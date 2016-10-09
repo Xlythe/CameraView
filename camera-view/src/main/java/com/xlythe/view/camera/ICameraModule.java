@@ -15,7 +15,7 @@ public abstract class ICameraModule {
     private static final int DEFAULT_MAX_VIDEO_SIZE = 10000000; // Approximately 10 megabytes
 
     private final CameraView mView;
-    private CameraView.Quality mQuality;
+    private CameraView.Quality mQuality = CameraView.Quality.HIGH;
     private int mMaxVideoDuration = DEFAULT_MAX_VIDEO_DURATION;
     private int mMaxVideoSize = DEFAULT_MAX_VIDEO_SIZE;
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;

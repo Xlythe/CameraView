@@ -20,14 +20,6 @@ public class MainFragment extends CameraFragment {
     }
 
     @Override
-    public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
-        super.onViewCreated(view, savedInstanceState);
-        setQuality(CameraView.Quality.HIGH);
-        setMaxVideoDuration(10 * 1000);
-        setMaxVideoSize(10 * 1000 * 1024);
-    }
-
-    @Override
     public void onImageCaptured(File file) {
         Toast.makeText(getContext(), "Picture saved to " + file.getAbsolutePath(), Toast.LENGTH_SHORT).show();
     }

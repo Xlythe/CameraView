@@ -2,6 +2,7 @@ package com.xlythe.view.camera;
 
 import android.annotation.TargetApi;
 import android.content.Context;
+import android.content.res.TypedArray;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.util.AttributeSet;
@@ -26,7 +27,20 @@ public class CameraView extends TextureView {
     }
 
     public enum Quality {
-        HIGH, MEDIUM, LOW
+        HIGH(0), MEDIUM(1), LOW(2);
+
+        int id;
+
+        Quality(int id) {
+            this.id = id;
+        }
+
+        static Quality fromId(int id) {
+            for (Quality f : values()) {
+                if (f.id == id) return f;
+            }
+            throw new IllegalArgumentException();
+        }
     }
 
     /**
@@ -88,6 +102,14 @@ public class CameraView extends TextureView {
             mCameraModule = new Camera2Module(this);
         } else {
            mCameraModule = new LegacyCameraModule(this);
+        }
+
+        if (attrs != null) {
+            final TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView, 0, 0);
+            setQuality(Quality.fromId(a.getInteger(R.styleable.CameraView_quality, getQuality().id)));
+            setMaxVideoDuration(a.getInteger(R.styleable.CameraView_maxVideoDuration, getMaxVideoDuration()));
+            setMaxVideoSize(a.getInteger(R.styleable.CameraView_maxVideoSize, getMaxVideoSize()));
+            a.recycle();
         }
     }
 
@@ -180,7 +202,7 @@ public class CameraView extends TextureView {
         mCameraModule.open();
     }
 
-    public void onClose() {
+    protected void onClose() {
         mCameraModule.close();
     }
 
