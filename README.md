@@ -107,7 +107,7 @@ CameraView includes the optional attributes quality [high, medium, low], maxVide
     camera:maxVideoDuration="10000"
     camera:maxVideoSize="10000000" />
 ```
-For the most part, you'll be interacting directly with CameraFragment and can stop here.
+__For the most part, you'll be interacting directly with CameraFragment and can stop here.__
 
 CameraView Lifecycle
 -----------------
