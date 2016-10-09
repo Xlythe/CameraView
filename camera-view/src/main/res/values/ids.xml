@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="layout_camera" type="id" />
+    <item name="layout_permissions" type="id" />
+    <item name="request_permissions" type="id" />
+    <item name="camera" type="id" />
+    <item name="capture" type="id" />
+    <item name="duration" type="id" />
+    <item name="progress" type="id" />
+    <item name="toggle" type="id" />
+</resources>
