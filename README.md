@@ -27,7 +27,7 @@ The following permissions are required in your AndroidManfiest.xml
 
 CameraFragment
 -----------------
-Extend CameraFragment and override the required methods 
+Extend CameraFragment and override the required methods. Both pictures and videos are saved to a cache directory and may be overwritten or deleted. It's advised that you copy the files to persistent storage, depending on your usecase. 
 ```java
 public class MainFragment extends CameraFragment {
 
