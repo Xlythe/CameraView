@@ -47,10 +47,8 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     private CameraView mCamera;
 
-    @Nullable
     private View mPermissionRequest;
 
-    @Nullable
     private View mCapture;
 
     @Nullable
@@ -128,16 +126,11 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     }
 
     public void setEnabled(boolean enabled) {
-        if (mCapture != null) {
-            mCapture.setEnabled(enabled);
-        }
+        mCapture.setEnabled(enabled);
     }
 
     public boolean isEnabled() {
-        if (mCapture != null) {
-            return mCapture.isEnabled();
-        }
-        return false;
+        return mCapture.isEnabled();
     }
 
     public void setQuality(CameraView.Quality quality) {
@@ -208,20 +201,37 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mProgress = (ProgressBar) view.findViewById(R.id.progress);
         mDuration = (TextView) view.findViewById(R.id.duration);
 
+        if (mCameraHolder == null) {
+            throw new IllegalStateException("No View found with id R.id.layout_camera");
+        }
+
         if (mCamera == null) {
             throw new IllegalStateException("No CameraView found with id R.id.camera");
         }
 
-        if (mCameraHolder == null) {
-            throw new IllegalStateException("No View found with id R.id.layout_camera");
+        if (mCapture == null) {
+            throw new IllegalStateException("No CameraView found with id R.id.capture");
         }
 
         if (mPermissionPrompt == null) {
             throw new IllegalStateException("No View found with id R.id.layout_permissions");
         }
 
+        if (mPermissionRequest == null) {
+            throw new IllegalStateException("No View found with id R.id.request_permissions");
+        }
+
         mCamera.setOnImageCapturedListener(this);
         mCamera.setOnVideoCapturedListener(this);
+
+        mCapture.setOnTouchListener(new OnTouchListener(getContext()));
+
+        mPermissionRequest.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                requestPermissions(REQUIRED_PERMISSIONS, REQUEST_CODE_REQUIRED_PERMISSIONS);
+            }
+        });
 
         if (mToggle != null) {
             mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
@@ -240,19 +250,6 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
         if (mDuration != null) {
             mDuration.setVisibility(View.GONE);
-        }
-
-        if (mCapture != null) {
-            mCapture.setOnTouchListener(new OnTouchListener(getContext()));
-        }
-
-        if (mPermissionRequest != null) {
-            mPermissionRequest.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View v) {
-                    requestPermissions(REQUIRED_PERMISSIONS, REQUEST_CODE_REQUIRED_PERMISSIONS);
-                }
-            });
         }
     }
 
