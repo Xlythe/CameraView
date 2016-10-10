@@ -92,7 +92,7 @@ Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any], 
 
 </FrameLayout>
 ```
-Optionally, you may also include @id/duration [TextView], @id/progress [ProgressBar], @id/toggle [ToggleButton]
+Optionally, you may also include @id/duration [TextView], @id/progress [ProgressBar], @id/toggle [CompoundButton]
 
 CameraView
 -----------------

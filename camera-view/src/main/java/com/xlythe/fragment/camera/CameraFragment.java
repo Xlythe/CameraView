@@ -21,7 +21,6 @@ import android.view.animation.LinearInterpolator;
 import android.widget.CompoundButton;
 import android.widget.ProgressBar;
 import android.widget.TextView;
-import android.widget.ToggleButton;
 
 import com.xlythe.view.camera.CameraView;
 
@@ -58,7 +57,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     private ProgressBar mProgress;
 
     @Nullable
-    private ToggleButton mToggle;
+    private CompoundButton mToggle;
 
     private ProgressBarAnimator mAnimator = new ProgressBarAnimator();
 
@@ -196,7 +195,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mPermissionPrompt = view.findViewById(R.id.layout_permissions);
         mPermissionRequest = view.findViewById(R.id.request_permissions);
         mCamera = (CameraView) view.findViewById(R.id.camera);
-        mToggle = (ToggleButton) view.findViewById(R.id.toggle);
+        mToggle = (CompoundButton) view.findViewById(R.id.toggle);
         mCapture = mCameraHolder.findViewById(R.id.capture);
         mProgress = (ProgressBar) view.findViewById(R.id.progress);
         mDuration = (TextView) view.findViewById(R.id.duration);
