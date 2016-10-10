@@ -123,7 +123,11 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     public void stopRecording() {
         if (mVideoRecorder != null) {
-            mVideoRecorder.stop();
+            try {
+                mVideoRecorder.stop();
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Failed to stop video recorder. This can happen if a video is stopped too quickly. :(", e);
+            }
             mVideoRecorder = null;
         }
         if (getOnVideoCapturedListener() != null) {

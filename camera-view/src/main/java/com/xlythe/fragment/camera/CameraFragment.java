@@ -332,7 +332,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             vibrate();
             mCamera.startRecording(new File(getContext().getCacheDir(), VIDEO_DESTINATION));
             if (mDuration != null) {
-                mDuration.setVisibility(android.view.View.VISIBLE);
+                mDuration.setVisibility(View.VISIBLE);
             }
             mAnimator.setDuration(mCamera.getMaxVideoDuration()).start();
             onRecordStart();
@@ -345,23 +345,25 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                 mProgress.setProgress(0);
             }
             if (mDuration != null) {
-                mDuration.setVisibility(android.view.View.GONE);
+                mDuration.setVisibility(View.GONE);
             }
             onRecordStop();
         }
 
         @Override
-        public boolean onTouch(android.view.View v, MotionEvent event) {
+        public boolean onTouch(View v, MotionEvent event) {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
                     start = System.currentTimeMillis();
                     mHandler.sendEmptyMessageDelayed(HOLD, LONG_PRESS);
+                    v.setPressed(true);
                     break;
                 case MotionEvent.ACTION_CANCEL:
                     clearHandler();
                     if (delta() > LONG_PRESS && delta() < mCamera.getMaxVideoDuration()) {
                         mHandler.sendEmptyMessage(RELEASE);
                     }
+                    v.setPressed(false);
                     break;
                 case MotionEvent.ACTION_UP:
                     clearHandler();
@@ -370,6 +372,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                     } else if (delta() < mCamera.getMaxVideoDuration()) {
                         mHandler.sendEmptyMessage(RELEASE);
                     }
+                    v.setPressed(false);
                     break;
             }
             return true;
