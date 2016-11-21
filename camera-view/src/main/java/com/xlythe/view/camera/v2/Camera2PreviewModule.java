@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.v2;
 
+import android.Manifest;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Rect;
@@ -10,10 +11,12 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.support.annotation.NonNull;
+import android.support.annotation.RequiresPermission;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -29,18 +32,19 @@ import java.util.LinkedList;
 import java.util.List;
 
 @TargetApi(21)
-public class Camera2PreviewModule extends ICameraModule {
+class Camera2PreviewModule extends ICameraModule {
 
-    protected enum State {
+    enum State {
         PREVIEW,
         RECORDING,
         WAITING_LOCK,
         WAITING_PRECAPTURE,
         WAITING_NON_PRECAPTURE,
         PICTURE_TAKEN,
-        WAITING_UNLOCK;
+        WAITING_UNLOCK
     }
 
+    private final Context mContext;
     private final CameraManager mCameraManager;
     private String mActiveCamera;
     private CameraCaptureSession mCaptureSession;
@@ -48,7 +52,6 @@ public class Camera2PreviewModule extends ICameraModule {
     private HandlerThread mBackgroundThread;
     private Handler mBackgroundHandler;
     private State mState = State.PREVIEW;
-    private CaptureRequest mPreviewRequest;
     private PreviewSurface mPreviewSurface = new PreviewSurface(this);
 
     private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
@@ -56,7 +59,38 @@ public class Camera2PreviewModule extends ICameraModule {
         public void onOpened(@NonNull CameraDevice cameraDevice) {
             // The camera has opened. Start the preview now.
             mCameraDevice = cameraDevice;
-            startPreview();
+
+            try {
+                // We want to define all our surfaces (preview, picture, video, etc) in our capture session
+                List<Surface> surfaces = new ArrayList<>();
+                for (CameraSurface surface : getCameraSurfaces()) {
+                    surfaces.add(surface.getSurface());
+                }
+
+                // Clean up any legacy sessions we forgot about
+                if (mCaptureSession != null) {
+                    mCaptureSession.close();
+                    mCaptureSession = null;
+                }
+
+                // Now, with all of our surfaces, we'll ask for a new session
+                mCameraDevice.createCaptureSession(surfaces, new CameraCaptureSession.StateCallback() {
+                    @Override
+                    public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
+                        // When the session is ready, we'll display the preview.
+                        mCaptureSession = cameraCaptureSession;
+                        startPreview();
+                    }
+
+                    @Override
+                    public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
+                        Log.e(TAG, "Configure failed");
+                    }
+                }, mBackgroundHandler);
+            } catch (CameraAccessException | IllegalStateException e) {
+                // Crashes if the Camera is interacted with while still loading
+                e.printStackTrace();
+            }
         }
 
         @Override
@@ -76,19 +110,24 @@ public class Camera2PreviewModule extends ICameraModule {
 
     Camera2PreviewModule(CameraView view) {
         super(view);
+        mContext = view.getContext();
         mCameraManager = (CameraManager) view.getContext().getSystemService(Context.CAMERA_SERVICE);
     }
 
-    protected synchronized void setState(State state) {
+    private Context getContext() {
+        return mContext;
+    }
+
+    synchronized void setState(State state) {
         Log.d(TAG, "Setting State: " + state.name());
         mState = state;
     }
 
-    protected synchronized State getState() {
+    synchronized State getState() {
         return mState;
     }
 
-    @SuppressWarnings({"MissingPermission"})
+    @RequiresPermission(Manifest.permission.CAMERA)
     @Override
     public void open() {
         startBackgroundThread();
@@ -143,7 +182,7 @@ public class Camera2PreviewModule extends ICameraModule {
         }
     }
 
-    protected String getActiveCamera() throws CameraAccessException {
+    private String getActiveCamera() throws CameraAccessException {
         return mActiveCamera == null ? getDefaultCamera() : mActiveCamera;
     }
 
@@ -167,19 +206,19 @@ public class Camera2PreviewModule extends ICameraModule {
         }
     }
 
-    protected Handler getBackgroundHandler() {
+    Handler getBackgroundHandler() {
         return mBackgroundHandler;
     }
 
-    protected CameraDevice getCameraDevice() {
+    CameraDevice getCameraDevice() {
         return mCameraDevice;
     }
 
-    protected CameraCaptureSession getCaptureSession() {
+    CameraCaptureSession getCaptureSession() {
         return mCaptureSession;
     }
 
-    protected CameraSurface getPreviewSurface() {
+    CameraSurface getPreviewSurface() {
         return mPreviewSurface;
     }
 
@@ -211,74 +250,70 @@ public class Camera2PreviewModule extends ICameraModule {
 
     @Override
     public void focus(Rect focus, Rect metering) {
-        // TODO
-    }
-
-    protected void startPreview() {
         try {
-            SurfaceTexture texture = getSurfaceTexture();
-            texture.setDefaultBufferSize(mPreviewSurface.getWidth(), mPreviewSurface.getHeight());
+            if (getState() != State.PREVIEW) {
+                Log.w(TAG, "Focus is only available in preview mode");
+                return;
+            }
 
-            final CaptureRequest.Builder previewBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            if (!supportsFocus(getActiveCamera())) {
+                Log.w(TAG, "Focus not available on this camera");
+                return;
+            }
 
-            List<Surface> surfaces = new ArrayList<>();
+            // Our metering Rect ranges from -1000 to 1000. We need to remap it to fit the camera dimensions (0 to width).
+            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(getActiveCamera());
+            Rect arraySize = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+            if (arraySize == null) {
+                Log.w(TAG, "Unable to load the active array size");
+                return;
+            }
+            resize(metering, arraySize.width(), arraySize.height());
 
-            // The preview is, well, the preview. This surface draws straight to the CameraView
-            surfaces.add(mPreviewSurface.getSurface());
-            previewBuilder.addTarget(mPreviewSurface.getSurface());
+            // Now we can update our request
+            CaptureRequest.Builder previewBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
             previewBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-
-            createCaptureSession(surfaces, previewBuilder.build());
-        } catch (CameraAccessException | IllegalStateException e) {
+            previewBuilder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[] { new MeteringRectangle(metering, MeteringRectangle.METERING_WEIGHT_MAX) });
+            previewBuilder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[] { new MeteringRectangle(metering, MeteringRectangle.METERING_WEIGHT_MAX) });
+            previewBuilder.addTarget(mPreviewSurface.getSurface());
+            mCaptureSession.setRepeatingRequest(previewBuilder.build(), null /* callback */, mBackgroundHandler);
+        } catch (CameraAccessException e) {
             // Crashes if the Camera is interacted with while still loading
             e.printStackTrace();
         }
     }
 
-    protected void createCaptureSession(
-            final List<Surface> surfaces,
-            final CaptureRequest request) throws CameraAccessException {
-        createCaptureSession(surfaces, request, null);
+    /**
+     * Resizes a Rect from its original dimensions of -1000 to 1000 to 0 to width/height.
+     */
+    private static void resize(Rect metering, int maxWidth, int maxHeight) {
+        // We can calculate the new width by scaling it to its new dimensions
+        int newWidth = metering.width() * maxWidth / 2000;
+        int newHeight = metering.height() * maxHeight / 2000;
+
+        // Then we calculate how far from the top/left corner it should be
+        int leftOffset = (metering.left + 1000) * maxWidth / 2000;
+        int topOffset = (metering.top + 1000) * maxHeight / 2000;
+
+        // And now we can resize the Rect to its new dimensions
+        metering.left = leftOffset;
+        metering.top = topOffset;
+        metering.right = metering.left + newWidth;
+        metering.bottom = metering.top + newHeight;
     }
 
-    protected void createCaptureSession(
-            final List<Surface> surfaces,
-            final CaptureRequest request,
-            final Callback callback) throws CameraAccessException {
-        createCaptureSession(surfaces, request, null, callback);
-    }
-
-    protected void createCaptureSession(
-            final List<Surface> surfaces,
-            final CaptureRequest request,
-            final CameraCaptureSession.CaptureCallback captureCallback,
-            final Callback callback) throws CameraAccessException {
-        if (mCaptureSession != null) {
-            mCaptureSession.close();
-            mCaptureSession = null;
+    void startPreview() {
+        Log.v(TAG, "startPreview");
+        try {
+            setState(State.PREVIEW);
+            CaptureRequest.Builder previewBuilder = mCameraDevice.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
+            previewBuilder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+            previewBuilder.addTarget(mPreviewSurface.getSurface());
+            mCaptureSession.setRepeatingRequest(previewBuilder.build(), null /* callback */, mBackgroundHandler);
+        } catch (CameraAccessException | IllegalStateException | NullPointerException e) {
+            // Crashes if the Camera is interacted with while still loading
+            e.printStackTrace();
         }
-        mCameraDevice.createCaptureSession(surfaces, new CameraCaptureSession.StateCallback() {
-            @Override
-            public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
-                // When the session is ready, we start displaying the preview.
-                mCaptureSession = cameraCaptureSession;
-                try {
-                    mPreviewRequest = request;
-                    mCaptureSession.setRepeatingRequest(mPreviewRequest, captureCallback, mBackgroundHandler);
-                    if (callback != null) {
-                        callback.onComplete(cameraCaptureSession);
-                    }
-                } catch (CameraAccessException | IllegalStateException e) {
-                    // Crashes on rotation. However, it does restore itself.
-                    e.printStackTrace();
-                }
-            }
-
-            @Override
-            public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
-                Log.e(TAG, "Configure failed");
-            }
-        }, mBackgroundHandler);
     }
 
     static class CompareSizesByArea implements Comparator<Size> {
@@ -322,6 +357,12 @@ public class Camera2PreviewModule extends ICameraModule {
         return false;
     }
 
+    private boolean supportsFocus(String cameraId) throws CameraAccessException {
+        CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(cameraId);
+        Integer maxRegions = characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF);
+        return maxRegions != null && maxRegions >= 1;
+    }
+
     private boolean isFrontFacing(String cameraId) throws CameraAccessException {
         CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(cameraId);
         Integer facing = characteristics.get(CameraCharacteristics.LENS_FACING);
@@ -336,9 +377,11 @@ public class Camera2PreviewModule extends ICameraModule {
 
     private int getSensorOrientation(String cameraId) throws CameraAccessException {
         CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(cameraId);
-        return characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+        Integer orientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
+        return orientation == null ? 0 : orientation;
     }
 
+    @RequiresPermission(Manifest.permission.CAMERA)
     @Override
     public void toggleCamera() {
         int position = 0;
@@ -358,25 +401,28 @@ public class Camera2PreviewModule extends ICameraModule {
         }
     }
 
-    protected static abstract class CameraSurface {
+    static abstract class CameraSurface {
         final Camera2PreviewModule mCameraView;
 
         Size mSize;
-        private boolean mInitialized = false;
+        private final Context mContext;
 
         CameraSurface(Camera2PreviewModule cameraView) {
             mCameraView = cameraView;
+            mContext = cameraView.getContext();
+        }
+
+        Context getContext() {
+            return mContext;
         }
 
         abstract void initialize(StreamConfigurationMap map);
 
         void initialize(Size size) {
+            if (DEBUG) {
+                Log.d(TAG, String.format("Initializing %s with width=%s and height=%s", getClass().getSimpleName(), size.getWidth(), size.getHeight()));
+            }
             mSize = size;
-            mInitialized = true;
-        }
-
-        boolean isInitialized() {
-            return mInitialized;
         }
 
         int getWidth() {
@@ -394,9 +440,6 @@ public class Camera2PreviewModule extends ICameraModule {
 
     private static final class PreviewSurface extends CameraSurface {
         private static Size chooseOptimalSize(Size[] choices, int width, int height) {
-            if (DEBUG) {
-                Log.d(TAG, String.format("Initializing PreviewSurface with width=%s and height=%s", width, height));
-            }
             // Collect the supported resolutions that are at least as big as the preview Surface
             List<Size> bigEnough = new ArrayList<>();
             for (Size option : choices) {
@@ -439,9 +482,5 @@ public class Camera2PreviewModule extends ICameraModule {
         void close() {
 
         }
-    }
-
-    public interface Callback {
-        void onComplete(CameraCaptureSession cameraCaptureSession);
     }
 }

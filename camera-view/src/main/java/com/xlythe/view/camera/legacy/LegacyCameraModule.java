@@ -13,19 +13,16 @@ import com.xlythe.view.camera.ICameraModule;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
+@SuppressWarnings("deprecation")
 public class LegacyCameraModule extends ICameraModule {
     private static final int INVALID_CAMERA_ID = -1;
 
     private int mActiveCamera = INVALID_CAMERA_ID;
     private Camera mCamera;
-    private Camera.Size mPreviewSize;
-
-    private final Rect mFocusRect = new Rect();
 
     private MediaRecorder mVideoRecorder;
     private File mVideoFile;
@@ -45,11 +42,11 @@ public class LegacyCameraModule extends ICameraModule {
             Camera.Parameters parameters = mCamera.getParameters();
             int cameraOrientation = getRelativeCameraOrientation();
             mCamera.setDisplayOrientation(cameraOrientation);
-            mPreviewSize = chooseOptimalPreviewSize(mCamera.getParameters().getSupportedPreviewSizes(), getWidth(), getHeight());
-            parameters.setPreviewSize(mPreviewSize.width, mPreviewSize.height);
+            Camera.Size previewSize = chooseOptimalPreviewSize(mCamera.getParameters().getSupportedPreviewSizes(), getWidth(), getHeight());
+            parameters.setPreviewSize(previewSize.width, previewSize.height);
             parameters.setPictureFormat(ImageFormat.JPEG);
             mCamera.setParameters(parameters);
-            configureTransform(getWidth(), getHeight(), mPreviewSize.width, mPreviewSize.height, cameraOrientation);
+            configureTransform(getWidth(), getHeight(), previewSize.width, previewSize.height, cameraOrientation);
 
             mCamera.startPreview();
         } catch (IOException e) {
@@ -164,11 +161,11 @@ public class LegacyCameraModule extends ICameraModule {
             parameters.setFocusMode(Camera.Parameters.FOCUS_MODE_AUTO);
 
             if (parameters.getMaxNumFocusAreas() > 0) {
-                parameters.setFocusAreas(Arrays.asList(new Camera.Area(focus, 1000)));
+                parameters.setFocusAreas(Collections.singletonList(new Camera.Area(focus, 1000)));
             }
 
             if (parameters.getMaxNumMeteringAreas() > 0) {
-                parameters.setMeteringAreas(Arrays.asList(new Camera.Area(metering, 1000)));
+                parameters.setMeteringAreas(Collections.singletonList(new Camera.Area(metering, 1000)));
             }
 
             mCamera.setParameters(parameters);
@@ -209,7 +206,7 @@ public class LegacyCameraModule extends ICameraModule {
         return getRelativeCameraOrientation(true /* isPreview */);
     }
 
-    protected int getRelativeCameraOrientation(boolean isPreview) {
+    private int getRelativeCameraOrientation(boolean isPreview) {
         return getRelativeImageOrientation(getDisplayRotation(), getSensorOrientation(), isUsingFrontFacingCamera(), isPreview);
     }
 
@@ -263,7 +260,7 @@ public class LegacyCameraModule extends ICameraModule {
         }
     }
 
-    static class CompareSizesByArea implements Comparator<Camera.Size> {
+    private static class CompareSizesByArea implements Comparator<Camera.Size> {
         @Override
         public int compare(Camera.Size lhs, Camera.Size rhs) {
             // We cast here to ensure the multiplications won't overflow

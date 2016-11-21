@@ -13,7 +13,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 
-public class LegacyPictureListener implements Camera.PictureCallback {
+@SuppressWarnings("deprecation")
+class LegacyPictureListener implements Camera.PictureCallback {
     // The file we're saving the picture to.
     private final File mFile;
 
@@ -26,7 +27,7 @@ public class LegacyPictureListener implements Camera.PictureCallback {
     private static final double MAX_UPPER = 2560.0;
     private static final double MAX_LOWER = 1440.0;
 
-    public LegacyPictureListener(File file, int orientation, CameraView.OnImageCapturedListener listener) {
+    LegacyPictureListener(File file, int orientation, CameraView.OnImageCapturedListener listener) {
         mFile = file;
         mOrientation = orientation;
         mListener = listener;
@@ -53,7 +54,7 @@ public class LegacyPictureListener implements Camera.PictureCallback {
             protected void onPostExecute(Void aVoid) {
                 mListener.onImageCaptured(mFile);
             }
-        }.execute();
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
         camera.startPreview();
     }
 

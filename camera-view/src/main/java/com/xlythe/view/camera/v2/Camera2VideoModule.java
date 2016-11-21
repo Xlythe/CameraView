@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.v2;
 
+import android.Manifest;
 import android.annotation.TargetApi;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
@@ -7,8 +8,11 @@ import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.MediaRecorder;
+import android.support.annotation.NonNull;
+import android.support.annotation.RequiresPermission;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -17,7 +21,6 @@ import com.xlythe.view.camera.CameraView;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -26,7 +29,7 @@ import java.util.List;
  * itself to the given file.
  */
 @TargetApi(21)
-public class Camera2VideoModule extends Camera2PictureModule {
+class Camera2VideoModule extends Camera2PictureModule {
     private VideoSurface mVideoSurface = new VideoSurface(this);
 
     Camera2VideoModule(CameraView view) {
@@ -40,10 +43,34 @@ public class Camera2VideoModule extends Camera2PictureModule {
         return list;
     }
 
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
     public void startRecording(File file) {
-        mVideoSurface.setFile(file);
-        startRecording();
+        //mVideoSurface.setFile(file);
+        mVideoSurface.mWantsToRecord = true;
+        try {
+            SurfaceTexture texture = getSurfaceTexture();
+            texture.setDefaultBufferSize(mVideoSurface.getWidth(), mVideoSurface.getHeight());
+
+            CaptureRequest.Builder request = getCameraDevice().createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+            request.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+            request.addTarget(getPreviewSurface().getSurface());
+            request.addTarget(mVideoSurface.getSurface());
+
+            setState(State.RECORDING);
+            getCaptureSession().setRepeatingRequest(request.build(), new CameraCaptureSession.CaptureCallback() {
+                @Override
+                public void onCaptureCompleted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
+                    // Alright, our session is active. Start recording the Video surface.
+                    if (!mVideoSurface.mWantsToRecord) {
+                        mVideoSurface.startRecording(getOnVideoCapturedListener());
+                    }
+                }
+            }, getBackgroundHandler());
+        } catch (CameraAccessException | IllegalStateException e) {
+            // Crashes if the Camera is interacted with while still loading
+            e.printStackTrace();
+        }
     }
 
     @Override
@@ -57,40 +84,6 @@ public class Camera2VideoModule extends Camera2PictureModule {
         return mVideoSurface.mIsRecordingVideo;
     }
 
-    private void startRecording() {
-        try {
-            SurfaceTexture texture = getSurfaceTexture();
-            texture.setDefaultBufferSize(mVideoSurface.getWidth(), mVideoSurface.getHeight());
-
-            final CaptureRequest.Builder builder = getCameraDevice().createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
-
-            List<Surface> surfaces = new ArrayList<>();
-
-            // We still want to draw the preview
-            surfaces.add(getPreviewSurface().getSurface());
-            builder.addTarget(getPreviewSurface().getSurface());
-
-            // But we also want to record
-            surfaces.add(mVideoSurface.getSurface());
-            builder.addTarget(mVideoSurface.getSurface());
-
-            // Set camera focus to auto
-            builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
-
-            // And! Switch!
-            createCaptureSession(surfaces, builder.build(), new Callback() {
-                @Override
-                public void onComplete(CameraCaptureSession cameraCaptureSession) {
-                    // Alright, our session is active. Start recording the Video surface.
-                    mVideoSurface.startRecording(getOnVideoCapturedListener());
-                }
-            });
-        } catch (CameraAccessException | IllegalStateException e) {
-            // Crashes if the Camera is interacted with while still loading
-            e.printStackTrace();
-        }
-    }
-
     private static final class VideoSurface extends CameraSurface {
         private static Size chooseVideoSize(Size[] choices) {
             for (Size size : choices) {
@@ -102,6 +95,7 @@ public class Camera2VideoModule extends Camera2PictureModule {
             return choices[0];
         }
 
+        private boolean mWantsToRecord;
         private boolean mIsRecordingVideo;
         private MediaRecorder mMediaRecorder;
         private CameraView.OnVideoCapturedListener mVideoListener;
@@ -114,6 +108,7 @@ public class Camera2VideoModule extends Camera2PictureModule {
         @Override
         void initialize(StreamConfigurationMap map) {
             super.initialize(chooseVideoSize(map.getOutputSizes(MediaRecorder.class)));
+            setFile(new File(getContext().getCacheDir() + "/" + "temp.mp4"));
         }
 
         void setFile(File file) {
@@ -149,17 +144,25 @@ public class Camera2VideoModule extends Camera2PictureModule {
             try {
                 mMediaRecorder.start();
                 mIsRecordingVideo = true;
+                mWantsToRecord = false;
             } catch (IllegalStateException e) {
                 e.printStackTrace();
             }
         }
 
         void stopRecording() {
-            mIsRecordingVideo = false;
-            mMediaRecorder.stop();
-            mMediaRecorder.reset();
-            if (mVideoListener != null) {
-                mVideoListener.onVideoCaptured(mFile);
+            if (mIsRecordingVideo) {
+                mIsRecordingVideo = false;
+                try {
+                    mMediaRecorder.stop();
+                    mMediaRecorder.reset();
+                    if (mVideoListener != null) {
+                        mVideoListener.onVideoCaptured(mFile);
+                    }
+                } catch (RuntimeException e) {
+                    // MediaRecorder can crash with 'stop failed.'
+                    e.printStackTrace();
+                }
             }
         }
 

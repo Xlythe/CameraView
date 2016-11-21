@@ -1,10 +1,13 @@
 package com.xlythe.view.camera;
 
+import android.Manifest;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.os.ParcelFileDescriptor;
+import android.support.annotation.RequiresPermission;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Display;
@@ -41,6 +44,10 @@ public class CameraView extends TextureView {
             }
             throw new IllegalArgumentException();
         }
+    }
+
+    public enum Flash {
+        ON, OFF, AUTO;
     }
 
     /**
@@ -147,6 +154,7 @@ public class CameraView extends TextureView {
      *       Manifest.permission.RECORD_AUDIO
      *       Manifest.permission.WRITE_EXTERNAL_STORAGE
      */
+    @RequiresPermission(allOf = { Manifest.permission.CAMERA, Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE })
     public synchronized void open() {
         if (isAvailable()) {
             setStatus(Status.OPEN);
@@ -222,6 +230,21 @@ public class CameraView extends TextureView {
         return mCameraModule.isRecording();
     }
 
+    @TargetApi(21)
+    public void startStreaming(ParcelFileDescriptor pfd) {
+        mCameraModule.startStreaming(pfd);
+    }
+
+    @TargetApi(21)
+    public void stopStreaming() {
+        mCameraModule.stopStreaming();
+    }
+
+    @TargetApi(21)
+    public boolean isStreaming() {
+        return mCameraModule.isStreaming();
+    }
+
     public boolean hasFrontFacingCamera() {
         return mCameraModule.hasFrontFacingCamera();
     }
@@ -236,6 +259,18 @@ public class CameraView extends TextureView {
 
     public void focus(Rect focus, Rect metering) {
         mCameraModule.focus(focus, metering);
+    }
+
+    public void setFlash(Flash flashMode) {
+        mCameraModule.setFlash(flashMode);
+    }
+
+    public Flash getFlash() {
+        return mCameraModule.getFlash();
+    }
+
+    public boolean hasFlash() {
+        return mCameraModule.hasFlash();
     }
 
     protected int getRelativeCameraOrientation() {
@@ -359,9 +394,11 @@ public class CameraView extends TextureView {
 
     public interface OnImageCapturedListener {
         void onImageCaptured(File file);
+        void onFailure();
     }
 
     public interface OnVideoCapturedListener {
         void onVideoCaptured(File file);
+        void onFailure();
     }
 }

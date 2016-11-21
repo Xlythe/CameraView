@@ -3,6 +3,7 @@ package com.xlythe.view.camera;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import java.io.File;
@@ -18,6 +19,7 @@ public abstract class ICameraModule {
     private CameraView.Quality mQuality = CameraView.Quality.HIGH;
     private int mMaxVideoDuration = DEFAULT_MAX_VIDEO_DURATION;
     private int mMaxVideoSize = DEFAULT_MAX_VIDEO_SIZE;
+    private CameraView.Flash mFlash = CameraView.Flash.AUTO;
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;
     private CameraView.OnVideoCapturedListener mOnVideoCapturedListener;
 
@@ -56,11 +58,11 @@ public abstract class ICameraModule {
         return mView.getSurfaceTexture();
     }
 
-    public Matrix getTransform(Matrix matrix) {
+    private Matrix getTransform(Matrix matrix) {
         return mView.getTransform(matrix);
     }
 
-    public void setTransform(Matrix matrix) {
+    private void setTransform(Matrix matrix) {
         mView.setTransform(matrix);
     }
 
@@ -145,6 +147,18 @@ public abstract class ICameraModule {
      */
     public abstract boolean isRecording();
 
+    public void startStreaming(ParcelFileDescriptor pfd) {
+        throw new RuntimeException("Unsupported operation");
+    }
+
+    public void stopStreaming() {
+        throw new RuntimeException("Unsupported operation");
+    }
+
+    public boolean isStreaming() {
+        throw new RuntimeException("Unsupported operation");
+    }
+
     public abstract void toggleCamera();
 
     public abstract boolean hasFrontFacingCamera();
@@ -177,6 +191,18 @@ public abstract class ICameraModule {
 
     public int getMaxVideoSize() {
         return mMaxVideoSize;
+    }
+
+    public void setFlash(CameraView.Flash flash) {
+        mFlash = flash;
+    }
+
+    public CameraView.Flash getFlash() {
+        return mFlash;
+    }
+
+    public boolean hasFlash() {
+        return false;
     }
 
     public void setOnImageCapturedListener(CameraView.OnImageCapturedListener l) {
