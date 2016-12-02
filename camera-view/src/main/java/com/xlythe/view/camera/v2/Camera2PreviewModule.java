@@ -3,6 +3,7 @@ package com.xlythe.view.camera.v2;
 import android.Manifest;
 import android.annotation.TargetApi;
 import android.content.Context;
+import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
@@ -13,6 +14,7 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.support.annotation.NonNull;
@@ -98,6 +100,7 @@ class Camera2PreviewModule extends ICameraModule {
             Log.w(TAG, "Camera disconnected");
             cameraDevice.close();
             mCameraDevice = null;
+            mBackgroundHandler.removeCallbacksAndMessages(null);
         }
 
         @Override
@@ -105,6 +108,7 @@ class Camera2PreviewModule extends ICameraModule {
             Log.e(TAG, "Camera crashed: " + error);
             cameraDevice.close();
             mCameraDevice = null;
+            mBackgroundHandler.removeCallbacksAndMessages(null);
         }
     };
 
@@ -146,8 +150,7 @@ class Camera2PreviewModule extends ICameraModule {
                 surface.initialize(map);
             }
 
-            int cameraOrientation = getRelativeCameraOrientation();
-            configureTransform(getWidth(), getHeight(), mPreviewSurface.getWidth(), mPreviewSurface.getHeight(), cameraOrientation);
+            transformPreview(getWidth(), getHeight(), mPreviewSurface.getWidth(), mPreviewSurface.getHeight(), getDisplayRotation(), getSensorOrientation(getActiveCamera()));
 
             mCameraManager.openCamera(mActiveCamera, mStateCallback, mBackgroundHandler);
         } catch (CameraAccessException e) {
@@ -170,6 +173,43 @@ class Camera2PreviewModule extends ICameraModule {
         }
 
         stopBackgroundThread();
+    }
+
+    protected void transformPreview(int viewWidth, int viewHeight, int previewWidth, int previewHeight, int displayOrientation, int cameraOrientation) {
+        if (DEBUG) {
+            Log.d(TAG, String.format("Configuring SurfaceView matrix: "
+                            + "viewWidth=%s, viewHeight=%s, previewWidth=%s, previewHeight=%s, displayOrientation=%s, cameraOrientation=%s",
+                    viewWidth, viewHeight, previewWidth, previewHeight, displayOrientation, cameraOrientation));
+        }
+
+        Matrix matrix = new Matrix();
+        getTransform(matrix);
+
+        // Camera2 tries to be smart, and will rotate the display automatically to portrait mode.
+        // It, unfortunately, forgets that phones may also be held sideways.
+        // We'll reverse the preview width/height if the camera did end up being rotated.
+        if ((displayOrientation == 90 || displayOrientation == 270)
+                && (cameraOrientation != 0 && cameraOrientation != 180)) {
+            int temp = previewWidth;
+            previewWidth = previewHeight;
+            previewHeight = temp;
+        }
+
+        double aspectRatio = (double) previewHeight / (double) previewWidth;
+        int newWidth, newHeight;
+        if (getHeight() > viewWidth * aspectRatio) {
+            newWidth = (int) (viewHeight / aspectRatio);
+            newHeight = viewHeight;
+        } else {
+            newWidth = viewWidth;
+            newHeight = (int) (viewWidth * aspectRatio);
+        }
+
+        matrix.setScale((float) newWidth / (float) viewWidth, (float) newHeight / (float) viewHeight);
+        matrix.postTranslate((viewWidth - newWidth) / 2, (viewHeight - newHeight) / 2);
+        matrix.postRotate(-displayOrientation, viewWidth / 2, viewHeight / 2);
+
+        setTransform(matrix);
     }
 
     @Override

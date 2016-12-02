@@ -1,6 +1,7 @@
 package com.xlythe.view.camera.legacy;
 
 import android.graphics.ImageFormat;
+import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.hardware.Camera;
 import android.media.CamcorderProfile;
@@ -46,7 +47,7 @@ public class LegacyCameraModule extends ICameraModule {
             parameters.setPreviewSize(previewSize.width, previewSize.height);
             parameters.setPictureFormat(ImageFormat.JPEG);
             mCamera.setParameters(parameters);
-            configureTransform(getWidth(), getHeight(), previewSize.width, previewSize.height, cameraOrientation);
+            transformPreview(getWidth(), getHeight(), previewSize.width, previewSize.height, cameraOrientation);
 
             mCamera.startPreview();
         } catch (IOException e) {
@@ -62,6 +63,46 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera.release();
             mCamera = null;
         }
+    }
+
+    private void transformPreview(int viewWidth, int viewHeight, int previewWidth, int previewHeight, int cameraOrientation) {
+        if (DEBUG) {
+            Log.d(TAG, String.format("Configuring SurfaceView matrix: "
+                            + "viewWidth=%s, viewHeight=%s, previewWidth=%s, previewHeight=%s, cameraOrientation=%s",
+                    viewWidth, viewHeight, previewWidth, previewHeight, cameraOrientation));
+        }
+
+        Matrix matrix = new Matrix();
+        getTransform(matrix);
+
+        // Because the camera already rotates the preview for us (@see Camera.setDisplayOrientation(int)},
+        // we need to flip the width/height to the dimensions we'll actually be given.
+        if (cameraOrientation == 90 || cameraOrientation == 270) {
+            int temp = previewWidth;
+            previewWidth = previewHeight;
+            previewHeight = temp;
+        }
+
+        // We want to maintain aspect ratio, but we also want both sides to be >= the view's width and height.
+        // Otherwise, there will be blank space around our preview.
+        double aspectRatio = (double) previewHeight / (double) previewWidth;
+        int newWidth, newHeight;
+        if (getHeight() > viewWidth * aspectRatio) {
+            newWidth = (int) (viewHeight / aspectRatio);
+            newHeight = viewHeight;
+        } else {
+            newWidth = viewWidth;
+            newHeight = (int) (viewWidth * aspectRatio);
+        }
+
+        // We scale the image up so that it definitely fits (or overflows) our bounds
+        matrix.setScale((float) newWidth / (float) viewWidth, (float) newHeight / (float) viewHeight);
+
+        // And then we reposition it so that it's centered
+        matrix.postTranslate((viewWidth - newWidth) / 2, (viewHeight - newHeight) / 2);
+
+        // And once we're done, we apply our changes.
+        setTransform(matrix);
     }
 
     @Override

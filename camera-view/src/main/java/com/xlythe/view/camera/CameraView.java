@@ -154,7 +154,11 @@ public class CameraView extends TextureView {
      *       Manifest.permission.RECORD_AUDIO
      *       Manifest.permission.WRITE_EXTERNAL_STORAGE
      */
-    @RequiresPermission(allOf = { Manifest.permission.CAMERA, Manifest.permission.CAMERA, Manifest.permission.WRITE_EXTERNAL_STORAGE })
+    @RequiresPermission(allOf = {
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE
+    })
     public synchronized void open() {
         if (isAvailable()) {
             setStatus(Status.OPEN);
@@ -342,7 +346,7 @@ public class CameraView extends TextureView {
             case 180:
                 // Fall through
             case 270:
-                // We're up side down. Fix x/y.
+                // We're upside down. Fix x/y.
                 x = width - x;
                 y = height - y;
                 break;

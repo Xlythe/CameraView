@@ -3,6 +3,7 @@ package com.xlythe.view.camera;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
@@ -58,55 +59,12 @@ public abstract class ICameraModule {
         return mView.getSurfaceTexture();
     }
 
-    private Matrix getTransform(Matrix matrix) {
+    protected Matrix getTransform(Matrix matrix) {
         return mView.getTransform(matrix);
     }
 
-    private void setTransform(Matrix matrix) {
+    protected void setTransform(Matrix matrix) {
         mView.setTransform(matrix);
-    }
-
-    protected void configureTransform(int viewWidth, int viewHeight, int previewWidth, int previewHeight, int cameraOrientation) {
-        if (DEBUG) {
-            Log.d(TAG, String.format("Configuring SurfaceView matrix: "
-                            + "viewWidth=%s, viewHeight=%s, previewWidth=%s, previewHeight=%s, cameraOrientation=%s",
-                    viewWidth, viewHeight, previewWidth, previewHeight, cameraOrientation));
-        }
-
-        if (cameraOrientation == 90 || cameraOrientation == 270) {
-            int temp = previewWidth;
-            previewWidth = previewHeight;
-            previewHeight = temp;
-        }
-
-        double aspectRatio = (double) previewHeight / (double) previewWidth;
-        int newWidth, newHeight;
-
-        if (getHeight() > viewWidth * aspectRatio) {
-            newWidth = (int) (viewHeight / aspectRatio);
-            newHeight = viewHeight;
-        } else {
-            newWidth = viewWidth;
-            newHeight = (int) (viewWidth * aspectRatio);
-        }
-
-        int xoff = (viewWidth - newWidth) / 2;
-        int yoff = (viewHeight - newHeight) / 2;
-
-        Matrix txform = new Matrix();
-
-        getTransform(txform);
-
-        float xscale = (float) newWidth / (float) viewWidth;
-        float yscale = (float) newHeight / (float) viewHeight;
-
-        txform.setScale(xscale, yscale);
-
-        // TODO rotate?
-
-        txform.postTranslate(xoff, yoff);
-
-        setTransform(txform);
     }
 
     /*
@@ -234,6 +192,9 @@ public abstract class ICameraModule {
             }
         } else {
             result = (sensorOrientation - displayRotation + 360) % 360;
+        }
+        if (DEBUG) {
+            Log.d(TAG, String.format("getRelativeImageOrientation result=%s", result));
         }
         return result;
     }
