@@ -89,8 +89,10 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                 @Override
                 public void onDisplayChanged(int displayId) {
                     if (hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
-                        mCamera.close();
-                        mCamera.open();
+                        if (mCamera.isOpen()) {
+                            mCamera.close();
+                            mCamera.open();
+                        }
                     }
                 }
             };

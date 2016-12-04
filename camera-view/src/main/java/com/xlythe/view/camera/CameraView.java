@@ -131,7 +131,7 @@ public class CameraView extends TextureView {
         }
     }
 
-    public synchronized Status getStatus() {
+    protected synchronized Status getStatus() {
         return mStatus;
     }
 
@@ -174,6 +174,13 @@ public class CameraView extends TextureView {
     public synchronized void close() {
         setStatus(Status.CLOSED);
         onClose();
+    }
+
+    /**
+     * @return True if camera is currently open
+     */
+    public synchronized boolean isOpen() {
+        return getStatus() == Status.OPEN;
     }
 
     protected int getDisplayRotation() {

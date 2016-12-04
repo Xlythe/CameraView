@@ -39,11 +39,7 @@ class Camera2PreviewModule extends ICameraModule {
     enum State {
         PREVIEW,
         RECORDING,
-        WAITING_LOCK,
-        WAITING_PRECAPTURE,
-        WAITING_NON_PRECAPTURE,
         PICTURE_TAKEN,
-        WAITING_UNLOCK
     }
 
     private final Context mContext;
@@ -89,7 +85,7 @@ class Camera2PreviewModule extends ICameraModule {
                         Log.e(TAG, "Configure failed");
                     }
                 }, mBackgroundHandler);
-            } catch (CameraAccessException | IllegalStateException e) {
+            } catch (CameraAccessException | IllegalStateException | NullPointerException e) {
                 // Crashes if the Camera is interacted with while still loading
                 e.printStackTrace();
             }
@@ -205,9 +201,20 @@ class Camera2PreviewModule extends ICameraModule {
             newHeight = (int) (viewWidth * aspectRatio);
         }
 
-        matrix.setScale((float) newWidth / (float) viewWidth, (float) newHeight / (float) viewHeight);
-        matrix.postTranslate((viewWidth - newWidth) / 2, (viewHeight - newHeight) / 2);
-        matrix.postRotate(-displayOrientation, viewWidth / 2, viewHeight / 2);
+        float scaleX = (float) newWidth / (float) viewWidth;
+        float scaleY = (float) newHeight / (float) viewHeight;
+        int translateX = (viewWidth - newWidth) / 2;
+        int translateY = (viewHeight - newHeight) / 2;
+        int rotation = -displayOrientation;
+
+        matrix.setScale(scaleX, scaleY);
+        matrix.postTranslate(translateX, translateY);
+        matrix.postRotate(rotation, viewWidth / 2, viewHeight / 2);
+
+        if (DEBUG) {
+            Log.d(TAG, String.format("Result: scaleX=%s, scaleY=%s, translateX=%s, translateY=%s, rotation=%s",
+                    scaleX, scaleY, translateX, translateY, rotation));
+        }
 
         setTransform(matrix);
     }
