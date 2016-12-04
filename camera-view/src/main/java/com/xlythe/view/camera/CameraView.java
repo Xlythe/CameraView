@@ -242,8 +242,8 @@ public class CameraView extends TextureView {
     }
 
     @TargetApi(21)
-    public void startStreaming(ParcelFileDescriptor pfd) {
-        mCameraModule.startStreaming(pfd);
+    public ParcelFileDescriptor startStreaming() {
+        return mCameraModule.startStreaming();
     }
 
     @TargetApi(21)

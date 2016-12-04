@@ -105,7 +105,7 @@ public abstract class ICameraModule {
      */
     public abstract boolean isRecording();
 
-    public void startStreaming(ParcelFileDescriptor pfd) {
+    public ParcelFileDescriptor startStreaming() {
         throw new RuntimeException("Unsupported operation");
     }
 

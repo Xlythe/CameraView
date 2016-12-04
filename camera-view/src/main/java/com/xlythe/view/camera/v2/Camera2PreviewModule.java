@@ -39,6 +39,7 @@ class Camera2PreviewModule extends ICameraModule {
     enum State {
         PREVIEW,
         RECORDING,
+        STREAMING,
         PICTURE_TAKEN,
     }
 

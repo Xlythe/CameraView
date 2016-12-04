@@ -4,6 +4,7 @@ import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Environment;
 import android.support.annotation.Nullable;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -26,32 +27,39 @@ public class MainFragment extends CameraFragment {
 
     @Override
     public void onImageCaptured(final File file) {
+        report("onImageCaptured");
         new FileTransferAsyncTask() {
             @Override
             protected void onPostExecute(File file) {
-                Toast.makeText(getContext(), "Picture saved to " + file.getAbsolutePath(), Toast.LENGTH_SHORT).show();
+                report("Picture saved to " + file.getAbsolutePath());
             }
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
     }
 
     @Override
     public void onVideoCaptured(final File file) {
+        report("onVideoCaptured");
         new FileTransferAsyncTask() {
             @Override
             protected void onPostExecute(File file) {
-                Toast.makeText(getContext(), "Video saved to " + file.getAbsolutePath(), Toast.LENGTH_SHORT).show();
+                report("Video saved to " + file.getAbsolutePath());
             }
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
     }
 
     @Override
     protected void onRecordStart() {
-        Toast.makeText(getContext(), "Recording", Toast.LENGTH_SHORT).show();
+        report("Recording");
     }
 
     @Override
     public void onFailure() {
-        Toast.makeText(getContext(), "Failure", Toast.LENGTH_SHORT).show();
+       report("Failure");
+    }
+
+    private void report(String msg) {
+        Log.d("CameraSample", msg);
+        Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
     }
 
     private static class FileTransferAsyncTask extends AsyncTask<File, Void, File> {
