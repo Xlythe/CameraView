@@ -14,6 +14,7 @@ import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.Fragment;
 import android.support.v4.content.ContextCompat;
+import android.text.format.DateFormat;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -25,6 +26,7 @@ import android.widget.TextView;
 import com.xlythe.view.camera.CameraView;
 
 import java.io.File;
+import java.util.Date;
 import java.util.Formatter;
 import java.util.Locale;
 
@@ -37,8 +39,8 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             Manifest.permission.WRITE_EXTERNAL_STORAGE
     };
     private static final int REQUEST_CODE_REQUIRED_PERMISSIONS = 3;
-    private static final String PHOTO_DESTINATION = "photo.jpg";
-    private static final String VIDEO_DESTINATION = "video.mp4";
+    private static final String PHOTO_DESTINATION = "yyyy-MM-dd hh:mm:ss.jpg";
+    private static final String VIDEO_DESTINATION = "yyyy-MM-dd hh:mm:ss.mp4";
 
     private View mCameraHolder;
 
@@ -326,13 +328,13 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         }
 
         protected void onTap() {
-            mCamera.takePicture(new File(getContext().getCacheDir(), PHOTO_DESTINATION));
+            mCamera.takePicture(new File(getContext().getCacheDir(), DateFormat.format(PHOTO_DESTINATION, new Date()).toString()));
             onTakePicture();
         }
 
         protected void onHold() {
             vibrate();
-            mCamera.startRecording(new File(getContext().getCacheDir(), VIDEO_DESTINATION));
+            mCamera.startRecording(new File(getContext().getCacheDir(), DateFormat.format(VIDEO_DESTINATION, new Date()).toString()));
             if (mDuration != null) {
                 mDuration.setVisibility(View.VISIBLE);
             }
