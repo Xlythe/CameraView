@@ -45,8 +45,6 @@ import java.util.List;
 class Camera2PictureModule extends Camera2PreviewModule {
     static final SparseIntArray ORIENTATIONS = new SparseIntArray();
 
-    private static final long PICTURE_TIMEOUT = 3000; // 3 seconds
-
     static {
         ORIENTATIONS.append(Surface.ROTATION_0, 90);
         ORIENTATIONS.append(Surface.ROTATION_90, 0);
