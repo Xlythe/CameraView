@@ -325,7 +325,7 @@ class Camera2PreviewModule extends ICameraModule {
             previewBuilder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[] { new MeteringRectangle(metering, MeteringRectangle.METERING_WEIGHT_MAX) });
             previewBuilder.addTarget(mPreviewSurface.getSurface());
             mCaptureSession.setRepeatingRequest(previewBuilder.build(), null /* callback */, mBackgroundHandler);
-        } catch (CameraAccessException e) {
+        } catch (CameraAccessException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
             e.printStackTrace();
         }
