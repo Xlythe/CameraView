@@ -464,6 +464,10 @@ class Camera2PreviewModule extends ICameraModule {
             return mContext;
         }
 
+        CameraView.Quality getQuality() {
+            return mCameraView.getQuality();
+        }
+
         abstract void initialize(StreamConfigurationMap map);
 
         void initialize(Size size) {

@@ -17,10 +17,12 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.media.MediaCodec;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.support.annotation.NonNull;
 import android.support.annotation.UiThread;
 import android.support.annotation.WorkerThread;
 import android.util.Log;
+import android.util.Size;
 import android.util.SparseIntArray;
 import android.view.Surface;
 
@@ -259,10 +261,23 @@ class Camera2PictureModule extends Camera2PreviewModule {
         }
 
         void initialize(StreamConfigurationMap map) {
-            super.initialize(Collections.max(Arrays.asList(map.getOutputSizes(ImageFormat.YUV_420_888)), new CompareSizesByArea()));
+            super.initialize(Collections.max(Arrays.asList(getSizes(map)), new CompareSizesByArea()));
 
             mImageReader = ImageReader.newInstance(getWidth(), getHeight(), ImageFormat.YUV_420_888, 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getBackgroundHandler());
+        }
+
+        private Size[] getSizes(StreamConfigurationMap map) {
+            // Special case for high resolution images (assuming, of course, quality was set to high)
+            if (getQuality() == CameraView.Quality.HIGH && Build.VERSION.SDK_INT >= 23) {
+                Size[] sizes = map.getHighResolutionOutputSizes(ImageFormat.YUV_420_888);
+                if (sizes != null && sizes.length > 0) {
+                    return sizes;
+                }
+            }
+
+            // Otherwise, just return the default sizes
+            return map.getOutputSizes(ImageFormat.YUV_420_888);
         }
 
         void initializePicture(File file, CameraView.OnImageCapturedListener listener) {
