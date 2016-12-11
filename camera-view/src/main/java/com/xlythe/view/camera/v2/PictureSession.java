@@ -14,6 +14,7 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.os.AsyncTask;
 import android.os.Build;
+import android.support.annotation.NonNull;
 import android.support.annotation.UiThread;
 import android.support.annotation.WorkerThread;
 import android.util.Log;
@@ -35,10 +36,6 @@ import java.util.List;
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-/**
- * In order to take photos, we create an ImageReader instance. We first lock the camera focus,
- * then await precapture, take the picture, and then unlock the focus and resume the preview.
- */
 @TargetApi(21)
 class PictureSession extends PreviewSession {
     private static final int IMAGE_FORMAT = ImageFormat.JPEG;
@@ -63,7 +60,7 @@ class PictureSession extends PreviewSession {
         return surfaces;
     }
 
-    public void takePicture(File file, CameraDevice device, CameraCaptureSession session) {
+    void takePicture(File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
         mPictureSurface.initializePicture(file, getOnImageCapturedListener());
         try {
             CaptureRequest.Builder captureRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
