@@ -343,8 +343,8 @@ public class Camera2Module extends ICameraModule {
         matrix.postRotate(rotation, viewWidth / 2, viewHeight / 2);
 
         if (DEBUG) {
-            Log.d(TAG, String.format("Result: aspectRatio=%s, scaleX=%s, scaleY=%s, translateX=%s, translateY=%s, rotation=%s",
-                    aspectRatio, scaleX, scaleY, translateX, translateY, rotation));
+            Log.d(TAG, String.format("Result: viewAspectRatio=%s, previewAspectRatio=%s, scaleX=%s, scaleY=%s, translateX=%s, translateY=%s, rotation=%s",
+                    ((double) viewHeight / (double) viewWidth), aspectRatio, scaleX, scaleY, translateX, translateY, rotation));
         }
 
         setTransform(matrix);

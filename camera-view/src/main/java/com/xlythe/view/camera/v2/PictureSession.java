@@ -200,6 +200,11 @@ class PictureSession extends PreviewSession {
                 availableSizes.add(size);
             }
 
+            if (availableSizes.isEmpty()) {
+                Log.e(TAG, "Couldn't find a suitable picture size");
+                availableSizes.add(choices[0]);
+            }
+
             if (DEBUG) {
                 Log.d(TAG, "Found available picture sizes: " + availableSizes);
             }

@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
@@ -67,21 +68,23 @@ class PreviewSession extends SessionImpl {
 
     private static final class PreviewSurface extends CameraSurface {
         private static Size chooseOptimalSize(Size[] choices, int width, int height) {
-            // Collect the supported resolutions that are at least as big as the preview Surface
-            List<Size> bigEnough = new ArrayList<>();
-            for (Size option : choices) {
-                if (option.getWidth() >= width && option.getHeight() >= height) {
-                    bigEnough.add(option);
+            List<Size> availableSizes = new ArrayList<>(choices.length);
+            for (Size size : choices) {
+                if (size.getWidth() >= width && size.getHeight() >= height) {
+                    availableSizes.add(size);
                 }
             }
 
-            // Pick the smallest of those, assuming we found any
-            if (bigEnough.size() > 0) {
-                return Collections.min(bigEnough, new CompareSizesByArea());
-            } else {
-                Log.e(TAG, "Couldn't find any suitable preview size");
-                return choices[0];
+            if (availableSizes.isEmpty()) {
+                Log.e(TAG, "Couldn't find a suitable preview size");
+                availableSizes.add(choices[0]);
             }
+
+            if (DEBUG) {
+                Log.d(TAG, "Found available preview sizes: " + availableSizes);
+            }
+
+            return Collections.min(availableSizes, new CompareSizesByArea());
         }
 
         private Surface mSurface;

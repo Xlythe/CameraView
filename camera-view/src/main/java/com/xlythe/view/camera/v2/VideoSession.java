@@ -122,13 +122,13 @@ class VideoSession extends PreviewSession {
                 availableSizes.add(size);
             }
 
-            if (DEBUG) {
-                Log.d(TAG, "Found available video sizes: " + availableSizes);
+            if (availableSizes.isEmpty()) {
+                Log.e(TAG, "Couldn't find a suitable video size");
+                availableSizes.add(choices[0]);
             }
 
-            if (availableSizes.isEmpty()) {
-                Log.e(TAG, "Couldn't find any suitable video size");
-                availableSizes.add(choices[0]);
+            if (DEBUG) {
+                Log.d(TAG, "Found available video sizes: " + availableSizes);
             }
 
             return Collections.max(availableSizes, new CompareSizesByArea());
