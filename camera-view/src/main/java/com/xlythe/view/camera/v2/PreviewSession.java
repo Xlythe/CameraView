@@ -45,6 +45,9 @@ class PreviewSession extends SessionImpl {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
+        if (mCropRegion != null) {
+            builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
+        }
         builder.addTarget(mPreviewSurface.getSurface());
         return builder.build();
     }

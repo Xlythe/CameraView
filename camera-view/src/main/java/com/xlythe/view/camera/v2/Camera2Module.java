@@ -15,6 +15,7 @@ import android.hardware.camera2.params.StreamConfigurationMap;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.annotation.RequiresPermission;
 import android.util.Log;
 import android.view.Surface;
@@ -32,6 +33,8 @@ import java.util.List;
  */
 @TargetApi(21)
 public class Camera2Module extends ICameraModule {
+    private static final int ZOOM_NOT_SUPPORTED = 1;
+
     /**
      * This is how we'll talk to the camera.
      */
@@ -65,7 +68,13 @@ public class Camera2Module extends ICameraModule {
     /**
      * The currently active session. See {@link PictureSession} and {@link VideoSession}.
      */
+    @Nullable
     private Session mActiveSession;
+
+    /**
+     * The current zoom level, from 0 to {@link #getMaxZoomLevel()}.
+     */
+    private int mZoomLevel;
 
     /**
      * Callbacks for when the camera is available / unavailable
@@ -113,6 +122,10 @@ public class Camera2Module extends ICameraModule {
             mCaptureSession = null;
         }
         if (mActiveSession != null) {
+            // Restore state from the previous session
+            session.setMeteringRectangle(mActiveSession.getMeteringRectangle());
+            session.setCropRegion(mActiveSession.getCropRegion());
+
             mActiveSession.close();
             mActiveSession = null;
         }
@@ -278,6 +291,75 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
+    public void setZoomLevel(int zoomLevel) {
+        mZoomLevel = zoomLevel;
+
+        if (mActiveSession == null) {
+            Log.w(TAG, "No active session available");
+            return;
+        }
+
+        try {
+            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
+            Rect m = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+            if (m == null) {
+                Log.w(TAG, "Zoom not supported");
+                return;
+            }
+
+            int maxZoom = getMaxZoomLevel();
+
+            int minW = (int) (m.width() / maxZoom);
+            int minH = (int) (m.height() / maxZoom);
+            int difW = m.width() - minW;
+            int difH = m.height() - minH;
+            int cropW = difW / 100 * zoomLevel;
+            int cropH = difH / 100 * zoomLevel;
+            cropW -= cropW & 3;
+            cropH -= cropH & 3;
+            Rect cropRegion = new Rect(cropW, cropH, m.width() - cropW, m.height() - cropH);
+            mActiveSession.setCropRegion(cropRegion);
+            mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+        } catch (CameraAccessException | NullPointerException e) {
+            // Crashes if the Camera is interacted with while still loading
+            e.printStackTrace();
+        }
+    }
+
+    @Override
+    public int getZoomLevel() {
+        return mZoomLevel;
+    }
+
+    @Override
+    public int getMaxZoomLevel() {
+        try {
+            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
+            Float maxZoom = (characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM));
+            if (maxZoom == null) {
+                return ZOOM_NOT_SUPPORTED;
+            }
+
+            // We scale the max zoom (which is a float) by 10 so that we can use ints. However,
+            // there's no need to do that if we can't even zoom.
+            if (maxZoom == ZOOM_NOT_SUPPORTED) {
+                return ZOOM_NOT_SUPPORTED;
+            }
+
+            return (int) (maxZoom * 10);
+        } catch (CameraAccessException e) {
+            e.printStackTrace();
+        }
+
+        return ZOOM_NOT_SUPPORTED;
+    }
+
+    @Override
+    public boolean isZoomSupported() {
+        return getMaxZoomLevel() != ZOOM_NOT_SUPPORTED;
+    }
+
+    @Override
     public void takePicture(File file) {
         if (mActiveSession != null && mActiveSession instanceof PictureSession) {
             PictureSession pictureSession = (PictureSession) mActiveSession;
@@ -428,6 +510,9 @@ public class Camera2Module extends ICameraModule {
         void initialize(StreamConfigurationMap map) throws CameraAccessException;
         List<Surface> getSurfaces();
         void setMeteringRectangle(MeteringRectangle meteringRectangle);
+        MeteringRectangle getMeteringRectangle();
+        void setCropRegion(Rect region);
+        Rect getCropRegion();
         void onAvailable(CameraDevice cameraDevice, CameraCaptureSession session) throws CameraAccessException;
         void onInvalidate(CameraDevice cameraDevice, CameraCaptureSession session) throws CameraAccessException;
         void close();

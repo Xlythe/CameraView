@@ -8,6 +8,7 @@ import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.ExifInterface;
 import android.media.Image;
@@ -38,6 +39,10 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
 class PictureSession extends PreviewSession {
+    /**
+     * Supports {@link ImageFormat#JPEG} and {@link ImageFormat#YUV_420_888}. You can support
+     * larger sizes with YUV_420_888, at the cost of speed.
+     */
     private static final int IMAGE_FORMAT = ImageFormat.JPEG;
 
     private final PictureSurface mPictureSurface;
@@ -63,11 +68,18 @@ class PictureSession extends PreviewSession {
     void takePicture(File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
         mPictureSurface.initializePicture(file, getOnImageCapturedListener());
         try {
-            CaptureRequest.Builder captureRequest = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            captureRequest.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            captureRequest.set(CaptureRequest.JPEG_ORIENTATION, ORIENTATIONS.get(getDisplayRotation()));
-            captureRequest.addTarget(mPictureSurface.getSurface());
-            session.capture(captureRequest.build(), null /* callback */, getBackgroundHandler());
+            CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+            builder.set(CaptureRequest.JPEG_ORIENTATION, ORIENTATIONS.get(getDisplayRotation()));
+            builder.addTarget(mPictureSurface.getSurface());
+            if (mMeteringRectangle != null) {
+                builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
+                builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
+            }
+            if (mCropRegion != null) {
+                builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
+            }
+            session.capture(builder.build(), null /* callback */, getBackgroundHandler());
         } catch (CameraAccessException | IllegalStateException e) {
             // Crashes if the Camera is interacted with while still loading
             e.printStackTrace();
@@ -100,25 +112,27 @@ class PictureSession extends PreviewSession {
                 output = new FileOutputStream(mFile);
                 output.write(bytes);
 
-                int orientation = 1;
-                switch (mOrientation) {
-                    case 0:
-                        orientation = ExifInterface.ORIENTATION_NORMAL;
-                        break;
-                    case 90:
+                if (IMAGE_FORMAT != ImageFormat.JPEG) {
+                    int orientation = 1;
+                    switch (mOrientation) {
+                        case 0:
+                            orientation = ExifInterface.ORIENTATION_NORMAL;
+                            break;
+                        case 90:
                             orientation = ExifInterface.ORIENTATION_ROTATE_90;
                             break;
-                    case 180:
+                        case 180:
                             orientation = ExifInterface.ORIENTATION_ROTATE_180;
                             break;
-                    case 270:
+                        case 270:
                             orientation = ExifInterface.ORIENTATION_ROTATE_270;
                             break;
-                }
+                    }
 
-                ExifInterface exifInterface = new ExifInterface(mFile.toString());
-                exifInterface.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(orientation));
-                exifInterface.saveAttributes();
+                    ExifInterface exifInterface = new ExifInterface(mFile.toString());
+                    exifInterface.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(orientation));
+                    exifInterface.saveAttributes();
+                }
             } catch (IOException e) {
                 e.printStackTrace();
             } finally {
@@ -187,8 +201,10 @@ class PictureSession extends PreviewSession {
             Size[] choices = getSizes(map);
             List<Size> availableSizes = new ArrayList<>(choices.length);
             for (Size size : choices) {
-                if (getQuality() == CameraView.Quality.HIGH && size.getWidth() > 1080) {
-                    // TODO Figure out why camera crashes when we use a size higher than 1080
+                if (getQuality() == CameraView.Quality.HIGH
+                        && size.getWidth() > 1080
+                        && IMAGE_FORMAT == ImageFormat.JPEG) {
+                    // Camera crashes when you use too high a resolution with JPEG.
                     continue;
                 }
                 if (getQuality() == CameraView.Quality.MEDIUM && size.getWidth() > 720) {

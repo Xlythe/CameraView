@@ -13,6 +13,7 @@ import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Display;
 import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.view.TextureView;
 import android.view.ViewConfiguration;
 import android.view.WindowManager;
@@ -93,8 +94,12 @@ public class CameraView extends TextureView {
     private OnVideoCapturedListener mOnVideoCapturedListener;
 
     // For tap-to-focus
+    private long mDownEventTimestamp;
     private final Rect mFocusingRect = new Rect();
     private final Rect mMeteringRect = new Rect();
+
+    // For pinch-to-zoom
+    private ScaleGestureDetector mScaleDetector;
 
     private ICameraModule mCameraModule;
 
@@ -136,6 +141,23 @@ public class CameraView extends TextureView {
             }
             a.recycle();
         }
+
+        mScaleDetector = new ScaleGestureDetector(context, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            private final float MAX_SCALE = 5f;
+            private float mScaleFactor = 1f;
+
+            @Override
+            public boolean onScale(ScaleGestureDetector detector) {
+                mScaleFactor *= detector.getScaleFactor();
+
+                // Don't let the object get too small or too large.
+                mScaleFactor = Math.max(1f, Math.min(mScaleFactor, MAX_SCALE));
+
+                // y = (x-1) * (maxZoom/maxScale)
+                setZoomLevel(rangeLimit((int) ((mScaleFactor-1) * getMaxZoomLevel() / MAX_SCALE), getMaxZoomLevel(), 0));
+                return true;
+            }
+        });
     }
 
     protected synchronized Status getStatus() {
@@ -280,17 +302,21 @@ public class CameraView extends TextureView {
         return mCameraModule.getRelativeCameraOrientation();
     }
 
-    private long start;
-
     private long delta() {
-        return System.currentTimeMillis() - start;
+        return System.currentTimeMillis() - mDownEventTimestamp;
     }
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        mScaleDetector.onTouchEvent(event);
+        if (event.getPointerCount() == 2 && isZoomSupported()) {
+            return true;
+        }
+
+        // Camera focus
         switch (event.getAction()) {
             case MotionEvent.ACTION_DOWN:
-                start = System.currentTimeMillis();
+                mDownEventTimestamp = System.currentTimeMillis();
                 break;
             case MotionEvent.ACTION_UP:
                 if (delta() < ViewConfiguration.getLongPressTimeout()) {
@@ -317,6 +343,9 @@ public class CameraView extends TextureView {
      * The area must be between -1000,-1000 and 1000,1000
      */
     private Rect calculateTapArea(Rect rect, float x, float y, float coefficient) {
+        int max = 1000;
+        int min = -1000;
+
         // Default to 300 (1/6th the total area) and scale by the coefficient
         int areaSize = Float.valueOf(300 * coefficient).intValue();
 
@@ -352,8 +381,8 @@ public class CameraView extends TextureView {
         }
 
         // Grab the x, y position from within the View and normalize it to -1000 to 1000
-        x = -1000 + 2000 * (x / width);
-        y = -1000 + 2000 * (y / height);
+        x = min + distance(max, min) * (x / width);
+        y = min + distance(max, min) * (y / height);
 
 
         // Modify the rect to the bounding area
@@ -363,18 +392,36 @@ public class CameraView extends TextureView {
         rect.right = rect.left + areaSize;
 
         // Cap at -1000 to 1000
-        rect.top = rangeLimit(rect.top);
-        rect.left = rangeLimit(rect.left);
-        rect.bottom = rangeLimit(rect.bottom);
-        rect.right = rangeLimit(rect.right);
+        rect.top = rangeLimit(rect.top, max, min);
+        rect.left = rangeLimit(rect.left, max, min);
+        rect.bottom = rangeLimit(rect.bottom, max, min);
+        rect.right = rangeLimit(rect.right, max, min);
 
         return rect;
     }
 
-    private int rangeLimit(int val) {
-        int floor = Math.max(val, -1000);
-        int ceiling = Math.min(floor, 1000);
-        return ceiling;
+    private int rangeLimit(int val, int max, int min) {
+        return Math.min(Math.max(val, min), max);
+    }
+
+    private int distance(int a, int b) {
+        return Math.abs(a - b);
+    }
+
+    public void setZoomLevel(int zoomLevel) {
+        mCameraModule.setZoomLevel(zoomLevel);
+    }
+
+    public int getZoomLevel() {
+        return mCameraModule.getZoomLevel();
+    }
+
+    public int getMaxZoomLevel() {
+        return mCameraModule.getMaxZoomLevel();
+    }
+
+    public boolean isZoomSupported() {
+        return mCameraModule.isZoomSupported();
     }
 
     public void setOnImageCapturedListener(OnImageCapturedListener l) {

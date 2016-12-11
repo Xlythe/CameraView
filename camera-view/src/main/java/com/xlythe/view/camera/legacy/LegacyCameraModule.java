@@ -224,6 +224,28 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     @Override
+    public void setZoomLevel(int zoomLevel) {
+        Camera.Parameters parameters = mCamera.getParameters();
+        parameters.setZoom(zoomLevel);
+        mCamera.setParameters(parameters);
+    }
+
+    @Override
+    public int getZoomLevel() {
+        return mCamera.getParameters().getZoom();
+    }
+
+    @Override
+    public int getMaxZoomLevel() {
+        return mCamera.getParameters().getMaxZoom();
+    }
+
+    @Override
+    public boolean isZoomSupported() {
+        return mCamera.getParameters().isZoomSupported();
+    }
+
+    @Override
     public boolean hasFrontFacingCamera() {
         // Search for the front facing camera
         int numberOfCameras = Camera.getNumberOfCameras();

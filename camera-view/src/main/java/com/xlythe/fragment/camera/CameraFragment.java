@@ -4,6 +4,7 @@ import android.Manifest;
 import android.animation.ValueAnimator;
 import android.content.Context;
 import android.content.pm.PackageManager;
+import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
 import android.os.Build;
 import android.os.Bundle;
@@ -301,7 +302,8 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
         private final Context mContext;
 
-        private long start;
+        private long mDownEventTimestamp;
+        private Rect mViewBoundsRect;
         private final Handler mHandler = new Handler() {
             @Override
             public void handleMessage(Message msg) {
@@ -363,10 +365,17 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         public boolean onTouch(View v, MotionEvent event) {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
-                    start = System.currentTimeMillis();
+                    mDownEventTimestamp = System.currentTimeMillis();
+                    mViewBoundsRect = new Rect(v.getLeft(), v.getTop(), v.getRight(), v.getBottom());
                     mHandler.sendEmptyMessageDelayed(HOLD, LONG_PRESS);
                     v.setPressed(true);
                     break;
+                case MotionEvent.ACTION_MOVE:
+                    // If the user moves their finger off the button, trigger RELEASE
+                    if (mViewBoundsRect.contains(v.getLeft() + (int) event.getX(), v.getTop() + (int) event.getY())) {
+                        break;
+                    }
+                    // Fall through
                 case MotionEvent.ACTION_CANCEL:
                     clearHandler();
                     if (delta() > LONG_PRESS && (mCamera.getMaxVideoDuration() <= 0 || delta() < mCamera.getMaxVideoDuration())) {
@@ -388,7 +397,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         }
 
         private long delta() {
-            return System.currentTimeMillis() - start;
+            return System.currentTimeMillis() - mDownEventTimestamp;
         }
 
         private void vibrate() {

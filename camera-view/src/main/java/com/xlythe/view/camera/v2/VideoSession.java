@@ -51,6 +51,9 @@ class VideoSession extends PreviewSession {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
+        if (mCropRegion != null) {
+            builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
+        }
         builder.addTarget(getPreviewSurface().getSurface());
         builder.addTarget(mVideoSurface.getSurface());
         return builder.build();

@@ -2,6 +2,7 @@ package com.xlythe.view.camera.v2;
 
 import android.annotation.TargetApi;
 import android.content.Context;
+import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
@@ -37,6 +38,9 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Nullable
     MeteringRectangle mMeteringRectangle;
 
+    @Nullable
+    Rect mCropRegion;
+
     SessionImpl(Camera2Module camera2Module) {
         mCamera2Module = camera2Module;
     }
@@ -64,6 +68,21 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Override
     public void setMeteringRectangle(MeteringRectangle meteringRectangle) {
         mMeteringRectangle = meteringRectangle;
+    }
+
+    @Override
+    public MeteringRectangle getMeteringRectangle() {
+        return mMeteringRectangle;
+    }
+
+    @Override
+    public void setCropRegion(Rect region) {
+        mCropRegion = region;
+    }
+
+    @Override
+    public Rect getCropRegion() {
+        return mCropRegion;
     }
 
     @Override

@@ -123,6 +123,14 @@ public abstract class ICameraModule {
 
     public abstract void focus(Rect focus, Rect metering);
 
+    public abstract void setZoomLevel(int zoomLevel);
+
+    public abstract int getZoomLevel();
+
+    public abstract int getMaxZoomLevel();
+
+    public abstract boolean isZoomSupported();
+
     protected abstract int getRelativeCameraOrientation();
 
     public void setQuality(CameraView.Quality quality) {
