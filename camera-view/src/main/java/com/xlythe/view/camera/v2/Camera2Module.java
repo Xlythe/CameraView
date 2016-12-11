@@ -43,32 +43,32 @@ public class Camera2Module extends ICameraModule {
     private String mActiveCamera;
 
     /**
-     *
+     * The current capture session. There is one capture session per {@link Session}.
      */
     private CameraCaptureSession mCaptureSession;
 
     /**
-     *
+     * The currently active camera. This may be a front facing camera or a back facing one.
      */
     private CameraDevice mCameraDevice;
 
     /**
-     *
+     * A background thread to receive callbacks from the camera on.
      */
     private HandlerThread mBackgroundThread;
 
     /**
-     *
+     * A handler pointing to the background thread.
      */
     private Handler mBackgroundHandler;
 
     /**
-     *
+     * The currently active session. See {@link PictureSession} and {@link VideoSession}.
      */
     private Session mActiveSession;
 
     /**
-     *
+     * Callbacks for when the camera is available / unavailable
      */
     private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
         @Override
