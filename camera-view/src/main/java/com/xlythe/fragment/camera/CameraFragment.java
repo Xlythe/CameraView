@@ -39,8 +39,9 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             Manifest.permission.WRITE_EXTERNAL_STORAGE
     };
     private static final int REQUEST_CODE_REQUIRED_PERMISSIONS = 3;
-    private static final String PHOTO_DESTINATION = "yyyy-MM-dd hh:mm:ss.jpg";
-    private static final String VIDEO_DESTINATION = "yyyy-MM-dd hh:mm:ss.mp4";
+    private static final String DESTINATION = "yyyy-MM-dd hh:mm:ss";
+    private static final String PHOTO_EXT = ".jpg";
+    private static final String VIDEO_EXT = ".mp4";
 
     private View mCameraHolder;
 
@@ -144,19 +145,19 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         return mCamera.getQuality();
     }
 
-    public void setMaxVideoDuration(int duration) {
+    public void setMaxVideoDuration(long duration) {
         mCamera.setMaxVideoDuration(duration);
     }
 
-    public int getMaxVideoDuration() {
+    public long getMaxVideoDuration() {
         return mCamera.getMaxVideoDuration();
     }
 
-    public void setMaxVideoSize(int size) {
+    public void setMaxVideoSize(long size) {
         mCamera.setMaxVideoSize(size);
     }
 
-    public int getMaxVideoSize() {
+    public long getMaxVideoSize() {
         return mCamera.getMaxVideoSize();
     }
 
@@ -310,7 +311,9 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                         break;
                     case HOLD:
                         onHold();
-                        sendEmptyMessageDelayed(RELEASE, mCamera.getMaxVideoDuration());
+                        if (mCamera.getMaxVideoDuration() > 0) {
+                            sendEmptyMessageDelayed(RELEASE, mCamera.getMaxVideoDuration());
+                        }
                         break;
                     case RELEASE:
                         onRelease();
@@ -328,17 +331,19 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         }
 
         protected void onTap() {
-            mCamera.takePicture(new File(getContext().getCacheDir(), DateFormat.format(PHOTO_DESTINATION, new Date()).toString()));
+            mCamera.takePicture(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + PHOTO_EXT));
             onTakePicture();
         }
 
         protected void onHold() {
             vibrate();
-            mCamera.startRecording(new File(getContext().getCacheDir(), DateFormat.format(VIDEO_DESTINATION, new Date()).toString()));
+            mCamera.startRecording(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + VIDEO_EXT));
             if (mDuration != null) {
                 mDuration.setVisibility(View.VISIBLE);
             }
-            mAnimator.setDuration(mCamera.getMaxVideoDuration()).start();
+            if (mCamera.getMaxVideoDuration() > 0) {
+                mAnimator.setDuration(mCamera.getMaxVideoDuration()).start();
+            }
             onRecordStart();
         }
 
@@ -364,7 +369,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                     break;
                 case MotionEvent.ACTION_CANCEL:
                     clearHandler();
-                    if (delta() > LONG_PRESS && delta() < mCamera.getMaxVideoDuration()) {
+                    if (delta() > LONG_PRESS && (mCamera.getMaxVideoDuration() <= 0 || delta() < mCamera.getMaxVideoDuration())) {
                         mHandler.sendEmptyMessage(RELEASE);
                     }
                     v.setPressed(false);
@@ -373,7 +378,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                     clearHandler();
                     if (delta() < LONG_PRESS) {
                         mHandler.sendEmptyMessage(TAP);
-                    } else if (delta() < mCamera.getMaxVideoDuration()) {
+                    } else if ((mCamera.getMaxVideoDuration() <= 0 || delta() < mCamera.getMaxVideoDuration())) {
                         mHandler.sendEmptyMessage(RELEASE);
                     }
                     v.setPressed(false);

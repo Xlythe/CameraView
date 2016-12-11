@@ -30,9 +30,7 @@
             android:layout_width="match_parent"
             android:layout_height="0dp"
             android:layout_weight="1"
-            camera:quality="high"
-            camera:maxVideoDuration="10000"
-            camera:maxVideoSize="10000000" />
+            camera:quality="high" />
 
         <Button
             android:id="@id/capture"

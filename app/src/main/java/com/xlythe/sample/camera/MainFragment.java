@@ -1,6 +1,10 @@
 package com.xlythe.sample.camera;
 
+import android.content.Intent;
+import android.hardware.Camera;
+import android.net.Uri;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.support.annotation.Nullable;
@@ -27,22 +31,22 @@ public class MainFragment extends CameraFragment {
 
     @Override
     public void onImageCaptured(final File file) {
-        report("onImageCaptured");
         new FileTransferAsyncTask() {
             @Override
             protected void onPostExecute(File file) {
                 report("Picture saved to " + file.getAbsolutePath());
+                broadcastPicture(file);
             }
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
     }
 
     @Override
     public void onVideoCaptured(final File file) {
-        report("onVideoCaptured");
         new FileTransferAsyncTask() {
             @Override
             protected void onPostExecute(File file) {
                 report("Video saved to " + file.getAbsolutePath());
+                broadcastVideo(file);
             }
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
     }
@@ -60,6 +64,22 @@ public class MainFragment extends CameraFragment {
     private void report(String msg) {
         Log.d("CameraSample", msg);
         Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
+    }
+
+    private void broadcastPicture(File file) {
+        if (Build.VERSION.SDK_INT < 24) {
+            Intent intent = new Intent(Camera.ACTION_NEW_PICTURE);
+            intent.setData(Uri.fromFile(file));
+            getActivity().sendBroadcast(intent);
+        }
+    }
+
+    private void broadcastVideo(File file) {
+        if (Build.VERSION.SDK_INT < 24) {
+            Intent intent = new Intent(Camera.ACTION_NEW_VIDEO);
+            intent.setData(Uri.fromFile(file));
+            getActivity().sendBroadcast(intent);
+        }
     }
 
     private static class FileTransferAsyncTask extends AsyncTask<File, Void, File> {

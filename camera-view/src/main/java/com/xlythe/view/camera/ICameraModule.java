@@ -1,10 +1,10 @@
 package com.xlythe.view.camera;
 
+import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
-import android.os.Build;
-import android.os.ParcelFileDescriptor;
+import android.os.Looper;
 import android.util.Log;
 
 import java.io.File;
@@ -13,19 +13,20 @@ public abstract class ICameraModule {
     public static final String TAG = "CameraModule";
     public static final boolean DEBUG = true;
 
-    private static final int DEFAULT_MAX_VIDEO_DURATION = 30000; // 30 seconds
-    private static final int DEFAULT_MAX_VIDEO_SIZE = 10000000; // Approximately 10 megabytes
-
     private final CameraView mView;
     private CameraView.Quality mQuality = CameraView.Quality.HIGH;
-    private int mMaxVideoDuration = DEFAULT_MAX_VIDEO_DURATION;
-    private int mMaxVideoSize = DEFAULT_MAX_VIDEO_SIZE;
+    private long mMaxVideoDuration = CameraView.INDEFINITE_VIDEO_DURATION;
+    private long mMaxVideoSize = CameraView.INDEFINITE_VIDEO_SIZE;
     private CameraView.Flash mFlash = CameraView.Flash.AUTO;
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;
     private CameraView.OnVideoCapturedListener mOnVideoCapturedListener;
 
     public ICameraModule(CameraView view) {
         mView = view;
+    }
+
+    public Context getContext() {
+        return mView.getContext();
     }
 
     public int getWidth() {
@@ -63,8 +64,17 @@ public abstract class ICameraModule {
         return mView.getTransform(matrix);
     }
 
-    protected void setTransform(Matrix matrix) {
-        mView.setTransform(matrix);
+    protected void setTransform(final Matrix matrix) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mView.post(new Runnable() {
+                @Override
+                public void run() {
+                    setTransform(matrix);
+                }
+            });
+        } else {
+            mView.setTransform(matrix);
+        }
     }
 
     /*
@@ -105,18 +115,6 @@ public abstract class ICameraModule {
      */
     public abstract boolean isRecording();
 
-    public ParcelFileDescriptor startStreaming() {
-        throw new RuntimeException("Unsupported operation");
-    }
-
-    public void stopStreaming() {
-        throw new RuntimeException("Unsupported operation");
-    }
-
-    public boolean isStreaming() {
-        throw new RuntimeException("Unsupported operation");
-    }
-
     public abstract void toggleCamera();
 
     public abstract boolean hasFrontFacingCamera();
@@ -135,19 +133,19 @@ public abstract class ICameraModule {
         return mQuality;
     }
 
-    public void setMaxVideoDuration(int duration) {
+    public void setMaxVideoDuration(long duration) {
         mMaxVideoDuration = duration;
     }
 
-    public int getMaxVideoDuration() {
+    public long getMaxVideoDuration() {
         return mMaxVideoDuration;
     }
 
-    public void setMaxVideoSize(int size) {
+    public void setMaxVideoSize(long size) {
         mMaxVideoSize = size;
     }
 
-    public int getMaxVideoSize() {
+    public long getMaxVideoSize() {
         return mMaxVideoSize;
     }
 

@@ -132,7 +132,9 @@ public class LegacyCameraModule extends ICameraModule {
                 break;
         }
         mVideoRecorder.setOutputFile(file.getAbsolutePath());
-        mVideoRecorder.setMaxDuration(getMaxVideoDuration());
+        mVideoRecorder.setMaxDuration((int) getMaxVideoDuration());
+        mVideoRecorder.setMaxFileSize(getMaxVideoSize());
+        mVideoRecorder.setMaxDuration((int) getMaxVideoDuration());
         mVideoRecorder.setMaxFileSize(getMaxVideoSize());
         mVideoRecorder.setOrientationHint(getRelativeCameraOrientation(false /* isPreview */));
         mVideoRecorder.setOnInfoListener(new MediaRecorder.OnInfoListener() {

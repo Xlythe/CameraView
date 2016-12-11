@@ -6,7 +6,8 @@ import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
-import android.os.ParcelFileDescriptor;
+import android.os.Build;
+import android.support.annotation.Nullable;
 import android.support.annotation.RequiresPermission;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -24,6 +25,9 @@ import java.io.File;
 public class CameraView extends TextureView {
     static final String TAG = CameraView.class.getSimpleName();
     static final boolean DEBUG = true;
+
+    public static final long INDEFINITE_VIDEO_DURATION = -1;
+    public static final long INDEFINITE_VIDEO_SIZE = -1;
 
     private enum Status {
         OPEN, CLOSED, AWAITING_TEXTURE
@@ -92,7 +96,7 @@ public class CameraView extends TextureView {
     private final Rect mFocusingRect = new Rect();
     private final Rect mMeteringRect = new Rect();
 
-    private final ICameraModule mCameraModule;
+    private ICameraModule mCameraModule;
 
     public CameraView(Context context) {
         this(context, null);
@@ -104,30 +108,33 @@ public class CameraView extends TextureView {
 
     public CameraView(Context context, AttributeSet attrs, int defStyle) {
         super(context, attrs, defStyle);
-        setSurfaceTextureListener(mSurfaceTextureListener);
-        if (android.os.Build.VERSION.SDK_INT >= 21 && Camera2Module.READY) {
-            mCameraModule = new Camera2Module(this);
-        } else {
-           mCameraModule = new LegacyCameraModule(this);
-        }
-
-        if (attrs != null) {
-            final TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView, 0, 0);
-            setQuality(Quality.fromId(a.getInteger(R.styleable.CameraView_quality, getQuality().id)));
-            setMaxVideoDuration(a.getInteger(R.styleable.CameraView_maxVideoDuration, getMaxVideoDuration()));
-            setMaxVideoSize(a.getInteger(R.styleable.CameraView_maxVideoSize, getMaxVideoSize()));
-            a.recycle();
-        }
+        init(context, attrs);
     }
 
     @TargetApi(21)
     public CameraView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
+        init(context, attrs);
+    }
+
+    private void init(Context context, @Nullable AttributeSet attrs) {
         setSurfaceTextureListener(mSurfaceTextureListener);
-        if (android.os.Build.VERSION.SDK_INT >= 21 && Camera2Module.READY) {
+        if (Build.VERSION.SDK_INT >= 21) {
             mCameraModule = new Camera2Module(this);
         } else {
             mCameraModule = new LegacyCameraModule(this);
+        }
+
+        if (attrs != null) {
+            TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView, 0, 0);
+            setQuality(Quality.fromId(a.getInteger(R.styleable.CameraView_quality, getQuality().id)));
+            if (a.hasValue(R.styleable.CameraView_maxVideoDuration)) {
+                setMaxVideoDuration(a.getInteger(R.styleable.CameraView_maxVideoDuration, 0));
+            }
+            if (a.hasValue(R.styleable.CameraView_maxVideoSize)) {
+                setMaxVideoSize(a.getInteger(R.styleable.CameraView_maxVideoSize, 0));
+            }
+            a.recycle();
         }
     }
 
@@ -201,19 +208,19 @@ public class CameraView extends TextureView {
         return mCameraModule.getQuality();
     }
 
-    public void setMaxVideoDuration(int duration) {
+    public void setMaxVideoDuration(long duration) {
         mCameraModule.setMaxVideoDuration(duration);
     }
 
-    public int getMaxVideoDuration() {
+    public long getMaxVideoDuration() {
         return mCameraModule.getMaxVideoDuration();
     }
 
-    public void setMaxVideoSize(int size) {
+    public void setMaxVideoSize(long size) {
         mCameraModule.setMaxVideoSize(size);
     }
 
-    public int getMaxVideoSize() {
+    public long getMaxVideoSize() {
         return mCameraModule.getMaxVideoSize();
     }
 
@@ -239,21 +246,6 @@ public class CameraView extends TextureView {
 
     public boolean isRecording() {
         return mCameraModule.isRecording();
-    }
-
-    @TargetApi(21)
-    public ParcelFileDescriptor startStreaming() {
-        return mCameraModule.startStreaming();
-    }
-
-    @TargetApi(21)
-    public void stopStreaming() {
-        mCameraModule.stopStreaming();
-    }
-
-    @TargetApi(21)
-    public boolean isStreaming() {
-        return mCameraModule.isStreaming();
     }
 
     public boolean hasFrontFacingCamera() {
