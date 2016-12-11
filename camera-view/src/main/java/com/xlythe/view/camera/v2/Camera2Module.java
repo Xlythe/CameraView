@@ -315,11 +315,8 @@ public class Camera2Module extends ICameraModule {
         Matrix matrix = new Matrix();
         getTransform(matrix);
 
-        // Camera2 tries to be smart, and will rotate the display automatically to portrait mode.
-        // It, unfortunately, forgets that phones may also be held sideways.
-        // We'll reverse the preview width/height if the camera did end up being rotated.
-        if ((displayOrientation == 90 || displayOrientation == 270)
-                && (cameraOrientation != 0 && cameraOrientation != 180)) {
+        // Camera2 reverses the preview width/height. Why? No idea.
+        if (cameraOrientation != 0 && cameraOrientation != 180) {
             int temp = previewWidth;
             previewWidth = previewHeight;
             previewHeight = temp;
@@ -327,7 +324,7 @@ public class Camera2Module extends ICameraModule {
 
         double aspectRatio = (double) previewHeight / (double) previewWidth;
         int newWidth, newHeight;
-        if (getHeight() > viewWidth * aspectRatio) {
+        if (viewHeight > viewWidth * aspectRatio) {
             newWidth = (int) (viewHeight / aspectRatio);
             newHeight = viewHeight;
         } else {
@@ -346,8 +343,8 @@ public class Camera2Module extends ICameraModule {
         matrix.postRotate(rotation, viewWidth / 2, viewHeight / 2);
 
         if (DEBUG) {
-            Log.d(TAG, String.format("Result: scaleX=%s, scaleY=%s, translateX=%s, translateY=%s, rotation=%s",
-                    scaleX, scaleY, translateX, translateY, rotation));
+            Log.d(TAG, String.format("Result: aspectRatio=%s, scaleX=%s, scaleY=%s, translateX=%s, translateY=%s, rotation=%s",
+                    aspectRatio, scaleX, scaleY, translateX, translateY, rotation));
         }
 
         setTransform(matrix);
