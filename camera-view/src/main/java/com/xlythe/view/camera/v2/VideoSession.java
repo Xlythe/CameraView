@@ -157,10 +157,6 @@ class VideoSession extends PreviewSession {
         @Override
         void initialize(StreamConfigurationMap map) {
             super.initialize(chooseVideoSize(map));
-
-            SurfaceTexture texture = mCameraView.getSurfaceTexture();
-            texture.setDefaultBufferSize(getWidth(), getHeight());
-
             try {
                 mMediaRecorder = new MediaRecorder();
                 mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
