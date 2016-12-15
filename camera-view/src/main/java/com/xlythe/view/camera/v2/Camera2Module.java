@@ -116,33 +116,36 @@ public class Camera2Module extends ICameraModule {
             return;
         }
 
-        // Clean up any previous sessions
-        boolean hasPreviousState = false;
-        if (mCaptureSession != null) {
-            mCaptureSession.close();
-            mCaptureSession = null;
-            hasPreviousState = true;
-        }
-        if (mActiveSession != null) {
-            // Restore state from the previous session
-            session.setMeteringRectangle(mActiveSession.getMeteringRectangle());
-            session.setCropRegion(mActiveSession.getCropRegion());
-
-            mActiveSession.close();
-            mActiveSession = null;
-            hasPreviousState = true;
-        }
-        if (hasPreviousState) {
-            mBackgroundHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    setSession(session);
-                }
-            });
-            return;
-        }
 
         try {
+            // Clean up any previous sessions
+            boolean hasPreviousState = false;
+            if (mCaptureSession != null) {
+                mCaptureSession.stopRepeating();
+                mCaptureSession.abortCaptures();
+                mCaptureSession.close();
+                mCaptureSession = null;
+                hasPreviousState = true;
+            }
+            if (mActiveSession != null) {
+                // Restore state from the previous session
+                session.setMeteringRectangle(mActiveSession.getMeteringRectangle());
+                session.setCropRegion(mActiveSession.getCropRegion());
+
+                mActiveSession.close();
+                mActiveSession = null;
+                hasPreviousState = true;
+            }
+            if (hasPreviousState) {
+                mBackgroundHandler.post(new Runnable() {
+                    @Override
+                    public void run() {
+                        setSession(session);
+                    }
+                });
+                return;
+            }
+
             // Assume this is a brand new session that's never been set up. Initialize it so that
             // it can decide what size to set its surfaces to.
             CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
