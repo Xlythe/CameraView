@@ -117,9 +117,11 @@ public class Camera2Module extends ICameraModule {
         }
 
         // Clean up any previous sessions
+        boolean hasPreviousState = false;
         if (mCaptureSession != null) {
             mCaptureSession.close();
             mCaptureSession = null;
+            hasPreviousState = true;
         }
         if (mActiveSession != null) {
             // Restore state from the previous session
@@ -128,6 +130,16 @@ public class Camera2Module extends ICameraModule {
 
             mActiveSession.close();
             mActiveSession = null;
+            hasPreviousState = true;
+        }
+        if (hasPreviousState) {
+            mBackgroundHandler.post(new Runnable() {
+                @Override
+                public void run() {
+                    setSession(session);
+                }
+            });
+            return;
         }
 
         try {
@@ -507,14 +519,14 @@ public class Camera2Module extends ICameraModule {
      * A session has multiple surfaces for the camera to draw to.
      */
     interface Session {
-        void initialize(StreamConfigurationMap map) throws CameraAccessException;
-        List<Surface> getSurfaces();
-        void setMeteringRectangle(MeteringRectangle meteringRectangle);
-        MeteringRectangle getMeteringRectangle();
-        void setCropRegion(Rect region);
-        Rect getCropRegion();
-        void onAvailable(CameraDevice cameraDevice, CameraCaptureSession session) throws CameraAccessException;
-        void onInvalidate(CameraDevice cameraDevice, CameraCaptureSession session) throws CameraAccessException;
+        void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException;
+        @NonNull List<Surface> getSurfaces();
+        void setMeteringRectangle(@Nullable MeteringRectangle meteringRectangle);
+        @Nullable MeteringRectangle getMeteringRectangle();
+        void setCropRegion(@Nullable Rect region);
+        @Nullable Rect getCropRegion();
+        void onAvailable(@NonNull CameraDevice cameraDevice, @NonNull CameraCaptureSession session) throws CameraAccessException;
+        void onInvalidate(@NonNull CameraDevice cameraDevice, @NonNull CameraCaptureSession session) throws CameraAccessException;
         void close();
     }
 }

@@ -53,11 +53,12 @@ class PictureSession extends PreviewSession {
     }
 
     @Override
-    public void initialize(StreamConfigurationMap map) throws CameraAccessException {
+    public void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException {
         super.initialize(map);
         mPictureSurface.initialize(map);
     }
 
+    @NonNull
     @Override
     public List<Surface> getSurfaces() {
         List<Surface> surfaces = super.getSurfaces();
@@ -65,7 +66,7 @@ class PictureSession extends PreviewSession {
         return surfaces;
     }
 
-    void takePicture(File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
+    void takePicture(@NonNull File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
         mPictureSurface.initializePicture(file, getOnImageCapturedListener());
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);

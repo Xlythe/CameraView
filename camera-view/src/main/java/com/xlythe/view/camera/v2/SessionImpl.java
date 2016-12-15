@@ -7,6 +7,7 @@ import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.os.Handler;
+import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.util.Log;
 import android.util.Size;
@@ -49,6 +50,7 @@ abstract class SessionImpl implements Camera2Module.Session {
         mCamera2Module.transformPreview(width, height);
     }
 
+    @NonNull
     Handler getBackgroundHandler() {
         return mCamera2Module.getBackgroundHandler();
     }
@@ -66,25 +68,28 @@ abstract class SessionImpl implements Camera2Module.Session {
     }
 
     @Override
-    public void setMeteringRectangle(MeteringRectangle meteringRectangle) {
+    public void setMeteringRectangle(@Nullable MeteringRectangle meteringRectangle) {
         mMeteringRectangle = meteringRectangle;
     }
 
+    @Nullable
     @Override
     public MeteringRectangle getMeteringRectangle() {
         return mMeteringRectangle;
     }
 
     @Override
-    public void setCropRegion(Rect region) {
+    public void setCropRegion(@Nullable Rect region) {
         mCropRegion = region;
     }
 
+    @Nullable
     @Override
     public Rect getCropRegion() {
         return mCropRegion;
     }
 
+    @NonNull
     @Override
     public List<Surface> getSurfaces() {
         return new ArrayList<>();
