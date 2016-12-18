@@ -39,12 +39,12 @@ class VideoSession extends PreviewSession {
     }
 
     @Override
-    public void initialize(StreamConfigurationMap map) throws CameraAccessException {
+    public void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException {
         super.initialize(map);
         mVideoSurface.initialize(map);
     }
 
-    private CaptureRequest createCaptureRequest(CameraDevice device) throws CameraAccessException {
+    private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
         if (mMeteringRectangle != null) {
@@ -60,7 +60,7 @@ class VideoSession extends PreviewSession {
     }
 
     @Override
-    public void onAvailable(CameraDevice device, CameraCaptureSession session) throws CameraAccessException {
+    public void onAvailable(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
         if (!mVideoSurface.mIsInitialized) {
             Log.w(TAG, "onAvailable failed. Not initialize.");
             return;
@@ -79,7 +79,7 @@ class VideoSession extends PreviewSession {
     }
 
     @Override
-    public void onInvalidate(CameraDevice device, CameraCaptureSession session) throws CameraAccessException {
+    public void onInvalidate(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
         if (!mVideoSurface.mIsInitialized) {
             Log.w(TAG, "onInvalidate failed. Not initialize.");
             return;
@@ -100,6 +100,7 @@ class VideoSession extends PreviewSession {
         mVideoSurface.close();
     }
 
+    @NonNull
     @Override
     public List<Surface> getSurfaces() {
         List<Surface> surfaces = super.getSurfaces();
@@ -157,6 +158,7 @@ class VideoSession extends PreviewSession {
         @Override
         void initialize(StreamConfigurationMap map) {
             super.initialize(chooseVideoSize(map));
+
             try {
                 mMediaRecorder = new MediaRecorder();
                 mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);

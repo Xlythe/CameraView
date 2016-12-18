@@ -8,6 +8,7 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.support.annotation.NonNull;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -33,12 +34,12 @@ class PreviewSession extends SessionImpl {
     }
 
     @Override
-    public void initialize(StreamConfigurationMap map) throws CameraAccessException {
+    public void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException {
         mPreviewSurface.initialize(map);
         transformPreview(mPreviewSurface.getWidth(), mPreviewSurface.getHeight());
     }
 
-    private CaptureRequest createCaptureRequest(CameraDevice device) throws CameraAccessException {
+    private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
         if (mMeteringRectangle != null) {
@@ -53,15 +54,16 @@ class PreviewSession extends SessionImpl {
     }
 
     @Override
-    public void onAvailable(CameraDevice device, CameraCaptureSession session) throws CameraAccessException {
+    public void onAvailable(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
         session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getBackgroundHandler());
     }
 
     @Override
-    public void onInvalidate(CameraDevice device, CameraCaptureSession session) throws CameraAccessException {
+    public void onInvalidate(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
         session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getBackgroundHandler());
     }
 
+    @NonNull
     @Override
     public List<Surface> getSurfaces() {
         List<Surface> surfaces = super.getSurfaces();
