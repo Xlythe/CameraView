@@ -214,7 +214,7 @@ public class CameraView extends TextureView {
 
     protected int getDisplayRotation() {
         Display display;
-        if (android.os.Build.VERSION.SDK_INT >= 17) {
+        if (Build.VERSION.SDK_INT >= 17) {
             display = getDisplay();
         } else {
             display = ((WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay();
