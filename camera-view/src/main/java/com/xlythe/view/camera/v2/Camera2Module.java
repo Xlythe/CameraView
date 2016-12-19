@@ -116,13 +116,16 @@ public class Camera2Module extends ICameraModule {
             return;
         }
 
-
         try {
             // Clean up any previous sessions
             boolean hasPreviousState = false;
             if (mCaptureSession != null) {
                 mCaptureSession.stopRepeating();
-                mCaptureSession.abortCaptures();
+                try {
+                    mCaptureSession.abortCaptures();
+                } catch (CameraAccessException e) {
+                    Log.e(TAG, "Failed to abort captures", e);
+                }
                 mCaptureSession.close();
                 mCaptureSession = null;
                 hasPreviousState = true;
@@ -166,7 +169,7 @@ public class Camera2Module extends ICameraModule {
                             mActiveSession = session;
                             session.onAvailable(mCameraDevice, mCaptureSession);
                         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
-                            e.printStackTrace();
+                            Log.e(TAG, "Failed to start session", e);
                         }
                     }
                 }
@@ -178,7 +181,7 @@ public class Camera2Module extends ICameraModule {
             }, mBackgroundHandler);
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
-            e.printStackTrace();
+            Log.e(TAG, "Failed to create capture session", e);
         }
     }
 
@@ -191,7 +194,7 @@ public class Camera2Module extends ICameraModule {
             mActiveCamera = getActiveCamera();
             mCameraManager.openCamera(mActiveCamera, mStateCallback, mBackgroundHandler);
         } catch (CameraAccessException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Failed to open camera", e);
         }
     }
 
@@ -220,7 +223,7 @@ public class Camera2Module extends ICameraModule {
                 if (frontFacing) return true;
             }
         } catch (CameraAccessException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Failed to query camera", e);
         }
         return false;
     }
@@ -230,7 +233,7 @@ public class Camera2Module extends ICameraModule {
         try {
             return isFrontFacing(getActiveCamera());
         } catch (CameraAccessException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Failed to query camera", e);
         }
         return false;
     }
@@ -251,7 +254,7 @@ public class Camera2Module extends ICameraModule {
             mActiveCamera = mCameraManager.getCameraIdList()[(position + 1) % mCameraManager.getCameraIdList().length];
             open();
         } catch (CameraAccessException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Failed to query camera", e);
         }
     }
 
@@ -282,7 +285,7 @@ public class Camera2Module extends ICameraModule {
             mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
         } catch (CameraAccessException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
-            e.printStackTrace();
+            Log.e(TAG, "Failed to focus", e);
         }
     }
 
@@ -337,7 +340,7 @@ public class Camera2Module extends ICameraModule {
             mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
         } catch (CameraAccessException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
-            e.printStackTrace();
+            Log.e(TAG, "Failed to zoom", e);
         }
     }
 
@@ -363,7 +366,7 @@ public class Camera2Module extends ICameraModule {
 
             return (int) (maxZoom * 10);
         } catch (CameraAccessException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Failed to query camera", e);
         }
 
         return ZOOM_NOT_SUPPORTED;
@@ -452,7 +455,7 @@ public class Camera2Module extends ICameraModule {
         try {
             return getRelativeImageOrientation(getDisplayRotation(), getSensorOrientation(getActiveCamera()), isUsingFrontFacingCamera(), false);
         } catch (CameraAccessException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Failed to query camera", e);
             return 0;
         }
     }
@@ -510,7 +513,8 @@ public class Camera2Module extends ICameraModule {
             mBackgroundThread = null;
             mBackgroundHandler = null;
         } catch (InterruptedException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Failed to join background thread", e);
+            Thread.currentThread().interrupt();
         }
     }
 

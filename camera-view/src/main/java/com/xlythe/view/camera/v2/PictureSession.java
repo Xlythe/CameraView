@@ -83,7 +83,7 @@ class PictureSession extends PreviewSession {
             session.capture(builder.build(), null /* callback */, getBackgroundHandler());
         } catch (CameraAccessException | IllegalStateException e) {
             // Crashes if the Camera is interacted with while still loading
-            e.printStackTrace();
+            Log.e(TAG, "Failed to create capture request", e);
 
             CameraView.OnImageCapturedListener l = getOnImageCapturedListener();
             if (l != null) {
@@ -135,14 +135,14 @@ class PictureSession extends PreviewSession {
                     exifInterface.saveAttributes();
                 }
             } catch (IOException e) {
-                e.printStackTrace();
+                Log.e(TAG, "Failed to write the file", e);
             } finally {
                 mImage.close();
                 if (output != null) {
                     try {
                         output.close();
                     } catch (IOException e) {
-                        e.printStackTrace();
+                        Log.e(TAG, "Failed to close the output stream", e);
                     }
                 }
             }
