@@ -11,7 +11,7 @@ import java.io.File;
 
 public abstract class ICameraModule {
     public static final String TAG = "CameraModule";
-    public static final boolean DEBUG = true;
+    public static final boolean DEBUG = false;
 
     private final CameraView mView;
     private CameraView.Quality mQuality = CameraView.Quality.HIGH;

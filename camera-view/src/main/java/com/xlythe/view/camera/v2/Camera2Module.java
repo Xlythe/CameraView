@@ -422,7 +422,7 @@ public class Camera2Module extends ICameraModule {
             previewHeight = temp;
         }
 
-        double aspectRatio = (double) previewHeight / (double) previewWidth;
+        float aspectRatio = (float) previewHeight / (float) previewWidth;
         int newWidth, newHeight;
         if (viewHeight > viewWidth * aspectRatio) {
             newWidth = (int) (viewHeight / aspectRatio);
@@ -432,10 +432,16 @@ public class Camera2Module extends ICameraModule {
             newHeight = (int) (viewWidth * aspectRatio);
         }
 
+        float scale = Math.min((float) previewHeight / (float) newHeight, 1f);
+
         float scaleX = (float) newWidth / (float) viewWidth;
         float scaleY = (float) newHeight / (float) viewHeight;
-        int translateX = (viewWidth - newWidth) / 2;
-        int translateY = (viewHeight - newHeight) / 2;
+        scaleX *= scale;
+        scaleY *= scale;
+
+        int translateX = (int) (viewWidth - newWidth * scale) / 2;
+        int translateY = (int) (viewHeight - newHeight * scale) / 2;
+
         int rotation = -displayOrientation;
 
         matrix.setScale(scaleX, scaleY);
@@ -443,8 +449,8 @@ public class Camera2Module extends ICameraModule {
         matrix.postRotate(rotation, viewWidth / 2, viewHeight / 2);
 
         if (DEBUG) {
-            Log.d(TAG, String.format("Result: viewAspectRatio=%s, previewAspectRatio=%s, scaleX=%s, scaleY=%s, translateX=%s, translateY=%s, rotation=%s",
-                    ((double) viewHeight / (double) viewWidth), aspectRatio, scaleX, scaleY, translateX, translateY, rotation));
+            Log.d(TAG, String.format("Result: viewAspectRatio=%s, previewAspectRatio=%s, newWidth=%s, newHeight=%s, scaleX=%s, scaleY=%s, translateX=%s, translateY=%s, rotation=%s",
+                    ((double) viewHeight / (double) viewWidth), aspectRatio, newWidth, newHeight, scaleX, scaleY, translateX, translateY, rotation));
         }
 
         setTransform(matrix);
