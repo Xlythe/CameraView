@@ -281,24 +281,27 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     public void onFailure() {}
 
     public void onImageConfirmation() {
-        if (mCancel != null) {
-            mCancel.setVisibility(View.VISIBLE);
-            mCancel.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
-                    mCamera.rejectPicture();
-                }
-            });
-        }
-        mCapture.setOnTouchListener(null);
-        mCapture.setOnClickListener(new View.OnClickListener() {
+        View.OnClickListener listener = new View.OnClickListener() {
             @Override
             public void onClick(View view) {
                 mCapture.setOnClickListener(null);
                 mCapture.setOnTouchListener(new OnTouchListener(getContext()));
-                mCamera.confirmPicture();
+                if (view == mCancel) {
+                    mCamera.rejectPicture();
+                } else {
+                    mCamera.confirmPicture();
+                }
+                if (mCancel!= null) {
+                    mCancel.setVisibility(View.GONE);
+                }
             }
-        });
+        };
+        if (mCancel != null) {
+            mCancel.setVisibility(View.VISIBLE);
+            mCancel.setOnClickListener(listener);
+        }
+        mCapture.setOnTouchListener(null);
+        mCapture.setOnClickListener(listener);
     }
 
     /**
