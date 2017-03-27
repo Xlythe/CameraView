@@ -432,7 +432,11 @@ public class Camera2Module extends ICameraModule {
             newHeight = (int) (viewWidth * aspectRatio);
         }
 
-        float scale = Math.min((float) previewHeight / (float) newHeight, 1f);
+        // Bugfix for landscape, which appears zoomed in
+        float scale = 1f;
+        if (displayOrientation == 90 || displayOrientation == 270) {
+            scale = (float) previewHeight / (float) newHeight;
+        }
 
         float scaleX = (float) newWidth / (float) viewWidth;
         float scaleY = (float) newHeight / (float) viewHeight;
@@ -449,8 +453,11 @@ public class Camera2Module extends ICameraModule {
         matrix.postRotate(rotation, viewWidth / 2, viewHeight / 2);
 
         if (DEBUG) {
-            Log.d(TAG, String.format("Result: viewAspectRatio=%s, previewAspectRatio=%s, newWidth=%s, newHeight=%s, scaleX=%s, scaleY=%s, translateX=%s, translateY=%s, rotation=%s",
-                    ((double) viewHeight / (double) viewWidth), aspectRatio, newWidth, newHeight, scaleX, scaleY, translateX, translateY, rotation));
+            Log.d(TAG, String.format("Result: viewAspectRatio=%s, previewAspectRatio=%s, "
+                            + "newWidth=%s, newHeight=%s, scaleX=%s, scaleY=%s, scale=%s, "
+                            + "translateX=%s, translateY=%s, rotation=%s",
+                    ((float) viewHeight / (float) viewWidth), aspectRatio, newWidth, newHeight,
+                    scaleX, scaleY, scale, translateX, translateY, rotation));
         }
 
         setTransform(matrix);
