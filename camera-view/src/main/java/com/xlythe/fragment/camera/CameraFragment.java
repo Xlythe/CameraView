@@ -11,11 +11,14 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.os.Vibrator;
+import android.support.annotation.CallSuper;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
+import android.support.annotation.RequiresPermission;
 import android.support.v4.app.Fragment;
 import android.support.v4.content.ContextCompat;
 import android.text.format.DateFormat;
+import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -67,6 +70,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     private DisplayManager.DisplayListener mDisplayListener;
 
+    @SuppressWarnings({"MissingPermission"})
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
         if (requestCode == REQUEST_CODE_REQUIRED_PERMISSIONS) {
@@ -90,6 +94,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                 @Override
                 public void onDisplayRemoved(int displayId) {}
 
+                @SuppressWarnings({"MissingPermission"})
                 @Override
                 public void onDisplayChanged(int displayId) {
                     if (hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
@@ -114,6 +119,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         super.onDetach();
     }
 
+    @SuppressWarnings({"MissingPermission"})
     @Override
     public void onStart() {
         super.onStart();
@@ -168,6 +174,11 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     protected void onRecordStop() {}
 
+    @RequiresPermission(allOf = {
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE
+    })
     private void showCamera() {
         mCameraHolder.setVisibility(View.VISIBLE);
         mPermissionPrompt.setVisibility(View.GONE);
@@ -258,6 +269,21 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         }
     }
 
+    @Override
+    public void onFailure() {}
+
+    public void onImageConfirmation() {
+        mCapture.setOnTouchListener(null);
+        mCapture.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                mCapture.setOnClickListener(null);
+                mCapture.setOnTouchListener(new OnTouchListener(getContext()));
+                mCamera.confirmPicture();
+            }
+        });
+    }
+
     /**
      * Returns true if all given permissions are available
      */
@@ -293,7 +319,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         }
     }
 
-    protected class OnTouchListener implements View.OnTouchListener {
+    private class OnTouchListener implements View.OnTouchListener {
         private final int TAP = 1;
         private final int HOLD = 2;
         private final int RELEASE = 3;
@@ -324,20 +350,20 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             }
         };
 
-        protected OnTouchListener(Context context) {
+        OnTouchListener(Context context) {
             mContext = context;
         }
 
-        protected Context getContext() {
+        Context getContext() {
             return mContext;
         }
 
-        protected void onTap() {
+        void onTap() {
             mCamera.takePicture(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + PHOTO_EXT));
             onTakePicture();
         }
 
-        protected void onHold() {
+        void onHold() {
             vibrate();
             mCamera.startRecording(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + VIDEO_EXT));
             if (mDuration != null) {
@@ -349,7 +375,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             onRecordStart();
         }
 
-        protected void onRelease() {
+        void onRelease() {
             mCamera.stopRecording();
             mAnimator.cancel();
             if (mProgress != null) {

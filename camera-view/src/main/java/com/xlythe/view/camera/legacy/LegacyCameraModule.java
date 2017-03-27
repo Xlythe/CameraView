@@ -107,7 +107,7 @@ public class LegacyCameraModule extends ICameraModule {
 
     @Override
     public void takePicture(File file) {
-        mCamera.takePicture(null, null, new LegacyPictureListener(file, getRelativeCameraOrientation(false /* isPreview */), getOnImageCapturedListener()));
+        mCamera.takePicture(null, null, new LegacyPictureListener(file, getRelativeCameraOrientation(false /* isPreview */), this));
     }
 
     @Override
@@ -170,9 +170,7 @@ public class LegacyCameraModule extends ICameraModule {
             }
             mVideoRecorder = null;
         }
-        if (getOnVideoCapturedListener() != null) {
-            getOnVideoCapturedListener().onVideoCaptured(mVideoFile);
-        }
+        showVideoConfirmation(mVideoFile);
     }
 
     @Override

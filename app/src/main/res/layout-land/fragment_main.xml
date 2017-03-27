@@ -34,7 +34,7 @@
 
         <Button
             android:id="@id/capture"
-            android:text="Capture"
+            android:text="@string/btn_capture"
             android:layout_width="125dp"
             android:layout_height="match_parent" />
 

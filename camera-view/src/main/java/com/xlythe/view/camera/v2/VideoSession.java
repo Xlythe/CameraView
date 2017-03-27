@@ -237,9 +237,7 @@ class VideoSession extends PreviewSession {
                     // MediaRecorder can crash with 'stop failed.'
                     Log.e(TAG, "Let me guess. 'stop failed.'?", e);
                 }
-                if (mVideoListener != null) {
-                    mVideoListener.onVideoCaptured(mFile);
-                }
+                showVideoConfirmation(mFile);
             }
         }
 

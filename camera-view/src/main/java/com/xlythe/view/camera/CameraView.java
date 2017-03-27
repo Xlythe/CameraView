@@ -4,26 +4,33 @@ import android.Manifest;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
+import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.net.Uri;
 import android.os.Build;
 import android.support.annotation.Nullable;
 import android.support.annotation.RequiresPermission;
+import android.support.annotation.UiThread;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
 import android.view.TextureView;
+import android.view.View;
 import android.view.ViewConfiguration;
+import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.widget.FrameLayout;
+import android.widget.ImageView;
 
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
 
-public class CameraView extends TextureView {
+public class CameraView extends FrameLayout {
     static final String TAG = CameraView.class.getSimpleName();
     static final boolean DEBUG = true;
 
@@ -56,10 +63,10 @@ public class CameraView extends TextureView {
     }
 
     /**
-     * {@link SurfaceTextureListener} handles several lifecycle events on a
+     * {@link TextureView.SurfaceTextureListener} handles several lifecycle events on a
      * {@link TextureView}.
      */
-    private final SurfaceTextureListener mSurfaceTextureListener = new SurfaceTextureListener() {
+    private final TextureView.SurfaceTextureListener mSurfaceTextureListener = new TextureView.SurfaceTextureListener() {
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
             Log.v(TAG, "Surface Texture now available.");
@@ -103,6 +110,12 @@ public class CameraView extends TextureView {
 
     private ICameraModule mCameraModule;
 
+    private TextureView mCameraView;
+    private ImageView mCameraPreviewView;
+
+    private File mImagePendingConfirmation;
+    private File mVideoPendingConfirmation;
+
     public CameraView(Context context) {
         this(context, null);
     }
@@ -123,7 +136,6 @@ public class CameraView extends TextureView {
     }
 
     private void init(Context context, @Nullable AttributeSet attrs) {
-        setSurfaceTextureListener(mSurfaceTextureListener);
         if (Build.VERSION.SDK_INT >= 21) {
             mCameraModule = new Camera2Module(this);
         } else {
@@ -160,6 +172,22 @@ public class CameraView extends TextureView {
         });
     }
 
+    @Override
+    protected void onFinishInflate() {
+        super.onFinishInflate();
+        addView(mCameraView = new TextureView(getContext()));
+        addView(mCameraPreviewView = new ImageView(getContext()));
+        mCameraPreviewView.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        mCameraPreviewView.setVisibility(View.GONE);
+
+        mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
+    }
+
+    @Override
+    protected LayoutParams generateDefaultLayoutParams() {
+        return new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
+    }
+
     protected synchronized Status getStatus() {
         return mStatus;
     }
@@ -189,7 +217,7 @@ public class CameraView extends TextureView {
             Manifest.permission.WRITE_EXTERNAL_STORAGE
     })
     public synchronized void open() {
-        if (isAvailable()) {
+        if (mCameraView.isAvailable()) {
             setStatus(Status.OPEN);
             onOpen();
         } else {
@@ -212,6 +240,10 @@ public class CameraView extends TextureView {
         return getStatus() == Status.OPEN;
     }
 
+    /**
+     * @return One of {@link android.view.Surface#ROTATION_0}, {@link android.view.Surface#ROTATION_90},
+     * {@link android.view.Surface#ROTATION_180}, {@link android.view.Surface#ROTATION_270}.
+     */
     protected int getDisplayRotation() {
         Display display;
         if (Build.VERSION.SDK_INT >= 17) {
@@ -220,6 +252,38 @@ public class CameraView extends TextureView {
             display = ((WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay();
         }
         return display.getRotation();
+    }
+
+    @UiThread
+    public SurfaceTexture getSurfaceTexture() {
+        return mCameraView.getSurfaceTexture();
+    }
+
+    @UiThread
+    protected Matrix getTransform(Matrix matrix) {
+        return mCameraView.getTransform(matrix);
+    }
+
+    @UiThread
+    protected void setTransform(final Matrix matrix) {
+        mCameraView.setTransform(matrix);
+    }
+
+    void showImageConfirmation(File file) {
+        mCameraPreviewView.setVisibility(View.VISIBLE);
+        mCameraPreviewView.setImageURI(Uri.fromFile(file));
+        mImagePendingConfirmation = file;
+
+        if (getOnImageCapturedListener() != null) {
+            getOnImageCapturedListener().onImageConfirmation();
+        }
+    }
+
+    void showVideoConfirmation(File file) {
+        // TODO
+        if (getOnVideoCapturedListener() != null) {
+            getOnVideoCapturedListener().onVideoCaptured(file);
+        }
     }
 
     public void setQuality(Quality quality) {
@@ -258,6 +322,15 @@ public class CameraView extends TextureView {
         mCameraModule.takePicture(file);
     }
 
+    public void confirmPicture() {
+        if (mImagePendingConfirmation == null) {
+            throw new IllegalStateException("confirmPicture() called, but no picture was awaiting confirmation");
+        }
+        mCameraPreviewView.setVisibility(View.GONE);
+        getOnImageCapturedListener().onImageCaptured(mImagePendingConfirmation);
+        mImagePendingConfirmation = null;
+    }
+
     public void startRecording(File file) {
         mCameraModule.startRecording(file);
     }
@@ -268,6 +341,15 @@ public class CameraView extends TextureView {
 
     public boolean isRecording() {
         return mCameraModule.isRecording();
+    }
+
+    public void confirmVideo() {
+        if (mVideoPendingConfirmation == null) {
+            throw new IllegalStateException("confirmPicture() called, but no picture was awaiting confirmation");
+        }
+        mCameraPreviewView.setVisibility(View.GONE);
+        getOnImageCapturedListener().onImageCaptured(mVideoPendingConfirmation);
+        mVideoPendingConfirmation = null;
     }
 
     public boolean hasFrontFacingCamera() {
@@ -443,6 +525,7 @@ public class CameraView extends TextureView {
     }
 
     public interface OnImageCapturedListener {
+        void onImageConfirmation();
         void onImageCaptured(File file);
         void onFailure();
     }

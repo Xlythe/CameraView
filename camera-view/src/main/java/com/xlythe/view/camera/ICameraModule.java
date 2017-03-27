@@ -99,6 +99,13 @@ public abstract class ICameraModule {
     public abstract void takePicture(File file);
 
     /**
+     * Informs the CameraView to pause and show the taken photo
+     */
+    public void showImageConfirmation(File file) {
+        mView.showImageConfirmation(file);
+    }
+
+    /**
      * Records a video. Set a OnVideoCapturedListener to be notified of when
      * the video has finished saving.
      */
@@ -114,6 +121,13 @@ public abstract class ICameraModule {
      * Returns true if recording.
      */
     public abstract boolean isRecording();
+
+    /**
+     * Informs the CameraView to pause and show the taken video
+     */
+    public void showVideoConfirmation(File file) {
+        mView.showVideoConfirmation(file);
+    }
 
     public abstract void toggleCamera();
 

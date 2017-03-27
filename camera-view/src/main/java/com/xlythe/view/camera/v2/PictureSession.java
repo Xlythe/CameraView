@@ -1,7 +1,10 @@
 package com.xlythe.view.camera.v2;
 
 import android.annotation.TargetApi;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
+import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
@@ -67,7 +70,7 @@ class PictureSession extends PreviewSession {
     }
 
     void takePicture(@NonNull File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
-        mPictureSurface.initializePicture(file, getOnImageCapturedListener());
+        mPictureSurface.initializePicture(file);
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
@@ -110,9 +113,17 @@ class PictureSession extends PreviewSession {
             byte[] bytes = getBytes();
             FileOutputStream output = null;
             try {
+                // For JPEG files, we flip the bytes
+                if (IMAGE_FORMAT == ImageFormat.JPEG) {
+                    if (mOrientation == 180 || mOrientation == 270) {
+                        bytes = flip(bytes);
+                    }
+                }
+
                 output = new FileOutputStream(mFile);
                 output.write(bytes);
 
+                // For all other files, we add Exif metadata so that others know we're flipped
                 if (IMAGE_FORMAT != ImageFormat.JPEG) {
                     int orientation = 1;
                     switch (mOrientation) {
@@ -195,6 +206,25 @@ class PictureSession extends PreviewSession {
             yuv.compressToJpeg(new Rect(0, 0, width, height), 100, out);
             return out.toByteArray();
         }
+
+        public static byte[] flip(byte[] image) {
+            Bitmap original = BitmapFactory.decodeByteArray(image, 0, image.length);
+            Matrix matrix = new Matrix();
+            matrix.postRotate(180);
+            Bitmap flipped = Bitmap.createBitmap(original, 0, 0, original.getWidth(), original.getHeight(), matrix, true);
+
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            flipped.compress(Bitmap.CompressFormat.JPEG, 100, bos);
+            try {
+                return bos.toByteArray();
+            } finally {
+                try {
+                    bos.close();
+                } catch (IOException e) {
+                    Log.e(TAG, "Failed to close ByteArrayOutputStream when flipping image", e);
+                }
+            }
+        }
     }
 
     private static final class PictureSurface extends CameraSurface {
@@ -249,15 +279,12 @@ class PictureSession extends PreviewSession {
                     @Override
                     public void run() {
                         if (mFile != null) {
-                            final CameraView.OnImageCapturedListener listener = mPhotoListener;
                             final File file = mFile;
                             new ImageSaver(reader.acquireLatestImage(), mCameraView.getRelativeCameraOrientation(), mFile) {
                                 @UiThread
                                 @Override
                                 protected void onPostExecute(Void aVoid) {
-                                    if (listener != null) {
-                                        listener.onImageCaptured(file);
-                                    }
+                                    showImageConfirmation(file);
                                 }
                             }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
                             mFile = null;
@@ -270,7 +297,6 @@ class PictureSession extends PreviewSession {
         };
 
         private ImageReader mImageReader;
-        private CameraView.OnImageCapturedListener mPhotoListener;
         private File mFile;
 
         PictureSurface(Camera2Module camera2Module) {
@@ -283,13 +309,12 @@ class PictureSession extends PreviewSession {
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getBackgroundHandler());
         }
 
-        void initializePicture(File file, CameraView.OnImageCapturedListener listener) {
+        void initializePicture(File file) {
             mFile = file;
             if (mFile.exists()) {
                 Log.w(TAG, "File already exists. Deleting.");
                 mFile.delete();
             }
-            mPhotoListener = listener;
         }
 
         @Override

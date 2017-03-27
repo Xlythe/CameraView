@@ -2,4 +2,7 @@
 
     <string name="app_name">Camera Sample</string>
 
+    <string name="btn_capture">Capture</string>
+    <string name="btn_confirm">Confirm</string>
+
 </resources>

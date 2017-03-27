@@ -12,6 +12,7 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import com.xlythe.fragment.camera.CameraFragment;
@@ -24,13 +25,18 @@ import java.nio.channels.FileChannel;
 
 public class MainFragment extends CameraFragment {
 
+    private TextView mCaptureBtn;
+
     @Override
     public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        return View.inflate(getContext(), R.layout.fragment_main, container);
+        View view = View.inflate(getContext(), R.layout.fragment_main, container);
+        mCaptureBtn = (TextView) view.findViewById(R.id.capture);
+        return view;
     }
 
     @Override
     public void onImageCaptured(final File file) {
+        mCaptureBtn.setText(R.string.btn_capture);
         new FileTransferAsyncTask() {
             @Override
             protected void onPostExecute(File file) {
@@ -49,6 +55,12 @@ public class MainFragment extends CameraFragment {
                 broadcastVideo(file);
             }
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
+    }
+
+    @Override
+    public void onImageConfirmation() {
+        super.onImageConfirmation();
+        mCaptureBtn.setText(R.string.btn_confirm);
     }
 
     @Override

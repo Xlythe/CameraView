@@ -16,6 +16,7 @@ import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
@@ -123,6 +124,14 @@ abstract class SessionImpl implements Camera2Module.Session {
                 Log.d(TAG, String.format("Initializing %s with width=%s and height=%s", getClass().getSimpleName(), size.getWidth(), size.getHeight()));
             }
             mSize = size;
+        }
+
+        void showImageConfirmation(File file) {
+            mCameraView.showImageConfirmation(file);
+        }
+
+        void showVideoConfirmation(File file) {
+            mCameraView.showVideoConfirmation(file);
         }
 
         int getWidth() {

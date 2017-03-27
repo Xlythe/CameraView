@@ -22,15 +22,15 @@ class LegacyPictureListener implements Camera.PictureCallback {
     private final int mOrientation;
 
     // The listener to notify when we're done.
-    private final CameraView.OnImageCapturedListener mListener;
+    private final LegacyCameraModule mModule;
 
     private static final double MAX_UPPER = 2560.0;
     private static final double MAX_LOWER = 1440.0;
 
-    LegacyPictureListener(File file, int orientation, CameraView.OnImageCapturedListener listener) {
+    LegacyPictureListener(File file, int orientation, LegacyCameraModule module) {
         mFile = file;
         mOrientation = orientation;
-        mListener = listener;
+        mModule = module;
     }
 
     @Override
@@ -52,7 +52,7 @@ class LegacyPictureListener implements Camera.PictureCallback {
 
             @Override
             protected void onPostExecute(Void aVoid) {
-                mListener.onImageCaptured(mFile);
+                mModule.showImageConfirmation(mFile);
             }
         }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
         camera.startPreview();
