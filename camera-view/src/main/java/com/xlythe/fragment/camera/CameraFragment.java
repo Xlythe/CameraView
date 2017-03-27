@@ -66,6 +66,9 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @Nullable
     private CompoundButton mToggle;
 
+    @Nullable
+    private View mCancel;
+
     private ProgressBarAnimator mAnimator = new ProgressBarAnimator();
 
     private DisplayManager.DisplayListener mDisplayListener;
@@ -216,6 +219,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mCapture = mCameraHolder.findViewById(R.id.capture);
         mProgress = (ProgressBar) view.findViewById(R.id.progress);
         mDuration = (TextView) view.findViewById(R.id.duration);
+        mCancel = view.findViewById(R.id.cancel);
 
         if (mCameraHolder == null) {
             throw new IllegalStateException("No View found with id R.id.layout_camera");
@@ -267,12 +271,25 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         if (mDuration != null) {
             mDuration.setVisibility(View.GONE);
         }
+
+        if (mCancel != null) {
+            mCancel.setVisibility(View.GONE);
+        }
     }
 
     @Override
     public void onFailure() {}
 
     public void onImageConfirmation() {
+        if (mCancel != null) {
+            mCancel.setVisibility(View.VISIBLE);
+            mCancel.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    mCamera.rejectPicture();
+                }
+            });
+        }
         mCapture.setOnTouchListener(null);
         mCapture.setOnClickListener(new View.OnClickListener() {
             @Override

@@ -331,6 +331,14 @@ public class CameraView extends FrameLayout {
         mImagePendingConfirmation = null;
     }
 
+    public void rejectPicture() {
+        if (mImagePendingConfirmation == null) {
+            throw new IllegalStateException("rejectPicture() called, but no picture was awaiting confirmation");
+        }
+        mCameraPreviewView.setVisibility(View.GONE);
+        mImagePendingConfirmation = null;
+    }
+
     public void startRecording(File file) {
         mCameraModule.startRecording(file);
     }
@@ -345,10 +353,18 @@ public class CameraView extends FrameLayout {
 
     public void confirmVideo() {
         if (mVideoPendingConfirmation == null) {
-            throw new IllegalStateException("confirmPicture() called, but no picture was awaiting confirmation");
+            throw new IllegalStateException("confirmVideo() called, but no video was awaiting confirmation");
         }
         mCameraPreviewView.setVisibility(View.GONE);
-        getOnImageCapturedListener().onImageCaptured(mVideoPendingConfirmation);
+        getOnVideoCapturedListener().onVideoCaptured(mVideoPendingConfirmation);
+        mVideoPendingConfirmation = null;
+    }
+
+    public void rejectVideo() {
+        if (mVideoPendingConfirmation == null) {
+            throw new IllegalStateException("rejectVideo() called, but no video was awaiting confirmation");
+        }
+        mCameraPreviewView.setVisibility(View.GONE);
         mVideoPendingConfirmation = null;
     }
 

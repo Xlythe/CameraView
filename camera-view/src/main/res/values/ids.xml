@@ -8,4 +8,5 @@
     <item name="duration" type="id" />
     <item name="progress" type="id" />
     <item name="toggle" type="id" />
+    <item name="cancel" type="id" />
 </resources>
