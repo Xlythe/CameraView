@@ -57,6 +57,8 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     private View mCapture;
 
+    private View mConfirm;
+
     @Nullable
     private TextView mDuration;
 
@@ -220,6 +222,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mProgress = (ProgressBar) view.findViewById(R.id.progress);
         mDuration = (TextView) view.findViewById(R.id.duration);
         mCancel = view.findViewById(R.id.cancel);
+        mConfirm = view.findViewById(R.id.confirm);
 
         if (mCameraHolder == null) {
             throw new IllegalStateException("No View found with id R.id.layout_camera");
@@ -241,10 +244,21 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             throw new IllegalStateException("No View found with id R.id.request_permissions");
         }
 
+        if (mConfirm == null) {
+            throw new IllegalStateException("No View found with id R.id.confirm");
+        }
+
         mCamera.setOnImageCapturedListener(this);
         mCamera.setOnVideoCapturedListener(this);
 
         mCapture.setOnTouchListener(new OnTouchListener(getContext()));
+
+        mConfirm.setOnClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                mCamera.confirmPicture();
+            }
+        });
 
         mPermissionRequest.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -275,6 +289,8 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         if (mCancel != null) {
             mCancel.setVisibility(View.GONE);
         }
+
+        mConfirm.setVisibility(View.GONE);
     }
 
     @Override
@@ -284,15 +300,20 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         View.OnClickListener listener = new View.OnClickListener() {
             @Override
             public void onClick(View view) {
-                mCapture.setOnClickListener(null);
-                mCapture.setOnTouchListener(new OnTouchListener(getContext()));
                 if (view == mCancel) {
                     mCamera.rejectPicture();
                 } else {
                     mCamera.confirmPicture();
                 }
+
+                // After confirming/rejecting, show our buttons again
+                mConfirm.setVisibility(View.GONE);
+                mCapture.setVisibility(View.VISIBLE);
                 if (mCancel!= null) {
                     mCancel.setVisibility(View.GONE);
+                }
+                if (mToggle != null) {
+                    mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
                 }
             }
         };
@@ -300,8 +321,12 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             mCancel.setVisibility(View.VISIBLE);
             mCancel.setOnClickListener(listener);
         }
-        mCapture.setOnTouchListener(null);
-        mCapture.setOnClickListener(listener);
+        if (mToggle != null) {
+            mToggle.setVisibility(View.GONE);
+        }
+        mCapture.setVisibility(View.GONE);
+        mConfirm.setVisibility(View.VISIBLE);
+        mConfirm.setOnClickListener(listener);
     }
 
     /**

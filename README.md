@@ -8,7 +8,7 @@ Where to Download
 -----------------
 ```groovy
 dependencies {
-  compile 'com.xlythe:camera-view:1.0.6'
+  compile 'com.xlythe:camera-view:1.0.7'
 }
 ```
 
@@ -48,7 +48,7 @@ public class MainFragment extends CameraFragment {
 }
 ```
 
-Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any], @id/camera [CameraView], id/capture [Any], and @id/request_permissions [Any].
+Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any], @id/camera [CameraView], id/capture [Any], id/confirm [Any], and @id/request_permissions [Any].
 ```xml
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:camera="http://schemas.android.com/apk/res-auto"
@@ -88,11 +88,17 @@ Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any], 
             android:layout_width="match_parent"
             android:layout_height="58dp" />
 
+        <Button
+            android:id="@id/confirm"
+            android:text="Confirm"
+            android:layout_width="match_parent"
+            android:layout_height="58dp" />
+
     </LinearLayout>
 
 </FrameLayout>
 ```
-Optionally, you may also include @id/duration [TextView], @id/progress [ProgressBar], @id/toggle [CompoundButton]
+Optionally, you may also include @id/duration [TextView], @id/progress [ProgressBar], @id/toggle [CompoundButton], and @id/cancel [Any]
 
 CameraView
 -----------------
