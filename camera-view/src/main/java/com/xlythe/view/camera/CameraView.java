@@ -32,7 +32,7 @@ import java.io.File;
 
 public class CameraView extends FrameLayout {
     static final String TAG = CameraView.class.getSimpleName();
-    static final boolean DEBUG = true;
+    static final boolean DEBUG = false;
 
     public static final long INDEFINITE_VIDEO_DURATION = -1;
     public static final long INDEFINITE_VIDEO_SIZE = -1;
@@ -115,6 +115,9 @@ public class CameraView extends FrameLayout {
 
     private File mImagePendingConfirmation;
     private File mVideoPendingConfirmation;
+
+    private boolean mIsImageConfirmationEnabled = true;
+    private boolean mIsVideoConfirmationEnabled = false;
 
     public CameraView(Context context) {
         this(context, null);
@@ -269,20 +272,43 @@ public class CameraView extends FrameLayout {
         mCameraView.setTransform(matrix);
     }
 
-    void showImageConfirmation(File file) {
-        mCameraPreviewView.setVisibility(View.VISIBLE);
-        mCameraPreviewView.setImageURI(Uri.fromFile(file));
-        mImagePendingConfirmation = file;
+    public void setImageConfirmationEnabled(boolean enabled) {
+        mIsImageConfirmationEnabled = enabled;
+    }
 
-        if (getOnImageCapturedListener() != null) {
-            getOnImageCapturedListener().onImageConfirmation();
+    public void setVideoConfirmationEnabled(boolean enabled) {
+        mIsVideoConfirmationEnabled = enabled;
+    }
+
+    void showImageConfirmation(File file) {
+        if (mIsImageConfirmationEnabled) {
+            mCameraPreviewView.setVisibility(View.VISIBLE);
+            mCameraPreviewView.setImageURI(Uri.fromFile(file));
+            mImagePendingConfirmation = file;
+
+            if (getOnImageCapturedListener() != null) {
+                getOnImageCapturedListener().onImageConfirmation();
+            }
+        } else {
+            if (getOnImageCapturedListener() != null) {
+                getOnImageCapturedListener().onImageCaptured(file);
+            }
         }
     }
 
     void showVideoConfirmation(File file) {
-        // TODO
-        if (getOnVideoCapturedListener() != null) {
-            getOnVideoCapturedListener().onVideoCaptured(file);
+        if (mIsVideoConfirmationEnabled) {
+            mCameraPreviewView.setVisibility(View.VISIBLE);
+            mCameraPreviewView.setImageURI(Uri.fromFile(file));
+            mVideoPendingConfirmation = file;
+
+            if (getOnVideoCapturedListener() != null) {
+                getOnVideoCapturedListener().onVideoConfirmation();
+            }
+        } else {
+            if (getOnVideoCapturedListener() != null) {
+                getOnVideoCapturedListener().onVideoCaptured(file);
+            }
         }
     }
 
@@ -547,6 +573,7 @@ public class CameraView extends FrameLayout {
     }
 
     public interface OnVideoCapturedListener {
+        void onVideoConfirmation();
         void onVideoCaptured(File file);
         void onFailure();
     }

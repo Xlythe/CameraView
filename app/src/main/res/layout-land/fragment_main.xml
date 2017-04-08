@@ -38,16 +38,16 @@
             android:orientation="vertical">
 
             <Button
-                android:id="@id/cancel"
-                android:text="@string/btn_cancel"
+                android:id="@id/confirm"
+                android:text="@string/btn_confirm"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
                 style="?android:buttonBarButtonStyle" />
 
             <Button
-                android:id="@id/confirm"
-                android:text="@string/btn_confirm"
+                android:id="@id/cancel"
+                android:text="@string/btn_cancel"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"
                 android:layout_weight="1"
@@ -60,6 +60,12 @@
                 android:layout_height="0dp"
                 android:layout_weight="1"
                 style="?android:buttonBarButtonStyle" />
+
+            <CheckBox
+                android:id="@id/toggle"
+                android:layout_width="wrap_content"
+                android:layout_height="50dp"
+                android:layout_gravity="center" />
 
         </LinearLayout>
 

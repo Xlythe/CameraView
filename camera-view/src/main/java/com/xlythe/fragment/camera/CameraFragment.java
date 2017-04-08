@@ -244,21 +244,22 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             throw new IllegalStateException("No View found with id R.id.request_permissions");
         }
 
-        if (mConfirm == null) {
-            throw new IllegalStateException("No View found with id R.id.confirm");
-        }
-
         mCamera.setOnImageCapturedListener(this);
         mCamera.setOnVideoCapturedListener(this);
 
         mCapture.setOnTouchListener(new OnTouchListener(getContext()));
 
-        mConfirm.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                mCamera.confirmPicture();
-            }
-        });
+        if (mConfirm != null) {
+            mConfirm.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    mCamera.confirmPicture();
+                }
+            });
+        } else {
+            mCamera.setImageConfirmationEnabled(false);
+            mCamera.setVideoConfirmationEnabled(false);
+        }
 
         mPermissionRequest.setOnClickListener(new View.OnClickListener() {
             @Override
@@ -296,6 +297,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @Override
     public void onFailure() {}
 
+    @Override
     public void onImageConfirmation() {
         View.OnClickListener listener = new View.OnClickListener() {
             @Override
@@ -304,6 +306,40 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                     mCamera.rejectPicture();
                 } else {
                     mCamera.confirmPicture();
+                }
+
+                // After confirming/rejecting, show our buttons again
+                mConfirm.setVisibility(View.GONE);
+                mCapture.setVisibility(View.VISIBLE);
+                if (mCancel!= null) {
+                    mCancel.setVisibility(View.GONE);
+                }
+                if (mToggle != null) {
+                    mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
+                }
+            }
+        };
+        if (mCancel != null) {
+            mCancel.setVisibility(View.VISIBLE);
+            mCancel.setOnClickListener(listener);
+        }
+        if (mToggle != null) {
+            mToggle.setVisibility(View.GONE);
+        }
+        mCapture.setVisibility(View.GONE);
+        mConfirm.setVisibility(View.VISIBLE);
+        mConfirm.setOnClickListener(listener);
+    }
+
+    @Override
+    public void onVideoConfirmation() {
+        View.OnClickListener listener = new View.OnClickListener() {
+            @Override
+            public void onClick(View view) {
+                if (view == mCancel) {
+                    mCamera.rejectVideo();
+                } else {
+                    mCamera.confirmVideo();
                 }
 
                 // After confirming/rejecting, show our buttons again
