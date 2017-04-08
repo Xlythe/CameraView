@@ -142,6 +142,10 @@ abstract class SessionImpl implements Camera2Module.Session {
             return mSize.getHeight();
         }
 
+        boolean isUsingFrontFacingCamera() {
+            return mCameraView.isUsingFrontFacingCamera();
+        }
+
         abstract void close();
 
         abstract Surface getSurface();

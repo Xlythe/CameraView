@@ -98,11 +98,16 @@ class PictureSession extends PreviewSession {
     private static class ImageSaver extends AsyncTask<Void, Void, Void> {
         private final Image mImage;
         private final int mOrientation;
+
+        // If true, the picture taken is reversed and needs to be flipped.
+        // Typical with front facing cameras.
+        private final boolean mIsReversed;
         private final File mFile;
 
-        ImageSaver(Image image, int orientation, File file) {
+        ImageSaver(Image image, int orientation, boolean reversed, File file) {
             mImage = image;
             mOrientation = orientation;
+            mIsReversed = reversed;
             mFile = file;
         }
 
@@ -116,7 +121,14 @@ class PictureSession extends PreviewSession {
                 // For JPEG files, we flip the bytes
                 if (IMAGE_FORMAT == ImageFormat.JPEG) {
                     if (mOrientation == 180 || mOrientation == 270) {
-                        bytes = flip(bytes);
+                        Matrix matrix = new Matrix();
+                        matrix.postRotate(180);
+                        bytes = transform(bytes, matrix);
+                    }
+                    if (mIsReversed) {
+                        Matrix matrix = new Matrix();
+                        matrix.postScale(-1, 1);
+                        bytes = transform(bytes, matrix);
                     }
                 }
 
@@ -207,10 +219,8 @@ class PictureSession extends PreviewSession {
             return out.toByteArray();
         }
 
-        public static byte[] flip(byte[] image) {
+        public static byte[] transform(byte[] image, Matrix matrix) {
             Bitmap original = BitmapFactory.decodeByteArray(image, 0, image.length);
-            Matrix matrix = new Matrix();
-            matrix.postRotate(180);
             Bitmap flipped = Bitmap.createBitmap(original, 0, 0, original.getWidth(), original.getHeight(), matrix, true);
 
             ByteArrayOutputStream bos = new ByteArrayOutputStream();
@@ -280,7 +290,11 @@ class PictureSession extends PreviewSession {
                     public void run() {
                         if (mFile != null) {
                             final File file = mFile;
-                            new ImageSaver(reader.acquireLatestImage(), mCameraView.getRelativeCameraOrientation(), mFile) {
+                            new ImageSaver(
+                                    reader.acquireLatestImage(),
+                                    mCameraView.getRelativeCameraOrientation(),
+                                    isUsingFrontFacingCamera(),
+                                    mFile) {
                                 @UiThread
                                 @Override
                                 protected void onPostExecute(Void aVoid) {

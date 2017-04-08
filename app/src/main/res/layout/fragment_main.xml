@@ -60,6 +60,11 @@
                 android:layout_weight="1"
                 style="?android:buttonBarButtonStyle" />
 
+            <CheckBox
+                android:id="@id/toggle"
+                android:layout_width="50dp"
+                android:layout_height="match_parent" />
+
         </LinearLayout>
 
     </LinearLayout>
