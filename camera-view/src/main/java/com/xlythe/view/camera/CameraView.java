@@ -111,7 +111,8 @@ public class CameraView extends FrameLayout {
     private ICameraModule mCameraModule;
 
     private TextureView mCameraView;
-    private ImageView mCameraPreviewView;
+    private ImageView mImagePreview;
+    private TextureView mVideoPreview;
 
     private File mImagePendingConfirmation;
     private File mVideoPendingConfirmation;
@@ -179,9 +180,9 @@ public class CameraView extends FrameLayout {
     protected void onFinishInflate() {
         super.onFinishInflate();
         addView(mCameraView = new TextureView(getContext()));
-        addView(mCameraPreviewView = new ImageView(getContext()));
-        mCameraPreviewView.setScaleType(ImageView.ScaleType.CENTER_CROP);
-        mCameraPreviewView.setVisibility(View.GONE);
+        addView(mImagePreview = new ImageView(getContext()));
+        mImagePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        mImagePreview.setVisibility(View.GONE);
 
         mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
     }
@@ -282,8 +283,8 @@ public class CameraView extends FrameLayout {
 
     void showImageConfirmation(File file) {
         if (mIsImageConfirmationEnabled) {
-            mCameraPreviewView.setVisibility(View.VISIBLE);
-            mCameraPreviewView.setImageURI(Uri.fromFile(file));
+            mImagePreview.setVisibility(View.VISIBLE);
+            mImagePreview.setImageURI(Uri.fromFile(file));
             mImagePendingConfirmation = file;
 
             if (getOnImageCapturedListener() != null) {
@@ -296,10 +297,9 @@ public class CameraView extends FrameLayout {
         }
     }
 
-    void showVideoConfirmation(File file) {
+    void showVideoConfirmation(final File file) {
         if (mIsVideoConfirmationEnabled) {
-            mCameraPreviewView.setVisibility(View.VISIBLE);
-            mCameraPreviewView.setImageURI(Uri.fromFile(file));
+            addView(mVideoPreview = new VideoView(getContext(), file));
             mVideoPendingConfirmation = file;
 
             if (getOnVideoCapturedListener() != null) {
@@ -352,7 +352,7 @@ public class CameraView extends FrameLayout {
         if (mImagePendingConfirmation == null) {
             throw new IllegalStateException("confirmPicture() called, but no picture was awaiting confirmation");
         }
-        mCameraPreviewView.setVisibility(View.GONE);
+        mImagePreview.setVisibility(View.GONE);
         getOnImageCapturedListener().onImageCaptured(mImagePendingConfirmation);
         mImagePendingConfirmation = null;
     }
@@ -361,7 +361,10 @@ public class CameraView extends FrameLayout {
         if (mImagePendingConfirmation == null) {
             throw new IllegalStateException("rejectPicture() called, but no picture was awaiting confirmation");
         }
-        mCameraPreviewView.setVisibility(View.GONE);
+        mImagePreview.setVisibility(View.GONE);
+        if (!mImagePendingConfirmation.delete()) {
+            Log.w(TAG, "Attempted to clean up pending image file, but failed");
+        }
         mImagePendingConfirmation = null;
     }
 
@@ -381,7 +384,7 @@ public class CameraView extends FrameLayout {
         if (mVideoPendingConfirmation == null) {
             throw new IllegalStateException("confirmVideo() called, but no video was awaiting confirmation");
         }
-        mCameraPreviewView.setVisibility(View.GONE);
+        removeView(mVideoPreview);
         getOnVideoCapturedListener().onVideoCaptured(mVideoPendingConfirmation);
         mVideoPendingConfirmation = null;
     }
@@ -390,7 +393,10 @@ public class CameraView extends FrameLayout {
         if (mVideoPendingConfirmation == null) {
             throw new IllegalStateException("rejectVideo() called, but no video was awaiting confirmation");
         }
-        mCameraPreviewView.setVisibility(View.GONE);
+        removeView(mVideoPreview);
+        if (!mVideoPendingConfirmation.delete()) {
+            Log.w(TAG, "Attempted to clean up pending video file, but failed");
+        }
         mVideoPendingConfirmation = null;
     }
 

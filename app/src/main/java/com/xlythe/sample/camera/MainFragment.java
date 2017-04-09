@@ -24,6 +24,7 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 
 public class MainFragment extends CameraFragment {
+    private static final String TAG = "CameraSample";
 
     @Override
     public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
@@ -63,7 +64,7 @@ public class MainFragment extends CameraFragment {
     }
 
     private void report(String msg) {
-        Log.d("CameraSample", msg);
+        Log.d(TAG, msg);
         Toast.makeText(getContext(), msg, Toast.LENGTH_SHORT).show();
     }
 
@@ -100,12 +101,19 @@ public class MainFragment extends CameraFragment {
             FileChannel outputChannel = null;
             FileChannel inputChannel = null;
             try {
-                newFile.delete();
+                if (newFile.exists()) {
+                    Log.w(TAG, "File " + newFile + " already exists. Replacing.");
+                    if (!newFile.delete()) {
+                        throw new IOException("Failed to delete destination file.");
+                    }
+                }
                 outputChannel = new FileOutputStream(newFile).getChannel();
                 inputChannel = new FileInputStream(file).getChannel();
                 inputChannel.transferTo(0, inputChannel.size(), outputChannel);
                 inputChannel.close();
-                file.delete();
+                if (!file.delete()) {
+                    throw new IOException("Failed to delete original file.");
+                }
             } finally {
                 if (inputChannel != null) inputChannel.close();
                 if (outputChannel != null) outputChannel.close();
