@@ -256,6 +256,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                     mCamera.confirmPicture();
                 }
             });
+            mCamera.setImageConfirmationEnabled(true);
             mCamera.setVideoConfirmationEnabled(true);
         } else {
             mCamera.setImageConfirmationEnabled(false);

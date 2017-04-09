@@ -117,7 +117,7 @@ public class CameraView extends FrameLayout {
     private File mImagePendingConfirmation;
     private File mVideoPendingConfirmation;
 
-    private boolean mIsImageConfirmationEnabled = true;
+    private boolean mIsImageConfirmationEnabled = false;
     private boolean mIsVideoConfirmationEnabled = false;
 
     public CameraView(Context context) {
