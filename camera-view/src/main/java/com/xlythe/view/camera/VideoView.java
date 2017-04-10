@@ -27,6 +27,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     @Override
     public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
+        prepare();
         play();
     }
 
@@ -35,13 +36,14 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     @Override
     public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
+        mMediaPlayer.release();
         return true;
     }
 
     @Override
     public void onSurfaceTextureUpdated(SurfaceTexture texture) {}
 
-    private void play() {
+    protected void prepare() {
         Surface surface = new Surface(getSurfaceTexture());
 
         try {
@@ -49,9 +51,32 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
             mMediaPlayer.setSurface(surface);
             mMediaPlayer.prepare();
             mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-            mMediaPlayer.start();
-        } catch (IOException e) {
+        } catch (IllegalStateException | IOException e) {
             e.printStackTrace();
         }
+    }
+
+    protected boolean play() {
+        try {
+            mMediaPlayer.start();
+            return true;
+        } catch (IllegalStateException e) {
+            e.printStackTrace();
+        }
+        return false;
+    }
+
+    protected boolean pause() {
+        try {
+            mMediaPlayer.pause();
+            return true;
+        } catch (IllegalStateException e) {
+            e.printStackTrace();
+        }
+        return false;
+    }
+
+    protected boolean isPlaying() {
+        return mMediaPlayer.isPlaying();
     }
 }
