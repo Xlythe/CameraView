@@ -69,7 +69,7 @@ public class CameraView extends FrameLayout {
     private final TextureView.SurfaceTextureListener mSurfaceTextureListener = new TextureView.SurfaceTextureListener() {
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
-            Log.v(TAG, "Surface Texture now available.");
+            if (DEBUG) Log.v(TAG, "Surface Texture now available.");
             synchronized (CameraView.this) {
                 if (getStatus() == Status.AWAITING_TEXTURE) {
                     setStatus(Status.OPEN);
@@ -302,7 +302,9 @@ public class CameraView extends FrameLayout {
         if (mIsVideoConfirmationEnabled) {
             mVideoPreview.setVisibility(View.VISIBLE);
             mVideoPreview.setFile(file);
-            mVideoPreview.play();
+            if (!mVideoPreview.play()) {
+                Log.w(TAG, "Failed to play video preview");
+            }
 
             mVideoPendingConfirmation = file;
 

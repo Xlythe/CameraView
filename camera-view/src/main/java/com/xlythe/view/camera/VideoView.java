@@ -8,6 +8,7 @@ import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.support.annotation.Nullable;
 import android.util.AttributeSet;
+import android.util.Log;
 import android.view.Surface;
 import android.view.TextureView;
 
@@ -16,11 +17,18 @@ import java.io.FileInputStream;
 import java.io.IOException;
 
 public class VideoView extends TextureView implements TextureView.SurfaceTextureListener {
-    private static final boolean DEBUG = false;
+    private static final String TAG = "VideoView";
+    private static final boolean DEBUG = true;
 
     private final MediaPlayer mMediaPlayer = new MediaPlayer();
 
     private File mFile;
+
+    // If true, the texture view is ready to be drawn on
+    private boolean mIsAvailable;
+
+    // If true, we should be playing
+    private boolean mIsPlaying;
 
     public VideoView(Context context) {
         this(context, null);
@@ -62,14 +70,17 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     }
 
     public void setFile(File file) {
+        if (DEBUG) Log.d(TAG, "File set to " + file);
         this.mFile = file;
-        if (getSurfaceTexture() != null) {
+        if (mIsAvailable) {
             prepare();
         }
     }
 
     @Override
     public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
+        if (DEBUG) Log.d(TAG, "Texture available");
+        mIsAvailable = true;
         if (mFile != null) {
             prepare();
         }
@@ -80,6 +91,8 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     @Override
     public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
+        if (DEBUG) Log.d(TAG, "Texture destroyed");
+        mIsAvailable = false;
         mMediaPlayer.release();
         return true;
     }
@@ -88,6 +101,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     public void onSurfaceTextureUpdated(SurfaceTexture texture) {}
 
     protected void prepare() {
+        if (DEBUG) Log.d(TAG, "Preparing video");
         Surface surface = new Surface(getSurfaceTexture());
 
         try {
@@ -115,11 +129,16 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     }
 
     public void seekToFirstFrame() {
+        if (DEBUG) Log.d(TAG, "seekToFirstFrame()");
         try {
             mMediaPlayer.setOnSeekCompleteListener(new MediaPlayer.OnSeekCompleteListener() {
                 @Override
                 public void onSeekComplete(MediaPlayer mediaPlayer) {
-                    mediaPlayer.pause();
+                    if (DEBUG) Log.d(TAG, "Seek completed");
+                    mMediaPlayer.setOnSeekCompleteListener(null);
+                    if (!mIsPlaying) {
+                        mediaPlayer.pause();
+                    }
                 }
             });
             mMediaPlayer.start();
@@ -130,8 +149,10 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     }
 
     public boolean play() {
+        if (DEBUG) Log.d(TAG, "play()");
         try {
             mMediaPlayer.start();
+            mIsPlaying = true;
             return true;
         } catch (IllegalStateException e) {
             if (DEBUG) e.printStackTrace();
@@ -140,6 +161,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     }
 
     public boolean pause() {
+        if (DEBUG) Log.d(TAG, "pause()");
         try {
             mMediaPlayer.pause();
             return true;
