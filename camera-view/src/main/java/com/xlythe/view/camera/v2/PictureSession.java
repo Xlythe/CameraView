@@ -317,6 +317,7 @@ class PictureSession extends PreviewSession {
             super(camera2Module);
         }
 
+        @Override
         void initialize(StreamConfigurationMap map) {
             super.initialize(choosePictureSize(map));
             mImageReader = ImageReader.newInstance(getWidth(), getHeight(), IMAGE_FORMAT, 1 /* maxImages */);
