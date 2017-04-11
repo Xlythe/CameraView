@@ -192,7 +192,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mPermissionPrompt.setVisibility(View.VISIBLE);
     }
 
-    private String stringForTime(int timeMs) {
+    private static String stringForTime(int timeMs) {
         int totalSeconds = timeMs / 1000;
 
         int seconds = totalSeconds % 60;
