@@ -36,6 +36,9 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     // If true, we should be playing
     private boolean mIsPlaying;
 
+    // An optional listener for when videos have reached the end
+    @Nullable private MediaPlayer.OnCompletionListener mOnCompletionListener;
+
     public VideoView(Context context) {
         this(context, null);
     }
@@ -119,6 +122,20 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         if (mMediaPlayer == null) {
             mMediaPlayer = new MediaPlayer();
         }
+
+        mMediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+            @Override
+            public void onCompletion(MediaPlayer mediaPlayer) {
+                mIsPlaying = false;
+                if (mOnCompletionListener != null) {
+                    mOnCompletionListener.onCompletion(mediaPlayer);
+                }
+            }
+        });
+    }
+
+    public void setOnCompletionListener(MediaPlayer.OnCompletionListener listener) {
+        mOnCompletionListener = listener;
     }
 
     protected void prepare() {
@@ -201,6 +218,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     public boolean pause() {
         if (DEBUG) Log.d(TAG, "pause()");
         ensureMediaPlayer();
+        mIsPlaying = false;
 
         try {
             mMediaPlayer.pause();

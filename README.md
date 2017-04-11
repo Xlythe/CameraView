@@ -8,7 +8,7 @@ Where to Download
 -----------------
 ```groovy
 dependencies {
-  compile 'com.xlythe:camera-view:1.0.10'
+  compile 'com.xlythe:camera-view:1.0.11'
 }
 ```
 
