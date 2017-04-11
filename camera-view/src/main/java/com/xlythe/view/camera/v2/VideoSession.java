@@ -1,7 +1,6 @@
 package com.xlythe.view.camera.v2;
 
 import android.annotation.TargetApi;
-import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;

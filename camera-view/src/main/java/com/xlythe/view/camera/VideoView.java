@@ -20,12 +20,11 @@ import android.view.WindowManager;
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
-import java.io.FileNotFoundException;
 import java.io.IOException;
 
 public class VideoView extends TextureView implements TextureView.SurfaceTextureListener {
-    private static final String TAG = "VideoView";
-    private static final boolean DEBUG = true;
+    private static final String TAG = VideoView.class.getSimpleName();
+    private static final boolean DEBUG = false;
 
     private final MediaPlayer mMediaPlayer = new MediaPlayer();
 

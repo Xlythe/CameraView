@@ -11,14 +11,12 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.os.Vibrator;
-import android.support.annotation.CallSuper;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.RequiresPermission;
 import android.support.v4.app.Fragment;
 import android.support.v4.content.ContextCompat;
 import android.text.format.DateFormat;
-import android.util.Log;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -28,13 +26,12 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.R;
 
 import java.io.File;
 import java.util.Date;
 import java.util.Formatter;
 import java.util.Locale;
-
-import com.xlythe.view.camera.R;
 
 public abstract class CameraFragment extends Fragment implements CameraView.OnImageCapturedListener, CameraView.OnVideoCapturedListener {
     private static final String[] REQUIRED_PERMISSIONS = {
