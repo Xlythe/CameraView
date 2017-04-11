@@ -112,7 +112,7 @@ public class CameraView extends FrameLayout {
 
     private TextureView mCameraView;
     private ImageView mImagePreview;
-    private TextureView mVideoPreview;
+    private VideoView mVideoPreview;
 
     private File mImagePendingConfirmation;
     private File mVideoPendingConfirmation;
@@ -181,6 +181,7 @@ public class CameraView extends FrameLayout {
         super.onFinishInflate();
         addView(mCameraView = new TextureView(getContext()));
         addView(mImagePreview = new ImageView(getContext()));
+        addView(mVideoPreview = new VideoView(getContext()));
         mImagePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
         mImagePreview.setVisibility(View.GONE);
 
@@ -299,7 +300,10 @@ public class CameraView extends FrameLayout {
 
     void showVideoConfirmation(final File file) {
         if (mIsVideoConfirmationEnabled) {
-            addView(mVideoPreview = new VideoView(getContext(), file));
+            mVideoPreview.setVisibility(View.VISIBLE);
+            mVideoPreview.setFile(file);
+            mVideoPreview.play();
+
             mVideoPendingConfirmation = file;
 
             if (getOnVideoCapturedListener() != null) {
@@ -384,7 +388,7 @@ public class CameraView extends FrameLayout {
         if (mVideoPendingConfirmation == null) {
             throw new IllegalStateException("confirmVideo() called, but no video was awaiting confirmation");
         }
-        removeView(mVideoPreview);
+        mVideoPreview.setVisibility(View.GONE);
         getOnVideoCapturedListener().onVideoCaptured(mVideoPendingConfirmation);
         mVideoPendingConfirmation = null;
     }
@@ -393,7 +397,7 @@ public class CameraView extends FrameLayout {
         if (mVideoPendingConfirmation == null) {
             throw new IllegalStateException("rejectVideo() called, but no video was awaiting confirmation");
         }
-        removeView(mVideoPreview);
+        mVideoPreview.setVisibility(View.GONE);
         if (!mVideoPendingConfirmation.delete()) {
             Log.w(TAG, "Attempted to clean up pending video file, but failed");
         }

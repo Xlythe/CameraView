@@ -9,4 +9,7 @@
         <attr name="maxVideoDuration" format="integer" />
         <attr name="maxVideoSize" format="integer" />
     </declare-styleable>
+    <declare-styleable name="VideoView">
+        <attr name="filePath" format="string" />
+    </declare-styleable>
 </resources>
