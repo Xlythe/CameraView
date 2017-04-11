@@ -26,7 +26,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     private static final String TAG = VideoView.class.getSimpleName();
     private static final boolean DEBUG = false;
 
-    private final MediaPlayer mMediaPlayer = new MediaPlayer();
+    private MediaPlayer mMediaPlayer;
 
     private File mFile;
 
@@ -68,6 +68,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     }
 
     public MediaPlayer getMediaPlayer() {
+        ensureMediaPlayer();
         return mMediaPlayer;
     }
 
@@ -99,15 +100,31 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
         if (DEBUG) Log.d(TAG, "Texture destroyed");
         mIsAvailable = false;
+
+        ensureMediaPlayer();
         mMediaPlayer.release();
+        mMediaPlayer = null;
+
         return true;
     }
 
     @Override
     public void onSurfaceTextureUpdated(SurfaceTexture texture) {}
 
+    /**
+     * MediaPlayer is null after being destroyed. Call this before any calls to MediaPlayer to
+     * ensure it exists.
+     */
+    private void ensureMediaPlayer() {
+        if (mMediaPlayer == null) {
+            mMediaPlayer = new MediaPlayer();
+        }
+    }
+
     protected void prepare() {
         if (DEBUG) Log.d(TAG, "Preparing video");
+        ensureMediaPlayer();
+
         try {
             FileDescriptor fileDescriptor = new FileInputStream(mFile).getFD();
 
@@ -147,6 +164,8 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     public void seekToFirstFrame() {
         if (DEBUG) Log.d(TAG, "seekToFirstFrame()");
+        ensureMediaPlayer();
+
         try {
             mMediaPlayer.setOnSeekCompleteListener(new MediaPlayer.OnSeekCompleteListener() {
                 @Override
@@ -167,6 +186,8 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     public boolean play() {
         if (DEBUG) Log.d(TAG, "play()");
+        ensureMediaPlayer();
+
         try {
             mMediaPlayer.start();
             mIsPlaying = true;
@@ -179,6 +200,8 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     public boolean pause() {
         if (DEBUG) Log.d(TAG, "pause()");
+        ensureMediaPlayer();
+
         try {
             mMediaPlayer.pause();
             return true;
@@ -189,6 +212,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     }
 
     public boolean isPlaying() {
+        ensureMediaPlayer();
         try {
             return mMediaPlayer.isPlaying();
         } catch (IllegalStateException e) {
