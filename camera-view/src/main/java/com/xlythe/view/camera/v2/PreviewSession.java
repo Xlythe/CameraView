@@ -98,6 +98,7 @@ class PreviewSession extends SessionImpl {
             super(cameraView);
         }
 
+        @Override
         void initialize(StreamConfigurationMap map) {
             super.initialize(chooseOptimalSize(map.getOutputSizes(SurfaceTexture.class), mCameraView.getWidth(), mCameraView.getHeight()));
 
