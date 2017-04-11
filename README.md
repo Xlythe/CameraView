@@ -27,7 +27,7 @@ The following permissions are required in your AndroidManfiest.xml
 
 CameraFragment
 -----------------
-Extend CameraFragment and override the required methods. Both pictures and videos are saved to a cache directory and may be overwritten or deleted. It's advised that you copy the files to persistent storage, depending on your usecase. 
+Extend CameraFragment and override the required methods. Both pictures and videos are saved to a cache directory and may be overwritten or deleted. It's advised that you copy the files to persistent storage, depending on your usecase.
 ```java
 public class MainFragment extends CameraFragment {
 
@@ -48,7 +48,7 @@ public class MainFragment extends CameraFragment {
 }
 ```
 
-Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any], @id/camera [CameraView], id/capture [Any], id/confirm [Any], and @id/request_permissions [Any].
+Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any], @id/camera [CameraView], id/capture [Any], and @id/request_permissions [Any].
 ```xml
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:camera="http://schemas.android.com/apk/res-auto"
@@ -98,7 +98,7 @@ Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any], 
 
 </FrameLayout>
 ```
-Optionally, you may also include @id/duration [TextView], @id/progress [ProgressBar], @id/toggle [CompoundButton], and @id/cancel [Any]
+Optionally, you may also include @id/duration [TextView], @id/progress [ProgressBar], @id/toggle [CompoundButton], id/confirm [Any], and @id/cancel [Any]
 
 CameraView
 -----------------
