@@ -44,7 +44,7 @@ public class CameraView extends FrameLayout {
     public enum Quality {
         HIGH(0), MEDIUM(1), LOW(2);
 
-        int id;
+        private final int id;
 
         Quality(int id) {
             this.id = id;
