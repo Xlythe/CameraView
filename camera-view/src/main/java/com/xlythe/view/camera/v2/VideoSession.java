@@ -71,7 +71,7 @@ class VideoSession extends PreviewSession {
             public void onCaptureCompleted(@NonNull CameraCaptureSession session, @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
                 if (mVideoSurface.mAwaitingRecording) {
                     mVideoSurface.mAwaitingRecording = false;
-                    mVideoSurface.startRecording(getOnVideoCapturedListener());
+                    mVideoSurface.startRecording();
                 }
             }
         }, getBackgroundHandler());
@@ -143,9 +143,6 @@ class VideoSession extends PreviewSession {
 
         private MediaRecorder mMediaRecorder;
 
-        @Nullable
-        private CameraView.OnVideoCapturedListener mVideoListener;
-
         @NonNull
         private final File mFile;
 
@@ -207,13 +204,12 @@ class VideoSession extends PreviewSession {
             return mIsRecordingVideo;
         }
 
-        void startRecording(CameraView.OnVideoCapturedListener listener) {
+        void startRecording() {
             if (mMediaRecorder == null) {
                 Log.w(TAG, "Cannot record. Failed to initialize.");
                 return;
             }
 
-            mVideoListener = listener;
             try {
                 mMediaRecorder.start();
                 mIsRecordingVideo = true;
