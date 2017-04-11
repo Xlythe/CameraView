@@ -3,17 +3,24 @@ package com.xlythe.view.camera;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
+import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
 import android.media.AudioManager;
+import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
+import android.os.Build;
 import android.support.annotation.Nullable;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.view.Display;
 import android.view.Surface;
 import android.view.TextureView;
+import android.view.WindowManager;
 
 import java.io.File;
+import java.io.FileDescriptor;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 
 public class VideoView extends TextureView implements TextureView.SurfaceTextureListener {
@@ -102,22 +109,33 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     protected void prepare() {
         if (DEBUG) Log.d(TAG, "Preparing video");
-        Surface surface = new Surface(getSurfaceTexture());
-
         try {
-            mMediaPlayer.stop();
-        } catch (IllegalStateException e) {
-            if (DEBUG) e.printStackTrace();
-        }
+            FileDescriptor fileDescriptor = new FileInputStream(mFile).getFD();
 
-        try {
-            mMediaPlayer.reset();
-        } catch (IllegalStateException e) {
-            if (DEBUG) e.printStackTrace();
-        }
+            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+            retriever.setDataSource(fileDescriptor);
+            int width = Integer.valueOf(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
+            int height = Integer.valueOf(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
+            retriever.release();
+            Log.d(TAG, String.format("Video metadata: width=%d, height=%d", width, height));
 
-        try {
-            mMediaPlayer.setDataSource(new FileInputStream(mFile).getFD());
+            transformPreview(width, height);
+
+            Surface surface = new Surface(getSurfaceTexture());
+
+            try {
+                mMediaPlayer.stop();
+            } catch (IllegalStateException e) {
+                if (DEBUG) e.printStackTrace();
+            }
+
+            try {
+                mMediaPlayer.reset();
+            } catch (IllegalStateException e) {
+                if (DEBUG) e.printStackTrace();
+            }
+
+            mMediaPlayer.setDataSource(fileDescriptor);
             mMediaPlayer.setSurface(surface);
             mMediaPlayer.prepare();
             mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
@@ -178,5 +196,61 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
             if (DEBUG) e.printStackTrace();
         }
         return false;
+    }
+
+    void transformPreview(int videoWidth, int videoHeight) {
+        int viewWidth = getWidth();
+        int viewHeight = getHeight();
+
+        Matrix matrix = new Matrix();
+        getTransform(matrix);
+
+        int displayOrientation = getDisplayRotation();
+        if (displayOrientation != Surface.ROTATION_90 && displayOrientation != Surface.ROTATION_270) {
+            int temp = videoWidth;
+            videoWidth = videoHeight;
+            videoHeight = temp;
+        }
+
+        float aspectRatio = (float) videoHeight / (float) videoWidth;
+        int newWidth, newHeight;
+        if (viewHeight > viewWidth * aspectRatio) {
+            newWidth = (int) (viewHeight / aspectRatio);
+            newHeight = viewHeight;
+        } else {
+            newWidth = viewWidth;
+            newHeight = (int) (viewWidth * aspectRatio);
+        }
+
+        float scaleX = (float) newWidth / (float) viewWidth;
+        float scaleY = (float) newHeight / (float) viewHeight;
+
+        int translateX = (int) (viewWidth - newWidth) / 2;
+        int translateY = (int) (viewHeight - newHeight) / 2;
+
+        matrix.setScale(scaleX, scaleY);
+        matrix.postTranslate(translateX, translateY);
+
+        if (DEBUG) {
+            Log.d(TAG, String.format("Result: viewAspectRatio=%s, videoAspectRatio=%s, "
+                            + "viewWidth=%s, viewHeight=%s, videoWidth=%s, videoHeight=%s, "
+                            + "newWidth=%s, newHeight=%s, scaleX=%s, scaleY=%s, translateX=%s, "
+                            + "translateY=%s",
+                    ((float) viewHeight / (float) viewWidth), aspectRatio, viewWidth, viewHeight,
+                    videoWidth, videoHeight, newWidth, newHeight, scaleX, scaleY, translateX, translateY));
+        }
+
+        setTransform(matrix);
+    }
+
+
+    public int getDisplayRotation() {
+        Display display;
+        if (Build.VERSION.SDK_INT >= 17) {
+            display = getDisplay();
+        } else {
+            display = ((WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay();
+        }
+        return display.getRotation();
     }
 }

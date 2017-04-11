@@ -6,6 +6,7 @@ import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.os.Looper;
 import android.util.Log;
+import android.view.Surface;
 
 import java.io.File;
 
@@ -40,16 +41,16 @@ public abstract class ICameraModule {
     public int getDisplayRotation() {
         int displayRotation = mView.getDisplayRotation();
         switch (displayRotation) {
-            case 0:
+            case Surface.ROTATION_0:
                 displayRotation = 0;
                 break;
-            case 1:
+            case Surface.ROTATION_90:
                 displayRotation = 90;
                 break;
-            case 2:
+            case Surface.ROTATION_180:
                 displayRotation = 180;
                 break;
-            case 3:
+            case Surface.ROTATION_270:
                 displayRotation = 270;
                 break;
         }
