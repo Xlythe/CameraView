@@ -327,14 +327,12 @@ public class Camera2Module extends ICameraModule {
 
             int maxZoom = getMaxZoomLevel();
 
-            int minW = (int) (m.width() / maxZoom);
-            int minH = (int) (m.height() / maxZoom);
+            int minW = m.width() / maxZoom;
+            int minH = m.height() / maxZoom;
             int difW = m.width() - minW;
             int difH = m.height() - minH;
-            int cropW = difW / 100 * zoomLevel;
-            int cropH = difH / 100 * zoomLevel;
-            cropW -= cropW & 3;
-            cropH -= cropH & 3;
+            int cropW = difW * zoomLevel / maxZoom;
+            int cropH = difH * zoomLevel / maxZoom;
             Rect cropRegion = new Rect(cropW, cropH, m.width() - cropW, m.height() - cropH);
             mActiveSession.setCropRegion(cropRegion);
             mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
