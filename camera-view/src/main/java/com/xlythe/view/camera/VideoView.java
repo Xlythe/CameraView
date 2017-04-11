@@ -103,6 +103,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
         if (DEBUG) Log.d(TAG, "Texture destroyed");
         mIsAvailable = false;
+        mIsPlaying = false;
 
         ensureMediaPlayer();
         mMediaPlayer.release();
