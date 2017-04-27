@@ -235,15 +235,9 @@ class PictureSession extends PreviewSession {
 
     private static final class PictureSurface extends CameraSurface {
         private Size choosePictureSize(StreamConfigurationMap map) {
-            Size[] choices = getSizes(map);
-            List<Size> availableSizes = new ArrayList<>(choices.length);
+            List<Size> choices = getSizes(map);
+            List<Size> availableSizes = new ArrayList<>(choices.size());
             for (Size size : choices) {
-                if (getQuality() == CameraView.Quality.HIGH
-                        && size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT
-                        && IMAGE_FORMAT == ImageFormat.JPEG) {
-                    // Camera crashes when you use too high a resolution with JPEG.
-                    continue;
-                }
                 if (getQuality() == CameraView.Quality.MEDIUM && size.getHeight() > 720) {
                     continue;
                 }
@@ -255,7 +249,7 @@ class PictureSession extends PreviewSession {
 
             if (availableSizes.isEmpty()) {
                 Log.e(TAG, "Couldn't find a suitable picture size");
-                availableSizes.add(choices[0]);
+                availableSizes.add(Collections.max(choices, new CompareSizesByArea()));
             }
 
             if (DEBUG) {
@@ -265,17 +259,32 @@ class PictureSession extends PreviewSession {
             return Collections.max(availableSizes, new CompareSizesByArea());
         }
 
-        private Size[] getSizes(StreamConfigurationMap map) {
+        private List<Size> getSizes(StreamConfigurationMap map) {
             // Special case for high resolution images (assuming, of course, quality was set to high)
             if (getQuality() == CameraView.Quality.HIGH && Build.VERSION.SDK_INT >= 23) {
                 Size[] sizes = map.getHighResolutionOutputSizes(IMAGE_FORMAT);
-                if (sizes != null && sizes.length > 0) {
-                    return sizes;
+                if (sizes != null) {
+                    List<Size> availableSizes = filter(sizes);
+                    if (availableSizes.size() > 0) {
+                        return availableSizes;
+                    }
                 }
             }
 
             // Otherwise, just return the default sizes
-            return map.getOutputSizes(IMAGE_FORMAT);
+            return filter(map.getOutputSizes(IMAGE_FORMAT));
+        }
+
+        private static List<Size> filter(Size[] sizes) {
+            List<Size> availableSizes = new ArrayList<>(sizes.length);
+            for (Size size : sizes) {
+                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT
+                        && IMAGE_FORMAT == ImageFormat.JPEG) {
+                    continue;
+                }
+                availableSizes.add(size);
+            }
+            return availableSizes;
         }
 
         private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {

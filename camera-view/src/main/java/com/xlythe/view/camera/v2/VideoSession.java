@@ -115,8 +115,8 @@ class VideoSession extends PreviewSession {
 
     private static final class VideoSurface extends CameraSurface {
         private Size chooseVideoSize(StreamConfigurationMap map) {
-            Size[] choices = map.getOutputSizes(MediaRecorder.class);
-            List<Size> availableSizes = new ArrayList<>(choices.length);
+            List<Size> choices = getSizes(map);
+            List<Size> availableSizes = new ArrayList<>(choices.size());
             for (Size size : choices) {
                 if (getQuality() == CameraView.Quality.HIGH && size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
                     continue;
@@ -132,7 +132,7 @@ class VideoSession extends PreviewSession {
 
             if (availableSizes.isEmpty()) {
                 Log.e(TAG, "Couldn't find a suitable video size");
-                availableSizes.add(choices[0]);
+                availableSizes.add(Collections.max(choices, new CompareSizesByArea()));
             }
 
             if (DEBUG) {
@@ -140,6 +140,21 @@ class VideoSession extends PreviewSession {
             }
 
             return Collections.max(availableSizes, new CompareSizesByArea());
+        }
+
+        private List<Size> getSizes(StreamConfigurationMap map) {
+            return filter(map.getOutputSizes(MediaRecorder.class));
+        }
+
+        private static List<Size> filter(Size[] sizes) {
+            List<Size> availableSizes = new ArrayList<>(sizes.length);
+            for (Size size : sizes) {
+                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
+                    continue;
+                }
+                availableSizes.add(size);
+            }
+            return availableSizes;
         }
 
         private boolean mIsRecordingVideo;

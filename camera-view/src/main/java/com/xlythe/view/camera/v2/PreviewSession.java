@@ -72,17 +72,10 @@ class PreviewSession extends SessionImpl {
     }
 
     private static final class PreviewSurface extends CameraSurface {
-        private static Size chooseOptimalSize(Size[] choices, int width, int height) {
-            // These sizes won't crash. I wish I didn't have to filter for this...
-            List<Size> filteredSizes = new ArrayList<>(choices.length);
-
+        private static Size chooseOptimalSize(List<Size> choices, int width, int height) {
             // These sizes are all larger than our view port, so we won't have to scale the image up.
-            List<Size> availableSizes = new ArrayList<>(choices.length);
+            List<Size> availableSizes = new ArrayList<>(choices.size());
             for (Size size : choices) {
-                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
-                    continue;
-                }
-                filteredSizes.add(size);
                 if (size.getWidth() >= width && size.getHeight() >= height) {
                     availableSizes.add(size);
                 }
@@ -90,7 +83,7 @@ class PreviewSession extends SessionImpl {
 
             if (availableSizes.isEmpty()) {
                 Log.e(TAG, "Couldn't find a suitable preview size");
-                availableSizes.add(Collections.max(filteredSizes, new CompareSizesByArea()));
+                availableSizes.add(Collections.max(choices, new CompareSizesByArea()));
             }
 
             if (DEBUG) {
@@ -98,6 +91,21 @@ class PreviewSession extends SessionImpl {
             }
 
             return Collections.min(availableSizes, new CompareSizesByArea());
+        }
+
+        private List<Size> getSizes(StreamConfigurationMap map) {
+            return filter(map.getOutputSizes(SurfaceTexture.class));
+        }
+
+        private static List<Size> filter(Size[] sizes) {
+            List<Size> availableSizes = new ArrayList<>(sizes.length);
+            for (Size size : sizes) {
+                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
+                    continue;
+                }
+                availableSizes.add(size);
+            }
+            return availableSizes;
         }
 
         private Surface mSurface;
@@ -108,7 +116,7 @@ class PreviewSession extends SessionImpl {
 
         @Override
         void initialize(StreamConfigurationMap map) {
-            super.initialize(chooseOptimalSize(map.getOutputSizes(SurfaceTexture.class), mCameraView.getWidth(), mCameraView.getHeight()));
+            super.initialize(chooseOptimalSize(getSizes(map), mCameraView.getWidth(), mCameraView.getHeight()));
 
             SurfaceTexture texture = mCameraView.getSurfaceTexture();
             texture.setDefaultBufferSize(getWidth(), getHeight());
