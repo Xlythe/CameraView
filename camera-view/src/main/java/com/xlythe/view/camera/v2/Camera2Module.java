@@ -25,6 +25,7 @@ import com.xlythe.view.camera.ICameraModule;
 
 import java.io.File;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * A wrapper around the Camera2 APIs. Camera2 has some peculiarities, such as crashing if you attach
@@ -101,10 +102,26 @@ public class Camera2Module extends ICameraModule {
 
         @Override
         public void onError(@NonNull CameraDevice cameraDevice, int error) {
-            Log.e(TAG, "Camera crashed: " + error);
+            Log.e(TAG, "Camera crashed: " + Camera2Module.toString(error));
             onDisconnected(cameraDevice);
         }
     };
+
+    private static String toString(int error) {
+        switch (error) {
+            case CameraDevice.StateCallback.ERROR_CAMERA_DEVICE:
+                return "ERROR_CAMERA_DEVICE";
+            case CameraDevice.StateCallback.ERROR_CAMERA_DISABLED:
+                return "ERROR_CAMERA_DISABLED";
+            case CameraDevice.StateCallback.ERROR_CAMERA_IN_USE:
+                return "ERROR_CAMERA_IN_USE";
+            case CameraDevice.StateCallback.ERROR_CAMERA_SERVICE:
+                return "ERROR_CAMERA_SERVICE";
+            case CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE:
+                return "ERROR_MAX_CAMERAS_IN_USE";
+        }
+        return String.format(Locale.US, "UNKNOWN_ERROR(%d)", error);
+    }
 
     public Camera2Module(CameraView cameraView) {
         super(cameraView);
