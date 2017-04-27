@@ -239,15 +239,15 @@ class PictureSession extends PreviewSession {
             List<Size> availableSizes = new ArrayList<>(choices.length);
             for (Size size : choices) {
                 if (getQuality() == CameraView.Quality.HIGH
-                        && size.getWidth() > 1080
+                        && size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT
                         && IMAGE_FORMAT == ImageFormat.JPEG) {
                     // Camera crashes when you use too high a resolution with JPEG.
                     continue;
                 }
-                if (getQuality() == CameraView.Quality.MEDIUM && size.getWidth() > 720) {
+                if (getQuality() == CameraView.Quality.MEDIUM && size.getHeight() > 720) {
                     continue;
                 }
-                if (getQuality() == CameraView.Quality.LOW && size.getWidth() > 420) {
+                if (getQuality() == CameraView.Quality.LOW && size.getHeight() > 420) {
                     continue;
                 }
                 availableSizes.add(size);

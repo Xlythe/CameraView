@@ -79,8 +79,7 @@ class PreviewSession extends SessionImpl {
             // These sizes are all larger than our view port, so we won't have to scale the image up.
             List<Size> availableSizes = new ArrayList<>(choices.length);
             for (Size size : choices) {
-                if (size.getWidth() > 1080) {
-                    // TODO Figure out why camera crashes when we use a size higher than 1080
+                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
                     continue;
                 }
                 filteredSizes.add(size);

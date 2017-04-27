@@ -36,6 +36,9 @@ import java.util.Locale;
 public class Camera2Module extends ICameraModule {
     private static final int ZOOM_NOT_SUPPORTED = 1;
 
+    // TODO Figure out why camera crashes when we use a size higher than 1080
+    static final int UNSUPPORTED_HEIGHT = 1080;
+
     /**
      * This is how we'll talk to the camera.
      */

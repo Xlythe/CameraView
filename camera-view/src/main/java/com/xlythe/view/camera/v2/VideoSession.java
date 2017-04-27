@@ -118,14 +118,13 @@ class VideoSession extends PreviewSession {
             Size[] choices = map.getOutputSizes(MediaRecorder.class);
             List<Size> availableSizes = new ArrayList<>(choices.length);
             for (Size size : choices) {
-                if (getQuality() == CameraView.Quality.HIGH && size.getWidth() > 1080) {
-                    // TODO Figure out why camera crashes when we use a size higher than 1080
+                if (getQuality() == CameraView.Quality.HIGH && size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
                     continue;
                 }
-                if (getQuality() == CameraView.Quality.MEDIUM && size.getWidth() > 720) {
+                if (getQuality() == CameraView.Quality.MEDIUM && size.getHeight() > 720) {
                     continue;
                 }
-                if (getQuality() == CameraView.Quality.LOW && size.getWidth() > 420) {
+                if (getQuality() == CameraView.Quality.LOW && size.getHeight() > 420) {
                     continue;
                 }
                 availableSizes.add(size);
