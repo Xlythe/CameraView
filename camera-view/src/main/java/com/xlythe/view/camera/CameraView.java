@@ -414,6 +414,7 @@ public class CameraView extends FrameLayout {
         if (mVideoPendingConfirmation == null) {
             throw new IllegalStateException("rejectVideo() called, but no video was awaiting confirmation");
         }
+        mVideoPreview.pause();
         mVideoPreview.setVisibility(View.GONE);
         if (!mVideoPendingConfirmation.delete()) {
             Log.w(TAG, "Attempted to clean up pending video file, but failed");
