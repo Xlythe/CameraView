@@ -464,7 +464,7 @@ public class Camera2Module extends ICameraModule {
         // Bugfix for landscape, which appears zoomed in
         float scale = 1f;
         if (displayOrientation == 90 || displayOrientation == 270) {
-            scale = (float) previewHeight / (float) newHeight;
+            scale = 0.7f;
         }
 
         float scaleX = (float) newWidth / (float) viewWidth;
