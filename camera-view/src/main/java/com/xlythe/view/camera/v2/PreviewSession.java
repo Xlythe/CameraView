@@ -73,8 +73,17 @@ class PreviewSession extends SessionImpl {
 
     private static final class PreviewSurface extends CameraSurface {
         private static Size chooseOptimalSize(Size[] choices, int width, int height) {
+            // These sizes won't crash. I wish I didn't have to filter for this...
+            List<Size> filteredSizes = new ArrayList<>(choices.length);
+
+            // These sizes are all larger than our view port, so we won't have to scale the image up.
             List<Size> availableSizes = new ArrayList<>(choices.length);
             for (Size size : choices) {
+                if (size.getWidth() > 1080) {
+                    // TODO Figure out why camera crashes when we use a size higher than 1080
+                    continue;
+                }
+                filteredSizes.add(size);
                 if (size.getWidth() >= width && size.getHeight() >= height) {
                     availableSizes.add(size);
                 }
@@ -82,7 +91,7 @@ class PreviewSession extends SessionImpl {
 
             if (availableSizes.isEmpty()) {
                 Log.e(TAG, "Couldn't find a suitable preview size");
-                availableSizes.add(choices[0]);
+                availableSizes.add(Collections.max(filteredSizes, new CompareSizesByArea()));
             }
 
             if (DEBUG) {
