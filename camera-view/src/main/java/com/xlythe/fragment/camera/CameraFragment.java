@@ -446,13 +446,15 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         void onHold() {
             vibrate();
             mCamera.startRecording(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + VIDEO_EXT));
-            if (mDuration != null) {
-                mDuration.setVisibility(View.VISIBLE);
+            if (mCamera.isRecording()) {
+                if (mDuration != null) {
+                    mDuration.setVisibility(View.VISIBLE);
+                }
+                if (mCamera.getMaxVideoDuration() > 0) {
+                    mAnimator.setDuration(mCamera.getMaxVideoDuration()).start();
+                }
+                onRecordStart();
             }
-            if (mCamera.getMaxVideoDuration() > 0) {
-                mAnimator.setDuration(mCamera.getMaxVideoDuration()).start();
-            }
-            onRecordStart();
         }
 
         void onRelease() {

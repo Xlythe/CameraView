@@ -130,6 +130,7 @@ public class Camera2Module extends ICameraModule {
 
     private synchronized void setSession(final Session session) {
         if (mCameraDevice == null) {
+            if (DEBUG) Log.w(TAG, "Cannot start a session without a CameraDevice");
             return;
         }
 
@@ -209,6 +210,7 @@ public class Camera2Module extends ICameraModule {
 
         try {
             mActiveCamera = getActiveCamera();
+            if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
             mCameraManager.openCamera(mActiveCamera, mStateCallback, mBackgroundHandler);
         } catch (CameraAccessException e) {
             Log.e(TAG, "Failed to open camera", e);
@@ -403,6 +405,15 @@ public class Camera2Module extends ICameraModule {
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
     public void startRecording(File file) {
+        // Quick fail if the CameraDevice was never created.
+        if (mCameraDevice == null) {
+            CameraView.OnVideoCapturedListener l = getOnVideoCapturedListener();
+            if (l != null) {
+                l.onFailure();
+            }
+            return;
+        }
+
         setSession(new VideoSession(this, file));
     }
 

@@ -39,6 +39,7 @@ import java.util.List;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
+import static com.xlythe.view.camera.ICameraModule.getRelativeImageOrientation;
 
 @TargetApi(21)
 class PictureSession extends PreviewSession {
@@ -74,7 +75,7 @@ class PictureSession extends PreviewSession {
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            builder.set(CaptureRequest.JPEG_ORIENTATION, ORIENTATIONS.get(getDisplayRotation()));
+            builder.set(CaptureRequest.JPEG_ORIENTATION, getRelativeCameraOrientation());
             builder.addTarget(mPictureSurface.getSurface());
             if (mMeteringRectangle != null) {
                 builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
@@ -84,7 +85,7 @@ class PictureSession extends PreviewSession {
                 builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
             }
             session.capture(builder.build(), null /* callback */, getBackgroundHandler());
-        } catch (CameraAccessException | IllegalStateException e) {
+        } catch (CameraAccessException | IllegalStateException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to create capture request", e);
 
@@ -120,11 +121,6 @@ class PictureSession extends PreviewSession {
             try {
                 // For JPEG files, we flip the bytes
                 if (IMAGE_FORMAT == ImageFormat.JPEG) {
-                    if (mOrientation == 180 || mOrientation == 270) {
-                        Matrix matrix = new Matrix();
-                        matrix.postRotate(180);
-                        bytes = transform(bytes, matrix);
-                    }
                     if (mIsReversed) {
                         Matrix matrix = new Matrix();
                         matrix.postScale(-1, 1);

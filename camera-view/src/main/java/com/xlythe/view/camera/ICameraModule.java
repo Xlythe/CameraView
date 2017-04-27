@@ -12,7 +12,7 @@ import java.io.File;
 
 public abstract class ICameraModule {
     public static final String TAG = "CameraModule";
-    public static final boolean DEBUG = false;
+    public static final boolean DEBUG = CameraView.DEBUG;
 
     private final CameraView mView;
     private CameraView.Quality mQuality = CameraView.Quality.HIGH;
@@ -39,22 +39,7 @@ public abstract class ICameraModule {
     }
 
     public int getDisplayRotation() {
-        int displayRotation = mView.getDisplayRotation();
-        switch (displayRotation) {
-            case Surface.ROTATION_0:
-                displayRotation = 0;
-                break;
-            case Surface.ROTATION_90:
-                displayRotation = 90;
-                break;
-            case Surface.ROTATION_180:
-                displayRotation = 180;
-                break;
-            case Surface.ROTATION_270:
-                displayRotation = 270;
-                break;
-        }
-        return displayRotation;
+        return mView.getDisplayRotation();
     }
 
     public SurfaceTexture getSurfaceTexture() {

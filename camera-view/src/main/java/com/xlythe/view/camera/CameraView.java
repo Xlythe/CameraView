@@ -17,6 +17,7 @@ import android.util.Log;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
+import android.view.Surface;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -246,8 +247,7 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * @return One of {@link android.view.Surface#ROTATION_0}, {@link android.view.Surface#ROTATION_90},
-     * {@link android.view.Surface#ROTATION_180}, {@link android.view.Surface#ROTATION_270}.
+     * @return One of 0, 90, 180, 270.
      */
     protected int getDisplayRotation() {
         Display display;
@@ -256,7 +256,22 @@ public class CameraView extends FrameLayout {
         } else {
             display = ((WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay();
         }
-        return display.getRotation();
+        int displayRotation = display.getRotation();
+        switch (displayRotation) {
+            case Surface.ROTATION_0:
+                displayRotation = 0;
+                break;
+            case Surface.ROTATION_90:
+                displayRotation = 90;
+                break;
+            case Surface.ROTATION_180:
+                displayRotation = 180;
+                break;
+            case Surface.ROTATION_270:
+                displayRotation = 270;
+                break;
+        }
+        return displayRotation;
     }
 
     @UiThread

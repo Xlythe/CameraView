@@ -12,7 +12,6 @@ import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
 import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -41,6 +40,13 @@ class VideoSession extends PreviewSession {
     public void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException {
         super.initialize(map);
         mVideoSurface.initialize(map);
+        if (!mVideoSurface.mIsInitialized) {
+            CameraView.OnVideoCapturedListener l = getOnVideoCapturedListener();
+            if (l != null) {
+                l.onFailure();
+            }
+            throw new CameraAccessException(CameraAccessException.CAMERA_ERROR);
+        }
     }
 
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
@@ -187,7 +193,7 @@ class VideoSession extends PreviewSession {
                     }
                 });
                 mMediaRecorder.setVideoSize(getWidth(), getHeight());
-                mMediaRecorder.setOrientationHint(ORIENTATIONS.get(mCameraView.getDisplayRotation()));
+                mMediaRecorder.setOrientationHint(mCameraView.getRelativeCameraOrientation());
                 mMediaRecorder.prepare();
                 mIsInitialized = true;
             } catch (IOException e) {

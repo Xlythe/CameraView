@@ -26,15 +26,6 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
 abstract class SessionImpl implements Camera2Module.Session {
-    static final SparseIntArray ORIENTATIONS = new SparseIntArray();
-
-    static {
-        ORIENTATIONS.append(Surface.ROTATION_0, 90);
-        ORIENTATIONS.append(Surface.ROTATION_90, 0);
-        ORIENTATIONS.append(Surface.ROTATION_180, 270);
-        ORIENTATIONS.append(Surface.ROTATION_270, 180);
-    }
-
     private final Camera2Module mCamera2Module;
 
     @Nullable
@@ -58,6 +49,10 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     int getDisplayRotation() {
         return mCamera2Module.getDisplayRotation();
+    }
+
+    int getRelativeCameraOrientation() {
+        return mCamera2Module.getRelativeCameraOrientation();
     }
 
     CameraView.OnImageCapturedListener getOnImageCapturedListener() {
