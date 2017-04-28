@@ -26,6 +26,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
+import com.squareup.picasso.Picasso;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
@@ -35,8 +36,8 @@ public class CameraView extends FrameLayout {
     static final String TAG = CameraView.class.getSimpleName();
     static final boolean DEBUG = false;
 
-    public static final long INDEFINITE_VIDEO_DURATION = -1;
-    public static final long INDEFINITE_VIDEO_SIZE = -1;
+    public static final int INDEFINITE_VIDEO_DURATION = -1;
+    public static final int INDEFINITE_VIDEO_SIZE = -1;
 
     private enum Status {
         OPEN, CLOSED, AWAITING_TEXTURE
@@ -151,10 +152,10 @@ public class CameraView extends FrameLayout {
             TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView, 0, 0);
             setQuality(Quality.fromId(a.getInteger(R.styleable.CameraView_quality, getQuality().id)));
             if (a.hasValue(R.styleable.CameraView_maxVideoDuration)) {
-                setMaxVideoDuration(a.getInteger(R.styleable.CameraView_maxVideoDuration, 0));
+                setMaxVideoDuration(a.getInteger(R.styleable.CameraView_maxVideoDuration, INDEFINITE_VIDEO_DURATION));
             }
             if (a.hasValue(R.styleable.CameraView_maxVideoSize)) {
-                setMaxVideoSize(a.getInteger(R.styleable.CameraView_maxVideoSize, 0));
+                setMaxVideoSize(a.getInteger(R.styleable.CameraView_maxVideoSize, INDEFINITE_VIDEO_SIZE));
             }
             a.recycle();
         }
@@ -256,6 +257,14 @@ public class CameraView extends FrameLayout {
         } else {
             display = ((WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay();
         }
+
+        // Null when the View is detached. If we were in the middle of a background operation,
+        // better to not NPE. When the background operation finishes, it'll realize that the camera
+        // was closed.
+        if (display == null) {
+            return 0;
+        }
+
         int displayRotation = display.getRotation();
         switch (displayRotation) {
             case Surface.ROTATION_0:
@@ -300,7 +309,7 @@ public class CameraView extends FrameLayout {
     void showImageConfirmation(File file) {
         if (mIsImageConfirmationEnabled) {
             mImagePreview.setVisibility(View.VISIBLE);
-            mImagePreview.setImageURI(Uri.fromFile(file));
+            Picasso.with(getContext()).load(file).into(mImagePreview);
             mImagePendingConfirmation = file;
 
             if (getOnImageCapturedListener() != null) {

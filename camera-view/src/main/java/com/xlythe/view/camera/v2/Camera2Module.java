@@ -461,11 +461,10 @@ public class Camera2Module extends ICameraModule {
             newHeight = (int) (viewWidth * aspectRatio);
         }
 
-        // Bugfix for landscape, which appears zoomed in
         float scale = 1f;
-        if (displayOrientation == 90 || displayOrientation == 270) {
-            scale = 0.7f;
-        }
+        // TODO Sometimes the preview is more zoomed in than it should be. Setting scale to 0.7f
+        // fixes it pretty accurately on those phones, but shrinks the preview too much on others.
+        // I need to think long and hard about why this happens and come up with a proper fix.
 
         float scaleX = (float) newWidth / (float) viewWidth;
         float scaleY = (float) newHeight / (float) viewHeight;
