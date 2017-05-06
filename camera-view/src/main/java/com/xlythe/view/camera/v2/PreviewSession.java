@@ -72,11 +72,11 @@ class PreviewSession extends SessionImpl {
     }
 
     private static final class PreviewSurface extends CameraSurface {
-        private static Size chooseOptimalSize(List<Size> choices, int width, int height) {
+        private static Size chooseOptimalSize(List<Size> choices, int viewWidth, int viewHeight) {
             // These sizes are all larger than our view port, so we won't have to scale the image up.
             List<Size> availableSizes = new ArrayList<>(choices.size());
             for (Size size : choices) {
-                if (size.getWidth() >= width && size.getHeight() >= height) {
+                if (size.getWidth() >= viewWidth && size.getHeight() >= viewHeight) {
                     availableSizes.add(size);
                 }
             }

@@ -441,16 +441,23 @@ public class Camera2Module extends ICameraModule {
                     viewWidth, viewHeight, previewWidth, previewHeight, displayOrientation, cameraOrientation));
         }
 
+        // Camera2 rotates the preview to always face in portrait mode, even if the phone is
+        // currently in landscape. This is great for portrait mode, because there's less work to be done.
+        // It's less great for landscape, because we have to undo it. Without any matrix modifications,
+        // the preview will be smushed into the aspect ratio of the view.
         Matrix matrix = new Matrix();
         getTransform(matrix);
 
-        // Camera2 reverses the preview width/height. Why? No idea.
+        // Camera2 reverses the preview width/height.
         if (cameraOrientation != 0 && cameraOrientation != 180) {
             int temp = previewWidth;
             previewWidth = previewHeight;
             previewHeight = temp;
         }
 
+        // We want to find the aspect ratio of the preview. Our goal is to stretch the image in
+        // our SurfaceView to match this ratio, so that the image doesn't looked smushed.
+        // This means the edges of the preview will be cut off.
         float aspectRatio = (float) previewHeight / (float) previewWidth;
         int newWidth, newHeight;
         if (viewHeight > viewWidth * aspectRatio) {
@@ -461,19 +468,32 @@ public class Camera2Module extends ICameraModule {
             newHeight = (int) (viewWidth * aspectRatio);
         }
 
-        float scale = 1f;
-        // TODO Sometimes the preview is more zoomed in than it should be. Setting scale to 0.7f
-        // fixes it pretty accurately on those phones, but shrinks the preview too much on others.
-        // I need to think long and hard about why this happens and come up with a proper fix.
-
+        // For portrait, we've already been mostly stretched. For landscape, our image is rotated 90 degrees.
+        // Think of it as a sideways squished photo. We want to first streeeetch the height of the photo
+        // until it matches the aspect ratio we originally expected. Now we're no longer stretched
+        // (although we're wildly off screen, with only the far left sliver of the photo still
+        // visible on the screen, and our picture is still sideways).
         float scaleX = (float) newWidth / (float) viewWidth;
         float scaleY = (float) newHeight / (float) viewHeight;
+
+        // However, we've actually stretched too much. The height of the picture is currently the
+        // width of our screen. When we rotate the picture, it'll be too large and we'll end up
+        // cropping a lot of the picture. That's what this step is for. We scale down the image so
+        // that the height of the photo (currently the width of the phone) becomes the height we
+        // want (the height of the phone, or slightly bigger, depending on aspect ratio).
+        float scale = 1f;
+        if (displayOrientation == 90 || displayOrientation == 270) {
+            scale = (float) newHeight / viewWidth;
+        }
         scaleX *= scale;
         scaleY *= scale;
 
-        int translateX = (int) (viewWidth - newWidth * scale) / 2;
-        int translateY = (int) (viewHeight - newHeight * scale) / 2;
+        // Because we scaled the preview beyond the bounds of the view, we need to crop some of it.
+        // By translating the photo over, we'll move it into the center.
+        int translateX = (int) (viewWidth - newWidth) / 2;
+        int translateY = (int) (viewHeight - newHeight) / 2;
 
+        // Finally, with our photo scaled and centered, we apply a rotation.
         int rotation = -displayOrientation;
 
         matrix.setScale(scaleX, scaleY);

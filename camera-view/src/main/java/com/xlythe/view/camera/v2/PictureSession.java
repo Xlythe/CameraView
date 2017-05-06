@@ -53,7 +53,7 @@ class PictureSession extends PreviewSession {
 
     PictureSession(Camera2Module camera2Module) {
         super(camera2Module);
-        mPictureSurface = new PictureSurface(camera2Module);
+        mPictureSurface = new PictureSurface(camera2Module, getPreviewSurface());
     }
 
     @Override
@@ -234,7 +234,7 @@ class PictureSession extends PreviewSession {
     }
 
     private static final class PictureSurface extends CameraSurface {
-        private Size choosePictureSize(StreamConfigurationMap map) {
+        private Size choosePictureSize(StreamConfigurationMap map, Size recommendedSize) {
             List<Size> choices = getSizes(map);
             List<Size> availableSizes = new ArrayList<>(choices.size());
             for (Size size : choices) {
@@ -244,7 +244,12 @@ class PictureSession extends PreviewSession {
                 if (getQuality() == CameraView.Quality.LOW && size.getHeight() > 420) {
                     continue;
                 }
-                availableSizes.add(size);
+
+                // Only look at sizes that match the aspect ratio of the preview, because that's what
+                // the user sees when they take the picture.
+                if (sameAspectRatio(size, recommendedSize)) {
+                    availableSizes.add(size);
+                }
             }
 
             if (availableSizes.isEmpty()) {
@@ -257,6 +262,10 @@ class PictureSession extends PreviewSession {
             }
 
             return Collections.max(availableSizes, new CompareSizesByArea());
+        }
+
+        private static boolean sameAspectRatio(Size a, Size b) {
+            return 1000 * a.getWidth() / a.getHeight() == 1000 * b.getWidth() / b.getHeight();
         }
 
         private List<Size> getSizes(StreamConfigurationMap map) {
@@ -315,16 +324,18 @@ class PictureSession extends PreviewSession {
             }
         };
 
+        private final CameraSurface mPreviewSurface;
         private ImageReader mImageReader;
         private File mFile;
 
-        PictureSurface(Camera2Module camera2Module) {
+        PictureSurface(Camera2Module camera2Module, CameraSurface previewSurface) {
             super(camera2Module);
+            mPreviewSurface = previewSurface;
         }
 
         @Override
         void initialize(StreamConfigurationMap map) {
-            super.initialize(choosePictureSize(map));
+            super.initialize(choosePictureSize(map, mPreviewSurface.mSize));
             mImageReader = ImageReader.newInstance(getWidth(), getHeight(), IMAGE_FORMAT, 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getBackgroundHandler());
         }
