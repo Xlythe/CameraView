@@ -1,10 +1,7 @@
 package com.xlythe.view.camera.v2;
 
 import android.annotation.TargetApi;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.ImageFormat;
-import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
@@ -13,13 +10,11 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
-import android.media.ExifInterface;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
 import android.support.annotation.UiThread;
 import android.support.annotation.WorkerThread;
 import android.util.Log;
@@ -27,6 +22,7 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ICameraModule;
 
 import java.io.ByteArrayOutputStream;
@@ -34,13 +30,9 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
-import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
-import static com.xlythe.view.camera.ICameraModule.getRelativeImageOrientation;
 
 @TargetApi(21)
 class PictureSession extends PreviewSession {
@@ -76,7 +68,6 @@ class PictureSession extends PreviewSession {
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            builder.set(CaptureRequest.JPEG_ORIENTATION, getRelativeCameraOrientation());
             if (hasFlash()) {
                 switch (getFlash()) {
                     case AUTO:
@@ -134,40 +125,15 @@ class PictureSession extends PreviewSession {
             byte[] bytes = getBytes();
             FileOutputStream output = null;
             try {
-                // For JPEG files, we flip the bytes
-                if (IMAGE_FORMAT == ImageFormat.JPEG) {
-                    if (mIsReversed) {
-                        Matrix matrix = new Matrix();
-                        matrix.postScale(-1, 1);
-                        bytes = transform(bytes, matrix);
-                    }
-                }
-
                 output = new FileOutputStream(mFile);
                 output.write(bytes);
 
-                // For all other files, we add Exif metadata so that others know we're flipped
-                if (IMAGE_FORMAT != ImageFormat.JPEG) {
-                    int orientation = 1;
-                    switch (mOrientation) {
-                        case 0:
-                            orientation = ExifInterface.ORIENTATION_NORMAL;
-                            break;
-                        case 90:
-                            orientation = ExifInterface.ORIENTATION_ROTATE_90;
-                            break;
-                        case 180:
-                            orientation = ExifInterface.ORIENTATION_ROTATE_180;
-                            break;
-                        case 270:
-                            orientation = ExifInterface.ORIENTATION_ROTATE_270;
-                            break;
-                    }
-
-                    ExifInterface exifInterface = new ExifInterface(mFile.toString());
-                    exifInterface.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(orientation));
-                    exifInterface.saveAttributes();
+                Exif exif = new Exif(mFile);
+                exif.rotate(mOrientation);
+                if (mIsReversed) {
+                    exif.flipHorizontally();
                 }
+                exif.save();
             } catch (IOException e) {
                 Log.e(TAG, "Failed to write the file", e);
             } finally {
@@ -228,23 +194,6 @@ class PictureSession extends PreviewSession {
             YuvImage yuv = new YuvImage(nv21, ImageFormat.NV21, width, height, null);
             yuv.compressToJpeg(new Rect(0, 0, width, height), 100, out);
             return out.toByteArray();
-        }
-
-        public static byte[] transform(byte[] image, Matrix matrix) {
-            Bitmap original = BitmapFactory.decodeByteArray(image, 0, image.length);
-            Bitmap flipped = Bitmap.createBitmap(original, 0, 0, original.getWidth(), original.getHeight(), matrix, true);
-
-            ByteArrayOutputStream bos = new ByteArrayOutputStream();
-            flipped.compress(Bitmap.CompressFormat.JPEG, 100, bos);
-            try {
-                return bos.toByteArray();
-            } finally {
-                try {
-                    bos.close();
-                } catch (IOException e) {
-                    Log.e(TAG, "Failed to close ByteArrayOutputStream when flipping image", e);
-                }
-            }
         }
     }
 

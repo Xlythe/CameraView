@@ -7,7 +7,6 @@ import android.content.res.TypedArray;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
-import android.net.Uri;
 import android.os.Build;
 import android.support.annotation.Nullable;
 import android.support.annotation.RequiresPermission;
@@ -26,7 +25,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
-import com.squareup.picasso.Picasso;
+import com.bumptech.glide.Glide;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
@@ -181,6 +180,7 @@ public class CameraView extends FrameLayout {
     @Override
     protected void onFinishInflate() {
         super.onFinishInflate();
+        removeAllViews();
         addView(mCameraView = new TextureView(getContext()));
         addView(mImagePreview = new ImageView(getContext()));
         addView(mVideoPreview = new VideoView(getContext()));
@@ -309,7 +309,7 @@ public class CameraView extends FrameLayout {
     void showImageConfirmation(File file) {
         if (mIsImageConfirmationEnabled) {
             mImagePreview.setVisibility(View.VISIBLE);
-            Picasso.with(getContext()).load(file).into(mImagePreview);
+            Glide.with(getContext()).load(file).into(mImagePreview);
             mImagePendingConfirmation = file;
 
             if (getOnImageCapturedListener() != null) {

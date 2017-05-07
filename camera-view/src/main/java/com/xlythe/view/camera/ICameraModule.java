@@ -6,7 +6,6 @@ import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.os.Looper;
 import android.util.Log;
-import android.view.Surface;
 
 import java.io.File;
 
