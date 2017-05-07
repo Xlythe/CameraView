@@ -19,6 +19,7 @@ import android.media.ImageReader;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.annotation.UiThread;
 import android.support.annotation.WorkerThread;
 import android.util.Log;
@@ -236,32 +237,74 @@ class PictureSession extends PreviewSession {
     private static final class PictureSurface extends CameraSurface {
         private Size choosePictureSize(StreamConfigurationMap map, Size recommendedSize) {
             List<Size> choices = getSizes(map);
+
+            List<Size> availableSizes;
+            switch (getQuality()) {
+                case LOW:
+                    availableSizes = getSizes(choices, CameraView.Quality.LOW, recommendedSize);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a low quality size with the same aspect ratio as the preview");
+                    availableSizes = getSizes(choices, CameraView.Quality.LOW);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a low quality size");
+                case MEDIUM:
+                    availableSizes = getSizes(choices, CameraView.Quality.MEDIUM, recommendedSize);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size with the same aspect ratio as the preview");
+                    availableSizes = getSizes(choices, CameraView.Quality.MEDIUM);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size");
+                case HIGH:
+                    availableSizes = getSizes(choices, CameraView.Quality.HIGH, recommendedSize);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a high quality size with the same aspect ratio as the preview");
+                    availableSizes = getSizes(choices, CameraView.Quality.HIGH);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a high quality size");
+                default:
+                    Log.e(TAG, "Couldn't find a suitable picture size");
+                    return Collections.max(choices, new CompareSizesByArea());
+            }
+        }
+
+        private static List<Size> getSizes(List<Size> choices, CameraView.Quality quality) {
+            return getSizes(choices, quality, null);
+        }
+
+        private static List<Size> getSizes(List<Size> choices, CameraView.Quality quality, @Nullable Size recommendedSize) {
             List<Size> availableSizes = new ArrayList<>(choices.size());
             for (Size size : choices) {
-                if (getQuality() == CameraView.Quality.MEDIUM && size.getHeight() > 720) {
+                if (quality == CameraView.Quality.MEDIUM && size.getHeight() > 720) {
                     continue;
                 }
-                if (getQuality() == CameraView.Quality.LOW && size.getHeight() > 420) {
+                if (quality == CameraView.Quality.LOW && size.getHeight() > 420) {
                     continue;
                 }
 
-                // Only look at sizes that match the aspect ratio of the preview, because that's what
-                // the user sees when they take the picture.
-                if (sameAspectRatio(size, recommendedSize)) {
+                if (recommendedSize == null) {
+                    availableSizes.add(size);
+                } else if (sameAspectRatio(size, recommendedSize)) {
+                    // Only look at sizes that match the aspect ratio of the preview, because that's what
+                    // the user sees when they take the picture.
                     availableSizes.add(size);
                 }
             }
-
-            if (availableSizes.isEmpty()) {
-                Log.e(TAG, "Couldn't find a suitable picture size");
-                availableSizes.add(Collections.max(choices, new CompareSizesByArea()));
-            }
-
             if (DEBUG) {
                 Log.d(TAG, "Found available picture sizes: " + availableSizes);
             }
-
-            return Collections.max(availableSizes, new CompareSizesByArea());
+            return availableSizes;
         }
 
         private static boolean sameAspectRatio(Size a, Size b) {
