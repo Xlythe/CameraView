@@ -483,8 +483,17 @@ public class Camera2Module extends ICameraModule {
         // want (the height of the phone, or slightly bigger, depending on aspect ratio).
         float scale = 1f;
         if (displayOrientation == 90 || displayOrientation == 270) {
-            scale = (float) newHeight / viewWidth;
+            boolean cropHeight = viewWidth > newHeight * viewHeight / newWidth;
+            if (cropHeight) {
+                // If we're cropping the top/bottom, then we want the widths to be exact
+                scale = (float) viewWidth / newHeight;
+            } else {
+                // If we're cropping the left/right, then we want the heights to be exact
+                scale = (float) viewHeight / newWidth;
+            }
         }
+        newWidth *= scale;
+        newHeight *= scale;
         scaleX *= scale;
         scaleY *= scale;
 
