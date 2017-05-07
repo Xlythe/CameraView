@@ -77,6 +77,20 @@ class PictureSession extends PreviewSession {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
             builder.set(CaptureRequest.JPEG_ORIENTATION, getRelativeCameraOrientation());
+            if (hasFlash()) {
+                switch (getFlash()) {
+                    case AUTO:
+                        // TODO: This doesn't work :(
+                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+                        break;
+                    case ON:
+                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE);
+                        break;
+                    case OFF:
+                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+                        break;
+                }
+            }
             builder.addTarget(mPictureSurface.getSurface());
             if (mMeteringRectangle != null) {
                 builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});

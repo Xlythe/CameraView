@@ -393,6 +393,22 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
+    public boolean hasFlash() {
+        try {
+            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
+            Boolean hasFlash = (characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE));
+            if (hasFlash == null) {
+                return false;
+            }
+            return hasFlash;
+        } catch (CameraAccessException e) {
+            Log.e(TAG, "Failed to query camera", e);
+        }
+
+        return false;
+    }
+
+    @Override
     public boolean isZoomSupported() {
         return getMaxZoomLevel() != ZOOM_NOT_SUPPORTED;
     }

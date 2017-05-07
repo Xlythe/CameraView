@@ -48,8 +48,12 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getBackgroundHandler();
     }
 
-    int getDisplayRotation() {
-        return mCamera2Module.getDisplayRotation();
+    boolean hasFlash() {
+        return mCamera2Module.hasFlash();
+    }
+
+    CameraView.Flash getFlash() {
+        return mCamera2Module.getFlash();
     }
 
     int getRelativeCameraOrientation() {
