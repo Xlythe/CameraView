@@ -26,8 +26,10 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     private static final String TAG = VideoView.class.getSimpleName();
     private static final boolean DEBUG = false;
 
+    // Controls video playback
     private MediaPlayer mMediaPlayer;
 
+    // The file of the video to play
     private File mFile;
 
     // If true, the texture view is ready to be drawn on
@@ -38,6 +40,9 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     // An optional listener for when videos have reached the end
     @Nullable private MediaPlayer.OnCompletionListener mOnCompletionListener;
+
+    // If true, the video should be mirrored
+    boolean mIsMirrored = false;
 
     public VideoView(Context context) {
         this(context, null);
@@ -240,6 +245,14 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         return false;
     }
 
+    public void setShouldMirror(boolean mirror) {
+        mIsMirrored = mirror;
+    }
+
+    public boolean isMirrored() {
+        return mIsMirrored;
+    }
+
     void transformPreview(int videoWidth, int videoHeight) {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
@@ -272,6 +285,11 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
         matrix.setScale(scaleX, scaleY);
         matrix.postTranslate(translateX, translateY);
+
+        if (isMirrored()) {
+            matrix.postScale(-1, 1);
+            matrix.postTranslate(viewWidth, 0);
+        }
 
         if (DEBUG) {
             Log.d(TAG, String.format("Result: viewAspectRatio=%s, videoAspectRatio=%s, "

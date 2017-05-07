@@ -325,6 +325,7 @@ public class CameraView extends FrameLayout {
     void showVideoConfirmation(final File file) {
         if (mIsVideoConfirmationEnabled) {
             mVideoPreview.setVisibility(View.VISIBLE);
+            mVideoPreview.setShouldMirror(isUsingFrontFacingCamera());
             mVideoPreview.setFile(file);
             if (!mVideoPreview.play()) {
                 Log.w(TAG, "Failed to play video preview");
