@@ -97,17 +97,6 @@ class PreviewSession extends SessionImpl {
             return filter(map.getOutputSizes(SurfaceTexture.class));
         }
 
-        private static List<Size> filter(Size[] sizes) {
-            List<Size> availableSizes = new ArrayList<>(sizes.length);
-            for (Size size : sizes) {
-                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
-                    continue;
-                }
-                availableSizes.add(size);
-            }
-            return availableSizes;
-        }
-
         private Surface mSurface;
 
         PreviewSurface(Camera2Module cameraView) {

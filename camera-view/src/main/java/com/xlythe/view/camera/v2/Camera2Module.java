@@ -491,11 +491,11 @@ public class Camera2Module extends ICameraModule {
                 // If we're cropping the left/right, then we want the heights to be exact
                 scale = (float) viewHeight / newWidth;
             }
+            newWidth *= scale;
+            newHeight *= scale;
+            scaleX *= scale;
+            scaleY *= scale;
         }
-        newWidth *= scale;
-        newHeight *= scale;
-        scaleX *= scale;
-        scaleY *= scale;
 
         // Because we scaled the preview beyond the bounds of the view, we need to crop some of it.
         // By translating the photo over, we'll move it into the center.

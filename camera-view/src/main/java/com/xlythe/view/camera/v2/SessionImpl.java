@@ -18,6 +18,7 @@ import com.xlythe.view.camera.CameraView;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
@@ -152,6 +153,91 @@ abstract class SessionImpl implements Camera2Module.Session {
                 return Long.signum((long) lhs.getWidth() * lhs.getHeight() -
                         (long) rhs.getWidth() * rhs.getHeight());
             }
+        }
+
+        Size chooseSize(List<Size> choices, Size recommendedSize) {
+            List<Size> availableSizes;
+            switch (getQuality()) {
+                case LOW:
+                    availableSizes = getSizes(choices, CameraView.Quality.LOW, recommendedSize);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a low quality size with the same aspect ratio as the preview");
+                    availableSizes = getSizes(choices, CameraView.Quality.LOW);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a low quality size");
+                case MEDIUM:
+                    availableSizes = getSizes(choices, CameraView.Quality.MEDIUM, recommendedSize);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size with the same aspect ratio as the preview");
+                    availableSizes = getSizes(choices, CameraView.Quality.MEDIUM);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size");
+                case HIGH:
+                    availableSizes = getSizes(choices, CameraView.Quality.HIGH, recommendedSize);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a high quality size with the same aspect ratio as the preview");
+                    availableSizes = getSizes(choices, CameraView.Quality.HIGH);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, new CompareSizesByArea());
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a high quality size");
+                default:
+                    Log.e(TAG, "Couldn't find a suitable size");
+                    return Collections.max(choices, new CompareSizesByArea());
+            }
+        }
+
+        static List<Size> getSizes(List<Size> choices, CameraView.Quality quality) {
+            return getSizes(choices, quality, null);
+        }
+
+        static List<Size> getSizes(List<Size> choices, CameraView.Quality quality, @Nullable Size recommendedSize) {
+            List<Size> availableSizes = new ArrayList<>(choices.size());
+            for (Size size : choices) {
+                if (quality == CameraView.Quality.MEDIUM && size.getHeight() > 720) {
+                    continue;
+                }
+                if (quality == CameraView.Quality.LOW && size.getHeight() > 420) {
+                    continue;
+                }
+
+                if (recommendedSize == null) {
+                    availableSizes.add(size);
+                } else if (sameAspectRatio(size, recommendedSize)) {
+                    // Only look at sizes that match the aspect ratio of the preview, because that's what
+                    // the user sees when they take the picture.
+                    availableSizes.add(size);
+                }
+            }
+            if (DEBUG) {
+                Log.d(TAG, "Found available picture sizes: " + availableSizes);
+            }
+            return availableSizes;
+        }
+
+        static boolean sameAspectRatio(Size a, Size b) {
+            return 1000 * a.getWidth() / a.getHeight() == 1000 * b.getWidth() / b.getHeight();
+        }
+
+        static List<Size> filter(Size[] sizes) {
+            List<Size> availableSizes = new ArrayList<>(sizes.length);
+            for (Size size : sizes) {
+                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
+                    continue;
+                }
+                availableSizes.add(size);
+            }
+            return availableSizes;
         }
     }
 }

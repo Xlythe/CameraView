@@ -33,7 +33,7 @@ class VideoSession extends PreviewSession {
 
     VideoSession(Camera2Module camera2Module, File file) {
         super(camera2Module);
-        mVideoSurface = new VideoSurface(camera2Module, file);
+        mVideoSurface = new VideoSurface(camera2Module, file, getPreviewSurface());
     }
 
     @Override
@@ -114,47 +114,8 @@ class VideoSession extends PreviewSession {
     }
 
     private static final class VideoSurface extends CameraSurface {
-        private Size chooseVideoSize(StreamConfigurationMap map) {
-            List<Size> choices = getSizes(map);
-            List<Size> availableSizes = new ArrayList<>(choices.size());
-            for (Size size : choices) {
-                if (getQuality() == CameraView.Quality.HIGH && size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
-                    continue;
-                }
-                if (getQuality() == CameraView.Quality.MEDIUM && size.getHeight() > 720) {
-                    continue;
-                }
-                if (getQuality() == CameraView.Quality.LOW && size.getHeight() > 420) {
-                    continue;
-                }
-                availableSizes.add(size);
-            }
-
-            if (availableSizes.isEmpty()) {
-                Log.e(TAG, "Couldn't find a suitable video size");
-                availableSizes.add(Collections.max(choices, new CompareSizesByArea()));
-            }
-
-            if (DEBUG) {
-                Log.d(TAG, "Found available video sizes: " + availableSizes);
-            }
-
-            return Collections.max(availableSizes, new CompareSizesByArea());
-        }
-
         private List<Size> getSizes(StreamConfigurationMap map) {
             return filter(map.getOutputSizes(MediaRecorder.class));
-        }
-
-        private static List<Size> filter(Size[] sizes) {
-            List<Size> availableSizes = new ArrayList<>(sizes.length);
-            for (Size size : sizes) {
-                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
-                    continue;
-                }
-                availableSizes.add(size);
-            }
-            return availableSizes;
         }
 
         private boolean mIsRecordingVideo;
@@ -165,15 +126,17 @@ class VideoSession extends PreviewSession {
 
         @NonNull
         private final File mFile;
+        private final CameraSurface mPreviewSurface;
 
-        VideoSurface(Camera2Module cameraView, @NonNull File file) {
+        VideoSurface(Camera2Module cameraView, @NonNull File file, CameraSurface previewSurface) {
             super(cameraView);
             mFile = file;
+            mPreviewSurface = previewSurface;
         }
 
         @Override
         void initialize(StreamConfigurationMap map) {
-            super.initialize(chooseVideoSize(map));
+            super.initialize(chooseSize(getSizes(map), mPreviewSurface.mSize));
 
             try {
                 mMediaRecorder = new MediaRecorder();

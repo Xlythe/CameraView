@@ -235,82 +235,6 @@ class PictureSession extends PreviewSession {
     }
 
     private static final class PictureSurface extends CameraSurface {
-        private Size choosePictureSize(StreamConfigurationMap map, Size recommendedSize) {
-            List<Size> choices = getSizes(map);
-
-            List<Size> availableSizes;
-            switch (getQuality()) {
-                case LOW:
-                    availableSizes = getSizes(choices, CameraView.Quality.LOW, recommendedSize);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
-                    }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a low quality size with the same aspect ratio as the preview");
-                    availableSizes = getSizes(choices, CameraView.Quality.LOW);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
-                    }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a low quality size");
-                case MEDIUM:
-                    availableSizes = getSizes(choices, CameraView.Quality.MEDIUM, recommendedSize);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
-                    }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size with the same aspect ratio as the preview");
-                    availableSizes = getSizes(choices, CameraView.Quality.MEDIUM);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
-                    }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size");
-                case HIGH:
-                    availableSizes = getSizes(choices, CameraView.Quality.HIGH, recommendedSize);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
-                    }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a high quality size with the same aspect ratio as the preview");
-                    availableSizes = getSizes(choices, CameraView.Quality.HIGH);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
-                    }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a high quality size");
-                default:
-                    Log.e(TAG, "Couldn't find a suitable picture size");
-                    return Collections.max(choices, new CompareSizesByArea());
-            }
-        }
-
-        private static List<Size> getSizes(List<Size> choices, CameraView.Quality quality) {
-            return getSizes(choices, quality, null);
-        }
-
-        private static List<Size> getSizes(List<Size> choices, CameraView.Quality quality, @Nullable Size recommendedSize) {
-            List<Size> availableSizes = new ArrayList<>(choices.size());
-            for (Size size : choices) {
-                if (quality == CameraView.Quality.MEDIUM && size.getHeight() > 720) {
-                    continue;
-                }
-                if (quality == CameraView.Quality.LOW && size.getHeight() > 420) {
-                    continue;
-                }
-
-                if (recommendedSize == null) {
-                    availableSizes.add(size);
-                } else if (sameAspectRatio(size, recommendedSize)) {
-                    // Only look at sizes that match the aspect ratio of the preview, because that's what
-                    // the user sees when they take the picture.
-                    availableSizes.add(size);
-                }
-            }
-            if (DEBUG) {
-                Log.d(TAG, "Found available picture sizes: " + availableSizes);
-            }
-            return availableSizes;
-        }
-
-        private static boolean sameAspectRatio(Size a, Size b) {
-            return 1000 * a.getWidth() / a.getHeight() == 1000 * b.getWidth() / b.getHeight();
-        }
-
         private List<Size> getSizes(StreamConfigurationMap map) {
             // Special case for high resolution images (assuming, of course, quality was set to high)
             if (getQuality() == CameraView.Quality.HIGH && Build.VERSION.SDK_INT >= 23) {
@@ -325,18 +249,6 @@ class PictureSession extends PreviewSession {
 
             // Otherwise, just return the default sizes
             return filter(map.getOutputSizes(IMAGE_FORMAT));
-        }
-
-        private static List<Size> filter(Size[] sizes) {
-            List<Size> availableSizes = new ArrayList<>(sizes.length);
-            for (Size size : sizes) {
-                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT
-                        && IMAGE_FORMAT == ImageFormat.JPEG) {
-                    continue;
-                }
-                availableSizes.add(size);
-            }
-            return availableSizes;
         }
 
         private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
@@ -378,7 +290,7 @@ class PictureSession extends PreviewSession {
 
         @Override
         void initialize(StreamConfigurationMap map) {
-            super.initialize(choosePictureSize(map, mPreviewSurface.mSize));
+            super.initialize(chooseSize(getSizes(map), mPreviewSurface.mSize));
             mImageReader = ImageReader.newInstance(getWidth(), getHeight(), IMAGE_FORMAT, 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getBackgroundHandler());
         }
