@@ -3,7 +3,6 @@ package com.xlythe.fragment.camera;
 import android.Manifest;
 import android.animation.ValueAnimator;
 import android.content.Context;
-import android.content.pm.PackageManager;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
 import android.os.Build;
@@ -15,7 +14,6 @@ import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.RequiresPermission;
 import android.support.v4.app.Fragment;
-import android.support.v4.content.ContextCompat;
 import android.text.format.DateFormat;
 import android.view.MotionEvent;
 import android.view.View;
@@ -26,9 +24,11 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.R;
 
 import java.io.File;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.Formatter;
 import java.util.Locale;
@@ -39,7 +39,11 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             Manifest.permission.RECORD_AUDIO,
             Manifest.permission.WRITE_EXTERNAL_STORAGE
     };
-    private static final int REQUEST_CODE_REQUIRED_PERMISSIONS = 3;
+    private static final String[] OPTIONAL_PERMISSIONS = {
+            Manifest.permission.ACCESS_FINE_LOCATION,
+            Manifest.permission.VIBRATE
+    };
+    private static final int REQUEST_CODE_PERMISSIONS = 10;
     private static final String DESTINATION = "yyyy-MM-dd hh:mm:ss";
     private static final String PHOTO_EXT = ".jpg";
     private static final String VIDEO_EXT = ".mp4";
@@ -75,8 +79,8 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @SuppressWarnings({"MissingPermission"})
     @Override
     public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        if (requestCode == REQUEST_CODE_REQUIRED_PERMISSIONS) {
-            if (hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
+        if (requestCode == REQUEST_CODE_PERMISSIONS) {
+            if (PermissionChecker.hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
                 showCamera();
             } else {
                 showPermissionPrompt();
@@ -99,7 +103,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                 @SuppressWarnings({"MissingPermission"})
                 @Override
                 public void onDisplayChanged(int displayId) {
-                    if (hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
+                    if (PermissionChecker.hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
                         if (mCamera.isOpen()) {
                             mCamera.close();
                             mCamera.open();
@@ -125,7 +129,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @Override
     public void onStart() {
         super.onStart();
-        if (hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
+        if (PermissionChecker.hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
             showCamera();
         } else {
             showPermissionPrompt();
@@ -263,7 +267,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mPermissionRequest.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
-                requestPermissions(REQUIRED_PERMISSIONS, REQUEST_CODE_REQUIRED_PERMISSIONS);
+                requestPermissions(concat(REQUIRED_PERMISSIONS, OPTIONAL_PERMISSIONS), REQUEST_CODE_PERMISSIONS);
             }
         });
 
@@ -362,18 +366,6 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mCapture.setVisibility(View.GONE);
         mConfirm.setVisibility(View.VISIBLE);
         mConfirm.setOnClickListener(listener);
-    }
-
-    /**
-     * Returns true if all given permissions are available
-     */
-    public static boolean hasPermissions(Context context, String... permissions) {
-        boolean ok = true;
-        for (String permission : permissions) {
-            ok = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED;
-            if (!ok) break;
-        }
-        return ok;
     }
 
     private class ProgressBarAnimator extends ValueAnimator {
@@ -510,7 +502,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
         private void vibrate() {
             Vibrator vibrator = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
-            if (vibrator.hasVibrator() && hasPermissions(getContext(), Manifest.permission.VIBRATE)) {
+            if (PermissionChecker.hasPermissions(getContext(), Manifest.permission.VIBRATE) && vibrator.hasVibrator()) {
                 vibrator.vibrate(25);
             }
         }
@@ -520,5 +512,11 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             mHandler.removeMessages(HOLD);
             mHandler.removeMessages(RELEASE);
         }
+    }
+
+    private static <T> T[] concat(T[] first, T[] second) {
+        T[] result = Arrays.copyOf(first, first.length + second.length);
+        System.arraycopy(second, 0, result, first.length, second.length);
+        return result;
     }
 }

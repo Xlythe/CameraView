@@ -1,6 +1,9 @@
 package com.xlythe.view.camera.v2;
 
+import android.Manifest;
 import android.annotation.TargetApi;
+import android.content.Context;
+import android.content.pm.PackageManager;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
@@ -10,11 +13,16 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.media.Image;
 import android.media.ImageReader;
 import android.os.AsyncTask;
 import android.os.Build;
+import android.os.Bundle;
 import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 import android.support.annotation.UiThread;
 import android.support.annotation.WorkerThread;
 import android.util.Log;
@@ -24,6 +32,8 @@ import android.view.Surface;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.LocationProvider;
+import com.xlythe.view.camera.PermissionChecker;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -41,6 +51,9 @@ class PictureSession extends PreviewSession {
      * larger sizes with YUV_420_888, at the cost of speed.
      */
     private static final int IMAGE_FORMAT = ImageFormat.JPEG;
+
+    private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
+    private static final long GPS_TIMEOUT_MILLIS = 10;
 
     private final PictureSurface mPictureSurface;
 
@@ -103,15 +116,23 @@ class PictureSession extends PreviewSession {
     }
 
     private static class ImageSaver extends AsyncTask<Void, Void, Void> {
+        private final Context mContext;
+
+        // The image that was captured
         private final Image mImage;
+
+        // The orientation of the image
         private final int mOrientation;
 
         // If true, the picture taken is reversed and needs to be flipped.
         // Typical with front facing cameras.
         private final boolean mIsReversed;
+
+        // The file to save the image to
         private final File mFile;
 
-        ImageSaver(Image image, int orientation, boolean reversed, File file) {
+        ImageSaver(Context context, Image image, int orientation, boolean reversed, File file) {
+            mContext = context.getApplicationContext();
             mImage = image;
             mOrientation = orientation;
             mIsReversed = reversed;
@@ -134,6 +155,10 @@ class PictureSession extends PreviewSession {
                 if (mIsReversed) {
                     exif.flipHorizontally();
                 }
+                Location location = getLocation(mContext);
+                if (location != null) {
+                    exif.attachLocation(location);
+                }
                 exif.save();
             } catch (IOException e) {
                 Log.e(TAG, "Failed to write the file", e);
@@ -146,6 +171,17 @@ class PictureSession extends PreviewSession {
                         Log.e(TAG, "Failed to close the output stream", e);
                     }
                 }
+            }
+            return null;
+        }
+
+        @SuppressWarnings({"MissingPermission"})
+        @Nullable
+        private static Location getLocation(Context context) {
+            if (PermissionChecker.hasPermissions(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
+                // Our GPS timeout is purposefully low. We're not intending to wait until GPS is acquired
+                // but we want a last known location for the next time a picture is taken.
+                return LocationProvider.getGPSLocation(context, STALE_LOCATION_MILLIS, GPS_TIMEOUT_MILLIS);
             }
             return null;
         }
@@ -221,22 +257,27 @@ class PictureSession extends PreviewSession {
                 mCameraView.getBackgroundHandler().post(new Runnable() {
                     @Override
                     public void run() {
-                        if (mFile != null) {
-                            final File file = mFile;
-                            new ImageSaver(
-                                    reader.acquireLatestImage(),
-                                    mCameraView.getRelativeCameraOrientation(),
-                                    isUsingFrontFacingCamera(),
-                                    mFile) {
-                                @UiThread
-                                @Override
-                                protected void onPostExecute(Void aVoid) {
-                                    showImageConfirmation(file);
-                                }
-                            }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
-                            mFile = null;
-                        } else {
-                            Log.w(ICameraModule.TAG, "OnImageAvailable called but no file to write to");
+                        try {
+                            if (mFile != null) {
+                                final File file = mFile;
+                                new ImageSaver(
+                                        mCameraView.getContext(),
+                                        reader.acquireLatestImage(),
+                                        mCameraView.getRelativeCameraOrientation(),
+                                        isUsingFrontFacingCamera(),
+                                        mFile) {
+                                    @UiThread
+                                    @Override
+                                    protected void onPostExecute(Void aVoid) {
+                                        showImageConfirmation(file);
+                                    }
+                                }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+                                mFile = null;
+                            } else {
+                                Log.w(ICameraModule.TAG, "OnImageAvailable called but no file to write to");
+                            }
+                        } catch (IllegalStateException e) {
+                            Log.e(TAG, "Failed to save image", e);
                         }
                     }
                 });

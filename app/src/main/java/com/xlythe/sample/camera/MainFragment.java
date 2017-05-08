@@ -16,6 +16,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import com.xlythe.fragment.camera.CameraFragment;
+import com.xlythe.view.camera.Exif;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -37,6 +38,12 @@ public class MainFragment extends CameraFragment {
             @Override
             protected void onPostExecute(File file) {
                 report("Picture saved to " + file.getAbsolutePath());
+
+                // Print out metadata about the picture
+                try {
+                    Log.d(TAG, new Exif(file).toString());
+                } catch (IOException e) {}
+
                 broadcastPicture(file);
             }
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));

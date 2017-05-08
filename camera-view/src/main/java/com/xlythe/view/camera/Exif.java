@@ -1,7 +1,6 @@
 package com.xlythe.view.camera;
 
 import android.location.Location;
-import android.location.LocationProvider;
 import android.support.annotation.Nullable;
 import android.support.annotation.VisibleForTesting;
 import android.support.media.ExifInterface;
@@ -10,8 +9,6 @@ import android.util.Log;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.text.DateFormat;
-import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -45,6 +42,12 @@ public class Exif {
 
     public void save() throws IOException {
         mExifInterface.saveAttributes();
+    }
+
+    @Override
+    public String toString() {
+        return String.format(Locale.ENGLISH, "Exif{location=%s, rotation=%d, isFlippedVertically=%s, isFlippedHorizontally=%s, timestamp=%s}",
+                getLocation(), getRotation(), isFlippedVertically(), isFlippedHorizontally(), getTimestamp());
     }
 
     private int getOrientation() {
