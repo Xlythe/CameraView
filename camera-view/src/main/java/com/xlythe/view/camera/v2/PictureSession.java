@@ -129,6 +129,7 @@ class PictureSession extends PreviewSession {
                 output.write(bytes);
 
                 Exif exif = new Exif(mFile);
+                exif.attachTimestamp();
                 exif.rotate(mOrientation);
                 if (mIsReversed) {
                     exif.flipHorizontally();

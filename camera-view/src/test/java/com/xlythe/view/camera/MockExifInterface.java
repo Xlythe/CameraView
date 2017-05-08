@@ -54,6 +54,10 @@ public class MockExifInterface {
                 return null;
             }
         }).when(exifInterface).setAttribute(Mockito.anyString(), Mockito.anyString());
+        Mockito.doCallRealMethod().when(exifInterface).setLatLong(Mockito.anyDouble(), Mockito.anyDouble());
+        Mockito.doCallRealMethod().when(exifInterface).getLatLong();
+        Mockito.doCallRealMethod().when(exifInterface).getGpsDateTime();
+        Mockito.doCallRealMethod().when(exifInterface).getDateTime();
     }
 
     public ExifInterface asMock() {

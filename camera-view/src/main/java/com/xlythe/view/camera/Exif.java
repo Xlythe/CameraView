@@ -1,5 +1,8 @@
 package com.xlythe.view.camera;
 
+import android.location.Location;
+import android.location.LocationProvider;
+import android.support.annotation.Nullable;
 import android.support.annotation.VisibleForTesting;
 import android.support.media.ExifInterface;
 import android.util.Log;
@@ -7,9 +10,19 @@ import android.util.Log;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.text.DateFormat;
+import java.text.ParseException;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
+import java.util.TimeZone;
 
 public class Exif {
     private static final String TAG = Exif.class.getSimpleName();
+
+    private static final String DATE_FORMAT = "yyyy:MM:dd";
+    private static final String TIME_FORMAT = "HH:mm:ss";
+    private static final String DATETIME_FORMAT = DATE_FORMAT + " " + TIME_FORMAT;
 
     private final ExifInterface mExifInterface;
 
@@ -120,6 +133,31 @@ public class Exif {
             default:
                 return false;
         }
+    }
+
+    public long getTimestamp() {
+        return mExifInterface.getDateTime();
+    }
+
+    @Nullable
+    public Location getLocation() {
+        String provider = mExifInterface.getAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD);
+        double[] latlng = mExifInterface.getLatLong();
+        long timestamp = mExifInterface.getGpsDateTime();
+        if (latlng == null) {
+            return null;
+        }
+        if (provider == null) {
+            provider = TAG;
+        }
+
+        Location location = new Location(provider);
+        location.setLatitude(latlng[0]);
+        location.setLongitude(latlng[1]);
+        if (timestamp != -1) {
+            location.setTime(timestamp);
+        }
+        return location;
     }
 
     /**
@@ -275,5 +313,34 @@ public class Exif {
                 break;
         }
         mExifInterface.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(orientation));
+    }
+
+    public void attachTimestamp() {
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, convertToExifDateTime(System.currentTimeMillis()));
+    }
+
+    public void attachLocation(Location location) {
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, location.getProvider());
+        mExifInterface.setLatLong(location.getLatitude(), location.getLongitude());
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, convertToExifDate(location.getTime()));
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, convertToExifTime(location.getTime()));
+    }
+
+    private static String convertToExifDateTime(long timestamp) {
+        SimpleDateFormat format = new SimpleDateFormat(DATETIME_FORMAT, Locale.ENGLISH);
+        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return format.format(new Date(timestamp));
+    }
+
+    private static String convertToExifDate(long timestamp) {
+        SimpleDateFormat format = new SimpleDateFormat(DATE_FORMAT, Locale.ENGLISH);
+        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return format.format(new Date(timestamp));
+    }
+
+    private static String convertToExifTime(long timestamp) {
+        SimpleDateFormat format = new SimpleDateFormat(TIME_FORMAT, Locale.ENGLISH);
+        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        return format.format(new Date(timestamp));
     }
 }

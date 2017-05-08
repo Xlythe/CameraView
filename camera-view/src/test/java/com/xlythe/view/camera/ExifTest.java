@@ -1,5 +1,7 @@
 package com.xlythe.view.camera;
 
+import android.location.Location;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -94,5 +96,25 @@ public class ExifTest {
         assertEquals(0, exif.getRotation());
         assertEquals(false, exif.isFlippedHorizontally());
         assertEquals(false, exif.isFlippedVertically());
+    }
+
+    @Test
+    public void timestamp() {
+        assertEquals(-1, exif.getTimestamp());
+
+        exif.attachTimestamp();
+        assertEquals(System.currentTimeMillis() / 1000 * 1000, exif.getTimestamp());
+    }
+
+    @Test
+    public void location() {
+        assertEquals(null, exif.getLocation());
+
+        Location location = new Location("TEST");
+        location.setLatitude(22.3);
+        location.setLongitude(114);
+        location.setTime(System.currentTimeMillis() / 1000 * 1000);
+        exif.attachLocation(location);
+        assertEquals(location, exif.getLocation());
     }
 }
