@@ -543,8 +543,8 @@ public class Camera2Module extends ICameraModule {
                 // If we're cropping the left/right, then we want the heights to be exact
                 scale = (float) viewHeight / newWidth;
             }
-            newWidth *= scale;
-            newHeight *= scale;
+            newWidth = (int) Math.ceil(newWidth * scale);
+            newHeight = (int) Math.ceil(newHeight * scale);
             scaleX *= scale;
             scaleY *= scale;
         }
