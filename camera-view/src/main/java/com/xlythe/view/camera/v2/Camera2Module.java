@@ -364,9 +364,14 @@ public class Camera2Module extends ICameraModule {
             int cropW = difW * zoomLevel / maxZoom;
             int cropH = difH * zoomLevel / maxZoom;
             Rect cropRegion = new Rect(cropW, cropH, m.width() - cropW, m.height() - cropH);
+
+            if (cropRegion.left > cropRegion.right || cropRegion.top > cropRegion.bottom) {
+                Log.w(TAG, "Crop Region has inverted, ignoring further zoom levels");
+                return;
+            }
             mActiveSession.setCropRegion(cropRegion);
             mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
-        } catch (CameraAccessException | NullPointerException e) {
+        } catch (CameraAccessException | IllegalStateException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to zoom", e);
         }
