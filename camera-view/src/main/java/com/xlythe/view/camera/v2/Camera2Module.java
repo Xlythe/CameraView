@@ -81,6 +81,11 @@ public class Camera2Module extends ICameraModule {
     private int mZoomLevel;
 
     /**
+     * If true, the preview should be paused.
+     */
+    private boolean mIsPaused = false;
+
+    /**
      * Callbacks for when the camera is available / unavailable
      */
     private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
@@ -188,7 +193,9 @@ public class Camera2Module extends ICameraModule {
                         try {
                             mCaptureSession = cameraCaptureSession;
                             mActiveSession = session;
-                            session.onAvailable(mCameraDevice, mCaptureSession);
+                            if (!mIsPaused) {
+                                session.onAvailable(mCameraDevice, mCaptureSession);
+                            }
                         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
                             Log.e(TAG, "Failed to start session", e);
                         }
@@ -411,6 +418,35 @@ public class Camera2Module extends ICameraModule {
     @Override
     public boolean isZoomSupported() {
         return getMaxZoomLevel() != ZOOM_NOT_SUPPORTED;
+    }
+
+    @Override
+    public void pause() {
+        if (supportsPause() && !mIsPaused) {
+            try {
+                mCaptureSession.stopRepeating();
+            } catch (CameraAccessException e) {
+                Log.e(TAG, "Failed to pause the camera", e);
+            }
+            mIsPaused = true;
+        }
+    }
+
+    @Override
+    public void resume() {
+        if (supportsPause() && mIsPaused) {
+            try {
+                mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
+            } catch (CameraAccessException e) {
+                Log.e(TAG, "Failed to pause the camera", e);
+            }
+            mIsPaused = false;
+        }
+    }
+
+    @Override
+    public boolean supportsPause() {
+        return mCaptureSession != null && mActiveSession != null;
     }
 
     @Override

@@ -168,6 +168,14 @@ public abstract class ICameraModule {
         return false;
     }
 
+    public void pause() {}
+
+    public void resume() {}
+
+    public boolean supportsPause() {
+        return false;
+    }
+
     public void setOnImageCapturedListener(CameraView.OnImageCapturedListener l) {
         mOnImageCapturedListener = l;
     }
