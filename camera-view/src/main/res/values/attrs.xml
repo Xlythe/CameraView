@@ -2,9 +2,10 @@
 <resources>
     <declare-styleable name="CameraView">
         <attr name="quality" format="enum">
-            <enum name="high" value="0"/>
-            <enum name="medium" value="1"/>
-            <enum name="low" value="2"/>
+            <enum name="very_high" value="0"/>
+            <enum name="high" value="1"/>
+            <enum name="medium" value="2"/>
+            <enum name="low" value="3"/>
         </attr>
         <attr name="maxVideoDuration" format="integer" />
         <attr name="maxVideoSize" format="integer" />

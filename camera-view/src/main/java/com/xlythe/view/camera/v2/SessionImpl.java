@@ -235,7 +235,8 @@ abstract class SessionImpl implements Camera2Module.Session {
         static List<Size> filter(Size[] sizes) {
             List<Size> availableSizes = new ArrayList<>(sizes.length);
             for (Size size : sizes) {
-                if (size.getHeight() > Camera2Module.UNSUPPORTED_HEIGHT) {
+                if (size.getWidth() > Camera2Module.MAX_SUPPORTED_SIZE.getWidth()
+                        || size.getHeight() > Camera2Module.MAX_SUPPORTED_SIZE.getHeight()) {
                     continue;
                 }
                 availableSizes.add(size);

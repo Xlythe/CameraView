@@ -18,6 +18,7 @@ import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.RequiresPermission;
 import android.util.Log;
+import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
@@ -37,7 +38,7 @@ public class Camera2Module extends ICameraModule {
     private static final int ZOOM_NOT_SUPPORTED = 1;
 
     // TODO Figure out why camera crashes when we use a size higher than 1080
-    static final int UNSUPPORTED_HEIGHT = 1080;
+    static final Size MAX_SUPPORTED_SIZE = new Size(1920, 1080);
 
     /**
      * This is how we'll talk to the camera.

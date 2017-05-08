@@ -36,6 +36,8 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 import static com.xlythe.view.camera.ICameraModule.TAG;
@@ -47,6 +49,7 @@ class PictureSession extends PreviewSession {
      * larger sizes with YUV_420_888, at the cost of speed.
      */
     private static final int IMAGE_FORMAT = ImageFormat.JPEG;
+    private static final int IMAGE_FORMAT_VERY_HIGH = ImageFormat.YUV_420_888;
 
     private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
     private static final long GPS_TIMEOUT_MILLIS = 10;
@@ -198,6 +201,8 @@ class PictureSession extends PreviewSession {
                 data = NV21toJPEG(
                         YUV_420_888toNV21(image),
                         image.getWidth(), image.getHeight());
+            } else {
+                Log.w(TAG, "Unrecognized image format: " + image.getFormat());
             }
             return data;
         }
@@ -234,9 +239,10 @@ class PictureSession extends PreviewSession {
         private List<Size> getSizes(StreamConfigurationMap map) {
             // Special case for high resolution images (assuming, of course, quality was set to high)
             if (getQuality() == CameraView.Quality.HIGH && Build.VERSION.SDK_INT >= 23) {
-                Size[] sizes = map.getHighResolutionOutputSizes(IMAGE_FORMAT);
+                Size[] sizes = map.getHighResolutionOutputSizes(getImageFormat(getQuality()));
                 if (sizes != null) {
-                    List<Size> availableSizes = filter(sizes);
+                    List<Size> availableSizes = isRaw(getImageFormat(getQuality()))
+                            ? Arrays.asList(sizes) : filter(sizes);
                     if (availableSizes.size() > 0) {
                         return availableSizes;
                     }
@@ -244,7 +250,8 @@ class PictureSession extends PreviewSession {
             }
 
             // Otherwise, just return the default sizes
-            return filter(map.getOutputSizes(IMAGE_FORMAT));
+            Size[] sizes = map.getOutputSizes(getImageFormat(getQuality()));
+            return isRaw(getImageFormat(getQuality())) ? Arrays.asList(sizes) : filter(sizes);
         }
 
         private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
@@ -292,7 +299,7 @@ class PictureSession extends PreviewSession {
         @Override
         void initialize(StreamConfigurationMap map) {
             super.initialize(chooseSize(getSizes(map), mPreviewSurface.mSize));
-            mImageReader = ImageReader.newInstance(getWidth(), getHeight(), IMAGE_FORMAT, 1 /* maxImages */);
+            mImageReader = ImageReader.newInstance(getWidth(), getHeight(), getImageFormat(getQuality()), 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getBackgroundHandler());
         }
 
@@ -315,6 +322,24 @@ class PictureSession extends PreviewSession {
                 mImageReader.close();
                 mImageReader = null;
             }
+        }
+    }
+
+    private static int getImageFormat(CameraView.Quality quality) {
+        switch (quality) {
+            case VERY_HIGH:
+                return IMAGE_FORMAT_VERY_HIGH;
+            default:
+                return IMAGE_FORMAT;
+        }
+    }
+
+    private static boolean isRaw(int imageFormat) {
+        switch (imageFormat) {
+            case ImageFormat.YUV_420_888:
+                return true;
+            default:
+                return false;
         }
     }
 }

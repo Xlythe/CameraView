@@ -43,7 +43,7 @@ public class CameraView extends FrameLayout {
     }
 
     public enum Quality {
-        HIGH(0), MEDIUM(1), LOW(2);
+        VERY_HIGH(0), HIGH(1), MEDIUM(2), LOW(3);
 
         private final int id;
 
