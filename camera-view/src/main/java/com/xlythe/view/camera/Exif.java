@@ -319,6 +319,7 @@ public class Exif {
     }
 
     public void attachTimestamp() {
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, convertToExifDateTime(System.currentTimeMillis()));
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, convertToExifDateTime(System.currentTimeMillis()));
     }
 
