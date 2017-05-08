@@ -2,6 +2,8 @@
 
     <string name="app_name">Camera Sample</string>
 
+    <string name="btn_request_permissions">Request Permissions</string>
+
     <string name="btn_capture">Capture</string>
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
