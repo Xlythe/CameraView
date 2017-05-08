@@ -44,8 +44,8 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     // If true, the video should be mirrored
     private boolean mIsMirrored = false;
 
-    // The offset of the surface. This is used to hide the surface until the video is available.
-    private int mSurfaceOffset = 0;
+    // Used in hiding the surface. This matrix contains the original transformation.
+    @Nullable private Matrix mOriginalMatrix;
 
     public VideoView(Context context) {
         this(context, null);
@@ -319,25 +319,22 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         return display.getRotation();
     }
 
-    // Translates the Surface off of the screen, so that it can be hidden until it's prepared.
+    // Hides the Surface, until it's fully prepared.
     private void hideSurface() {
-        if (mSurfaceOffset == 0) {
+        if (mOriginalMatrix == null) {
             Matrix matrix = new Matrix();
             getTransform(matrix);
-            matrix.postTranslate(-getWidth(), 0);
+            mOriginalMatrix = new Matrix(matrix);
+            matrix.postScale(0, 0);
             setTransform(matrix);
-            mSurfaceOffset = -getWidth();
         }
     }
 
     // Translates the Surface back onto the screen, once it's ready to be shown.
     private void showSurface() {
-        if (mSurfaceOffset != 0) {
-            Matrix matrix = new Matrix();
-            getTransform(matrix);
-            matrix.postTranslate(-mSurfaceOffset, 0);
-            setTransform(matrix);
-            mSurfaceOffset = 0;
+        if (mOriginalMatrix != null) {
+            setTransform(mOriginalMatrix);
+            mOriginalMatrix = null;
         }
     }
 }
