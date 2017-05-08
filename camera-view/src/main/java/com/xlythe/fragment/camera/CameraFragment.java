@@ -34,15 +34,34 @@ import java.util.Formatter;
 import java.util.Locale;
 
 public abstract class CameraFragment extends Fragment implements CameraView.OnImageCapturedListener, CameraView.OnVideoCapturedListener {
-    private static final String[] REQUIRED_PERMISSIONS = {
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
-    };
-    private static final String[] OPTIONAL_PERMISSIONS = {
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.VIBRATE
-    };
+    private static final String[] REQUIRED_PERMISSIONS;
+    private static final String[] OPTIONAL_PERMISSIONS;
+
+    static {
+        // In KitKat+, WRITE_EXTERNAL_STORAGE is optional
+        if (Build.VERSION.SDK_INT >= 19) {
+            REQUIRED_PERMISSIONS = new String[] {
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.RECORD_AUDIO
+            };
+            OPTIONAL_PERMISSIONS = new String[] {
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE,
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.VIBRATE
+            };
+        } else {
+            REQUIRED_PERMISSIONS = new String[] {
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.RECORD_AUDIO,
+                    Manifest.permission.WRITE_EXTERNAL_STORAGE
+            };
+            OPTIONAL_PERMISSIONS = new String[] {
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.VIBRATE
+            };
+        }
+    }
+
     private static final int REQUEST_CODE_PERMISSIONS = 10;
     private static final String DESTINATION = "yyyy-MM-dd hh:mm:ss";
     private static final String PHOTO_EXT = ".jpg";
