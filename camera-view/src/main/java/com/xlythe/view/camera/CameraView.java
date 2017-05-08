@@ -180,12 +180,12 @@ public class CameraView extends FrameLayout {
     @Override
     protected void onFinishInflate() {
         super.onFinishInflate();
-        removeAllViews();
         addView(mCameraView = new TextureView(getContext()));
         addView(mImagePreview = new ImageView(getContext()));
         addView(mVideoPreview = new VideoView(getContext()));
         mImagePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
         mImagePreview.setVisibility(View.GONE);
+        mVideoPreview.setVisibility(View.GONE);
 
         mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
     }
