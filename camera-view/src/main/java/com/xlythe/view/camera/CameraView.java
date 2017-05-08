@@ -44,6 +44,7 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_MODULE = "module";
     private static final String EXTRA_QUALITY = "quality";
     private static final String EXTRA_ZOOM_LEVEL = "zoom_level";
+    private static final String EXTRA_ZOOM_ENABLED = "zoom_enabled";
     private static final String EXTRA_FLASH = "flash";
     private static final String EXTRA_MAX_VIDEO_DURATION = "max_video_duration";
     private static final String EXTRA_MAX_VIDEO_SIZE = "max_video_size";
@@ -135,6 +136,7 @@ public class CameraView extends FrameLayout {
 
     // For pinch-to-zoom
     private ScaleGestureDetector mScaleDetector;
+    private boolean mIsZoomEnabled = true;
 
     private ICameraModule mCameraModule;
 
@@ -145,8 +147,8 @@ public class CameraView extends FrameLayout {
     private File mImagePendingConfirmation;
     private File mVideoPendingConfirmation;
 
-    private boolean mIsImageConfirmationEnabled = false;
-    private boolean mIsVideoConfirmationEnabled = false;
+    private boolean mIsImageConfirmationEnabled;
+    private boolean mIsVideoConfirmationEnabled;
 
     public CameraView(Context context) {
         this(context, null);
@@ -177,12 +179,16 @@ public class CameraView extends FrameLayout {
         if (attrs != null) {
             TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView, 0, 0);
             setQuality(Quality.fromId(a.getInteger(R.styleable.CameraView_quality, getQuality().id)));
+            setFlash(Flash.fromId(a.getInteger(R.styleable.CameraView_flash, getFlash().id)));
+            setZoomEnabled(a.getBoolean(R.styleable.CameraView_pinchToZoomEnabled, isZoomEnabled()));
             if (a.hasValue(R.styleable.CameraView_maxVideoDuration)) {
                 setMaxVideoDuration(a.getInteger(R.styleable.CameraView_maxVideoDuration, INDEFINITE_VIDEO_DURATION));
             }
             if (a.hasValue(R.styleable.CameraView_maxVideoSize)) {
                 setMaxVideoSize(a.getInteger(R.styleable.CameraView_maxVideoSize, INDEFINITE_VIDEO_SIZE));
             }
+            setImageConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmImages, isImageConfirmationEnabled()));
+            setVideoConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmVideos, isVideoConfirmationEnabled()));
             a.recycle();
         }
 
@@ -228,6 +234,7 @@ public class CameraView extends FrameLayout {
         state.putParcelable(EXTRA_SUPER, super.onSaveInstanceState());
         state.putInt(EXTRA_QUALITY, getQuality().id);
         state.putInt(EXTRA_ZOOM_LEVEL, getZoomLevel());
+        state.putBoolean(EXTRA_ZOOM_ENABLED, isZoomEnabled());
         state.putInt(EXTRA_FLASH, getFlash().id);
         state.putLong(EXTRA_MAX_VIDEO_DURATION, getMaxVideoDuration());
         state.putLong(EXTRA_MAX_VIDEO_SIZE, getMaxVideoSize());
@@ -250,6 +257,7 @@ public class CameraView extends FrameLayout {
             super.onRestoreInstanceState(state.getParcelable(EXTRA_SUPER));
             setQuality(Quality.fromId(state.getInt(EXTRA_QUALITY)));
             setZoomLevel(state.getInt(EXTRA_ZOOM_LEVEL));
+            setZoomEnabled(state.getBoolean(EXTRA_ZOOM_ENABLED));
             setFlash(Flash.fromId(state.getInt(EXTRA_FLASH)));
             setMaxVideoDuration(state.getLong(EXTRA_MAX_VIDEO_DURATION));
             setMaxVideoSize(state.getLong(EXTRA_MAX_VIDEO_SIZE));
@@ -591,7 +599,7 @@ public class CameraView extends FrameLayout {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         mScaleDetector.onTouchEvent(event);
-        if (event.getPointerCount() == 2 && isZoomSupported()) {
+        if (event.getPointerCount() == 2 && isZoomEnabled() && isZoomSupported()) {
             return true;
         }
 
@@ -688,6 +696,14 @@ public class CameraView extends FrameLayout {
 
     private int distance(int a, int b) {
         return Math.abs(a - b);
+    }
+
+    public void setZoomEnabled(boolean enabled) {
+        mIsZoomEnabled = enabled;
+    }
+
+    public boolean isZoomEnabled() {
+        return mIsZoomEnabled;
     }
 
     public void setZoomLevel(int zoomLevel) {

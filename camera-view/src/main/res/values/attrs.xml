@@ -14,6 +14,9 @@
             <enum name="on" value="1"/>
             <enum name="off" value="2"/>
         </attr>
+        <attr name="confirmImages" format="boolean" />
+        <attr name="confirmVideos" format="boolean" />
+        <attr name="pinchToZoomEnabled" format="boolean" />
     </declare-styleable>
     <declare-styleable name="VideoView">
         <attr name="filePath" format="string" />
