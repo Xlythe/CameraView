@@ -8,6 +8,8 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.os.Build;
+import android.os.Bundle;
+import android.os.Parcelable;
 import android.support.annotation.Nullable;
 import android.support.annotation.RequiresPermission;
 import android.support.annotation.UiThread;
@@ -38,6 +40,18 @@ public class CameraView extends FrameLayout {
     public static final int INDEFINITE_VIDEO_DURATION = -1;
     public static final int INDEFINITE_VIDEO_SIZE = -1;
 
+    private static final String EXTRA_SUPER = "super";
+    private static final String EXTRA_MODULE = "module";
+    private static final String EXTRA_QUALITY = "quality";
+    private static final String EXTRA_ZOOM_LEVEL = "zoom_level";
+    private static final String EXTRA_FLASH = "flash";
+    private static final String EXTRA_MAX_VIDEO_DURATION = "max_video_duration";
+    private static final String EXTRA_MAX_VIDEO_SIZE = "max_video_size";
+    private static final String EXTRA_CONFIRM_IMAGE = "confirm_image";
+    private static final String EXTRA_CONFIRM_VIDEO = "confirm_video";
+    private static final String EXTRA_PENDING_IMAGE_FILE_PATH = "pending_image_file_path";
+    private static final String EXTRA_PENDING_VIDEO_FILE_PATH = "pending_video_file_path";
+
     private enum Status {
         OPEN, CLOSED, AWAITING_TEXTURE
     }
@@ -60,7 +74,20 @@ public class CameraView extends FrameLayout {
     }
 
     public enum Flash {
-        ON, OFF, AUTO;
+        AUTO(0), ON(1), OFF(2);
+
+        private final int id;
+
+        Flash(int id) {
+            this.id = id;
+        }
+
+        static Flash fromId(int id) {
+            for (Flash f : values()) {
+                if (f.id == id) return f;
+            }
+            throw new IllegalArgumentException();
+        }
     }
 
     /**
@@ -195,6 +222,59 @@ public class CameraView extends FrameLayout {
         return new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT);
     }
 
+    @Override
+    protected Parcelable onSaveInstanceState() {
+        Bundle state = new Bundle();
+        state.putParcelable(EXTRA_SUPER, super.onSaveInstanceState());
+        state.putInt(EXTRA_QUALITY, getQuality().id);
+        state.putInt(EXTRA_ZOOM_LEVEL, getZoomLevel());
+        state.putInt(EXTRA_FLASH, getFlash().id);
+        state.putLong(EXTRA_MAX_VIDEO_DURATION, getMaxVideoDuration());
+        state.putLong(EXTRA_MAX_VIDEO_SIZE, getMaxVideoSize());
+        state.putBoolean(EXTRA_CONFIRM_IMAGE, isImageConfirmationEnabled());
+        state.putBoolean(EXTRA_CONFIRM_VIDEO, isVideoConfirmationEnabled());
+        if (mImagePendingConfirmation != null) {
+            state.putString(EXTRA_PENDING_IMAGE_FILE_PATH, mImagePendingConfirmation.getAbsolutePath());
+        }
+        if (mVideoPendingConfirmation != null) {
+            state.putString(EXTRA_PENDING_VIDEO_FILE_PATH, mVideoPendingConfirmation.getAbsolutePath());
+        }
+        state.putParcelable(EXTRA_MODULE, mCameraModule.onSaveInstanceState());
+        return state;
+    }
+
+    @Override
+    protected void onRestoreInstanceState(Parcelable savedState) {
+        if (savedState instanceof Bundle) {
+            Bundle state = (Bundle) savedState;
+            super.onRestoreInstanceState(state.getParcelable(EXTRA_SUPER));
+            setQuality(Quality.fromId(state.getInt(EXTRA_QUALITY)));
+            setZoomLevel(state.getInt(EXTRA_ZOOM_LEVEL));
+            setFlash(Flash.fromId(state.getInt(EXTRA_FLASH)));
+            setMaxVideoDuration(state.getLong(EXTRA_MAX_VIDEO_DURATION));
+            setMaxVideoSize(state.getLong(EXTRA_MAX_VIDEO_SIZE));
+            setImageConfirmationEnabled(state.getBoolean(EXTRA_CONFIRM_IMAGE));
+            setVideoConfirmationEnabled(state.getBoolean(EXTRA_CONFIRM_VIDEO));
+
+            if (state.containsKey(EXTRA_PENDING_IMAGE_FILE_PATH)) {
+                File file = new File(state.getString(EXTRA_PENDING_IMAGE_FILE_PATH));
+                if (file.exists()) {
+                    showImageConfirmation(file);
+                }
+            }
+            if (state.containsKey(EXTRA_PENDING_VIDEO_FILE_PATH)) {
+                File file = new File(state.getString(EXTRA_PENDING_VIDEO_FILE_PATH));
+                if (file.exists()) {
+                    showVideoConfirmation(file);
+                }
+            }
+
+            mCameraModule.onRestoreInstanceState(state.getParcelable(EXTRA_MODULE));
+        } else {
+            super.onRestoreInstanceState(savedState);
+        }
+    }
+
     protected synchronized Status getStatus() {
         return mStatus;
     }
@@ -302,8 +382,16 @@ public class CameraView extends FrameLayout {
         mIsImageConfirmationEnabled = enabled;
     }
 
+    public boolean isImageConfirmationEnabled() {
+        return mIsImageConfirmationEnabled;
+    }
+
     public void setVideoConfirmationEnabled(boolean enabled) {
         mIsVideoConfirmationEnabled = enabled;
+    }
+
+    public boolean isVideoConfirmationEnabled() {
+        return mIsVideoConfirmationEnabled;
     }
 
     void showImageConfirmation(File file) {

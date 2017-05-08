@@ -9,6 +9,11 @@
         </attr>
         <attr name="maxVideoDuration" format="integer" />
         <attr name="maxVideoSize" format="integer" />
+        <attr name="flash" format="enum">
+            <enum name="auto" value="0"/>
+            <enum name="on" value="1"/>
+            <enum name="off" value="2"/>
+        </attr>
     </declare-styleable>
     <declare-styleable name="VideoView">
         <attr name="filePath" format="string" />

@@ -5,6 +5,7 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.os.Looper;
+import android.os.Parcelable;
 import android.util.Log;
 
 import java.io.File;
@@ -175,6 +176,12 @@ public abstract class ICameraModule {
     public boolean supportsPause() {
         return false;
     }
+
+    public Parcelable onSaveInstanceState() {
+        return null;
+    }
+
+    public void onRestoreInstanceState(Parcelable savedState) {}
 
     public void setOnImageCapturedListener(CameraView.OnImageCapturedListener l) {
         mOnImageCapturedListener = l;
