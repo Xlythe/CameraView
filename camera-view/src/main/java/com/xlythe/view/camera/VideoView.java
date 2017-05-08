@@ -42,7 +42,10 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     @Nullable private MediaPlayer.OnCompletionListener mOnCompletionListener;
 
     // If true, the video should be mirrored
-    boolean mIsMirrored = false;
+    private boolean mIsMirrored = false;
+
+    // The offset of the surface. This is used to hide the surface until the video is available.
+    private int mSurfaceOffset = 0;
 
     public VideoView(Context context) {
         this(context, null);
@@ -156,7 +159,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
             int width = Integer.valueOf(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
             int height = Integer.valueOf(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
             retriever.release();
-            Log.d(TAG, String.format("Video metadata: width=%d, height=%d", width, height));
+            if (DEBUG) Log.d(TAG, String.format("Video metadata: width=%d, height=%d", width, height));
 
             transformPreview(width, height);
 
@@ -188,6 +191,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     public void seekToFirstFrame() {
         if (DEBUG) Log.d(TAG, "seekToFirstFrame()");
         ensureMediaPlayer();
+        hideSurface();
 
         try {
             mMediaPlayer.setOnSeekCompleteListener(new MediaPlayer.OnSeekCompleteListener() {
@@ -198,10 +202,11 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
                     if (!mIsPlaying) {
                         mediaPlayer.pause();
                     }
+                    showSurface();
                 }
             });
             mMediaPlayer.start();
-            mMediaPlayer.seekTo(mMediaPlayer.getCurrentPosition() + 1);
+            mMediaPlayer.seekTo(1);
         } catch (IllegalStateException e) {
             if (DEBUG) e.printStackTrace();
         }
@@ -312,5 +317,27 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
             display = ((WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay();
         }
         return display.getRotation();
+    }
+
+    // Translates the Surface off of the screen, so that it can be hidden until it's prepared.
+    private void hideSurface() {
+        if (mSurfaceOffset == 0) {
+            Matrix matrix = new Matrix();
+            getTransform(matrix);
+            matrix.postTranslate(-getWidth(), 0);
+            setTransform(matrix);
+            mSurfaceOffset = -getWidth();
+        }
+    }
+
+    // Translates the Surface back onto the screen, once it's ready to be shown.
+    private void showSurface() {
+        if (mSurfaceOffset != 0) {
+            Matrix matrix = new Matrix();
+            getTransform(matrix);
+            matrix.postTranslate(-mSurfaceOffset, 0);
+            setTransform(matrix);
+            mSurfaceOffset = 0;
+        }
     }
 }
