@@ -598,6 +598,11 @@ public class CameraView extends FrameLayout {
 
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        // Disable pinch-to-zoom while a preview is visible.
+        if (mImagePendingConfirmation != null || mVideoPendingConfirmation != null) {
+            return false;
+        }
+
         mScaleDetector.onTouchEvent(event);
         if (event.getPointerCount() == 2 && isZoomEnabled() && isZoomSupported()) {
             return true;
