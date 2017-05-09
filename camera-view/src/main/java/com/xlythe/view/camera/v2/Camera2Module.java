@@ -197,6 +197,9 @@ public class Camera2Module extends ICameraModule {
                             if (!mIsPaused) {
                                 session.onAvailable(mCameraDevice, mCaptureSession);
                             }
+                            if (mZoomLevel != 0) {
+                                setZoomLevel(mZoomLevel);
+                            }
                         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
                             Log.e(TAG, "Failed to start session", e);
                         }

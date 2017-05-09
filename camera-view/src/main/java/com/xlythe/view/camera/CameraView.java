@@ -45,6 +45,7 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_QUALITY = "quality";
     private static final String EXTRA_ZOOM_LEVEL = "zoom_level";
     private static final String EXTRA_PINCH_TO_ZOOM_ENABLED = "pinch_to_zoom_enabled";
+    private static final String EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR = "pinch_to_zoom_scale_factor";
     private static final String EXTRA_FLASH = "flash";
     private static final String EXTRA_MAX_VIDEO_DURATION = "max_video_duration";
     private static final String EXTRA_MAX_VIDEO_SIZE = "max_video_size";
@@ -135,7 +136,7 @@ public class CameraView extends FrameLayout {
     private final Rect mMeteringRect = new Rect();
 
     // For pinch-to-zoom
-    private ScaleGestureDetector mScaleDetector;
+    private PinchToZoomGestureDetector mScaleDetector;
     private boolean mIsPinchToZoomEnabled = true;
 
     private ICameraModule mCameraModule;
@@ -192,22 +193,7 @@ public class CameraView extends FrameLayout {
             a.recycle();
         }
 
-        mScaleDetector = new ScaleGestureDetector(context, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
-            private final float MAX_SCALE = 5f;
-            private float mScaleFactor = 1f;
-
-            @Override
-            public boolean onScale(ScaleGestureDetector detector) {
-                mScaleFactor *= detector.getScaleFactor();
-
-                // Don't let the object get too small or too large.
-                mScaleFactor = Math.max(1f, Math.min(mScaleFactor, MAX_SCALE));
-
-                // y = (x-1) * (maxZoom/maxScale)
-                setZoomLevel(rangeLimit((int) ((mScaleFactor-1) * getMaxZoomLevel() / MAX_SCALE), getMaxZoomLevel(), 0));
-                return true;
-            }
-        });
+        mScaleDetector = new PinchToZoomGestureDetector(context);
     }
 
     @Override
@@ -235,6 +221,7 @@ public class CameraView extends FrameLayout {
         state.putInt(EXTRA_QUALITY, getQuality().id);
         state.putInt(EXTRA_ZOOM_LEVEL, getZoomLevel());
         state.putBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED, isPinchToZoomEnabled());
+        state.putFloat(EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR, mScaleDetector.getCumulativeScaleFactor());
         state.putInt(EXTRA_FLASH, getFlash().id);
         state.putLong(EXTRA_MAX_VIDEO_DURATION, getMaxVideoDuration());
         state.putLong(EXTRA_MAX_VIDEO_SIZE, getMaxVideoSize());
@@ -258,6 +245,7 @@ public class CameraView extends FrameLayout {
             setQuality(Quality.fromId(state.getInt(EXTRA_QUALITY)));
             setZoomLevel(state.getInt(EXTRA_ZOOM_LEVEL));
             setPinchToZoomEnabled(state.getBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED));
+            mScaleDetector.setCumulativeScaleFactor(state.getFloat(EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR, mScaleDetector.getCumulativeScaleFactor()));
             setFlash(Flash.fromId(state.getInt(EXTRA_FLASH)));
             setMaxVideoDuration(state.getLong(EXTRA_MAX_VIDEO_DURATION));
             setMaxVideoSize(state.getLong(EXTRA_MAX_VIDEO_SIZE));
@@ -755,5 +743,60 @@ public class CameraView extends FrameLayout {
         void onVideoConfirmation();
         void onVideoCaptured(File file);
         void onFailure();
+    }
+
+    private class PinchToZoomGestureDetector extends ScaleGestureDetector implements ScaleGestureDetector.OnScaleGestureListener {
+        final float MAX_SCALE = 5f;
+        float mScaleFactor = 1f;
+
+        PinchToZoomGestureDetector(Context context) {
+            this(context, new S());
+        }
+
+        PinchToZoomGestureDetector(Context context, S s) {
+            super(context, s);
+            s.setRealGestureDetector(this);
+        }
+
+        float getCumulativeScaleFactor() {
+            return mScaleFactor;
+        }
+
+        void setCumulativeScaleFactor(float scaleFactor) {
+            mScaleFactor = scaleFactor;
+        }
+
+        @Override
+        public boolean onScale(ScaleGestureDetector detector) {
+            mScaleFactor *= detector.getScaleFactor();
+
+            // Don't let the object get too small or too large.
+            mScaleFactor = Math.max(1f, Math.min(mScaleFactor, MAX_SCALE));
+
+            // y = (x-1) * (maxZoom/maxScale)
+            setZoomLevel(rangeLimit((int) ((mScaleFactor-1) * getMaxZoomLevel() / MAX_SCALE), getMaxZoomLevel(), 0));
+            return true;
+        }
+
+        @Override
+        public boolean onScaleBegin(ScaleGestureDetector detector) {
+            return false;
+        }
+
+        @Override
+        public void onScaleEnd(ScaleGestureDetector detector) {}
+    }
+
+    private static class S extends ScaleGestureDetector.SimpleOnScaleGestureListener {
+        private ScaleGestureDetector.OnScaleGestureListener listener;
+
+        void setRealGestureDetector(ScaleGestureDetector.OnScaleGestureListener l) {
+            listener = l;
+        }
+
+        @Override
+        public boolean onScale(ScaleGestureDetector detector) {
+            return listener.onScale(detector);
+        }
     }
 }
