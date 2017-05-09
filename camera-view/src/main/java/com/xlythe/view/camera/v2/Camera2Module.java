@@ -313,7 +313,7 @@ public class Camera2Module extends ICameraModule {
             // Now we can update our request
             mActiveSession.setMeteringRectangle(new MeteringRectangle(metering, MeteringRectangle.METERING_WEIGHT_MAX));
             mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
-        } catch (CameraAccessException | NullPointerException e) {
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to focus", e);
         }
