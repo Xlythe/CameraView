@@ -9,6 +9,7 @@ import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.location.Location;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
 import android.support.annotation.NonNull;
@@ -168,6 +169,12 @@ class VideoSession extends PreviewSession {
                 });
                 mMediaRecorder.setVideoSize(getWidth(), getHeight());
                 mMediaRecorder.setOrientationHint(mCameraView.getRelativeCameraOrientation());
+
+                Location location = getLocation(getContext());
+                if (location != null) {
+                    mMediaRecorder.setLocation((float) location.getLatitude(), (float) location.getLongitude());
+                }
+
                 mMediaRecorder.prepare();
                 mIsInitialized = true;
             } catch (IOException e) {

@@ -51,9 +51,6 @@ class PictureSession extends PreviewSession {
     private static final int IMAGE_FORMAT = ImageFormat.JPEG;
     private static final int IMAGE_FORMAT_VERY_HIGH = ImageFormat.YUV_420_888;
 
-    private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
-    private static final long GPS_TIMEOUT_MILLIS = 10;
-
     private final PictureSurface mPictureSurface;
 
     PictureSession(Camera2Module camera2Module) {
@@ -154,7 +151,7 @@ class PictureSession extends PreviewSession {
                 if (mIsReversed) {
                     exif.flipHorizontally();
                 }
-                Location location = getLocation(mContext);
+                Location location = SessionImpl.CameraSurface.getLocation(mContext);
                 if (location != null) {
                     exif.attachLocation(location);
                 }
@@ -170,17 +167,6 @@ class PictureSession extends PreviewSession {
                         Log.e(TAG, "Failed to close the output stream", e);
                     }
                 }
-            }
-            return null;
-        }
-
-        @SuppressWarnings({"MissingPermission"})
-        @Nullable
-        private static Location getLocation(Context context) {
-            if (PermissionChecker.hasPermissions(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
-                // Our GPS timeout is purposefully low. We're not intending to wait until GPS is acquired
-                // but we want a last known location for the next time a picture is taken.
-                return LocationProvider.getGPSLocation(context, STALE_LOCATION_MILLIS, GPS_TIMEOUT_MILLIS);
             }
             return null;
         }
