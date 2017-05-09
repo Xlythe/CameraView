@@ -293,12 +293,6 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         if (mToggle != null) {
             mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
             mToggle.setChecked(mCamera.isUsingFrontFacingCamera());
-            mToggle.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-                @Override
-                public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                    mCamera.toggleCamera();
-                }
-            });
         }
 
         if (mProgress != null) {
@@ -314,6 +308,21 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         }
 
         mConfirm.setVisibility(View.GONE);
+    }
+
+    @Override
+    public void onViewStateRestored(@Nullable Bundle savedInstanceState) {
+        super.onViewStateRestored(savedInstanceState);
+
+        // Set listeners here, or else restoring state will trigger them.
+        if (mToggle != null) {
+            mToggle.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+                @Override
+                public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                    mCamera.toggleCamera();
+                }
+            });
+        }
     }
 
     @Override

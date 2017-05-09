@@ -12,8 +12,10 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.Parcelable;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.RequiresPermission;
@@ -36,6 +38,8 @@ import java.util.Locale;
 @TargetApi(21)
 public class Camera2Module extends ICameraModule {
     private static final int ZOOM_NOT_SUPPORTED = 1;
+
+    private static final String EXTRA_DEVICE_ID = "device_id";
 
     // TODO Figure out why camera crashes when we use a size higher than 1080
     static final Size MAX_SUPPORTED_SIZE = new Size(1920, 1080);
@@ -651,6 +655,19 @@ public class Camera2Module extends ICameraModule {
 
     Handler getBackgroundHandler() {
         return mBackgroundHandler;
+    }
+
+
+    @Override
+    public Parcelable onSaveInstanceState() {
+        Bundle state = new Bundle();
+        state.putString(EXTRA_DEVICE_ID, mActiveCamera);
+        return state;
+    }
+
+    @Override
+    public void onRestoreInstanceState(Parcelable state) {
+        mActiveCamera = ((Bundle) state).getString(EXTRA_DEVICE_ID);
     }
 
     /**
