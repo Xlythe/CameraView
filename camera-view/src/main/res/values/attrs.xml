@@ -2,7 +2,7 @@
 <resources>
     <declare-styleable name="CameraView">
         <attr name="quality" format="enum">
-            <enum name="very_high" value="0"/>
+            <enum name="max" value="0"/>
             <enum name="high" value="1"/>
             <enum name="medium" value="2"/>
             <enum name="low" value="3"/>

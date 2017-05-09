@@ -1,6 +1,5 @@
 package com.xlythe.view.camera.v2;
 
-import android.Manifest;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.ImageFormat;
@@ -18,7 +17,6 @@ import android.media.ImageReader;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
 import android.support.annotation.UiThread;
 import android.support.annotation.WorkerThread;
 import android.util.Log;
@@ -28,15 +26,12 @@ import android.view.Surface;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ICameraModule;
-import com.xlythe.view.camera.LocationProvider;
-import com.xlythe.view.camera.PermissionChecker;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -48,8 +43,8 @@ class PictureSession extends PreviewSession {
      * Supports {@link ImageFormat#JPEG} and {@link ImageFormat#YUV_420_888}. You can support
      * larger sizes with YUV_420_888, at the cost of speed.
      */
-    private static final int IMAGE_FORMAT = ImageFormat.JPEG;
-    private static final int IMAGE_FORMAT_VERY_HIGH = ImageFormat.YUV_420_888;
+    private static final int IMAGE_FORMAT_DEFAULT = ImageFormat.JPEG;
+    private static final int IMAGE_FORMAT_MAX = ImageFormat.YUV_420_888;
 
     private final PictureSurface mPictureSurface;
 
@@ -313,10 +308,10 @@ class PictureSession extends PreviewSession {
 
     private static int getImageFormat(CameraView.Quality quality) {
         switch (quality) {
-            case VERY_HIGH:
-                return IMAGE_FORMAT_VERY_HIGH;
+            case MAX:
+                return IMAGE_FORMAT_MAX;
             default:
-                return IMAGE_FORMAT;
+                return IMAGE_FORMAT_DEFAULT;
         }
     }
 
