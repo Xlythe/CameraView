@@ -371,7 +371,7 @@ public class Camera2Module extends ICameraModule {
             }
             mActiveSession.setCropRegion(cropRegion);
             mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
-        } catch (CameraAccessException | IllegalStateException | NullPointerException e) {
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to zoom", e);
         }
