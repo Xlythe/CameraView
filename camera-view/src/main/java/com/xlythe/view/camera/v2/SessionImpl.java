@@ -166,6 +166,9 @@ abstract class SessionImpl implements Camera2Module.Session {
         }
 
         Size chooseSize(List<Size> choices, Size recommendedSize) {
+            if (DEBUG) {
+                Log.d(TAG, "Choosing from sizes " + choices);
+            }
             List<Size> availableSizes;
             switch (getQuality()) {
                 case LOW:
@@ -201,6 +204,8 @@ abstract class SessionImpl implements Camera2Module.Session {
                         return Collections.max(availableSizes, new CompareSizesByArea());
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a high quality size");
+                case MAX:
+                    return Collections.max(choices, new CompareSizesByArea());
                 default:
                     Log.e(TAG, "Couldn't find a suitable size");
                     return Collections.max(choices, new CompareSizesByArea());
@@ -240,10 +245,14 @@ abstract class SessionImpl implements Camera2Module.Session {
         }
 
         static List<Size> filter(Size[] sizes) {
+            return filter(sizes, Camera2Module.MAX_SUPPORTED_SIZE);
+        }
+
+        static List<Size> filter(Size[] sizes, Size maxSize) {
             List<Size> availableSizes = new ArrayList<>(sizes.length);
             for (Size size : sizes) {
-                if (size.getWidth() > Camera2Module.MAX_SUPPORTED_SIZE.getWidth()
-                        || size.getHeight() > Camera2Module.MAX_SUPPORTED_SIZE.getHeight()) {
+                if (size.getWidth() > maxSize.getWidth()
+                        || size.getHeight() > maxSize.getHeight()) {
                     continue;
                 }
                 availableSizes.add(size);

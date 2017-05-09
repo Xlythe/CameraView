@@ -21,12 +21,16 @@ import com.xlythe.view.camera.CameraView;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
 class VideoSession extends PreviewSession {
+    // TODO Figure out why camera crashes when we use a size higher than 4k
+    static final Size MAX_SUPPORTED_SIZE = new Size(3840, 2160);
+
     private final VideoSurface mVideoSurface;
 
     VideoSession(Camera2Module camera2Module, File file) {
@@ -113,7 +117,12 @@ class VideoSession extends PreviewSession {
 
     private static final class VideoSurface extends CameraSurface {
         private List<Size> getSizes(StreamConfigurationMap map) {
-            return filter(map.getOutputSizes(MediaRecorder.class));
+            Size[] sizes = map.getOutputSizes(MediaRecorder.class);
+            if (getQuality() == CameraView.Quality.MAX
+                    && CamcorderProfile.hasProfile(CamcorderProfile.QUALITY_2160P)) {
+                return filter(sizes, MAX_SUPPORTED_SIZE);
+            }
+            return filter(sizes);
         }
 
         private boolean mIsRecordingVideo;
@@ -141,6 +150,8 @@ class VideoSession extends PreviewSession {
                 mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
                 mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
                 switch (mCameraView.getQuality()) {
+                    case MAX:
+                        // Fall-through
                     case HIGH:
                         mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH));
                         break;

@@ -156,8 +156,8 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
             MediaMetadataRetriever retriever = new MediaMetadataRetriever();
             retriever.setDataSource(fileDescriptor);
-            int width = Integer.valueOf(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH));
-            int height = Integer.valueOf(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT));
+            int width = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+            int height = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
             retriever.release();
             if (DEBUG) Log.d(TAG, String.format("Video metadata: width=%d, height=%d", width, height));
 
@@ -186,6 +186,14 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         }
 
         seekToFirstFrame();
+    }
+
+    private int extractAsInt(MediaMetadataRetriever retriever, int key) {
+        String metadata = retriever.extractMetadata(key);
+        if (metadata == null) {
+            return 0;
+        }
+        return Integer.valueOf(metadata);
     }
 
     public void seekToFirstFrame() {
