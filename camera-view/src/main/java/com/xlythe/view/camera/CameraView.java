@@ -44,7 +44,7 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_MODULE = "module";
     private static final String EXTRA_QUALITY = "quality";
     private static final String EXTRA_ZOOM_LEVEL = "zoom_level";
-    private static final String EXTRA_ZOOM_ENABLED = "zoom_enabled";
+    private static final String EXTRA_PINCH_TO_ZOOM_ENABLED = "pinch_to_zoom_enabled";
     private static final String EXTRA_FLASH = "flash";
     private static final String EXTRA_MAX_VIDEO_DURATION = "max_video_duration";
     private static final String EXTRA_MAX_VIDEO_SIZE = "max_video_size";
@@ -136,7 +136,7 @@ public class CameraView extends FrameLayout {
 
     // For pinch-to-zoom
     private ScaleGestureDetector mScaleDetector;
-    private boolean mIsZoomEnabled = true;
+    private boolean mIsPinchToZoomEnabled = true;
 
     private ICameraModule mCameraModule;
 
@@ -180,7 +180,7 @@ public class CameraView extends FrameLayout {
             TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView, 0, 0);
             setQuality(Quality.fromId(a.getInteger(R.styleable.CameraView_quality, getQuality().id)));
             setFlash(Flash.fromId(a.getInteger(R.styleable.CameraView_flash, getFlash().id)));
-            setZoomEnabled(a.getBoolean(R.styleable.CameraView_pinchToZoomEnabled, isZoomEnabled()));
+            setPinchToZoomEnabled(a.getBoolean(R.styleable.CameraView_pinchToZoomEnabled, isPinchToZoomEnabled()));
             if (a.hasValue(R.styleable.CameraView_maxVideoDuration)) {
                 setMaxVideoDuration(a.getInteger(R.styleable.CameraView_maxVideoDuration, INDEFINITE_VIDEO_DURATION));
             }
@@ -234,7 +234,7 @@ public class CameraView extends FrameLayout {
         state.putParcelable(EXTRA_SUPER, super.onSaveInstanceState());
         state.putInt(EXTRA_QUALITY, getQuality().id);
         state.putInt(EXTRA_ZOOM_LEVEL, getZoomLevel());
-        state.putBoolean(EXTRA_ZOOM_ENABLED, isZoomEnabled());
+        state.putBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED, isPinchToZoomEnabled());
         state.putInt(EXTRA_FLASH, getFlash().id);
         state.putLong(EXTRA_MAX_VIDEO_DURATION, getMaxVideoDuration());
         state.putLong(EXTRA_MAX_VIDEO_SIZE, getMaxVideoSize());
@@ -257,7 +257,7 @@ public class CameraView extends FrameLayout {
             super.onRestoreInstanceState(state.getParcelable(EXTRA_SUPER));
             setQuality(Quality.fromId(state.getInt(EXTRA_QUALITY)));
             setZoomLevel(state.getInt(EXTRA_ZOOM_LEVEL));
-            setZoomEnabled(state.getBoolean(EXTRA_ZOOM_ENABLED));
+            setPinchToZoomEnabled(state.getBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED));
             setFlash(Flash.fromId(state.getInt(EXTRA_FLASH)));
             setMaxVideoDuration(state.getLong(EXTRA_MAX_VIDEO_DURATION));
             setMaxVideoSize(state.getLong(EXTRA_MAX_VIDEO_SIZE));
@@ -604,7 +604,7 @@ public class CameraView extends FrameLayout {
         }
 
         mScaleDetector.onTouchEvent(event);
-        if (event.getPointerCount() == 2 && isZoomEnabled() && isZoomSupported()) {
+        if (event.getPointerCount() == 2 && isPinchToZoomEnabled() && isZoomSupported()) {
             return true;
         }
 
@@ -703,12 +703,12 @@ public class CameraView extends FrameLayout {
         return Math.abs(a - b);
     }
 
-    public void setZoomEnabled(boolean enabled) {
-        mIsZoomEnabled = enabled;
+    public void setPinchToZoomEnabled(boolean enabled) {
+        mIsPinchToZoomEnabled = enabled;
     }
 
-    public boolean isZoomEnabled() {
-        return mIsZoomEnabled;
+    public boolean isPinchToZoomEnabled() {
+        return mIsPinchToZoomEnabled;
     }
 
     public void setZoomLevel(int zoomLevel) {
