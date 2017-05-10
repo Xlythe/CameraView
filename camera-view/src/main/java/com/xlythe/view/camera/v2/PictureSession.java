@@ -259,7 +259,8 @@ class PictureSession extends PreviewSession {
     private static final class PictureSurface extends CameraSurface {
         private List<Size> getSizes(StreamConfigurationMap map) {
             // Special case for high resolution images (assuming, of course, quality was set to high)
-            if (getQuality() == CameraView.Quality.HIGH && Build.VERSION.SDK_INT >= 23) {
+            if ((getQuality() == CameraView.Quality.MAX
+                    || getQuality() == CameraView.Quality.HIGH) && Build.VERSION.SDK_INT >= 23) {
                 Size[] sizes = map.getHighResolutionOutputSizes(getImageFormat(getQuality()));
                 if (sizes != null) {
                     List<Size> availableSizes = isRaw(getImageFormat(getQuality()))
