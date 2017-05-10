@@ -63,7 +63,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     }
 
     private static final int REQUEST_CODE_PERMISSIONS = 10;
-    private static final String DESTINATION = "yyyy-MM-dd hh:mm:ss";
+    private static final String DESTINATION = "yyyy-MM-dd HH:mm:ss";
     private static final String PHOTO_EXT = ".jpg";
     private static final String VIDEO_EXT = ".mp4";
 
