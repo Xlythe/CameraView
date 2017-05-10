@@ -45,10 +45,7 @@ class VideoSession extends PreviewSession {
         super.initialize(map);
         mVideoSurface.initialize(map);
         if (!mVideoSurface.mIsInitialized) {
-            CameraView.OnVideoCapturedListener l = getOnVideoCapturedListener();
-            if (l != null) {
-                l.onFailure();
-            }
+            onVideoFailed();
             throw new CameraAccessException(CameraAccessException.CAMERA_ERROR);
         }
     }
@@ -115,6 +112,10 @@ class VideoSession extends PreviewSession {
         List<Surface> surfaces = super.getSurfaces();
         surfaces.add(mVideoSurface.getSurface());
         return surfaces;
+    }
+
+    boolean isRecording() {
+        return mVideoSurface.isRecording();
     }
 
     private static final class VideoSurface extends CameraSurface {
@@ -263,10 +264,11 @@ class VideoSession extends PreviewSession {
                 mIsRecordingVideo = true;
             } catch (IllegalStateException e) {
                 Log.e(TAG, "Unable to start recording", e);
+                onVideoFailed();
             } catch (RuntimeException e) {
                 // MediaRecorder can crash with 'start failed.'
                 Log.e(TAG, "Let me guess. 'start failed.'?", e);
-                mIsInitialized = false;
+                onVideoFailed();
             }
         }
 
@@ -276,11 +278,14 @@ class VideoSession extends PreviewSession {
                 try {
                     mMediaRecorder.stop();
                     mMediaRecorder.reset();
+                    showVideoConfirmation(mFile);
                 } catch (RuntimeException e) {
                     // MediaRecorder can crash with 'stop failed.'
                     Log.e(TAG, "Let me guess. 'stop failed.'?", e);
+                    onVideoFailed();
                 }
-                showVideoConfirmation(mFile);
+            } else {
+                onVideoFailed();
             }
         }
 

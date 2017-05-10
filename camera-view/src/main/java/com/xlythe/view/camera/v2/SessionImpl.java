@@ -105,6 +105,13 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Override
     public void close() {}
 
+    void onImageFailed() {
+        mCamera2Module.onImageFailed();
+    }
+
+    void onVideoFailed() {
+        mCamera2Module.onVideoFailed();
+    }
 
     static abstract class CameraSurface {
         final Camera2Module mCameraView;
@@ -136,8 +143,16 @@ abstract class SessionImpl implements Camera2Module.Session {
             mCameraView.showImageConfirmation(file);
         }
 
+        void onImageFailed() {
+            mCameraView.onImageFailed();
+        }
+
         void showVideoConfirmation(File file) {
             mCameraView.showVideoConfirmation(file);
+        }
+
+        void onVideoFailed() {
+            mCameraView.onVideoFailed();
         }
 
         int getWidth() {

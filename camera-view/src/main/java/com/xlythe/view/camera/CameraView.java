@@ -410,7 +410,17 @@ public class CameraView extends FrameLayout {
         }
     }
 
-    void showVideoConfirmation(final File file) {
+    void onImageFailed() {
+        if (mCameraModule.supportsPause()) {
+            mCameraModule.resume();
+        }
+
+        if (getOnImageCapturedListener() != null) {
+            getOnImageCapturedListener().onFailure();
+        }
+    }
+
+    void showVideoConfirmation(File file) {
         if (mIsVideoConfirmationEnabled) {
             mVideoPreview.setVisibility(View.VISIBLE);
             mVideoPreview.setShouldMirror(isUsingFrontFacingCamera());
@@ -432,6 +442,16 @@ public class CameraView extends FrameLayout {
             if (getOnVideoCapturedListener() != null) {
                 getOnVideoCapturedListener().onVideoCaptured(file);
             }
+        }
+    }
+
+    void onVideoFailed() {
+        if (mCameraModule.supportsPause()) {
+            mCameraModule.resume();
+        }
+
+        if (getOnVideoCapturedListener() != null) {
+            getOnVideoCapturedListener().onFailure();
         }
     }
 

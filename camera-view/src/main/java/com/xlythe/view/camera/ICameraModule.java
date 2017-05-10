@@ -91,6 +91,10 @@ public abstract class ICameraModule {
         mView.showImageConfirmation(file);
     }
 
+    public void onImageFailed() {
+        mView.onImageFailed();
+    }
+
     /**
      * Records a video. Set a OnVideoCapturedListener to be notified of when
      * the video has finished saving.
@@ -113,6 +117,10 @@ public abstract class ICameraModule {
      */
     public void showVideoConfirmation(File file) {
         mView.showVideoConfirmation(file);
+    }
+
+    public void onVideoFailed() {
+        mView.onVideoFailed();
     }
 
     public abstract void toggleCamera();

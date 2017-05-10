@@ -99,11 +99,7 @@ class PictureSession extends PreviewSession {
         } catch (CameraAccessException | IllegalStateException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to create capture request", e);
-
-            CameraView.OnImageCapturedListener l = getOnImageCapturedListener();
-            if (l != null) {
-                l.onFailure();
-            }
+            onImageFailed();
         }
     }
 

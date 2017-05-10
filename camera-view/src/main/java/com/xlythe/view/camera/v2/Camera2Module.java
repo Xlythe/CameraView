@@ -438,10 +438,12 @@ public class Camera2Module extends ICameraModule {
         if (supportsPause() && !mIsPaused) {
             try {
                 mCaptureSession.stopRepeating();
-            } catch (CameraAccessException e) {
+            } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
                 Log.e(TAG, "Failed to pause the camera", e);
             }
             mIsPaused = true;
+        } else {
+            Log.w(TAG, "Cannot pause. Was never unpaused.");
         }
     }
 
@@ -450,16 +452,18 @@ public class Camera2Module extends ICameraModule {
         if (supportsPause() && mIsPaused) {
             try {
                 mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
-            } catch (CameraAccessException e) {
+            } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
                 Log.e(TAG, "Failed to pause the camera", e);
             }
             mIsPaused = false;
+        } else {
+            Log.w(TAG, "Cannot resume. Was never paused.");
         }
     }
 
     @Override
     public boolean supportsPause() {
-        return mCaptureSession != null && mActiveSession != null;
+        return mIsPaused || (mCaptureSession != null && mActiveSession != null);
     }
 
     @Override
@@ -475,10 +479,7 @@ public class Camera2Module extends ICameraModule {
     public void startRecording(File file) {
         // Quick fail if the CameraDevice was never created.
         if (mCameraDevice == null) {
-            CameraView.OnVideoCapturedListener l = getOnVideoCapturedListener();
-            if (l != null) {
-                l.onFailure();
-            }
+            onVideoFailed();
             return;
         }
 
@@ -492,7 +493,8 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public boolean isRecording() {
-        return mActiveSession != null && mActiveSession instanceof VideoSession;
+        return mActiveSession != null
+                && mActiveSession instanceof VideoSession;
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {
