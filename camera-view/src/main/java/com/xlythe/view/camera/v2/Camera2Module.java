@@ -540,11 +540,11 @@ public class Camera2Module extends ICameraModule {
         float aspectRatio = (float) previewHeight / (float) previewWidth;
         int newWidth, newHeight;
         if (viewHeight > viewWidth * aspectRatio) {
-            newWidth = (int) (viewHeight / aspectRatio);
+            newWidth = (int) Math.ceil(viewHeight / aspectRatio);
             newHeight = viewHeight;
         } else {
             newWidth = viewWidth;
-            newHeight = (int) (viewWidth * aspectRatio);
+            newHeight = (int) Math.ceil(viewWidth * aspectRatio);
         }
 
         // For portrait, we've already been mostly stretched. For landscape, our image is rotated 90 degrees.
@@ -578,8 +578,8 @@ public class Camera2Module extends ICameraModule {
 
         // Because we scaled the preview beyond the bounds of the view, we need to crop some of it.
         // By translating the photo over, we'll move it into the center.
-        int translateX = (int) (viewWidth - newWidth) / 2;
-        int translateY = (int) (viewHeight - newHeight) / 2;
+        int translateX = (int) Math.ceil((viewWidth - newWidth) / 2d);
+        int translateY = (int) Math.ceil((viewHeight - newHeight) / 2d);
 
         // Finally, with our photo scaled and centered, we apply a rotation.
         int rotation = -displayOrientation;
