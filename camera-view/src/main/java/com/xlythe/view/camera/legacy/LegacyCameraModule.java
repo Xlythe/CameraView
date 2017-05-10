@@ -1,15 +1,21 @@
 package com.xlythe.view.camera.legacy;
 
+import android.Manifest;
+import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.hardware.Camera;
+import android.location.Location;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
+import android.support.annotation.Nullable;
 import android.util.Log;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.LocationProvider;
+import com.xlythe.view.camera.PermissionChecker;
 
 import java.io.File;
 import java.io.IOException;
@@ -21,6 +27,9 @@ import java.util.List;
 @SuppressWarnings("deprecation")
 public class LegacyCameraModule extends ICameraModule {
     private static final int INVALID_CAMERA_ID = -1;
+
+    private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
+    private static final long GPS_TIMEOUT_MILLIS = 10;
 
     private int mActiveCamera = INVALID_CAMERA_ID;
     private Camera mCamera;
@@ -107,7 +116,8 @@ public class LegacyCameraModule extends ICameraModule {
 
     @Override
     public void takePicture(File file) {
-        mCamera.takePicture(null, null, new LegacyPictureListener(file, getRelativeCameraOrientation(false /* isPreview */), this));
+        mCamera.takePicture(null, null, new LegacyPictureListener(
+                file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(), this));
     }
 
     @Override
@@ -168,6 +178,11 @@ public class LegacyCameraModule extends ICameraModule {
                 }
             }
         });
+
+        Location location = getLocation(getContext());
+        if (location != null) {
+            mVideoRecorder.setLocation((float) location.getLatitude(), (float) location.getLongitude());
+        }
 
         try {
             mVideoRecorder.prepare();
@@ -348,5 +363,16 @@ public class LegacyCameraModule extends ICameraModule {
             return Long.signum((long) lhs.width * lhs.height -
                     (long) rhs.width * rhs.height);
         }
+    }
+
+    @SuppressWarnings({"MissingPermission"})
+    @Nullable
+    static Location getLocation(Context context) {
+        if (PermissionChecker.hasPermissions(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
+            // Our GPS timeout is purposefully low. We're not intending to wait until GPS is acquired
+            // but we want a last known location for the next time a picture is taken.
+            return LocationProvider.getGPSLocation(context, STALE_LOCATION_MILLIS, GPS_TIMEOUT_MILLIS);
+        }
+        return null;
     }
 }

@@ -1,15 +1,17 @@
 package com.xlythe.view.camera.legacy;
 
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
-import android.graphics.Matrix;
 import android.hardware.Camera;
+import android.location.Location;
 import android.os.AsyncTask;
+import android.util.Log;
 
-import java.io.ByteArrayOutputStream;
+import com.xlythe.view.camera.Exif;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+
+import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @SuppressWarnings("deprecation")
 class LegacyPictureListener implements Camera.PictureCallback {
@@ -19,14 +21,15 @@ class LegacyPictureListener implements Camera.PictureCallback {
     // The camera's orientation. If it's not 0, we'll have to rotate the image.
     private final int mOrientation;
 
+    // True if the picture is mirrored
+    private final boolean mIsReversed;
+
     // The listener to notify when we're done.
     private final LegacyCameraModule mModule;
 
-    private static final double MAX_UPPER = 2560.0;
-    private static final double MAX_LOWER = 1440.0;
-
-    LegacyPictureListener(File file, int orientation, LegacyCameraModule module) {
+    LegacyPictureListener(File file, int orientation, boolean mirrored, LegacyCameraModule module) {
         mFile = file;
+        mIsReversed = mirrored;
         mOrientation = orientation;
         mModule = module;
     }
@@ -36,15 +39,34 @@ class LegacyPictureListener implements Camera.PictureCallback {
         new AsyncTask<Void, Void, Void>() {
             @Override
             protected Void doInBackground(Void... params) {
-                byte[] cleanedUp = manuallyRotateImage(data);
-
+                FileOutputStream output = null;
                 try {
-                    FileOutputStream fos = new FileOutputStream(mFile);
-                    fos.write(cleanedUp);
-                    fos.close();
+                    output = new FileOutputStream(mFile);
+                    output.write(data);
+
+                    Exif exif = new Exif(mFile);
+                    exif.attachTimestamp();
+                    exif.rotate(mOrientation);
+                    if (mIsReversed) {
+                        exif.flipHorizontally();
+                    }
+                    Location location = LegacyCameraModule.getLocation(mModule.getContext());
+                    if (location != null) {
+                        exif.attachLocation(location);
+                    }
+                    exif.save();
                 } catch (IOException e) {
-                    e.printStackTrace();
+                    Log.e(TAG, "Failed to write the file", e);
+                } finally {
+                    if (output != null) {
+                        try {
+                            output.close();
+                        } catch (IOException e) {
+                            Log.e(TAG, "Failed to close the output stream", e);
+                        }
+                    }
                 }
+
                 return null;
             }
 
@@ -54,37 +76,5 @@ class LegacyPictureListener implements Camera.PictureCallback {
             }
         }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
         camera.startPreview();
-    }
-
-    private byte[] manuallyRotateImage(byte[] data) {
-        Bitmap bitmap = BitmapFactory.decodeByteArray(data, 0, data.length);
-
-        Matrix matrix = new Matrix();
-        matrix.postRotate(mOrientation);
-
-        int max = Math.max(bitmap.getHeight(), bitmap.getWidth());
-        int height;
-        int width;
-        double scale;
-        if (max > MAX_UPPER) {
-            scale = MAX_UPPER / max;
-            width = (int) (bitmap.getWidth() * scale);
-            height = (int) (bitmap.getHeight() * scale);
-            bitmap = Bitmap.createScaledBitmap(bitmap, width, height, false);
-        }
-        int min = Math.min(bitmap.getHeight(), bitmap.getWidth());
-        if (min > MAX_LOWER) {
-            scale = MAX_LOWER / min;
-            width = (int) (bitmap.getWidth() * scale);
-            height = (int) (bitmap.getHeight() * scale);
-            bitmap = Bitmap.createScaledBitmap(bitmap, width, height, false);
-        }
-
-        bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
-
-        ByteArrayOutputStream stream = new ByteArrayOutputStream();
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, stream);
-
-        return stream.toByteArray();
     }
 }
