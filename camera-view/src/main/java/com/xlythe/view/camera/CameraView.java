@@ -400,7 +400,7 @@ public class CameraView extends FrameLayout {
                 getOnImageCapturedListener().onImageConfirmation();
             }
         } else {
-            if (mCameraModule.supportsPause()) {
+            if (mCameraModule.supportsPause() && isImageConfirmationEnabled()) {
                 mCameraModule.resume();
             }
 
@@ -411,7 +411,7 @@ public class CameraView extends FrameLayout {
     }
 
     void onImageFailed() {
-        if (mCameraModule.supportsPause()) {
+        if (mCameraModule.supportsPause() && isImageConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
@@ -435,7 +435,7 @@ public class CameraView extends FrameLayout {
                 getOnVideoCapturedListener().onVideoConfirmation();
             }
         } else {
-            if (mCameraModule.supportsPause()) {
+            if (mCameraModule.supportsPause() && isVideoConfirmationEnabled()) {
                 mCameraModule.resume();
             }
 
@@ -446,7 +446,7 @@ public class CameraView extends FrameLayout {
     }
 
     void onVideoFailed() {
-        if (mCameraModule.supportsPause()) {
+        if (mCameraModule.supportsPause() && isVideoConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
@@ -488,7 +488,7 @@ public class CameraView extends FrameLayout {
     }
 
     public void takePicture(File file) {
-        if (mCameraModule.supportsPause()) {
+        if (mCameraModule.supportsPause() && isImageConfirmationEnabled()) {
             mCameraModule.pause();
         }
 
@@ -496,7 +496,7 @@ public class CameraView extends FrameLayout {
     }
 
     public void confirmPicture() {
-        if (mCameraModule.supportsPause()) {
+        if (mCameraModule.supportsPause() && isImageConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
@@ -509,7 +509,7 @@ public class CameraView extends FrameLayout {
     }
 
     public void rejectPicture() {
-        if (mCameraModule.supportsPause()) {
+        if (mCameraModule.supportsPause() && isImageConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
@@ -528,7 +528,7 @@ public class CameraView extends FrameLayout {
     }
 
     public void stopRecording() {
-        if (mCameraModule.supportsPause()) {
+        if (mCameraModule.supportsPause() && isVideoConfirmationEnabled()) {
             mCameraModule.pause();
         }
 
@@ -540,7 +540,7 @@ public class CameraView extends FrameLayout {
     }
 
     public void confirmVideo() {
-        if (mCameraModule.supportsPause()) {
+        if (mCameraModule.supportsPause() && isVideoConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
@@ -553,7 +553,7 @@ public class CameraView extends FrameLayout {
     }
 
     public void rejectVideo() {
-        if (mCameraModule.supportsPause()) {
+        if (mCameraModule.supportsPause() && isVideoConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
