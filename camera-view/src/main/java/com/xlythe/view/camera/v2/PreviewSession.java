@@ -13,6 +13,8 @@ import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 
+import com.xlythe.view.camera.CameraView;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -72,7 +74,7 @@ class PreviewSession extends SessionImpl {
     }
 
     private static final class PreviewSurface extends CameraSurface {
-        private static Size chooseOptimalSize(List<Size> choices, int viewWidth, int viewHeight) {
+        private Size chooseOptimalSize(List<Size> choices, int viewWidth, int viewHeight) {
             // These sizes are all larger than our view port, so we won't have to scale the image up.
             List<Size> availableSizes = new ArrayList<>(choices.size());
             for (Size size : choices) {
@@ -88,6 +90,10 @@ class PreviewSession extends SessionImpl {
 
             if (DEBUG) {
                 Log.d(TAG, "Found available preview sizes: " + availableSizes);
+            }
+
+            if (getQuality() == CameraView.Quality.MAX) {
+                return Collections.max(availableSizes, new CompareSizesByArea());
             }
 
             return Collections.min(availableSizes, new CompareSizesByArea());

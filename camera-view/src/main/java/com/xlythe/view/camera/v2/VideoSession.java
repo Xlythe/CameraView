@@ -21,7 +21,6 @@ import com.xlythe.view.camera.CameraView;
 
 import java.io.File;
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.List;
 
 import static com.xlythe.view.camera.ICameraModule.TAG;
