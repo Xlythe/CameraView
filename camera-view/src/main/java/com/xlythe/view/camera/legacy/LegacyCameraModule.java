@@ -121,13 +121,31 @@ public class LegacyCameraModule extends ICameraModule {
         mVideoRecorder.setAudioSource(MediaRecorder.AudioSource.DEFAULT);
         mVideoRecorder.setVideoSource(MediaRecorder.VideoSource.DEFAULT);
         switch (getQuality()) {
+            case MAX:
+                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_HIGH)) {
+                    mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH));
+                    break;
+                }
+                // Fall-through
             case HIGH:
-                mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH));
-                break;
+                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_1080P)) {
+                    mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_1080P));
+                    break;
+                }
+                // Fall-through
             case MEDIUM:
-                mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_720P));
-                break;
+                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_720P)) {
+                    mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_720P));
+                    break;
+                }
+                // Fall-through
             case LOW:
+                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_480P)) {
+                    mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_480P));
+                    break;
+                }
+                // Fall-through
+            default:
                 mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_LOW));
                 break;
         }

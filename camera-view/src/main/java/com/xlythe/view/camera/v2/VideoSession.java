@@ -29,7 +29,10 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 @TargetApi(21)
 class VideoSession extends PreviewSession {
     // TODO Figure out why camera crashes when we use a size higher than 4k
-    static final Size MAX_SUPPORTED_SIZE = new Size(3840, 2160);
+    private static final Size SIZE_4K = new Size(3840, 2160);
+    private static final Size SIZE_1080P = new Size(1920, 1080);
+    private static final Size SIZE_720P = new Size(1280, 720);
+    private static final Size SIZE_480P = new Size(640, 480);
 
     private final VideoSurface mVideoSurface;
 
@@ -118,11 +121,43 @@ class VideoSession extends PreviewSession {
     private static final class VideoSurface extends CameraSurface {
         private List<Size> getSizes(StreamConfigurationMap map) {
             Size[] sizes = map.getOutputSizes(MediaRecorder.class);
-            if (getQuality() == CameraView.Quality.MAX
-                    && CamcorderProfile.hasProfile(CamcorderProfile.QUALITY_2160P)) {
-                return filter(sizes, MAX_SUPPORTED_SIZE);
+            List<Size> filtered;
+            switch (getQuality()) {
+                case MAX:
+                    if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_2160P)) {
+                        filtered = filter(sizes, SIZE_4K);
+                        if (!filtered.isEmpty()) {
+                            return filtered;
+                        }
+                    }
+                    // Fall-through
+                case HIGH:
+                    if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_1080P)) {
+                        filtered = filter(sizes, SIZE_1080P);
+                        if (!filtered.isEmpty()) {
+                            return filtered;
+                        }
+                    }
+                    // Fall-through
+                case MEDIUM:
+                    if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_720P)) {
+                        filtered = filter(sizes, SIZE_720P);
+                        if (!filtered.isEmpty()) {
+                            return filtered;
+                        }
+                    }
+                    // Fall-through
+                case LOW:
+                    if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_480P)) {
+                        filtered = filter(sizes, SIZE_480P);
+                        if (!filtered.isEmpty()) {
+                            return filtered;
+                        }
+                    }
+                    // Fall-through
+                default:
+                    return filter(sizes);
             }
-            return filter(sizes);
         }
 
         private boolean mIsRecordingVideo;
@@ -149,16 +184,32 @@ class VideoSession extends PreviewSession {
                 mMediaRecorder = new MediaRecorder();
                 mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
                 mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
-                switch (mCameraView.getQuality()) {
+                switch (getQuality()) {
                     case MAX:
+                        if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_2160P)) {
+                            mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_2160P));
+                            break;
+                        }
                         // Fall-through
                     case HIGH:
-                        mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH));
-                        break;
+                        if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_1080P)) {
+                            mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_1080P));
+                            break;
+                        }
+                        // Fall-through
                     case MEDIUM:
-                        mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_720P));
-                        break;
+                        if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_720P)) {
+                            mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_720P));
+                            break;
+                        }
+                        // Fall-through
                     case LOW:
+                        if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_480P)) {
+                            mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_480P));
+                            break;
+                        }
+                        // Fall-through
+                    default:
                         mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_LOW));
                         break;
                 }

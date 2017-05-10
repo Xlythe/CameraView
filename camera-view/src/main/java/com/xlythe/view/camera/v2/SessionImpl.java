@@ -152,6 +152,21 @@ abstract class SessionImpl implements Camera2Module.Session {
             return mCameraView.isUsingFrontFacingCamera();
         }
 
+        int getCameraId() {
+            try {
+                String cameraId = mCameraView.getActiveCamera();
+
+                // Usually an integer, but has the potential to be a random string. We convert to
+                // an integer because Camcorder requires it
+                return Integer.parseInt(cameraId);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to get camera id", e);
+
+                // The default camera always has id 0
+                return 0;
+            }
+        }
+
         abstract void close();
 
         abstract Surface getSurface();

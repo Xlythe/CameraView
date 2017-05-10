@@ -595,7 +595,7 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
-    private String getActiveCamera() throws CameraAccessException {
+    String getActiveCamera() throws CameraAccessException {
         return mActiveCamera == null ? getDefaultCamera() : mActiveCamera;
     }
 
