@@ -307,7 +307,9 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             mCancel.setVisibility(View.GONE);
         }
 
-        mConfirm.setVisibility(View.GONE);
+        if (mConfirm != null) {
+            mConfirm.setVisibility(View.GONE);
+        }
     }
 
     @Override
