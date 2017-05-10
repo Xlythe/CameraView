@@ -18,10 +18,11 @@ The following permissions are required in your AndroidManfiest.xml
 ```xml
 <uses-permission android:name="android.permission.CAMERA" />
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
-<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+<!-- If you're not saving the file to the SD Card, you can set a max sdk version of 18 (Jellybean) -->
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="18" />
 
-<!-- Optional -->
+<!-- Optional camera permissions -->
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 <uses-permission android:name="android.permission.VIBRATE" />
 ```
 
@@ -113,7 +114,7 @@ CameraView includes the optional attributes quality [high, medium, low], maxVide
     camera:maxVideoDuration="10000"
     camera:maxVideoSize="10000000" />
 ```
-__For the most part, you'll be interacting directly with CameraFragment and can stop here.__
+__Simple applications can rely entirely on CameraFragment and don't need to read any further.__
 
 CameraView Lifecycle
 -----------------
