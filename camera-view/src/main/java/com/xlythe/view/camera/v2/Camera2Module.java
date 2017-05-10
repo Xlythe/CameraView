@@ -39,6 +39,8 @@ import java.util.Locale;
 public class Camera2Module extends ICameraModule {
     private static final int ZOOM_NOT_SUPPORTED = 1;
 
+    private static final long BACKGROUND_THREAD_SHUTDOWN_TIMEOUT = 10000;
+
     private static final String EXTRA_DEVICE_ID = "device_id";
 
     // TODO Figure out why camera crashes when we use a size higher than 1080
@@ -223,8 +225,10 @@ public class Camera2Module extends ICameraModule {
 
     @RequiresPermission(Manifest.permission.CAMERA)
     @Override
-    public void open() {
-        startBackgroundThread();
+    public synchronized void open() {
+        if (mBackgroundThread == null) {
+            startBackgroundThread();
+        }
 
         try {
             mActiveCamera = getActiveCamera();
@@ -237,19 +241,27 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public void close() {
-        if (mCaptureSession != null) {
-            mCaptureSession.close();
-            mCaptureSession = null;
+        close(true /* shutdownThread */);
+    }
+
+    private void close(boolean shutdownThread) {
+        synchronized (this) {
+            if (mCaptureSession != null) {
+                mCaptureSession.close();
+                mCaptureSession = null;
+            }
+            if (mActiveSession != null) {
+                mActiveSession.close();
+                mActiveSession = null;
+            }
+            if (mCameraDevice != null) {
+                mCameraDevice.close();
+                mCameraDevice = null;
+            }
         }
-        if (mActiveSession != null) {
-            mActiveSession.close();
-            mActiveSession = null;
+        if (shutdownThread) {
+            stopBackgroundThread();
         }
-        if (mCameraDevice != null) {
-            mCameraDevice.close();
-            mCameraDevice = null;
-        }
-        stopBackgroundThread();
     }
 
     @Override
@@ -277,7 +289,7 @@ public class Camera2Module extends ICameraModule {
 
     @RequiresPermission(Manifest.permission.CAMERA)
     @Override
-    public void toggleCamera() {
+    public synchronized void toggleCamera() {
         int position = 0;
 
         try {
@@ -287,7 +299,7 @@ public class Camera2Module extends ICameraModule {
                 }
                 position++;
             }
-            close();
+            close(false /* shutdownThread */);
             mActiveCamera = mCameraManager.getCameraIdList()[(position + 1) % mCameraManager.getCameraIdList().length];
             open();
         } catch (CameraAccessException e) {
@@ -296,7 +308,7 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public void focus(Rect focus, Rect metering) {
+    public synchronized void focus(Rect focus, Rect metering) {
         try {
             if (!supportsFocus(getActiveCamera())) {
                 Log.w(TAG, "Focus not available on this camera");
@@ -346,7 +358,7 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public void setZoomLevel(int zoomLevel) {
+    public synchronized void setZoomLevel(int zoomLevel) {
         mZoomLevel = zoomLevel;
 
         if (mActiveSession == null) {
@@ -385,12 +397,12 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public int getZoomLevel() {
+    public synchronized int getZoomLevel() {
         return mZoomLevel;
     }
 
     @Override
-    public int getMaxZoomLevel() {
+    public synchronized int getMaxZoomLevel() {
         try {
             CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
             Float maxZoom = (characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM));
@@ -413,7 +425,7 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public boolean hasFlash() {
+    public synchronized boolean hasFlash() {
         try {
             CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
             Boolean hasFlash = (characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE));
@@ -434,7 +446,7 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public void pause() {
+    public synchronized void pause() {
         if (supportsPause() && !mIsPaused) {
             try {
                 mCaptureSession.stopRepeating();
@@ -448,7 +460,7 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public void resume() {
+    public synchronized void resume() {
         if (supportsPause() && mIsPaused) {
             try {
                 mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
@@ -462,12 +474,12 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public boolean supportsPause() {
+    public synchronized boolean supportsPause() {
         return mIsPaused || (mCaptureSession != null && mActiveSession != null);
     }
 
     @Override
-    public void takePicture(File file) {
+    public synchronized void takePicture(File file) {
         if (mActiveSession != null && mActiveSession instanceof PictureSession) {
             PictureSession pictureSession = (PictureSession) mActiveSession;
             pictureSession.takePicture(file, mCameraDevice, mCaptureSession);
@@ -476,7 +488,7 @@ public class Camera2Module extends ICameraModule {
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
-    public void startRecording(File file) {
+    public synchronized void startRecording(File file) {
         // Quick fail if the CameraDevice was never created.
         if (mCameraDevice == null) {
             onVideoFailed();
@@ -492,7 +504,7 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public boolean isRecording() {
+    public synchronized boolean isRecording() {
         return mActiveSession != null
                 && mActiveSession instanceof VideoSession;
     }
@@ -597,7 +609,7 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
-    String getActiveCamera() throws CameraAccessException {
+    synchronized String getActiveCamera() throws CameraAccessException {
         return mActiveCamera == null ? getDefaultCamera() : mActiveCamera;
     }
 
@@ -646,7 +658,7 @@ public class Camera2Module extends ICameraModule {
         }
         mBackgroundThread.quitSafely();
         try {
-            mBackgroundThread.join();
+            mBackgroundThread.join(BACKGROUND_THREAD_SHUTDOWN_TIMEOUT);
             mBackgroundThread = null;
             mBackgroundHandler = null;
         } catch (InterruptedException e) {
@@ -661,14 +673,14 @@ public class Camera2Module extends ICameraModule {
 
 
     @Override
-    public Parcelable onSaveInstanceState() {
+    public synchronized Parcelable onSaveInstanceState() {
         Bundle state = new Bundle();
         state.putString(EXTRA_DEVICE_ID, mActiveCamera);
         return state;
     }
 
     @Override
-    public void onRestoreInstanceState(Parcelable state) {
+    public synchronized void onRestoreInstanceState(Parcelable state) {
         mActiveCamera = ((Bundle) state).getString(EXTRA_DEVICE_ID);
     }
 
