@@ -96,7 +96,7 @@ class PictureSession extends PreviewSession {
                 builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
             }
             session.capture(builder.build(), null /* callback */, getBackgroundHandler());
-        } catch (CameraAccessException | IllegalStateException | NullPointerException e) {
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to create capture request", e);
             onImageFailed();
@@ -298,7 +298,7 @@ class PictureSession extends PreviewSession {
                                 }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
                                 mFile = null;
                             } else {
-                                Log.w(ICameraModule.TAG, "OnImageAvailable called but no file to write to");
+                                Log.w(TAG, "OnImageAvailable called but no file to write to");
                             }
                         } catch (IllegalStateException e) {
                             Log.e(TAG, "Failed to save image", e);

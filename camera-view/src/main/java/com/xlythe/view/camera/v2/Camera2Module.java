@@ -108,11 +108,7 @@ public class Camera2Module extends ICameraModule {
         @Override
         public void onDisconnected(@NonNull CameraDevice cameraDevice) {
             Log.w(TAG, "Camera disconnected");
-            synchronized (Camera2Module.this) {
-                cameraDevice.close();
-                mCameraDevice = null;
-                mBackgroundHandler.removeCallbacksAndMessages(null);
-            }
+            close();
         }
 
         @Override
@@ -258,8 +254,10 @@ public class Camera2Module extends ICameraModule {
                 mCameraDevice.close();
                 mCameraDevice = null;
             }
+            mIsPaused = false;
         }
         if (shutdownThread) {
+            mBackgroundHandler.removeCallbacksAndMessages(null);
             stopBackgroundThread();
         }
     }
