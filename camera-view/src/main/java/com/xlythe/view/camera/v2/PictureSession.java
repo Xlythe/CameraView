@@ -35,6 +35,7 @@ import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
 
+import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
@@ -189,21 +190,64 @@ class PictureSession extends PreviewSession {
         }
 
         private static byte[] YUV_420_888toNV21(Image image) {
-            byte[] nv21;
-            ByteBuffer yBuffer = image.getPlanes()[0].getBuffer();
-            ByteBuffer uBuffer = image.getPlanes()[1].getBuffer();
-            ByteBuffer vBuffer = image.getPlanes()[2].getBuffer();
+            Image.Plane yPlane = image.getPlanes()[0];
+            Image.Plane uPlane = image.getPlanes()[1];
+            Image.Plane vPlane = image.getPlanes()[2];
+
+            ByteBuffer yBuffer = yPlane.getBuffer();
+            ByteBuffer uBuffer = uPlane.getBuffer();
+            ByteBuffer vBuffer = vPlane.getBuffer();
 
             int ySize = yBuffer.remaining();
             int uSize = uBuffer.remaining();
             int vSize = vBuffer.remaining();
 
-            nv21 = new byte[ySize + uSize + vSize];
+            if (DEBUG) {
+                Log.d(TAG, String.format("Image{width=%d, height=%d}",
+                        image.getWidth(), image.getHeight()));
+                Log.d(TAG, String.format("yPlane{size=%d, pixelStride=%d, rowStride=%d}",
+                        ySize, yPlane.getPixelStride(), yPlane.getRowStride()));
+                Log.d(TAG, String.format("uPlane{size=%d, pixelStride=%d, rowStride=%d}",
+                        uSize, uPlane.getPixelStride(), uPlane.getRowStride()));
+                Log.d(TAG, String.format("vPlane{size=%d, pixelStride=%d, rowStride=%d}",
+                        vSize, vPlane.getPixelStride(), vPlane.getRowStride()));
+            }
 
-            // U and V are swapped
-            yBuffer.get(nv21, 0, ySize);
-            vBuffer.get(nv21, ySize, vSize);
-            uBuffer.get(nv21, ySize + vSize, uSize);
+            int position = 0;
+            byte[] nv21 = new byte[ySize + (image.getWidth() * image.getHeight() / 2)];
+
+            // Add the full y buffer to the array. If rowStride > 1, some padding may be skipped.
+            for (int row = 0; row < image.getHeight(); row++) {
+                yBuffer.get(nv21, position, image.getWidth());
+                position += image.getWidth();
+                yBuffer.position(Math.min(ySize, yBuffer.position() - image.getWidth() + yPlane.getRowStride()));
+            }
+
+            int chromaHeight = image.getHeight() / 2;
+            int chromaWidth = image.getWidth() / 2;
+            int chromaGap = uPlane.getRowStride() - (chromaWidth * uPlane.getPixelStride());
+
+            if (DEBUG) {
+                Log.d(TAG, String.format("chromaHeight=%d", chromaHeight));
+                Log.d(TAG, String.format("chromaWidth=%d", chromaWidth));
+                Log.d(TAG, String.format("chromaGap=%d", chromaGap));
+            }
+
+            // Interleave the u and v frames, filling up the rest of the buffer
+            for (int row = 0; row < chromaHeight; row++) {
+                for (int col = 0; col < chromaWidth; col++) {
+                    vBuffer.get(nv21, position++, 1);
+                    uBuffer.get(nv21, position++, 1);
+                    vBuffer.position(Math.min(vSize, vBuffer.position() - 1 + vPlane.getPixelStride()));
+                    uBuffer.position(Math.min(uSize, uBuffer.position() - 1 + uPlane.getPixelStride()));
+                }
+                vBuffer.position(Math.min(vSize, vBuffer.position() + chromaGap));
+                uBuffer.position(Math.min(uSize, uBuffer.position() + chromaGap));
+            }
+
+            if (DEBUG) {
+                Log.d(TAG, String.format("nv21{size=%d, position=%d}", nv21.length, position));
+            }
 
             return nv21;
         }
