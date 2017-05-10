@@ -251,14 +251,20 @@ public class LegacyCameraModule extends ICameraModule {
                     }
                 }
             });
+        } else {
+            Log.w(TAG, "Attempted to set focus but no camera found");
         }
     }
 
     @Override
     public void setZoomLevel(int zoomLevel) {
-        Camera.Parameters parameters = mCamera.getParameters();
-        parameters.setZoom(zoomLevel);
-        mCamera.setParameters(parameters);
+        if (mCamera != null) {
+            Camera.Parameters parameters = mCamera.getParameters();
+            parameters.setZoom(zoomLevel);
+            mCamera.setParameters(parameters);
+        } else {
+            Log.w(TAG, "Attempted to set zoom level to " + zoomLevel + " but no camera found");
+        }
     }
 
     @Override
