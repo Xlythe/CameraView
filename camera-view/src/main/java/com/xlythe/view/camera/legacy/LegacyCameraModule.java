@@ -190,6 +190,7 @@ public class LegacyCameraModule extends ICameraModule {
         } catch (IOException | RuntimeException e) {
             e.printStackTrace();
             mVideoRecorder = null;
+            onVideoFailed();
         }
     }
 
@@ -198,12 +199,15 @@ public class LegacyCameraModule extends ICameraModule {
         if (mVideoRecorder != null) {
             try {
                 mVideoRecorder.stop();
+                showVideoConfirmation(mVideoFile);
             } catch (RuntimeException e) {
                 Log.e(TAG, "Failed to stop video recorder. This can happen if a video is stopped too quickly. :(", e);
+                onVideoFailed();
             }
             mVideoRecorder = null;
+        } else {
+            onVideoFailed();
         }
-        showVideoConfirmation(mVideoFile);
     }
 
     @Override

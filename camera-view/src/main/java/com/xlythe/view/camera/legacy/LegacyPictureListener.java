@@ -57,6 +57,8 @@ class LegacyPictureListener implements Camera.PictureCallback {
                     exif.save();
                 } catch (IOException e) {
                     Log.e(TAG, "Failed to write the file", e);
+                    mModule.onImageFailed();
+                    cancel(true);
                 } finally {
                     if (output != null) {
                         try {
