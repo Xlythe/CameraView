@@ -194,7 +194,7 @@ public class CameraView extends FrameLayout {
         }
 
         if (getBackground() == null) {
-            setBackgroundColor(0xEE000000);
+            setBackgroundColor(0xFF111111);
         }
 
         mScaleDetector = new PinchToZoomGestureDetector(context);
