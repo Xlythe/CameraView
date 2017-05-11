@@ -93,6 +93,11 @@ public class Camera2Module extends ICameraModule {
     private boolean mIsPaused = false;
 
     /**
+     * If true, we are currently recording.
+     */
+    private boolean mIsRecording = false;
+
+    /**
      * Callbacks for when the camera is available / unavailable
      */
     private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
@@ -493,18 +498,31 @@ public class Camera2Module extends ICameraModule {
             return;
         }
 
+        mIsRecording = true;
         setSession(new VideoSession(this, file));
     }
 
     @Override
     public void stopRecording() {
+        mIsRecording = false;
         setSession(new PictureSession(this));
     }
 
     @Override
     public synchronized boolean isRecording() {
-        return mActiveSession != null
-                && mActiveSession instanceof VideoSession;
+        return mIsRecording;
+    }
+
+    @Override
+    public void showVideoConfirmation(File file) {
+        super.showVideoConfirmation(file);
+        mIsRecording = false;
+    }
+
+    @Override
+    public void onVideoFailed() {
+        super.onVideoFailed();
+        mIsRecording = false;
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {
