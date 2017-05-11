@@ -178,7 +178,7 @@ public class CameraView extends FrameLayout {
         }
 
         if (attrs != null) {
-            TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView, 0, 0);
+            TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView);
             setQuality(Quality.fromId(a.getInteger(R.styleable.CameraView_quality, getQuality().id)));
             setFlash(Flash.fromId(a.getInteger(R.styleable.CameraView_flash, getFlash().id)));
             setPinchToZoomEnabled(a.getBoolean(R.styleable.CameraView_pinchToZoomEnabled, isPinchToZoomEnabled()));
@@ -191,6 +191,10 @@ public class CameraView extends FrameLayout {
             setImageConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmImages, isImageConfirmationEnabled()));
             setVideoConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmVideos, isVideoConfirmationEnabled()));
             a.recycle();
+        }
+
+        if (getBackground() == null) {
+            setBackgroundColor(0xEE000000);
         }
 
         mScaleDetector = new PinchToZoomGestureDetector(context);
