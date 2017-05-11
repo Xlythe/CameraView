@@ -262,7 +262,6 @@ public class Camera2Module extends ICameraModule {
             mIsPaused = false;
         }
         if (shutdownThread) {
-            mBackgroundHandler.removeCallbacksAndMessages(null);
             stopBackgroundThread();
         }
     }
@@ -679,6 +678,7 @@ public class Camera2Module extends ICameraModule {
         if (mBackgroundThread == null) {
             return;
         }
+        mBackgroundHandler.removeCallbacksAndMessages(null);
         mBackgroundThread.quitSafely();
         try {
             mBackgroundThread.join(BACKGROUND_THREAD_SHUTDOWN_TIMEOUT);
