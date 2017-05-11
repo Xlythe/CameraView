@@ -272,8 +272,9 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
         Matrix matrix = new Matrix();
 
-        int displayOrientation = getDisplayRotation();
-        if (displayOrientation != Surface.ROTATION_90 && displayOrientation != Surface.ROTATION_270) {
+        // Usually, we'd check device orientation. However, on the Pixel C, the orientation is
+        // reversed from what you'd expect. What we really care about is width/height ratio.
+        if (viewWidth < viewHeight) {
             int temp = videoWidth;
             videoWidth = videoHeight;
             videoHeight = temp;
@@ -313,17 +314,6 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         }
 
         setTransform(matrix);
-    }
-
-
-    public int getDisplayRotation() {
-        Display display;
-        if (Build.VERSION.SDK_INT >= 17) {
-            display = getDisplay();
-        } else {
-            display = ((WindowManager) getContext().getSystemService(Context.WINDOW_SERVICE)).getDefaultDisplay();
-        }
-        return display.getRotation();
     }
 
     // Hides the Surface, until it's fully prepared.
