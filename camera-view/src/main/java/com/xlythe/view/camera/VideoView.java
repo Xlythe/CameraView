@@ -271,7 +271,6 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         int viewHeight = getHeight();
 
         Matrix matrix = new Matrix();
-        getTransform(matrix);
 
         int displayOrientation = getDisplayRotation();
         if (displayOrientation != Surface.ROTATION_90 && displayOrientation != Surface.ROTATION_270) {

@@ -82,7 +82,6 @@ public class LegacyCameraModule extends ICameraModule {
         }
 
         Matrix matrix = new Matrix();
-        getTransform(matrix);
 
         // Because the camera already rotates the preview for us (@see Camera.setDisplayOrientation(int)},
         // we need to flip the width/height to the dimensions we'll actually be given.

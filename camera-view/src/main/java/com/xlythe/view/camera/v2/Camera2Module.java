@@ -523,7 +523,6 @@ public class Camera2Module extends ICameraModule {
         // It's less great for landscape, because we have to undo it. Without any matrix modifications,
         // the preview will be smushed into the aspect ratio of the view.
         Matrix matrix = new Matrix();
-        getTransform(matrix);
 
         // Camera2 reverses the preview width/height.
         if (cameraOrientation != 0 && cameraOrientation != 180) {
@@ -579,12 +578,20 @@ public class Camera2Module extends ICameraModule {
         int translateX = (int) Math.ceil((viewWidth - newWidth) / 2d);
         int translateY = (int) Math.ceil((viewHeight - newHeight) / 2d);
 
+        // Due to the direction of rotation (90 vs 270), a 1 pixel offset can either put us
+        // exactly where we want to be, or it can put us 1px lower than we wanted. This is error
+        // correction for that.
+        if (displayOrientation == 270) {
+            translateX = (int) Math.floor((viewWidth - newWidth) / 2d);
+            translateY = (int) Math.floor((viewHeight - newHeight) / 2d);
+        }
+
         // Finally, with our photo scaled and centered, we apply a rotation.
         int rotation = -displayOrientation;
 
         matrix.setScale(scaleX, scaleY);
         matrix.postTranslate(translateX, translateY);
-        matrix.postRotate(rotation, viewWidth / 2, viewHeight / 2);
+        matrix.postRotate(rotation, (int) Math.ceil(viewWidth / 2d), (int) Math.ceil(viewHeight / 2d));
 
         if (DEBUG) {
             Log.d(TAG, String.format("Result: viewAspectRatio=%s, previewAspectRatio=%s, "
