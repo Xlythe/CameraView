@@ -449,7 +449,7 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public synchronized void pause() {
-        if (supportsPause() && !mIsPaused) {
+        if (!mIsPaused) {
             try {
                 mCaptureSession.stopRepeating();
             } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
@@ -457,13 +457,15 @@ public class Camera2Module extends ICameraModule {
             }
             mIsPaused = true;
         } else {
-            Log.w(TAG, "Cannot pause. Was never unpaused.");
+            if (DEBUG) {
+                Log.w(TAG, "Cannot pause. Was never unpaused.");
+            }
         }
     }
 
     @Override
     public synchronized void resume() {
-        if (supportsPause() && mIsPaused) {
+        if (mIsPaused) {
             try {
                 mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
             } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
@@ -471,13 +473,10 @@ public class Camera2Module extends ICameraModule {
             }
             mIsPaused = false;
         } else {
-            Log.w(TAG, "Cannot resume. Was never paused.");
+            if (DEBUG) {
+                Log.w(TAG, "Cannot resume. Was never paused.");
+            }
         }
-    }
-
-    @Override
-    public synchronized boolean supportsPause() {
-        return mIsPaused || (mCaptureSession != null && mActiveSession != null);
     }
 
     @Override
