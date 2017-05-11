@@ -88,6 +88,11 @@ public class Camera2Module extends ICameraModule {
     private int mZoomLevel;
 
     /**
+     * If true, the camera is currently open.
+     */
+    private boolean mIsOpen = false;
+
+    /**
      * If true, the preview should be paused.
      */
     private boolean mIsPaused = false;
@@ -227,6 +232,7 @@ public class Camera2Module extends ICameraModule {
     @RequiresPermission(Manifest.permission.CAMERA)
     @Override
     public synchronized void open() {
+        mIsOpen = true;
         if (mBackgroundThread == null) {
             startBackgroundThread();
         }
@@ -260,6 +266,7 @@ public class Camera2Module extends ICameraModule {
                 mCameraDevice = null;
             }
             mIsPaused = false;
+            mIsOpen = false;
         }
         if (shutdownThread) {
             stopBackgroundThread();
@@ -301,9 +308,15 @@ public class Camera2Module extends ICameraModule {
                 }
                 position++;
             }
+
+            // Close the old camera and open with the new camera id, but only if it was already
+            // open before toggle was requested.
+            boolean shouldOpen = mIsOpen;
             close(false /* shutdownThread */);
             mActiveCamera = mCameraManager.getCameraIdList()[(position + 1) % mCameraManager.getCameraIdList().length];
-            open();
+            if (shouldOpen) {
+                open();
+            }
         } catch (CameraAccessException e) {
             Log.e(TAG, "Failed to query camera", e);
         }
