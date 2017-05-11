@@ -35,7 +35,8 @@
         <LinearLayout
             android:layout_width="125dp"
             android:layout_height="match_parent"
-            android:orientation="vertical">
+            android:orientation="vertical"
+            android:background="#cc000000">
 
             <Button
                 android:id="@id/confirm"
