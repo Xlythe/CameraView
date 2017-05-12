@@ -8,14 +8,11 @@ import android.graphics.SurfaceTexture;
 import android.media.AudioManager;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
-import android.os.Build;
 import android.support.annotation.Nullable;
 import android.util.AttributeSet;
 import android.util.Log;
-import android.view.Display;
 import android.view.Surface;
 import android.view.TextureView;
-import android.view.WindowManager;
 
 import java.io.File;
 import java.io.FileDescriptor;

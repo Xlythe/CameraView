@@ -17,8 +17,6 @@ import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 
-import com.xlythe.view.camera.CameraView;
-
 import java.io.File;
 import java.io.IOException;
 import java.util.List;

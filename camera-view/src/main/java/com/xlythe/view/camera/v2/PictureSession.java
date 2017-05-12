@@ -25,7 +25,6 @@ import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
-import com.xlythe.view.camera.ICameraModule;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
