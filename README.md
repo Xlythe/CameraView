@@ -1,7 +1,12 @@
 Camera View
 ====================
 
-A View/Fragment that display the Android camera.
+CameraView provides a simple wrapper around the Android camera APIs, with backwards compatibility
+to API 14. Rather than directly manipulating the camera, here you have an Android View that can be
+placed within your app. This View displays a preview and has the methods takePicture(File),
+startRecording(File) and stopRecording(File). For simple use cases, CameraFragment exists as well.
+If you inflate a CameraFragment with Views that have the correct ids (eg. @id/capture),
+CameraFragment will bind to them to control the CameraView.
 
 
 Where to Download
@@ -28,7 +33,12 @@ The following permissions are required in your AndroidManfiest.xml
 
 CameraFragment
 -----------------
-Extend CameraFragment and override the required methods. Both pictures and videos are saved to a cache directory and may be overwritten or deleted. It's advised that you copy the files to persistent storage, depending on your usecase.
+CameraFragment allows for simple use cases of CameraView without requiring much more logic than a
+layout xml file. Extend CameraFragment and override the required methods. As pictures and videos are
+saved, you'll be notified via onImageCaptured(File) and onVideoCaptured(File). Note that both are
+saved to a cache directory and may eventually be overwritten or deleted if you don't move them.
+It's advised that you copy the files to persistent storage, or back them up to a server, if your
+usecase requires long term storage.
 ```java
 public class MainFragment extends CameraFragment {
 
@@ -49,7 +59,8 @@ public class MainFragment extends CameraFragment {
 }
 ```
 
-Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any], @id/camera [CameraView], id/capture [Any], and @id/request_permissions [Any].
+Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any],
+@id/camera [CameraView], id/capture [Any], and @id/request_permissions [Any].
 ```xml
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:camera="http://schemas.android.com/apk/res-auto"
@@ -99,11 +110,21 @@ Your layout MUST contain @id/layout_camera [Any], @id/layout_permissions [Any], 
 
 </FrameLayout>
 ```
-Optionally, you may also include @id/duration [TextView], @id/progress [ProgressBar], @id/toggle [CompoundButton], id/confirm [Any], and @id/cancel [Any]
+Optionally, you may also include @id/duration [TextView], @id/progress [ProgressBar],
+@id/toggle [CompoundButton], id/confirm [Any], and @id/cancel [Any]
 
 CameraView
 -----------------
-CameraView includes the optional attributes quality [high, medium, low], maxVideoDuration [milliseconds], and maxVideoSize [bits].
+CameraView is a View that simplifies the Android Camera APIs. Like any other Android View, it can
+be inflated within an xml layout resource and obtained in an Activity/Fragment via
+findViewById(int). Because the Camera is a limited resource, and consumes a high amount of power,
+CameraView must be opened/closed. Typically, it's recommended to call CameraView.open() in your
+application's onStart() lifecycle, and CameraView.close() in it's onStop() event. If you're using
+CameraFragment, then this will happen for free.
+
+
+CameraView includes the optional attributes quality [max, high, medium, low],
+maxVideoDuration [milliseconds], and maxVideoSize [bytes].
 ```xml
 <com.xlythe.view.camera.CameraView
     xmlns:camera="http://schemas.android.com/apk/res-auto"
@@ -114,27 +135,10 @@ CameraView includes the optional attributes quality [high, medium, low], maxVide
     camera:maxVideoDuration="10000"
     camera:maxVideoSize="10000000" />
 ```
-__Simple applications can rely entirely on CameraFragment and don't need to read any further.__
 
-CameraView Lifecycle
------------------
-After obtaining permissions, call CameraView.open() in onStart() and CameraView.close() in onStop.
-```java
-@Override
-public void onStart() {
-    super.onStart();
-    mCamera.open();
-}
+CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
+handle binding the Views to the appropriate methods on CameraView.
 
-@Override
-public void onStop() {
-    mCamera.close();
-    super.onStop();
-}
-```
-
-CameraView Methods
------------------
 Takes a picture and saves it to the given file
 ```java
 mCameraView.takePicture(file);
@@ -150,6 +154,27 @@ mCameraView.stopRecording();
 Toggles between the various cameras on the device (typically the front and back cameras)
 ```java
 mCameraView.toggleCamera();
+```
+
+Exif
+-----------------
+CameraView encodes metadata into pictures via Exif. By default, there's nothing more you need to do.
+Exif metadata will be read by most Android image libraries (we recommend Glide), as well as most
+computers (Windows, Mac, Linux). However, if needed, Exif gives you the option to be more privacy
+sensitive (via Exif.removeLocation(), Exif.removeTimestamp()) as well as the information needed to
+manually rotate/flip images if you cannot use another library.
+```java
+Exif exif = new Exif(file);
+exif.removeLocation();
+```
+
+VideoView
+-----------------
+VideoView is another simplified Android View. In this case, as the name implies, it plays Videos.
+```java
+mVideoView.setFile(file);
+mVideoView.play();
+mVideoView.pause();
 ```
 
 License
