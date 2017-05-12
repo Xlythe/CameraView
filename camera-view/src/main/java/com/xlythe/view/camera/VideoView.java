@@ -266,6 +266,11 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         return mIsMirrored;
     }
 
+    public void setVolume(float volume) {
+        ensureMediaPlayer();
+        mMediaPlayer.setVolume(volume, volume);
+    }
+
     void transformPreview(int videoWidth, int videoHeight) {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
