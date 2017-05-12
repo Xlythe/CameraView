@@ -2,7 +2,6 @@ package com.xlythe.view.camera;
 
 import android.location.Location;
 import android.support.annotation.Nullable;
-import android.support.annotation.VisibleForTesting;
 import android.support.media.ExifInterface;
 import android.util.Log;
 
@@ -35,8 +34,7 @@ public class Exif {
         this(new ExifInterface(is));
     }
 
-    @VisibleForTesting
-    Exif(ExifInterface exifInterface) {
+    private Exif(ExifInterface exifInterface) {
         mExifInterface = exifInterface;
     }
 
@@ -323,11 +321,26 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, convertToExifDateTime(System.currentTimeMillis()));
     }
 
+    public void removeTimestamp() {
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, null);
+    }
+
     public void attachLocation(Location location) {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, location.getProvider());
         mExifInterface.setLatLong(location.getLatitude(), location.getLongitude());
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, convertToExifDate(location.getTime()));
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, convertToExifTime(location.getTime()));
+    }
+
+    public void removeLocation() {
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_LATITUDE, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_LONGITUDE, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, null);
     }
 
     private static String convertToExifDateTime(long timestamp) {

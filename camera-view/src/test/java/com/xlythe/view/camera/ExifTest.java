@@ -5,9 +5,12 @@ import android.location.Location;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLog;
+
+import java.io.InputStream;
 
 import static junit.framework.Assert.assertEquals;
 
@@ -19,7 +22,7 @@ public class ExifTest {
     @Before
     public void setup() throws Exception {
         ShadowLog.stream = System.out;
-        exif = new Exif(new MockExifInterface().asMock());
+        exif = new Exif(Mockito.mock(InputStream.class));
     }
 
     @Test
@@ -104,6 +107,9 @@ public class ExifTest {
 
         exif.attachTimestamp();
         assertEquals(System.currentTimeMillis() / 1000 * 1000, exif.getTimestamp());
+
+        exif.removeTimestamp();
+        assertEquals(-1, exif.getTimestamp());
     }
 
     @Test
@@ -116,5 +122,8 @@ public class ExifTest {
         location.setTime(System.currentTimeMillis() / 1000 * 1000);
         exif.attachLocation(location);
         assertEquals(location, exif.getLocation());
+
+        exif.removeLocation();
+        assertEquals(null, exif.getLocation());
     }
 }
