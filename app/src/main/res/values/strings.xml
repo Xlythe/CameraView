@@ -1,6 +1,6 @@
 <resources>
 
-    <string name="app_name">Camera Sample</string>
+    <string name="app_name">Camera</string>
 
     <string name="btn_request_permissions">Request Permissions</string>
 
