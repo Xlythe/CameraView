@@ -15,7 +15,8 @@
             android:text="@string/btn_request_permissions"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_gravity="center" />
+            android:layout_gravity="center"
+            style="?android:buttonBarButtonStyle" />
 
     </FrameLayout>
 
@@ -35,8 +36,7 @@
         <LinearLayout
             android:layout_width="125dp"
             android:layout_height="match_parent"
-            android:orientation="vertical"
-            android:background="#cc000000">
+            android:orientation="vertical">
 
             <Button
                 android:id="@id/confirm"
