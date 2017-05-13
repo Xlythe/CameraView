@@ -346,7 +346,9 @@ public class Camera2Module extends ICameraModule {
 
             // Now we can update our request
             mActiveSession.setMeteringRectangle(new MeteringRectangle(metering, MeteringRectangle.METERING_WEIGHT_MAX));
-            mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+            if (!mIsPaused) {
+                mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+            }
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to focus", e);
@@ -404,7 +406,9 @@ public class Camera2Module extends ICameraModule {
                 return;
             }
             mActiveSession.setCropRegion(cropRegion);
-            mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+            if (!mIsPaused) {
+                mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+            }
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to zoom", e);
