@@ -181,6 +181,10 @@ public abstract class ICameraModule {
 
     public void resume() {}
 
+    public boolean isPaused() {
+        return false;
+    }
+
     public Parcelable onSaveInstanceState() {
         return null;
     }
