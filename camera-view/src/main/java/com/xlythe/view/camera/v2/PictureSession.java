@@ -33,6 +33,10 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadPoolExecutor;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
@@ -45,6 +49,8 @@ class PictureSession extends PreviewSession {
      */
     private static final int IMAGE_FORMAT_DEFAULT = ImageFormat.JPEG;
     private static final int IMAGE_FORMAT_MAX = ImageFormat.YUV_420_888;
+
+    private static final ExecutorService sExecutor = Executors.newFixedThreadPool(12);
 
     private final PictureSurface mPictureSurface;
 
@@ -184,18 +190,22 @@ class PictureSession extends PreviewSession {
             return data;
         }
 
-        private static byte[] YUV_420_888toNV21(Image image) {
-            Image.Plane yPlane = image.getPlanes()[0];
-            Image.Plane uPlane = image.getPlanes()[1];
-            Image.Plane vPlane = image.getPlanes()[2];
+        private static byte[] YUV_420_888toNV21(final Image image) {
+            final Image.Plane yPlane = image.getPlanes()[0];
+            final Image.Plane uPlane = image.getPlanes()[1];
+            final Image.Plane vPlane = image.getPlanes()[2];
 
-            ByteBuffer yBuffer = yPlane.getBuffer();
-            ByteBuffer uBuffer = uPlane.getBuffer();
-            ByteBuffer vBuffer = vPlane.getBuffer();
+            final ByteBuffer yBuffer = yPlane.getBuffer();
+            final ByteBuffer uBuffer = uPlane.getBuffer();
+            final ByteBuffer vBuffer = vPlane.getBuffer();
 
-            int ySize = yBuffer.remaining();
-            int uSize = uBuffer.remaining();
-            int vSize = vBuffer.remaining();
+            final int ySize = yBuffer.remaining();
+            final int uSize = uBuffer.remaining();
+            final int vSize = vBuffer.remaining();
+
+            final int chromaHeight = image.getHeight() / 2;
+            final int chromaWidth = image.getWidth() / 2;
+            final int chromaGap = uPlane.getRowStride() - (chromaWidth * uPlane.getPixelStride());
 
             if (DEBUG) {
                 Log.d(TAG, String.format("Image{width=%d, height=%d}",
@@ -206,42 +216,95 @@ class PictureSession extends PreviewSession {
                         uSize, uPlane.getPixelStride(), uPlane.getRowStride()));
                 Log.d(TAG, String.format("vPlane{size=%d, pixelStride=%d, rowStride=%d}",
                         vSize, vPlane.getPixelStride(), vPlane.getRowStride()));
-            }
-
-            int position = 0;
-            byte[] nv21 = new byte[ySize + (image.getWidth() * image.getHeight() / 2)];
-
-            // Add the full y buffer to the array. If rowStride > 1, some padding may be skipped.
-            for (int row = 0; row < image.getHeight(); row++) {
-                yBuffer.get(nv21, position, image.getWidth());
-                position += image.getWidth();
-                yBuffer.position(Math.min(ySize, yBuffer.position() - image.getWidth() + yPlane.getRowStride()));
-            }
-
-            int chromaHeight = image.getHeight() / 2;
-            int chromaWidth = image.getWidth() / 2;
-            int chromaGap = uPlane.getRowStride() - (chromaWidth * uPlane.getPixelStride());
-
-            if (DEBUG) {
                 Log.d(TAG, String.format("chromaHeight=%d", chromaHeight));
                 Log.d(TAG, String.format("chromaWidth=%d", chromaWidth));
                 Log.d(TAG, String.format("chromaGap=%d", chromaGap));
             }
 
-            // Interleave the u and v frames, filling up the rest of the buffer
-            for (int row = 0; row < chromaHeight; row++) {
-                for (int col = 0; col < chromaWidth; col++) {
-                    vBuffer.get(nv21, position++, 1);
-                    uBuffer.get(nv21, position++, 1);
-                    vBuffer.position(Math.min(vSize, vBuffer.position() - 1 + vPlane.getPixelStride()));
-                    uBuffer.position(Math.min(uSize, uBuffer.position() - 1 + uPlane.getPixelStride()));
+            final byte[] nv21 = new byte[ySize + (image.getWidth() * image.getHeight() / 2)];
+
+            long start = System.currentTimeMillis();
+            int maxYThreads = 1;
+            final int maxUThreads = 20;
+            int maxVThreads = 20;
+            int maxThreads = maxYThreads + maxUThreads + maxVThreads;
+            final CountDownLatch barrier = new CountDownLatch(maxThreads);
+
+            // Y plane
+            sExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    // Add the full y buffer to the array. If rowStride > 1, some padding may be skipped.
+                    int position = 0;
+                    for (int row = 0; row < image.getHeight(); row++) {
+                        yBuffer.get(nv21, position, image.getWidth());
+                        position += image.getWidth();
+                        yBuffer.position(Math.min(ySize, yBuffer.position() - image.getWidth() + yPlane.getRowStride()));
+                    }
+                    barrier.countDown();
                 }
-                vBuffer.position(Math.min(vSize, vBuffer.position() + chromaGap));
-                uBuffer.position(Math.min(uSize, uBuffer.position() + chromaGap));
+            });
+
+            // U plane
+            for (int i = 0; i < maxUThreads; i++) {
+                final int numOfRows = i * chromaHeight / maxUThreads;
+                final int initialPosition = image.getWidth() * image.getHeight();
+                sExecutor.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        // Interleave the u and v frames, filling up the rest of the buffer
+                        try {
+                            int position = initialPosition;
+                            for (int row = 0; row < numOfRows; row++) {
+                                for (int col = 0; col < chromaWidth; col++) {
+                                    vBuffer.get(nv21, position++, 1);
+                                    position++;
+                                    vBuffer.position(vBuffer.position() - 1 + vPlane.getPixelStride());
+                                }
+                                vBuffer.position(vBuffer.position() + chromaGap);
+                            }
+                        } catch (Exception e) {
+                            // no-op, cheaper than checking with Math.min
+                        }
+                        barrier.countDown();
+                    }
+                });
             }
 
+            // V plane
+            for (int i = 0; i < maxVThreads; i++) {
+                sExecutor.execute(new Runnable() {
+                    @Override
+                    public void run() {
+                        // Interleave the u and v frames, filling up the rest of the buffer
+                        try {
+                            int position = (image.getWidth() * image.getHeight());
+                            for (int row = 0; row < chromaHeight; row++) {
+                                for (int col = 0; col < chromaWidth; col++) {
+                                    position++;
+                                    uBuffer.get(nv21, position++, 1);
+                                    uBuffer.position(uBuffer.position() - 1 + uPlane.getPixelStride());
+                                }
+                                uBuffer.position(uBuffer.position() + chromaGap);
+                            }
+                        } catch (Exception e) {
+                            // no-op, cheaper than checking with Math.min
+                        }
+                        barrier.countDown();
+                    }
+                });
+            }
+
+            try {
+                barrier.await();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+
+            Log.d(TAG, "YUV conversion took " + (System.currentTimeMillis()-start) + " millis");
+
             if (DEBUG) {
-                Log.d(TAG, String.format("nv21{size=%d, position=%d}", nv21.length, position));
+                Log.d(TAG, String.format("nv21{size=%d}", nv21.length));
             }
 
             return nv21;

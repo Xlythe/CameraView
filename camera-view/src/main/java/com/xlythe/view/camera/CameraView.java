@@ -609,7 +609,9 @@ public class CameraView extends FrameLayout {
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         // Disable pinch-to-zoom while a preview is visible.
-        if (mImagePendingConfirmation != null || mVideoPendingConfirmation != null) {
+        if (mImagePendingConfirmation != null
+                || mVideoPendingConfirmation != null
+                || mCameraModule.isPaused()) {
             return false;
         }
 

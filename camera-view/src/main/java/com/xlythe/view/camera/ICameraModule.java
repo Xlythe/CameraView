@@ -22,6 +22,11 @@ public abstract class ICameraModule {
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;
     private CameraView.OnVideoCapturedListener mOnVideoCapturedListener;
 
+    /**
+     * If true, the preview should be paused.
+     */
+    private boolean mIsPaused = false;
+
     public ICameraModule(CameraView view) {
         mView = view;
     }
@@ -177,9 +182,21 @@ public abstract class ICameraModule {
         return false;
     }
 
-    public void pause() {}
+    public void pause() {
+        mIsPaused = true;
+    }
 
-    public void resume() {}
+    public void resume() {
+        mIsPaused = false;
+    }
+
+    public boolean isPaused() {
+        return mIsPaused;
+    }
+
+    public void setPaused(boolean paused) {
+        mIsPaused = paused;
+    }
 
     public Parcelable onSaveInstanceState() {
         return null;

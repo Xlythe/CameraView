@@ -31,7 +31,7 @@
             android:layout_width="0dp"
             android:layout_height="match_parent"
             android:layout_weight="1"
-            camera:quality="high" />
+            camera:quality="max" />
 
         <LinearLayout
             android:layout_width="125dp"

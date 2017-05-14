@@ -93,11 +93,6 @@ public class Camera2Module extends ICameraModule {
     private boolean mIsOpen = false;
 
     /**
-     * If true, the preview should be paused.
-     */
-    private boolean mIsPaused = false;
-
-    /**
      * If true, we are currently recording.
      */
     private boolean mIsRecording = false;
@@ -206,7 +201,7 @@ public class Camera2Module extends ICameraModule {
                         try {
                             mCaptureSession = cameraCaptureSession;
                             mActiveSession = session;
-                            if (!mIsPaused) {
+                            if (!isPaused()) {
                                 session.onAvailable(mCameraDevice, mCaptureSession);
                             }
                             if (mZoomLevel != 0) {
@@ -265,7 +260,7 @@ public class Camera2Module extends ICameraModule {
                 mCameraDevice.close();
                 mCameraDevice = null;
             }
-            mIsPaused = false;
+            setPaused(false);
             mIsOpen = false;
         }
         if (shutdownThread) {
@@ -346,7 +341,7 @@ public class Camera2Module extends ICameraModule {
 
             // Now we can update our request
             mActiveSession.setMeteringRectangle(new MeteringRectangle(metering, MeteringRectangle.METERING_WEIGHT_MAX));
-            if (!mIsPaused) {
+            if (!isPaused()) {
                 mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
             }
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
@@ -406,7 +401,7 @@ public class Camera2Module extends ICameraModule {
                 return;
             }
             mActiveSession.setCropRegion(cropRegion);
-            if (!mIsPaused) {
+            if (!isPaused()) {
                 mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
             }
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
@@ -466,13 +461,13 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public synchronized void pause() {
-        if (!mIsPaused) {
+        if (!isPaused()) {
             try {
                 mCaptureSession.stopRepeating();
             } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
                 Log.e(TAG, "Failed to pause the camera", e);
             }
-            mIsPaused = true;
+            super.pause();
         } else {
             if (DEBUG) {
                 Log.w(TAG, "Cannot pause. Was never unpaused.");
@@ -482,13 +477,13 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public synchronized void resume() {
-        if (mIsPaused) {
+        if (isPaused()) {
             try {
                 mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
             } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
-                Log.e(TAG, "Failed to pause the camera", e);
+                Log.e(TAG, "Failed to resume the camera", e);
             }
-            mIsPaused = false;
+            super.resume();
         } else {
             if (DEBUG) {
                 Log.w(TAG, "Cannot resume. Was never paused.");
