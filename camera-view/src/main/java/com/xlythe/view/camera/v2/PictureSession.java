@@ -37,6 +37,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
@@ -50,7 +51,8 @@ class PictureSession extends PreviewSession {
     private static final int IMAGE_FORMAT_DEFAULT = ImageFormat.JPEG;
     private static final int IMAGE_FORMAT_MAX = ImageFormat.YUV_420_888;
 
-    private static final ExecutorService sExecutor = Executors.newFixedThreadPool(12);
+    private static final int MAX_PROCESSING_THREADS = 131;
+    private static final ExecutorService sExecutor = Executors.newFixedThreadPool(MAX_PROCESSING_THREADS);
 
     private final PictureSurface mPictureSurface;
 
@@ -190,6 +192,10 @@ class PictureSession extends PreviewSession {
             return data;
         }
 
+        /**
+         * Converts from YUV_420_888 to NV21. This involves stripping the padding from the Y plane
+         * and interleaving the U and V planes into a single byte array.
+         */
         private static byte[] YUV_420_888toNV21(final Image image) {
             final Image.Plane yPlane = image.getPlanes()[0];
             final Image.Plane uPlane = image.getPlanes()[1];
@@ -221,14 +227,17 @@ class PictureSession extends PreviewSession {
                 Log.d(TAG, String.format("chromaGap=%d", chromaGap));
             }
 
-            final byte[] nv21 = new byte[ySize + (image.getWidth() * image.getHeight() / 2)];
+            final byte[] nv21 = new byte[(int) (1.5 * image.getWidth() * image.getHeight())];
+
+            final int maxYThreads = 1;
+            final int maxUThreads, maxVThreads;
+            maxUThreads = maxVThreads = Math.max(1, (MAX_PROCESSING_THREADS - maxYThreads) / 2);
+            final CountDownLatch barrier = new CountDownLatch(maxYThreads + maxUThreads + maxVThreads);
+            Log.d(TAG, String.format("maxYThreads=%d", maxYThreads));
+            Log.d(TAG, String.format("maxUThreads=%d", maxUThreads));
+            Log.d(TAG, String.format("maxVThreads=%d", maxVThreads));
 
             long start = System.currentTimeMillis();
-            int maxYThreads = 1;
-            final int maxUThreads = 20;
-            int maxVThreads = 20;
-            int maxThreads = maxYThreads + maxUThreads + maxVThreads;
-            final CountDownLatch barrier = new CountDownLatch(maxThreads);
 
             // Y plane
             sExecutor.execute(new Runnable() {
@@ -244,28 +253,53 @@ class PictureSession extends PreviewSession {
                     barrier.countDown();
                 }
             });
+            final int uvPositionOffset = image.getWidth() * image.getHeight();
 
             // U plane
+            final AtomicInteger asdf = new AtomicInteger(0);
             for (int i = 0; i < maxUThreads; i++) {
-                final int numOfRows = i * chromaHeight / maxUThreads;
-                final int initialPosition = image.getWidth() * image.getHeight();
+                // Each thread will iterate over this may rows
+                final int rowsPerIteration = chromaHeight / maxUThreads;
+
+                // The thread will begin at this row
+                final int initialRow = i * rowsPerIteration;
+
+                // And end at this row
+                final int lastRow = (i + 1) * rowsPerIteration;
+
+                // Filling up the NV21 array starting at this position
+                final int initialPosition = uvPositionOffset + (i * chromaWidth * 2 * rowsPerIteration);
+
+                // Using this buffer
+                final ByteBuffer buffer = uBuffer.duplicate();
+
+                if (DEBUG) {
+                    Log.d(TAG, String.format("rowsPerIteration=%d, initialRow=%d, lastRow=%d, initialPosition=%d",
+                            rowsPerIteration, initialRow, lastRow, initialPosition));
+                }
+
                 sExecutor.execute(new Runnable() {
                     @Override
                     public void run() {
+                        long start = System.currentTimeMillis();
                         // Interleave the u and v frames, filling up the rest of the buffer
                         try {
                             int position = initialPosition;
-                            for (int row = 0; row < numOfRows; row++) {
+                            for (int row = initialRow; row < lastRow; row++) {
                                 for (int col = 0; col < chromaWidth; col++) {
-                                    vBuffer.get(nv21, position++, 1);
+                                    asdf.getAndIncrement();
                                     position++;
-                                    vBuffer.position(vBuffer.position() - 1 + vPlane.getPixelStride());
+                                    buffer.get(nv21, position++, 1);
+                                    buffer.position(buffer.position() - 1 + uPlane.getPixelStride());
                                 }
-                                vBuffer.position(vBuffer.position() + chromaGap);
+                                buffer.position(buffer.position() + chromaGap);
                             }
+                            Log.d(TAG, "last pos: " + position);
                         } catch (Exception e) {
                             // no-op, cheaper than checking with Math.min
                         }
+                        long end = System.currentTimeMillis();
+                        Log.d(TAG, "time: " + (end - start));
                         barrier.countDown();
                     }
                 });
@@ -273,19 +307,39 @@ class PictureSession extends PreviewSession {
 
             // V plane
             for (int i = 0; i < maxVThreads; i++) {
+                // Each thread will iterate over this may rows
+                final int rowsPerIteration = chromaHeight / maxVThreads;
+
+                // The thread will begin at this row
+                final int initialRow = i * rowsPerIteration;
+
+                // And end at this row
+                final int lastRow = (i + 1) * rowsPerIteration;
+
+                // Filling up the NV21 array starting at this position
+                final int initialPosition = uvPositionOffset + (i * chromaWidth * 2 * rowsPerIteration);
+
+                // Using this buffer
+                final ByteBuffer buffer = vBuffer.duplicate();
+
+                if (DEBUG) {
+                    Log.d(TAG, String.format("rowsPerIteration=%d, initialRow=%d, lastRow=%d, initialPosition=%d",
+                            rowsPerIteration, initialRow, lastRow, initialPosition));
+                }
+
                 sExecutor.execute(new Runnable() {
                     @Override
                     public void run() {
                         // Interleave the u and v frames, filling up the rest of the buffer
                         try {
-                            int position = (image.getWidth() * image.getHeight());
-                            for (int row = 0; row < chromaHeight; row++) {
+                            int position = initialPosition;
+                            for (int row = initialRow; row < lastRow; row++) {
                                 for (int col = 0; col < chromaWidth; col++) {
+                                    buffer.get(nv21, position++, 1);
                                     position++;
-                                    uBuffer.get(nv21, position++, 1);
-                                    uBuffer.position(uBuffer.position() - 1 + uPlane.getPixelStride());
+                                    buffer.position(buffer.position() - 1 + vPlane.getPixelStride());
                                 }
-                                uBuffer.position(uBuffer.position() + chromaGap);
+                                buffer.position(buffer.position() + chromaGap);
                             }
                         } catch (Exception e) {
                             // no-op, cheaper than checking with Math.min
@@ -300,6 +354,7 @@ class PictureSession extends PreviewSession {
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
+            Log.d(TAG, "operations: " + asdf.get());
 
             Log.d(TAG, "YUV conversion took " + (System.currentTimeMillis()-start) + " millis");
 
