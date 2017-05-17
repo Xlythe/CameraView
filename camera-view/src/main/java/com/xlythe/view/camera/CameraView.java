@@ -221,6 +221,7 @@ public class CameraView extends FrameLayout {
     protected Parcelable onSaveInstanceState() {
         Bundle state = new Bundle();
         state.putParcelable(EXTRA_SUPER, super.onSaveInstanceState());
+        state.putParcelable(EXTRA_MODULE, mCameraModule.onSaveInstanceState());
         state.putInt(EXTRA_QUALITY, getQuality().id);
         state.putInt(EXTRA_ZOOM_LEVEL, getZoomLevel());
         state.putBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED, isPinchToZoomEnabled());
@@ -236,7 +237,6 @@ public class CameraView extends FrameLayout {
         if (mVideoPendingConfirmation != null) {
             state.putString(EXTRA_PENDING_VIDEO_FILE_PATH, mVideoPendingConfirmation.getAbsolutePath());
         }
-        state.putParcelable(EXTRA_MODULE, mCameraModule.onSaveInstanceState());
         return state;
     }
 
@@ -245,6 +245,7 @@ public class CameraView extends FrameLayout {
         if (savedState instanceof Bundle) {
             Bundle state = (Bundle) savedState;
             super.onRestoreInstanceState(state.getParcelable(EXTRA_SUPER));
+            mCameraModule.onRestoreInstanceState(state.getParcelable(EXTRA_MODULE));
             setQuality(Quality.fromId(state.getInt(EXTRA_QUALITY)));
             setZoomLevel(state.getInt(EXTRA_ZOOM_LEVEL));
             setPinchToZoomEnabled(state.getBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED));
@@ -267,8 +268,6 @@ public class CameraView extends FrameLayout {
                     showVideoConfirmation(file);
                 }
             }
-
-            mCameraModule.onRestoreInstanceState(state.getParcelable(EXTRA_MODULE));
         } else {
             super.onRestoreInstanceState(savedState);
         }
