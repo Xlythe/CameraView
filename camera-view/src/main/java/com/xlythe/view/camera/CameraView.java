@@ -27,7 +27,6 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
-import com.bumptech.glide.Glide;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
@@ -398,7 +397,7 @@ public class CameraView extends FrameLayout {
         if (isImageConfirmationEnabled()) {
             mCameraModule.pause();
             mImagePreview.setVisibility(View.VISIBLE);
-            Glide.with(getContext()).load(file).into(mImagePreview);
+            Image.with(getContext()).load(file).into(mImagePreview);
             mImagePendingConfirmation = file;
 
             if (getOnImageCapturedListener() != null) {
@@ -503,7 +502,7 @@ public class CameraView extends FrameLayout {
         if (mImagePendingConfirmation == null) {
             throw new IllegalStateException("confirmPicture() called, but no picture was awaiting confirmation");
         }
-        Glide.clear(mImagePreview);
+        Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
         getOnImageCapturedListener().onImageCaptured(mImagePendingConfirmation);
         mImagePendingConfirmation = null;
@@ -517,7 +516,7 @@ public class CameraView extends FrameLayout {
         if (mImagePendingConfirmation == null) {
             throw new IllegalStateException("rejectPicture() called, but no picture was awaiting confirmation");
         }
-        Glide.clear(mImagePreview);
+        Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
         if (!mImagePendingConfirmation.delete()) {
             Log.w(TAG, "Attempted to clean up pending image file, but failed");
