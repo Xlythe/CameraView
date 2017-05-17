@@ -72,9 +72,9 @@ public class Exif {
             case ExifInterface.ORIENTATION_ROTATE_270:
                 return 270;
             case ExifInterface.ORIENTATION_NORMAL:
-                // fall-through
+                // Fall-through
             case ExifInterface.ORIENTATION_UNDEFINED:
-                // fall-through
+                // Fall-through
             default:
                 return 0;
         }
@@ -100,9 +100,9 @@ public class Exif {
             case ExifInterface.ORIENTATION_ROTATE_270:
                 return false;
             case ExifInterface.ORIENTATION_NORMAL:
-                // fall-through
+                // Fall-through
             case ExifInterface.ORIENTATION_UNDEFINED:
-                // fall-through
+                // Fall-through
             default:
                 return false;
         }
@@ -128,9 +128,9 @@ public class Exif {
             case ExifInterface.ORIENTATION_ROTATE_270:
                 return false;
             case ExifInterface.ORIENTATION_NORMAL:
-                // fall-through
+                // Fall-through
             case ExifInterface.ORIENTATION_UNDEFINED:
-                // fall-through
+                // Fall-through
             default:
                 return false;
         }
@@ -201,9 +201,9 @@ public class Exif {
                     orientation = ExifInterface.ORIENTATION_ROTATE_90;
                     break;
                 case ExifInterface.ORIENTATION_NORMAL:
-                    // fall-through
+                    // Fall-through
                 case ExifInterface.ORIENTATION_UNDEFINED:
-                    // fall-through
+                    // Fall-through
                 default:
                     orientation = ExifInterface.ORIENTATION_ROTATE_270;
                     break;
@@ -235,9 +235,9 @@ public class Exif {
                     orientation = ExifInterface.ORIENTATION_NORMAL;
                     break;
                 case ExifInterface.ORIENTATION_NORMAL:
-                    // fall-through
+                    // Fall-through
                 case ExifInterface.ORIENTATION_UNDEFINED:
-                    // fall-through
+                    // Fall-through
                 default:
                     orientation = ExifInterface.ORIENTATION_ROTATE_90;
                     break;
@@ -271,9 +271,9 @@ public class Exif {
                 orientation = ExifInterface.ORIENTATION_TRANSPOSE;
                 break;
             case ExifInterface.ORIENTATION_NORMAL:
-                // fall-through
+                // Fall-through
             case ExifInterface.ORIENTATION_UNDEFINED:
-                // fall-through
+                // Fall-through
             default:
                 orientation = ExifInterface.ORIENTATION_FLIP_VERTICAL;
                 break;
@@ -306,9 +306,9 @@ public class Exif {
                 orientation = ExifInterface.ORIENTATION_TRANSVERSE;
                 break;
             case ExifInterface.ORIENTATION_NORMAL:
-                // fall-through
+                // Fall-through
             case ExifInterface.ORIENTATION_UNDEFINED:
-                // fall-through
+                // Fall-through
             default:
                 orientation = ExifInterface.ORIENTATION_FLIP_HORIZONTAL;
                 break;

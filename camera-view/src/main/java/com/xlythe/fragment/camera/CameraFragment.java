@@ -505,7 +505,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                     if (mViewBoundsRect.contains(v.getLeft() + (int) event.getX(), v.getTop() + (int) event.getY())) {
                         break;
                     }
-                    // Fall through
+                    // Fall-through
                 case MotionEvent.ACTION_CANCEL:
                     clearHandler();
                     if (delta() > LONG_PRESS && (mCamera.getMaxVideoDuration() <= 0 || delta() < mCamera.getMaxVideoDuration())) {

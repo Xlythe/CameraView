@@ -664,7 +664,7 @@ public class CameraView extends FrameLayout {
         float tempf = -1f;
         switch (relativeCameraOrientation) {
             case 90:
-                // Fall through
+                // Fall-through
             case 270:
                 // We're horizontal. Swap width/height. Swap x/y.
                 temp = width;
@@ -678,7 +678,7 @@ public class CameraView extends FrameLayout {
         }
         switch (relativeCameraOrientation) {
             case 180:
-                // Fall through
+                // Fall-through
             case 270:
                 // We're upside down. Fix x/y.
                 x = width - x;

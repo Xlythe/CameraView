@@ -212,6 +212,7 @@ abstract class SessionImpl implements Camera2Module.Session {
                         return Collections.max(availableSizes, new CompareSizesByArea());
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a low quality size");
+                    // Fall-through
                 case MEDIUM:
                     availableSizes = getSizes(choices, CameraView.Quality.MEDIUM, recommendedSize);
                     if (!availableSizes.isEmpty()) {
@@ -223,6 +224,7 @@ abstract class SessionImpl implements Camera2Module.Session {
                         return Collections.max(availableSizes, new CompareSizesByArea());
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size");
+                    // Fall-through
                 case HIGH:
                     availableSizes = getSizes(choices, CameraView.Quality.HIGH, recommendedSize);
                     if (!availableSizes.isEmpty()) {
@@ -234,6 +236,7 @@ abstract class SessionImpl implements Camera2Module.Session {
                         return Collections.max(availableSizes, new CompareSizesByArea());
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a high quality size");
+                    // Fall-through
                 case MAX:
                     return Collections.max(choices, new CompareSizesByArea());
                 default:
