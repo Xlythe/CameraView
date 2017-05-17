@@ -8,9 +8,11 @@ import android.graphics.SurfaceTexture;
 import android.media.AudioManager;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
+import android.os.Build;
 import android.support.annotation.Nullable;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
 
@@ -37,6 +39,9 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     // An optional listener for when videos have reached the end
     @Nullable private MediaPlayer.OnCompletionListener mOnCompletionListener;
+
+    // An optional listener for when videos are paused/played
+    @Nullable private EventListener mEventListener;
 
     // If true, the video should be mirrored
     private boolean mIsMirrored = false;
@@ -108,7 +113,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
         if (DEBUG) Log.d(TAG, "Texture destroyed");
         mIsAvailable = false;
-        mIsPlaying = false;
+        setPlayingState(false);
 
         ensureMediaPlayer();
         mMediaPlayer.release();
@@ -132,7 +137,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         mMediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
             @Override
             public void onCompletion(MediaPlayer mediaPlayer) {
-                mIsPlaying = false;
+                setPlayingState(false);
                 if (mOnCompletionListener != null) {
                     mOnCompletionListener.onCompletion(mediaPlayer);
                 }
@@ -142,6 +147,10 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
     public void setOnCompletionListener(MediaPlayer.OnCompletionListener listener) {
         mOnCompletionListener = listener;
+    }
+
+    public void setEventListener(EventListener listener) {
+        mEventListener = listener;
     }
 
     protected void prepare() {
@@ -155,9 +164,15 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
             retriever.setDataSource(fileDescriptor);
             int width = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
             int height = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+            int rotation = Build.VERSION.SDK_INT < 17 ? 0 : extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
             retriever.release();
-            if (DEBUG) Log.d(TAG, String.format("Video metadata: width=%d, height=%d", width, height));
+            if (DEBUG) Log.d(TAG, String.format("Video metadata: width=%d, height=%d, rotation=%d", width, height, rotation));
 
+            if (rotation == 90 || rotation == 270) {
+                int temp = width;
+                width = height;
+                height = temp;
+            }
             transformPreview(width, height);
 
             Surface surface = new Surface(getSurfaceTexture());
@@ -223,7 +238,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
 
         try {
             mMediaPlayer.start();
-            mIsPlaying = true;
+            setPlayingState(true);
             return true;
         } catch (IllegalStateException e) {
             if (DEBUG) e.printStackTrace();
@@ -234,14 +249,15 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     public boolean pause() {
         if (DEBUG) Log.d(TAG, "pause()");
         ensureMediaPlayer();
-        mIsPlaying = false;
 
         try {
             mMediaPlayer.pause();
+            setPlayingState(false);
             return true;
         } catch (IllegalStateException e) {
             if (DEBUG) e.printStackTrace();
         }
+
         return false;
     }
 
@@ -253,6 +269,19 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
             if (DEBUG) e.printStackTrace();
         }
         return false;
+    }
+
+    private void setPlayingState(boolean state) {
+        if (mIsPlaying != state) {
+            mIsPlaying = state;
+            if (mEventListener != null) {
+                if (mIsPlaying) {
+                    mEventListener.onPlay();
+                } else {
+                    mEventListener.onPause();
+                }
+            }
+        }
     }
 
     public void setShouldMirror(boolean mirror) {
@@ -273,14 +302,6 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         int viewHeight = getHeight();
 
         Matrix matrix = new Matrix();
-
-        // Usually, we'd check device orientation. However, on the Pixel C, the orientation is
-        // reversed from what you'd expect. What we really care about is width/height ratio.
-        if (viewWidth < viewHeight) {
-            int temp = videoWidth;
-            videoWidth = videoHeight;
-            videoHeight = temp;
-        }
 
         float aspectRatio = (float) videoHeight / (float) videoWidth;
         int newWidth, newHeight;
@@ -335,5 +356,37 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
             setTransform(mOriginalMatrix);
             mOriginalMatrix = null;
         }
+    }
+
+    private void onTap() {
+        if (isPlaying()) {
+            pause();
+        } else {
+            play();
+        }
+    }
+
+    @Override
+    public boolean onTouchEvent(MotionEvent event) {
+        if (!super.onTouchEvent(event)) {
+            switch (event.getAction()) {
+                case MotionEvent.ACTION_DOWN:
+                    setPressed(true);
+                    break;
+                case MotionEvent.ACTION_CANCEL:
+                    setPressed(false);
+                    break;
+                case MotionEvent.ACTION_UP:
+                    onTap();
+                    setPressed(false);
+                    break;
+            }
+        }
+        return true;
+    }
+
+    public interface EventListener {
+        void onPlay();
+        void onPause();
     }
 }
