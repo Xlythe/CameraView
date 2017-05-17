@@ -25,12 +25,6 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
 class VideoSession extends PreviewSession {
-    // TODO Figure out why camera crashes when we use a size higher than 4k
-    private static final Size SIZE_4K = new Size(3840, 2160);
-    private static final Size SIZE_1080P = new Size(1920, 1080);
-    private static final Size SIZE_720P = new Size(1280, 720);
-    private static final Size SIZE_480P = new Size(640, 480);
-
     private final VideoSurface mVideoSurface;
 
     VideoSession(Camera2Module camera2Module, File file) {
