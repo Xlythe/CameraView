@@ -69,7 +69,7 @@ public class Image {
         }
 
         @Override
-        protected Bitmap doInBackground(File[] params) {
+        protected Bitmap doInBackground(File... params) {
             try {
                 File file = params[0];
                 Exif exif = new Exif(file);
