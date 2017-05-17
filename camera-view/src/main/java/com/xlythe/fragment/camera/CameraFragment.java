@@ -344,7 +344,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                 // After confirming/rejecting, show our buttons again
                 mConfirm.setVisibility(View.GONE);
                 mCapture.setVisibility(View.VISIBLE);
-                if (mCancel!= null) {
+                if (mCancel != null) {
                     mCancel.setVisibility(View.GONE);
                 }
                 if (mToggle != null) {
