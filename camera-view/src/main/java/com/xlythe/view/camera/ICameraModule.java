@@ -198,6 +198,10 @@ public abstract class ICameraModule {
         mIsPaused = paused;
     }
 
+    public boolean isPaused() {
+        return false;
+    }
+
     public Parcelable onSaveInstanceState() {
         return null;
     }
@@ -221,10 +225,6 @@ public abstract class ICameraModule {
     }
 
     public static int getRelativeImageOrientation(int displayRotation, int sensorOrientation, boolean isFrontFacing, boolean compensateForMirroring) {
-        if (DEBUG) {
-            Log.d(TAG, String.format("getRelativeImageOrientation displayRotation=%s, sensorOrientation=%s, isFrontFacing=%s, compensateForMirroring=%s",
-                    displayRotation, sensorOrientation, isFrontFacing, compensateForMirroring));
-        }
         int result;
         if (isFrontFacing) {
             result = (sensorOrientation + displayRotation) % 360;
@@ -235,7 +235,10 @@ public abstract class ICameraModule {
             result = (sensorOrientation - displayRotation + 360) % 360;
         }
         if (DEBUG) {
-            Log.d(TAG, String.format("getRelativeImageOrientation result=%s", result));
+            Log.d(TAG, String.format("getRelativeImageOrientation: displayRotation=%s, "
+                            + "sensorOrientation=%s, isFrontFacing=%s, compensateForMirroring=%s, "
+                            + "result=%s",
+                    displayRotation, sensorOrientation, isFrontFacing, compensateForMirroring, result));
         }
         return result;
     }

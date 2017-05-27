@@ -27,7 +27,6 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
-import com.bumptech.glide.Glide;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
@@ -222,6 +221,7 @@ public class CameraView extends FrameLayout {
     protected Parcelable onSaveInstanceState() {
         Bundle state = new Bundle();
         state.putParcelable(EXTRA_SUPER, super.onSaveInstanceState());
+        state.putParcelable(EXTRA_MODULE, mCameraModule.onSaveInstanceState());
         state.putInt(EXTRA_QUALITY, getQuality().id);
         state.putInt(EXTRA_ZOOM_LEVEL, getZoomLevel());
         state.putBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED, isPinchToZoomEnabled());
@@ -237,7 +237,6 @@ public class CameraView extends FrameLayout {
         if (mVideoPendingConfirmation != null) {
             state.putString(EXTRA_PENDING_VIDEO_FILE_PATH, mVideoPendingConfirmation.getAbsolutePath());
         }
-        state.putParcelable(EXTRA_MODULE, mCameraModule.onSaveInstanceState());
         return state;
     }
 
@@ -246,6 +245,7 @@ public class CameraView extends FrameLayout {
         if (savedState instanceof Bundle) {
             Bundle state = (Bundle) savedState;
             super.onRestoreInstanceState(state.getParcelable(EXTRA_SUPER));
+            mCameraModule.onRestoreInstanceState(state.getParcelable(EXTRA_MODULE));
             setQuality(Quality.fromId(state.getInt(EXTRA_QUALITY)));
             setZoomLevel(state.getInt(EXTRA_ZOOM_LEVEL));
             setPinchToZoomEnabled(state.getBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED));
@@ -268,8 +268,6 @@ public class CameraView extends FrameLayout {
                     showVideoConfirmation(file);
                 }
             }
-
-            mCameraModule.onRestoreInstanceState(state.getParcelable(EXTRA_MODULE));
         } else {
             super.onRestoreInstanceState(savedState);
         }
@@ -398,7 +396,7 @@ public class CameraView extends FrameLayout {
         if (isImageConfirmationEnabled()) {
             mCameraModule.pause();
             mImagePreview.setVisibility(View.VISIBLE);
-            Glide.with(getContext()).load(file).into(mImagePreview);
+            Image.with(getContext()).load(file).into(mImagePreview);
             mImagePendingConfirmation = file;
 
             if (getOnImageCapturedListener() != null) {
@@ -485,6 +483,14 @@ public class CameraView extends FrameLayout {
 
     protected void onClose() {
         mCameraModule.close();
+
+        // Destroy the TextureView we used for the previous round of camera activity. This is
+        // because the TextureView will continue to show a bitmap of the old view until the camera
+        // is able to draw to it again. We'd rather clear the TextureView, but since there's no such
+        // way, we destroy it instead.
+        removeView(mCameraView);
+        addView(mCameraView = new TextureView(getContext()), 0);
+        mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
     }
 
     public void takePicture(File file) {
@@ -503,7 +509,7 @@ public class CameraView extends FrameLayout {
         if (mImagePendingConfirmation == null) {
             throw new IllegalStateException("confirmPicture() called, but no picture was awaiting confirmation");
         }
-        Glide.clear(mImagePreview);
+        Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
         getOnImageCapturedListener().onImageCaptured(mImagePendingConfirmation);
         mImagePendingConfirmation = null;
@@ -517,7 +523,7 @@ public class CameraView extends FrameLayout {
         if (mImagePendingConfirmation == null) {
             throw new IllegalStateException("rejectPicture() called, but no picture was awaiting confirmation");
         }
-        Glide.clear(mImagePreview);
+        Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
         if (!mImagePendingConfirmation.delete()) {
             Log.w(TAG, "Attempted to clean up pending image file, but failed");
@@ -665,7 +671,7 @@ public class CameraView extends FrameLayout {
         float tempf = -1f;
         switch (relativeCameraOrientation) {
             case 90:
-                // Fall through
+                // Fall-through
             case 270:
                 // We're horizontal. Swap width/height. Swap x/y.
                 temp = width;
@@ -679,7 +685,7 @@ public class CameraView extends FrameLayout {
         }
         switch (relativeCameraOrientation) {
             case 180:
-                // Fall through
+                // Fall-through
             case 270:
                 // We're upside down. Fix x/y.
                 x = width - x;

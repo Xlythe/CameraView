@@ -21,6 +21,7 @@ import com.xlythe.view.camera.PermissionChecker;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -32,6 +33,11 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 abstract class SessionImpl implements Camera2Module.Session {
     private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
     private static final long GPS_TIMEOUT_MILLIS = 10;
+
+    static final Size SIZE_4K = new Size(3840, 2160);
+    static final Size SIZE_1080P = new Size(1920, 1080);
+    static final Size SIZE_720P = new Size(1280, 720);
+    static final Size SIZE_480P = new Size(640, 480);
 
     private final Camera2Module mCamera2Module;
 
@@ -134,7 +140,7 @@ abstract class SessionImpl implements Camera2Module.Session {
 
         void initialize(Size size) {
             if (DEBUG) {
-                Log.d(TAG, String.format("Initializing %s with width=%s and height=%s", getClass().getSimpleName(), size.getWidth(), size.getHeight()));
+                Log.d(TAG, String.format("Initialized %s with width=%s and height=%s", getClass().getSimpleName(), size.getWidth(), size.getHeight()));
             }
             mSize = size;
         }
@@ -199,46 +205,50 @@ abstract class SessionImpl implements Camera2Module.Session {
             if (DEBUG) {
                 Log.d(TAG, "Choosing from sizes " + choices);
             }
+            Comparator<Size> comparator = new CompareSizesByArea();
             List<Size> availableSizes;
             switch (getQuality()) {
                 case LOW:
                     availableSizes = getSizes(choices, CameraView.Quality.LOW, recommendedSize);
                     if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
+                        return Collections.max(availableSizes, comparator);
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a low quality size with the same aspect ratio as the preview");
                     availableSizes = getSizes(choices, CameraView.Quality.LOW);
                     if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
+                        return Collections.max(availableSizes, comparator);
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a low quality size");
+                    // Fall-through
                 case MEDIUM:
                     availableSizes = getSizes(choices, CameraView.Quality.MEDIUM, recommendedSize);
                     if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
+                        return Collections.max(availableSizes, comparator);
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size with the same aspect ratio as the preview");
                     availableSizes = getSizes(choices, CameraView.Quality.MEDIUM);
                     if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
+                        return Collections.max(availableSizes, comparator);
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size");
+                    // Fall-through
                 case HIGH:
                     availableSizes = getSizes(choices, CameraView.Quality.HIGH, recommendedSize);
                     if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
+                        return Collections.max(availableSizes, comparator);
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a high quality size with the same aspect ratio as the preview");
                     availableSizes = getSizes(choices, CameraView.Quality.HIGH);
                     if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, new CompareSizesByArea());
+                        return Collections.max(availableSizes, comparator);
                     }
                     if (DEBUG) Log.e(TAG, "Couldn't find a high quality size");
+                    // Fall-through
                 case MAX:
-                    return Collections.max(choices, new CompareSizesByArea());
+                    return Collections.max(choices, comparator);
                 default:
                     Log.e(TAG, "Couldn't find a suitable size");
-                    return Collections.max(choices, new CompareSizesByArea());
+                    return Collections.max(choices, comparator);
             }
         }
 
@@ -249,10 +259,19 @@ abstract class SessionImpl implements Camera2Module.Session {
         static List<Size> getSizes(List<Size> choices, CameraView.Quality quality, @Nullable Size recommendedSize) {
             List<Size> availableSizes = new ArrayList<>(choices.size());
             for (Size size : choices) {
-                if (quality == CameraView.Quality.MEDIUM && size.getHeight() > 720) {
+                if (quality == CameraView.Quality.HIGH
+                        && (size.getWidth() > SIZE_1080P.getWidth()
+                        || size.getHeight() > SIZE_1080P.getHeight())) {
                     continue;
                 }
-                if (quality == CameraView.Quality.LOW && size.getHeight() > 420) {
+                if (quality == CameraView.Quality.MEDIUM
+                        && (size.getWidth() > SIZE_720P.getWidth()
+                        || size.getHeight() > SIZE_720P.getHeight())) {
+                    continue;
+                }
+                if (quality == CameraView.Quality.LOW
+                        && (size.getWidth() > SIZE_480P.getWidth()
+                        || size.getHeight() > SIZE_480P.getHeight())) {
                     continue;
                 }
 
@@ -265,7 +284,7 @@ abstract class SessionImpl implements Camera2Module.Session {
                 }
             }
             if (DEBUG) {
-                Log.d(TAG, "Found available picture sizes: " + availableSizes);
+                Log.d(TAG, "Filtered the choices down to: " + availableSizes);
             }
             return availableSizes;
         }
@@ -299,6 +318,12 @@ abstract class SessionImpl implements Camera2Module.Session {
                 return LocationProvider.getGPSLocation(context, STALE_LOCATION_MILLIS, GPS_TIMEOUT_MILLIS);
             }
             return null;
+        }
+
+        static <T> T[] concat(T[] first, T[] second) {
+            T[] result = Arrays.copyOf(first, first.length + second.length);
+            System.arraycopy(second, 0, result, first.length, second.length);
+            return result;
         }
     }
 }

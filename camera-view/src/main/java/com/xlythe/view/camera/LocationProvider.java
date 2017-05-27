@@ -19,14 +19,14 @@ public class LocationProvider {
     @Nullable
     @WorkerThread
     @RequiresPermission(Manifest.permission.ACCESS_FINE_LOCATION)
-    public static Location getGPSLocation(Context context, long locationCacheTimeout, long queryTimeoutMillis) {
+    public static Location getGPSLocation(Context context, long locationCacheAllowance, long queryTimeoutMillis) {
         if (!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS)) {
             return null;
         }
 
         LocationManager locationManager = (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
         Location location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-        if (location == null || location.getTime() < locationCacheTimeout) {
+        if (location == null || location.getTime() < System.currentTimeMillis() - locationCacheAllowance) {
             LocationCallback locationCallback = new LocationCallback();
             locationManager.requestSingleUpdate(LocationManager.GPS_PROVIDER, locationCallback, Looper.getMainLooper());
             return locationCallback.await(queryTimeoutMillis, TimeUnit.MILLISECONDS);

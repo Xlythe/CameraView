@@ -375,22 +375,17 @@ class PictureSession extends PreviewSession {
 
     private static final class PictureSurface extends CameraSurface {
         private List<Size> getSizes(StreamConfigurationMap map) {
+            Size[] sizes = map.getOutputSizes(getImageFormat(getQuality()));
+
             // Special case for high resolution images (assuming, of course, quality was set to high)
-            if ((getQuality() == CameraView.Quality.MAX
-                    || getQuality() == CameraView.Quality.HIGH) && Build.VERSION.SDK_INT >= 23) {
-                Size[] sizes = map.getHighResolutionOutputSizes(getImageFormat(getQuality()));
-                if (sizes != null) {
-                    List<Size> availableSizes = isRaw(getImageFormat(getQuality()))
-                            ? Arrays.asList(sizes) : filter(sizes);
-                    if (availableSizes.size() > 0) {
-                        return availableSizes;
-                    }
+            if (Build.VERSION.SDK_INT >= 23) {
+                Size[] highResSizes = map.getHighResolutionOutputSizes(getImageFormat(getQuality()));
+                if (highResSizes != null) {
+                    sizes = concat(sizes, highResSizes);
                 }
             }
 
-            // Otherwise, just return the default sizes
-            Size[] sizes = map.getOutputSizes(getImageFormat(getQuality()));
-            return isRaw(getImageFormat(getQuality())) ? Arrays.asList(sizes) : filter(sizes);
+            return Arrays.asList(sizes);
         }
 
         private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
@@ -437,6 +432,7 @@ class PictureSession extends PreviewSession {
 
         @Override
         void initialize(StreamConfigurationMap map) {
+            if (DEBUG) Log.d(TAG, "Initializing PictureSession");
             super.initialize(chooseSize(getSizes(map), mPreviewSurface.mSize));
             mImageReader = ImageReader.newInstance(getWidth(), getHeight(), getImageFormat(getQuality()), 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getBackgroundHandler());
