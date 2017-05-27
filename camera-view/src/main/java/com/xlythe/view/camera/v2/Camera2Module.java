@@ -492,11 +492,6 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public boolean isPaused() {
-        return mIsPaused;
-    }
-
-    @Override
     public synchronized void takePicture(File file) {
         if (mActiveSession != null && mActiveSession instanceof PictureSession) {
             PictureSession pictureSession = (PictureSession) mActiveSession;

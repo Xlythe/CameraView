@@ -198,10 +198,6 @@ public abstract class ICameraModule {
         mIsPaused = paused;
     }
 
-    public boolean isPaused() {
-        return false;
-    }
-
     public Parcelable onSaveInstanceState() {
         return null;
     }

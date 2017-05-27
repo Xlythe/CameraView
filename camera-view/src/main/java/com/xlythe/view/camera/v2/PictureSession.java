@@ -223,12 +223,7 @@ class PictureSession extends PreviewSession {
 
             final byte[] nv21 = new byte[ySize + (image.getWidth() * image.getHeight() / 2)];
 
-            long start = System.currentTimeMillis();
-            int maxYThreads = 1;
-            final int maxUThreads = 20;
-            int maxVThreads = 20;
-            int maxThreads = maxYThreads + maxUThreads + maxVThreads;
-            final CountDownLatch barrier = new CountDownLatch(maxThreads);
+            final CountDownLatch barrier = new CountDownLatch(3);
 
             // Y plane
             sExecutor.execute(new Runnable() {
@@ -246,65 +241,53 @@ class PictureSession extends PreviewSession {
             });
 
             // U plane
-            for (int i = 0; i < maxUThreads; i++) {
-                final int numOfRows = i * chromaHeight / maxUThreads;
-                final int initialPosition = image.getWidth() * image.getHeight();
-                sExecutor.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        // Interleave the u and v frames, filling up the rest of the buffer
-                        try {
-                            int position = initialPosition;
-                            for (int row = 0; row < numOfRows; row++) {
-                                for (int col = 0; col < chromaWidth; col++) {
-                                    vBuffer.get(nv21, position++, 1);
-                                    position++;
-                                    vBuffer.position(vBuffer.position() - 1 + vPlane.getPixelStride());
-                                }
-                                vBuffer.position(vBuffer.position() + chromaGap);
+            sExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    // Interleave the u and v frames, filling up the rest of the buffer
+                    try {
+                        int position = (image.getWidth() * image.getHeight());
+                        for (int row = 0; row < chromaHeight; row++) {
+                            for (int col = 0; col < chromaWidth; col++) {
+                                vBuffer.get(nv21, position++, 1);
+                                position++;
+                                vBuffer.position(vBuffer.position() - 1 + vPlane.getPixelStride());
                             }
-                        } catch (Exception e) {
-                            // no-op, cheaper than checking with Math.min
+                            vBuffer.position(vBuffer.position() + chromaGap);
                         }
-                        barrier.countDown();
+                    } catch (Exception e) {
+                        // no-op, cheaper than checking with Math.min
                     }
-                });
-            }
+                    barrier.countDown();
+                }
+            });
 
             // V plane
-            for (int i = 0; i < maxVThreads; i++) {
-                sExecutor.execute(new Runnable() {
-                    @Override
-                    public void run() {
-                        // Interleave the u and v frames, filling up the rest of the buffer
-                        try {
-                            int position = (image.getWidth() * image.getHeight());
-                            for (int row = 0; row < chromaHeight; row++) {
-                                for (int col = 0; col < chromaWidth; col++) {
-                                    position++;
-                                    uBuffer.get(nv21, position++, 1);
-                                    uBuffer.position(uBuffer.position() - 1 + uPlane.getPixelStride());
-                                }
-                                uBuffer.position(uBuffer.position() + chromaGap);
+            sExecutor.execute(new Runnable() {
+                @Override
+                public void run() {
+                    // Interleave the u and v frames, filling up the rest of the buffer
+                    try {
+                        int position = (image.getWidth() * image.getHeight());
+                        for (int row = 0; row < chromaHeight; row++) {
+                            for (int col = 0; col < chromaWidth; col++) {
+                                position++;
+                                uBuffer.get(nv21, position++, 1);
+                                uBuffer.position(uBuffer.position() - 1 + uPlane.getPixelStride());
                             }
-                        } catch (Exception e) {
-                            // no-op, cheaper than checking with Math.min
+                            uBuffer.position(uBuffer.position() + chromaGap);
                         }
-                        barrier.countDown();
+                    } catch (Exception e) {
+                        // no-op, cheaper than checking with Math.min
                     }
-                });
-            }
+                    barrier.countDown();
+                }
+            });
 
             try {
                 barrier.await();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-            }
-
-            Log.d(TAG, "YUV conversion took " + (System.currentTimeMillis()-start) + " millis");
-
-            if (DEBUG) {
-                Log.d(TAG, String.format("nv21{size=%d}", nv21.length));
             }
 
             return nv21;
