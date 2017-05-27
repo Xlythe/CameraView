@@ -75,6 +75,10 @@ class PreviewSession extends SessionImpl {
 
     private static final class PreviewSurface extends CameraSurface {
         private Size chooseOptimalSize(List<Size> choices, int viewWidth, int viewHeight) {
+            if (DEBUG) {
+                Log.d(TAG, "Choosing from sizes " + choices);
+            }
+
             // These sizes are all larger than our view port, so we won't have to scale the image up.
             List<Size> availableSizes = new ArrayList<>(choices.size());
             for (Size size : choices) {
@@ -83,17 +87,13 @@ class PreviewSession extends SessionImpl {
                 }
             }
 
-            if (availableSizes.isEmpty()) {
-                Log.e(TAG, "Couldn't find a suitable preview size");
-                availableSizes.add(Collections.max(choices, new CompareSizesByArea()));
-            }
-
             if (DEBUG) {
-                Log.d(TAG, "Found available preview sizes: " + availableSizes);
+                Log.d(TAG, "Filtered the choices down to: " + availableSizes);
             }
 
-            if (getQuality() == CameraView.Quality.MAX) {
-                return Collections.max(availableSizes, new CompareSizesByArea());
+            if (availableSizes.isEmpty()) {
+                Log.e(TAG, "Couldn't find a suitable size");
+                availableSizes.add(Collections.max(choices, new CompareSizesByArea()));
             }
 
             return Collections.min(availableSizes, new CompareSizesByArea());
@@ -111,6 +111,7 @@ class PreviewSession extends SessionImpl {
 
         @Override
         void initialize(StreamConfigurationMap map) {
+            if (DEBUG) Log.d(TAG, "Initializing PreviewSession");
             super.initialize(chooseOptimalSize(getSizes(map), mCameraView.getWidth(), mCameraView.getHeight()));
 
             SurfaceTexture texture = mCameraView.getSurfaceTexture();

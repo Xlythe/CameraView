@@ -21,6 +21,7 @@ import com.xlythe.view.camera.PermissionChecker;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
@@ -139,7 +140,7 @@ abstract class SessionImpl implements Camera2Module.Session {
 
         void initialize(Size size) {
             if (DEBUG) {
-                Log.d(TAG, String.format("Initializing %s with width=%s and height=%s", getClass().getSimpleName(), size.getWidth(), size.getHeight()));
+                Log.d(TAG, String.format("Initialized %s with width=%s and height=%s", getClass().getSimpleName(), size.getWidth(), size.getHeight()));
             }
             mSize = size;
         }
@@ -283,7 +284,7 @@ abstract class SessionImpl implements Camera2Module.Session {
                 }
             }
             if (DEBUG) {
-                Log.d(TAG, "Found available picture sizes: " + availableSizes);
+                Log.d(TAG, "Filtered the choices down to: " + availableSizes);
             }
             return availableSizes;
         }
@@ -317,6 +318,12 @@ abstract class SessionImpl implements Camera2Module.Session {
                 return LocationProvider.getGPSLocation(context, STALE_LOCATION_MILLIS, GPS_TIMEOUT_MILLIS);
             }
             return null;
+        }
+
+        static <T> T[] concat(T[] first, T[] second) {
+            T[] result = Arrays.copyOf(first, first.length + second.length);
+            System.arraycopy(second, 0, result, first.length, second.length);
+            return result;
         }
     }
 }
