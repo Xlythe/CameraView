@@ -550,11 +550,6 @@ public class Camera2Module extends ICameraModule {
         int viewHeight = getHeight();
         int displayOrientation = getDisplayRotation();
         int cameraOrientation = getSensorOrientation(getActiveCamera());
-        if (DEBUG) {
-            Log.d(TAG, String.format("Configuring SurfaceView matrix: "
-                            + "viewWidth=%s, viewHeight=%s, previewWidth=%s, previewHeight=%s, displayOrientation=%s, cameraOrientation=%s",
-                    viewWidth, viewHeight, previewWidth, previewHeight, displayOrientation, cameraOrientation));
-        }
 
         // Camera2 rotates the preview to always face in portrait mode, even if the phone is
         // currently in landscape. This is great for portrait mode, because there's less work to be done.
@@ -632,11 +627,13 @@ public class Camera2Module extends ICameraModule {
         matrix.postRotate(rotation, (int) Math.ceil(viewWidth / 2d), (int) Math.ceil(viewHeight / 2d));
 
         if (DEBUG) {
-            Log.d(TAG, String.format("Result: viewAspectRatio=%s, previewAspectRatio=%s, "
+            Log.d(TAG, String.format("transformPreview: displayOrientation=%s, cameraOrientation=%s, "
+                            + "viewWidth=%s, viewHeight=%s, viewAspectRatio=%s, previewWidth=%s, previewHeight=%s, previewAspectRatio=%s, "
                             + "newWidth=%s, newHeight=%s, scaleX=%s, scaleY=%s, scale=%s, "
                             + "translateX=%s, translateY=%s, rotation=%s",
-                    ((float) viewHeight / (float) viewWidth), aspectRatio, newWidth, newHeight,
-                    scaleX, scaleY, scale, translateX, translateY, rotation));
+                    displayOrientation, cameraOrientation, viewWidth, viewHeight,
+                    ((float) viewHeight / (float) viewWidth), previewWidth, previewHeight, aspectRatio,
+                    newWidth, newHeight, scaleX, scaleY, scale, translateX, translateY, rotation));
         }
 
         setTransform(matrix);

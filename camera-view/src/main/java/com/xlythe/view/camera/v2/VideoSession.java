@@ -19,9 +19,11 @@ import android.view.Surface;
 
 import java.io.File;
 import java.io.IOException;
+import java.util.Arrays;
 import java.util.List;
 
 import static com.xlythe.view.camera.ICameraModule.TAG;
+import static com.xlythe.view.camera.ICameraModule.DEBUG;
 
 @TargetApi(21)
 class VideoSession extends PreviewSession {
@@ -113,43 +115,36 @@ class VideoSession extends PreviewSession {
     private static final class VideoSurface extends CameraSurface {
         private List<Size> getSizes(StreamConfigurationMap map) {
             Size[] sizes = map.getOutputSizes(MediaRecorder.class);
+
+            // StreamConfigurationMap.getOutputSizes(MediaRecorder.class) only tells us if the
+            // camera supports these sizes. It does not tell us if MediaRecorder supports these
+            // sizes, odd as that sounds. Therefore, we need to filter ourselves manually.
             List<Size> filtered;
-            switch (getQuality()) {
-                case MAX:
-                    if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_2160P)) {
-                        filtered = filter(sizes, SIZE_4K);
-                        if (!filtered.isEmpty()) {
-                            return filtered;
-                        }
-                    }
-                    // Fall-through
-                case HIGH:
-                    if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_1080P)) {
-                        filtered = filter(sizes, SIZE_1080P);
-                        if (!filtered.isEmpty()) {
-                            return filtered;
-                        }
-                    }
-                    // Fall-through
-                case MEDIUM:
-                    if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_720P)) {
-                        filtered = filter(sizes, SIZE_720P);
-                        if (!filtered.isEmpty()) {
-                            return filtered;
-                        }
-                    }
-                    // Fall-through
-                case LOW:
-                    if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_480P)) {
-                        filtered = filter(sizes, SIZE_480P);
-                        if (!filtered.isEmpty()) {
-                            return filtered;
-                        }
-                    }
-                    // Fall-through
-                default:
-                    return filter(sizes);
+            if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_2160P)) {
+                filtered = filter(sizes, SIZE_4K);
+                if (!filtered.isEmpty()) {
+                    return filtered;
+                }
             }
+            if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_1080P)) {
+                filtered = filter(sizes, SIZE_1080P);
+                if (!filtered.isEmpty()) {
+                    return filtered;
+                }
+            }
+            if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_720P)) {
+                filtered = filter(sizes, SIZE_720P);
+                if (!filtered.isEmpty()) {
+                    return filtered;
+                }
+            }
+            if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_480P)) {
+                filtered = filter(sizes, SIZE_480P);
+                if (!filtered.isEmpty()) {
+                    return filtered;
+                }
+            }
+            return Arrays.asList(sizes);
         }
 
         private boolean mIsRecordingVideo;
@@ -170,6 +165,7 @@ class VideoSession extends PreviewSession {
 
         @Override
         void initialize(StreamConfigurationMap map) {
+            if (DEBUG) Log.d(TAG, "Initializing VideoSession");
             super.initialize(chooseSize(getSizes(map), mPreviewSurface.mSize));
 
             try {
