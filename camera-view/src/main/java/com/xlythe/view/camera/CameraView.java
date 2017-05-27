@@ -483,6 +483,14 @@ public class CameraView extends FrameLayout {
 
     protected void onClose() {
         mCameraModule.close();
+
+        // Destroy the TextureView we used for the previous round of camera activity. This is
+        // because the TextureView will continue to show a bitmap of the old view until the camera
+        // is able to draw to it again. We'd rather clear the TextureView, but since there's no such
+        // way, we destroy it instead.
+        removeView(mCameraView);
+        addView(mCameraView = new TextureView(getContext()), 0);
+        mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
     }
 
     public void takePicture(File file) {

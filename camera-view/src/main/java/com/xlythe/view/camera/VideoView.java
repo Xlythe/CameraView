@@ -15,15 +15,19 @@ import android.util.Log;
 import android.view.MotionEvent;
 import android.view.Surface;
 import android.view.TextureView;
+import android.widget.FrameLayout;
 
 import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.IOException;
 
-public class VideoView extends TextureView implements TextureView.SurfaceTextureListener {
+public class VideoView extends FrameLayout implements TextureView.SurfaceTextureListener {
     private static final String TAG = VideoView.class.getSimpleName();
     private static final boolean DEBUG = false;
+
+    // The view we draw the video on to
+    private TextureView mTextureView;
 
     // Controls video playback
     private MediaPlayer mMediaPlayer;
@@ -69,8 +73,6 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     }
 
     private void init(Context context, @Nullable AttributeSet attrs) {
-        setSurfaceTextureListener(this);
-
         if (attrs != null) {
             TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.VideoView, 0, 0);
             if (a.hasValue(R.styleable.VideoView_filePath)) {
@@ -90,10 +92,13 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     }
 
     public void setFile(File file) {
-        if (DEBUG) Log.d(TAG, "File set to " + file);
-        this.mFile = file;
-        if (mIsAvailable) {
-            prepare();
+        if (!file.equals(mFile)) {
+            if (DEBUG) Log.d(TAG, "File set to " + file);
+            this.mFile = file;
+            createTextureView();
+            if (mIsAvailable) {
+                prepare();
+            }
         }
     }
 
@@ -175,7 +180,7 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
             }
             transformPreview(width, height);
 
-            Surface surface = new Surface(getSurfaceTexture());
+            Surface surface = new Surface(mTextureView.getSurfaceTexture());
 
             try {
                 mMediaPlayer.stop();
@@ -211,7 +216,6 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
     public void seekToFirstFrame() {
         if (DEBUG) Log.d(TAG, "seekToFirstFrame()");
         ensureMediaPlayer();
-        hideSurface();
 
         try {
             mMediaPlayer.setOnSeekCompleteListener(new MediaPlayer.OnSeekCompleteListener() {
@@ -222,7 +226,6 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
                     if (!mIsPlaying) {
                         mediaPlayer.pause();
                     }
-                    showSurface();
                 }
             });
             mMediaPlayer.start();
@@ -316,8 +319,8 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
         float scaleX = (float) newWidth / (float) viewWidth;
         float scaleY = (float) newHeight / (float) viewHeight;
 
-        int translateX = (int) (viewWidth - newWidth) / 2;
-        int translateY = (int) (viewHeight - newHeight) / 2;
+        int translateX = (viewWidth - newWidth) / 2;
+        int translateY = (viewHeight - newHeight) / 2;
 
         matrix.setScale(scaleX, scaleY);
         matrix.postTranslate(translateX, translateY);
@@ -336,26 +339,20 @@ public class VideoView extends TextureView implements TextureView.SurfaceTexture
                     videoWidth, videoHeight, newWidth, newHeight, scaleX, scaleY, translateX, translateY));
         }
 
-        setTransform(matrix);
+        mTextureView.setTransform(matrix);
     }
 
-    // Hides the Surface, until it's fully prepared.
-    private void hideSurface() {
-        if (mOriginalMatrix == null) {
-            Matrix matrix = new Matrix();
-            getTransform(matrix);
-            mOriginalMatrix = new Matrix(matrix);
-            matrix.postScale(0, 0);
-            setTransform(matrix);
+    private void createTextureView() {
+        // Destroy the TextureView we used for the previous round of video activity. This is
+        // because the TextureView will continue to show a bitmap of the old view until the video
+        // is able to draw to it again. We'd rather clear the TextureView, but since there's no such
+        // way, we destroy it instead.
+        if (mTextureView != null) {
+            removeView(mTextureView);
         }
-    }
-
-    // Translates the Surface back onto the screen, once it's ready to be shown.
-    private void showSurface() {
-        if (mOriginalMatrix != null) {
-            setTransform(mOriginalMatrix);
-            mOriginalMatrix = null;
-        }
+        mIsAvailable = false;
+        addView(mTextureView = new TextureView(getContext()), 0);
+        mTextureView.setSurfaceTextureListener(this);
     }
 
     private void onTap() {
