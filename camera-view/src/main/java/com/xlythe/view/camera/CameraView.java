@@ -2,7 +2,6 @@ package com.xlythe.view.camera;
 
 import android.Manifest;
 import android.annotation.TargetApi;
-import android.app.Activity;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Matrix;
