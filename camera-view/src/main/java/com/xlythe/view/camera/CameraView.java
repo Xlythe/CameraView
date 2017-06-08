@@ -32,6 +32,15 @@ import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
 
+/**
+ * A {@link View} that displays a preview of the camera with methods {@link #takePicture(File)},
+ * {@link #startRecording(File)} and {@link #stopRecording()}.
+ *
+ * Because the Camera is a limited resource and consumes a high amount of power, CameraView must be
+ * opened/closed. It's recommended to call {@link #open()} in
+ * {@link android.app.Activity#onStart()} and {@link #close()} in
+ * {@link android.app.Activity#onStop()}.
+ */
 public class CameraView extends FrameLayout {
     static final String TAG = CameraView.class.getSimpleName();
     static final boolean DEBUG = false;
@@ -58,6 +67,16 @@ public class CameraView extends FrameLayout {
         OPEN, CLOSED, AWAITING_TEXTURE
     }
 
+    /**
+     * Determines the resolution of CameraView's outputs. All resolutions are best attempts, and
+     * will fall to lower qualities if the Android device cannot support them. Resolutions also may
+     * change in the future (if, say, Android adds 8k resolution).
+     *
+     * (*) {@link Quality#MAX} will output at 4k.
+     * (*) {@link Quality#HIGH} will output at 1080p.
+     * (*) {@link Quality#MEDIUM} will output at 720.
+     * (*) {@link Quality#LOW} will output at 480.
+     */
     public enum Quality {
         MAX(0), HIGH(1), MEDIUM(2), LOW(3);
 
@@ -75,6 +94,9 @@ public class CameraView extends FrameLayout {
         }
     }
 
+    /**
+     * Determines the use of the camera's flash when taking pictures.
+     */
     public enum Flash {
         AUTO(0), ON(1), OFF(2);
 
@@ -380,18 +402,38 @@ public class CameraView extends FrameLayout {
         mCameraView.setTransform(matrix);
     }
 
+    /**
+     * When enabled, requires videos to be confirmed before
+     * {@link OnImageCapturedListener#onImageCaptured(File)} is triggered. A preview of the image
+     * will be displayed in CameraView's preview.
+     */
     public void setImageConfirmationEnabled(boolean enabled) {
         mIsImageConfirmationEnabled = enabled;
     }
 
+    /**
+     * When true, {@link #takePicture(File)} will trigger the
+     * {@link OnImageCapturedListener#onImageConfirmation()} callback. To continue,  call
+     * {@link #confirmPicture()}.
+     */
     public boolean isImageConfirmationEnabled() {
         return mIsImageConfirmationEnabled;
     }
 
+    /**
+     * When enabled, requires videos to be confirmed before
+     * {@link OnVideoCapturedListener#onVideoCaptured(File)} is triggered. A preview of the video
+     * will be displayed in CameraView's preview.
+     */
     public void setVideoConfirmationEnabled(boolean enabled) {
         mIsVideoConfirmationEnabled = enabled;
     }
 
+    /**
+     * When true, {@link #startRecording(File)} will trigger the
+     * {@link OnVideoCapturedListener#onVideoConfirmation()} callback. To continue,  call
+     * {@link #confirmVideo()}.
+     */
     public boolean isVideoConfirmationEnabled() {
         return mIsVideoConfirmationEnabled;
     }
@@ -457,35 +499,69 @@ public class CameraView extends FrameLayout {
         }
     }
 
+    /**
+     * Attempts to match image and video outputs to the preview aspect ratio.
+     */
     @TargetApi(21)
     public void setMatchPreviewAspectRatio(boolean enabled) {
         mCameraModule.setMatchPreviewAspectRatio(enabled);
     }
 
+    /**
+     * When enabled, image and video outputs will attempt to match the same aspect ratio used in
+     * the preview. It's advised that this is enabled when using
+     * {@link #setImageConfirmationEnabled(boolean)} and
+     * {@link #setVideoConfirmationEnabled(boolean)} as it provides the least amount of jank when
+     * showing the preview. Having this enabled also ensures that what the user sees is what the
+     * picture/video output.
+     */
     public boolean isMatchPreviewAspectRatioEnabled() {
         return mCameraModule.isMatchPreviewAspectRatioEnabled();
     }
 
+    /**
+     * Sets the quality for image and video outputs.
+     */
     public void setQuality(Quality quality) {
         mCameraModule.setQuality(quality);
     }
 
+    /**
+     * Gets the current quality for image and video outputs.
+     */
     public Quality getQuality() {
         return mCameraModule.getQuality();
     }
 
+    /**
+     * Sets the maximum video duration before {@link OnVideoCapturedListener#onVideoCaptured(File)}
+     * is called automatically. Use {@link #INDEFINITE_VIDEO_DURATION} to disable the timeout.
+     */
     public void setMaxVideoDuration(long duration) {
         mCameraModule.setMaxVideoDuration(duration);
     }
 
+    /**
+     * Returns the maximum duration of videos, or {@link #INDEFINITE_VIDEO_DURATION} if there is
+     * no timeout.
+     */
     public long getMaxVideoDuration() {
         return mCameraModule.getMaxVideoDuration();
     }
 
+    /**
+     * Sets the maximum video size in bytes before
+     * {@link OnVideoCapturedListener#onVideoCaptured(File)} is called automatically. Use
+     * {@link #INDEFINITE_VIDEO_SIZE} to disable the size restriction.
+     */
     public void setMaxVideoSize(long size) {
         mCameraModule.setMaxVideoSize(size);
     }
 
+    /**
+     * Returns the maximum size of videos in bytes, or {@link #INDEFINITE_VIDEO_SIZE} if there is
+     * no timeout.
+     */
     public long getMaxVideoSize() {
         return mCameraModule.getMaxVideoSize();
     }
@@ -506,6 +582,10 @@ public class CameraView extends FrameLayout {
         mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
     }
 
+    /**
+     * Takes a picture and calls {@link OnImageCapturedListener#onImageCaptured(File)} when done.
+     * @param file The destination.
+     */
     public void takePicture(File file) {
         if (isImageConfirmationEnabled()) {
             mCameraModule.pause();
@@ -514,6 +594,9 @@ public class CameraView extends FrameLayout {
         mCameraModule.takePicture(file);
     }
 
+    /**
+     * Confirms a picture that is currently being displayed on the preview.
+     */
     public void confirmPicture() {
         if (isImageConfirmationEnabled()) {
             mCameraModule.resume();
@@ -528,6 +611,9 @@ public class CameraView extends FrameLayout {
         mImagePendingConfirmation = null;
     }
 
+    /**
+     * Rejects a picture that is currently being displayed on the preview.
+     */
     public void rejectPicture() {
         if (isImageConfirmationEnabled()) {
             mCameraModule.resume();
@@ -544,10 +630,17 @@ public class CameraView extends FrameLayout {
         mImagePendingConfirmation = null;
     }
 
+    /**
+     * Takes a video and calls {@link OnVideoCapturedListener#onVideoCaptured(File)} when done.
+     * @param file The destination.
+     */
     public void startRecording(File file) {
         mCameraModule.startRecording(file);
     }
 
+    /**
+     * Stops an in progress video.
+     */
     public void stopRecording() {
         if (isVideoConfirmationEnabled()) {
             mCameraModule.pause();
@@ -556,10 +649,16 @@ public class CameraView extends FrameLayout {
         mCameraModule.stopRecording();
     }
 
+    /**
+     * @return True if currently recording.
+     */
     public boolean isRecording() {
         return mCameraModule.isRecording();
     }
 
+    /**
+     * Confirms a video that is currently being displayed on the preview.
+     */
     public void confirmVideo() {
         if (isVideoConfirmationEnabled()) {
             mCameraModule.resume();
@@ -573,6 +672,9 @@ public class CameraView extends FrameLayout {
         mVideoPendingConfirmation = null;
     }
 
+    /**
+     * Rejects a video that is currently being displayed on the preview.
+     */
     public void rejectVideo() {
         if (isVideoConfirmationEnabled()) {
             mCameraModule.resume();
@@ -589,30 +691,52 @@ public class CameraView extends FrameLayout {
         mVideoPendingConfirmation = null;
     }
 
+    /**
+     * @return True if the device supports a front facing camera.
+     */
     public boolean hasFrontFacingCamera() {
         return mCameraModule.hasFrontFacingCamera();
     }
 
+    /**
+     * @return True if CameraView is currently using a front facing camera.
+     */
     public boolean isUsingFrontFacingCamera() {
         return mCameraModule.isUsingFrontFacingCamera();
     }
 
+    /**
+     * Toggles the active camera to the next available camera. Typically, this toggles between
+     * the front and back facing cameras.
+     */
     public void toggleCamera() {
         mCameraModule.toggleCamera();
     }
 
+    /**
+     * Focuses the camera on the given area. Limited from -1000 to 1000.
+     */
     public void focus(Rect focus, Rect metering) {
         mCameraModule.focus(focus, metering);
     }
 
+    /**
+     * Sets the active flash strategy.
+     */
     public void setFlash(Flash flashMode) {
         mCameraModule.setFlash(flashMode);
     }
 
+    /**
+     * Gets the active flash strategy.
+     */
     public Flash getFlash() {
         return mCameraModule.getFlash();
     }
 
+    /**
+     * @return True if the camera supports flash.
+     */
     public boolean hasFlash() {
         return mCameraModule.hasFlash();
     }
@@ -734,30 +858,51 @@ public class CameraView extends FrameLayout {
         return Math.abs(a - b);
     }
 
+    /**
+     * When enabled, the user can pinch the camera to zoom in/out.
+     */
     public void setPinchToZoomEnabled(boolean enabled) {
         mIsPinchToZoomEnabled = enabled;
     }
 
+    /**
+     * @return True if pinch to zoom is enabled.
+     */
     public boolean isPinchToZoomEnabled() {
         return mIsPinchToZoomEnabled;
     }
 
+    /**
+     * Sets the current zoom level, from 0 to {@link #getMaxZoomLevel()}.
+     */
     public void setZoomLevel(int zoomLevel) {
         mCameraModule.setZoomLevel(zoomLevel);
     }
 
+    /**
+     * @return The current zoom level.
+     */
     public int getZoomLevel() {
         return mCameraModule.getZoomLevel();
     }
 
+    /**
+     * @return The maximum zoom level.
+     */
     public int getMaxZoomLevel() {
         return mCameraModule.getMaxZoomLevel();
     }
 
+    /**
+     * @return True if the camera supports zooming.
+     */
     public boolean isZoomSupported() {
         return mCameraModule.isZoomSupported();
     }
 
+    /**
+     * Enables listening for image-related callbacks.
+     */
     public void setOnImageCapturedListener(OnImageCapturedListener l) {
         mOnImageCapturedListener = l;
         mCameraModule.setOnImageCapturedListener(l);
@@ -767,6 +912,9 @@ public class CameraView extends FrameLayout {
         return mOnImageCapturedListener;
     }
 
+    /**
+     * Enables listening for video-related callbacks.
+     */
     public void setOnVideoCapturedListener(OnVideoCapturedListener l) {
         mOnVideoCapturedListener = l;
         mCameraModule.setOnVideoCapturedListener(l);

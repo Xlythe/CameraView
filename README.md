@@ -4,7 +4,7 @@ Camera View
 CameraView provides a simple wrapper around the Android camera APIs, with backwards compatibility
 to API 14. Rather than directly manipulating the camera, here you have an Android View that can be
 placed within your app. This View displays a preview and has the methods takePicture(File),
-startRecording(File) and stopRecording(File). For simple use cases, CameraFragment exists as well.
+startRecording(File) and stopRecording(). For simple use cases, CameraFragment exists as well.
 If you inflate a CameraFragment with Views that have the correct ids (eg. @id/capture),
 CameraFragment will bind to them to control the CameraView.
 
