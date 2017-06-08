@@ -44,7 +44,18 @@ class PictureSession extends PreviewSession {
      * larger sizes with YUV_420_888, at the cost of speed.
      */
     private static final int IMAGE_FORMAT_DEFAULT = ImageFormat.JPEG;
-    private static final int IMAGE_FORMAT_MAX = ImageFormat.YUV_420_888;
+    private static final int IMAGE_FORMAT_LOW = IMAGE_FORMAT_DEFAULT;
+    private static final int IMAGE_FORMAT_MEDIUM = IMAGE_FORMAT_DEFAULT;
+    private static final int IMAGE_FORMAT_HIGH = IMAGE_FORMAT_DEFAULT;
+
+    /**
+     * Note: Historically, we used YUV_420_888 for MAX. JPEG does not play well with other surfaces
+     * at high resolutions. However, we found a solution where JPEG does work (up to its max
+     * supported resolution); limit the the preview to 1080p. The preview has other reasons for
+     * being restricted to 1080p (it crashes the Nexus 5X for one), but this adds yet another reason
+     * we mustn't let the preview go any higher.
+     */
+    private static final int IMAGE_FORMAT_MAX = IMAGE_FORMAT_DEFAULT;
 
     private final PictureSurface mPictureSurface;
 
@@ -344,6 +355,12 @@ class PictureSession extends PreviewSession {
 
     private static int getImageFormat(CameraView.Quality quality) {
         switch (quality) {
+            case LOW:
+                return IMAGE_FORMAT_LOW;
+            case MEDIUM:
+                return IMAGE_FORMAT_MEDIUM;
+            case HIGH:
+                return IMAGE_FORMAT_HIGH;
             case MAX:
                 return IMAGE_FORMAT_MAX;
             default:

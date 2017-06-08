@@ -24,6 +24,11 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
 class PreviewSession extends SessionImpl {
+    /**
+     * The preview must always be limited to, at most, 1080p. Without that limit, max-resolution
+     * pictures will break and high-resolution pictures will crash on the Nexus 5X (due to a lack
+     * of CTS tests for this combination).
+     */
     private final PreviewSurface mPreviewSurface;
 
     PreviewSession(Camera2Module camera2Module) {

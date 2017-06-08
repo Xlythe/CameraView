@@ -27,6 +27,13 @@ import static com.xlythe.view.camera.ICameraModule.DEBUG;
 
 @TargetApi(21)
 class VideoSession extends PreviewSession {
+    /**
+     * The VideoSurface must always check CamcorderProfile to see if the outputs supported by the
+     * camera are also supported by MediaRecorder. Bizarre as it sounds,
+     * getOutputSizes(MediaRecorder.class) doesn't actually care if MediaRecorder supports the
+     * sizes it gives back. Because MediaRecorder is always (at most) limited to 4k recording, that
+     * is our max video size.
+     */
     private final VideoSurface mVideoSurface;
 
     VideoSession(Camera2Module camera2Module, File file) {
