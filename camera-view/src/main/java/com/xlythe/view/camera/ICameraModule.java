@@ -22,6 +22,9 @@ public abstract class ICameraModule {
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;
     private CameraView.OnVideoCapturedListener mOnVideoCapturedListener;
 
+    // When true, pictures and videos will try to match the aspect ratio of the preview
+    private boolean mMatchPreviewAspectRatio = true;
+
     public ICameraModule(CameraView view) {
         mView = view;
     }
@@ -175,6 +178,14 @@ public abstract class ICameraModule {
 
     public boolean hasFlash() {
         return false;
+    }
+
+    public void setMatchPreviewAspectRatio(boolean enabled) {
+        mMatchPreviewAspectRatio = enabled;
+    }
+
+    public boolean isMatchPreviewAspectRatioEnabled() {
+        return mMatchPreviewAspectRatio;
     }
 
     public void pause() {}

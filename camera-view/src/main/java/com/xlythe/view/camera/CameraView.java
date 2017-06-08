@@ -52,6 +52,7 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_CONFIRM_VIDEO = "confirm_video";
     private static final String EXTRA_PENDING_IMAGE_FILE_PATH = "pending_image_file_path";
     private static final String EXTRA_PENDING_VIDEO_FILE_PATH = "pending_video_file_path";
+    private static final String EXTRA_MATCH_PREVIEW_ASPECT_RATIO = "match_preview_aspect_ratio";
 
     private enum Status {
         OPEN, CLOSED, AWAITING_TEXTURE
@@ -189,6 +190,7 @@ public class CameraView extends FrameLayout {
             }
             setImageConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmImages, isImageConfirmationEnabled()));
             setVideoConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmVideos, isVideoConfirmationEnabled()));
+            setMatchPreviewAspectRatio(a.getBoolean(R.styleable.CameraView_matchPreviewAspectRatio, isMatchPreviewAspectRatioEnabled()));
             a.recycle();
         }
 
@@ -231,6 +233,7 @@ public class CameraView extends FrameLayout {
         state.putLong(EXTRA_MAX_VIDEO_SIZE, getMaxVideoSize());
         state.putBoolean(EXTRA_CONFIRM_IMAGE, isImageConfirmationEnabled());
         state.putBoolean(EXTRA_CONFIRM_VIDEO, isVideoConfirmationEnabled());
+        state.putBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO, isMatchPreviewAspectRatioEnabled());
         if (mImagePendingConfirmation != null) {
             state.putString(EXTRA_PENDING_IMAGE_FILE_PATH, mImagePendingConfirmation.getAbsolutePath());
         }
@@ -255,6 +258,7 @@ public class CameraView extends FrameLayout {
             setMaxVideoSize(state.getLong(EXTRA_MAX_VIDEO_SIZE));
             setImageConfirmationEnabled(state.getBoolean(EXTRA_CONFIRM_IMAGE));
             setVideoConfirmationEnabled(state.getBoolean(EXTRA_CONFIRM_VIDEO));
+            setMatchPreviewAspectRatio(state.getBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO));
 
             if (state.containsKey(EXTRA_PENDING_IMAGE_FILE_PATH)) {
                 File file = new File(state.getString(EXTRA_PENDING_IMAGE_FILE_PATH));
@@ -451,6 +455,15 @@ public class CameraView extends FrameLayout {
         if (getOnVideoCapturedListener() != null) {
             getOnVideoCapturedListener().onFailure();
         }
+    }
+
+    @TargetApi(21)
+    public void setMatchPreviewAspectRatio(boolean enabled) {
+        mCameraModule.setMatchPreviewAspectRatio(enabled);
+    }
+
+    public boolean isMatchPreviewAspectRatioEnabled() {
+        return mCameraModule.isMatchPreviewAspectRatioEnabled();
     }
 
     public void setQuality(Quality quality) {

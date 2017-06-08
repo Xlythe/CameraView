@@ -173,6 +173,10 @@ abstract class SessionImpl implements Camera2Module.Session {
             return mCameraView.isUsingFrontFacingCamera();
         }
 
+        public boolean isMatchPreviewAspectRatioEnabled() {
+            return mCameraView.isMatchPreviewAspectRatioEnabled();
+        }
+
         int getCameraId() {
             try {
                 String cameraId = mCameraView.getActiveCamera();
@@ -209,11 +213,14 @@ abstract class SessionImpl implements Camera2Module.Session {
             List<Size> availableSizes;
             switch (getQuality()) {
                 case LOW:
-                    availableSizes = getSizes(choices, CameraView.Quality.LOW, recommendedSize);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, comparator);
+                    if (isMatchPreviewAspectRatioEnabled()) {
+                        availableSizes = getSizes(choices, CameraView.Quality.LOW, recommendedSize);
+                        if (!availableSizes.isEmpty()) {
+                            return Collections.max(availableSizes, comparator);
+                        }
+                        if (DEBUG)
+                            Log.e(TAG, "Couldn't find a low quality size with the same aspect ratio as the preview");
                     }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a low quality size with the same aspect ratio as the preview");
                     availableSizes = getSizes(choices, CameraView.Quality.LOW);
                     if (!availableSizes.isEmpty()) {
                         return Collections.max(availableSizes, comparator);
@@ -221,11 +228,14 @@ abstract class SessionImpl implements Camera2Module.Session {
                     if (DEBUG) Log.e(TAG, "Couldn't find a low quality size");
                     // Fall-through
                 case MEDIUM:
-                    availableSizes = getSizes(choices, CameraView.Quality.MEDIUM, recommendedSize);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, comparator);
+                    if (isMatchPreviewAspectRatioEnabled()) {
+                        availableSizes = getSizes(choices, CameraView.Quality.MEDIUM, recommendedSize);
+                        if (!availableSizes.isEmpty()) {
+                            return Collections.max(availableSizes, comparator);
+                        }
+                        if (DEBUG)
+                            Log.e(TAG, "Couldn't find a medium quality size with the same aspect ratio as the preview");
                     }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size with the same aspect ratio as the preview");
                     availableSizes = getSizes(choices, CameraView.Quality.MEDIUM);
                     if (!availableSizes.isEmpty()) {
                         return Collections.max(availableSizes, comparator);
@@ -233,11 +243,14 @@ abstract class SessionImpl implements Camera2Module.Session {
                     if (DEBUG) Log.e(TAG, "Couldn't find a medium quality size");
                     // Fall-through
                 case HIGH:
-                    availableSizes = getSizes(choices, CameraView.Quality.HIGH, recommendedSize);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, comparator);
+                    if (isMatchPreviewAspectRatioEnabled()) {
+                        availableSizes = getSizes(choices, CameraView.Quality.HIGH, recommendedSize);
+                        if (!availableSizes.isEmpty()) {
+                            return Collections.max(availableSizes, comparator);
+                        }
+                        if (DEBUG)
+                            Log.e(TAG, "Couldn't find a high quality size with the same aspect ratio as the preview");
                     }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a high quality size with the same aspect ratio as the preview");
                     availableSizes = getSizes(choices, CameraView.Quality.HIGH);
                     if (!availableSizes.isEmpty()) {
                         return Collections.max(availableSizes, comparator);
@@ -245,11 +258,14 @@ abstract class SessionImpl implements Camera2Module.Session {
                     if (DEBUG) Log.e(TAG, "Couldn't find a high quality size");
                     // Fall-through
                 case MAX:
-                    availableSizes = getSizes(choices, CameraView.Quality.MAX, recommendedSize);
-                    if (!availableSizes.isEmpty()) {
-                        return Collections.max(availableSizes, comparator);
+                    if (isMatchPreviewAspectRatioEnabled()) {
+                        availableSizes = getSizes(choices, CameraView.Quality.MAX, recommendedSize);
+                        if (!availableSizes.isEmpty()) {
+                            return Collections.max(availableSizes, comparator);
+                        }
+                        if (DEBUG)
+                            Log.e(TAG, "Couldn't find a max quality size with the same aspect ratio as the preview");
                     }
-                    if (DEBUG) Log.e(TAG, "Couldn't find a max quality size with the same aspect ratio as the preview");
                     availableSizes = getSizes(choices, CameraView.Quality.MAX);
                     if (!availableSizes.isEmpty()) {
                         return Collections.max(availableSizes, comparator);

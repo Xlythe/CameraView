@@ -17,6 +17,7 @@
         <attr name="confirmImages" format="boolean" />
         <attr name="confirmVideos" format="boolean" />
         <attr name="pinchToZoomEnabled" format="boolean" />
+        <attr name="matchPreviewAspectRatio" format="boolean" />
     </declare-styleable>
     <declare-styleable name="VideoView">
         <attr name="filePath" format="string" />
