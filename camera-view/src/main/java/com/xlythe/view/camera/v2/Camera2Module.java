@@ -502,6 +502,20 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
+    public synchronized void setQuality(CameraView.Quality quality) {
+        super.setQuality(quality);
+
+        // When quality changes, we need to update our session with the new dimensions
+        if (mActiveSession != null) {
+            if (mActiveSession instanceof PictureSession) {
+                setSession(new PictureSession(this));
+            } else if (mActiveSession instanceof VideoSession) {
+                setSession(new VideoSession(this, ((VideoSession) mActiveSession).getFile()));
+            }
+        }
+    }
+
+    @Override
     public synchronized void takePicture(File file) {
         if (mActiveSession != null && mActiveSession instanceof PictureSession) {
             PictureSession pictureSession = (PictureSession) mActiveSession;

@@ -108,6 +108,10 @@ class VideoSession extends PreviewSession {
         return surfaces;
     }
 
+    public File getFile() {
+        return mVideoSurface.mFile;
+    }
+
     boolean isRecording() {
         return mVideoSurface.isRecording();
     }
