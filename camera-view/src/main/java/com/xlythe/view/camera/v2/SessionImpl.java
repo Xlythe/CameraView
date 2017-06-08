@@ -245,9 +245,19 @@ abstract class SessionImpl implements Camera2Module.Session {
                     if (DEBUG) Log.e(TAG, "Couldn't find a high quality size");
                     // Fall-through
                 case MAX:
+                    availableSizes = getSizes(choices, CameraView.Quality.MAX, recommendedSize);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, comparator);
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a max quality size with the same aspect ratio as the preview");
+                    availableSizes = getSizes(choices, CameraView.Quality.MAX);
+                    if (!availableSizes.isEmpty()) {
+                        return Collections.max(availableSizes, comparator);
+                    }
+                    if (DEBUG) Log.e(TAG, "Couldn't find a max quality size");
                     return Collections.max(choices, comparator);
                 default:
-                    Log.e(TAG, "Couldn't find a suitable size");
+                    Log.e(TAG, "Couldn't find a suitable size, returning max possible size");
                     return Collections.max(choices, comparator);
             }
         }
