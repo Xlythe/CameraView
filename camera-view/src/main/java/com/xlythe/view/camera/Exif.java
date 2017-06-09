@@ -13,9 +13,13 @@ import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
 
+/**
+ * Modifies metadata on JPEG files. Call {@link #save()} to persist changes to disc.
+ */
 public class Exif {
     private static final String TAG = Exif.class.getSimpleName();
 
+    private static final String DEFAULT_TIMEZONE = "UTC";
     private static final String DATE_FORMAT = "yyyy:MM:dd";
     private static final String TIME_FORMAT = "HH:mm:ss";
     private static final String DATETIME_FORMAT = DATE_FORMAT + " " + TIME_FORMAT;
@@ -38,6 +42,9 @@ public class Exif {
         mExifInterface = exifInterface;
     }
 
+    /**
+     * Persists changes to disc.
+     */
     public void save() throws IOException {
         mExifInterface.saveAttributes();
     }
@@ -136,10 +143,16 @@ public class Exif {
         }
     }
 
+    /**
+     * @return The timestamp (in millis) that this picture was taken, or -1 if no time is available.
+     */
     public long getTimestamp() {
         return mExifInterface.getDateTime();
     }
 
+    /**
+     * @return The location this picture was taken, or null if no location is available.
+     */
     @Nullable
     public Location getLocation() {
         String provider = mExifInterface.getAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD);
@@ -246,6 +259,9 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(orientation));
     }
 
+    /**
+     * Flips the image over the horizon so that the top and bottom are reversed.
+     */
     public void flipVertically() {
         int orientation;
         switch (getOrientation()) {
@@ -281,6 +297,9 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(orientation));
     }
 
+    /**
+     * Flips the image over the vertical so that the left and right are reversed.
+     */
     public void flipHorizontally() {
         int orientation;
         switch (getOrientation()) {
@@ -316,17 +335,26 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_ORIENTATION, String.valueOf(orientation));
     }
 
+    /**
+     * Attaches the current timestamp to the file.
+     */
     public void attachTimestamp() {
         String timestamp = convertToExifDateTime(System.currentTimeMillis());
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, timestamp);
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, timestamp);
     }
 
+    /**
+     * Removes the timestamp from the file.
+     */
     public void removeTimestamp() {
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, null);
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, null);
     }
 
+    /**
+     * Attaches the given location to the file.
+     */
     public void attachLocation(Location location) {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, location.getProvider());
         mExifInterface.setLatLong(location.getLatitude(), location.getLongitude());
@@ -334,6 +362,9 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, convertToExifTime(location.getTime()));
     }
 
+    /**
+     * Removes the location from the file.
+     */
     public void removeLocation() {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, null);
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_LATITUDE, null);
@@ -346,19 +377,19 @@ public class Exif {
 
     private static String convertToExifDateTime(long timestamp) {
         SimpleDateFormat format = new SimpleDateFormat(DATETIME_FORMAT, Locale.ENGLISH);
-        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        format.setTimeZone(TimeZone.getTimeZone(DEFAULT_TIMEZONE));
         return format.format(new Date(timestamp));
     }
 
     private static String convertToExifDate(long timestamp) {
         SimpleDateFormat format = new SimpleDateFormat(DATE_FORMAT, Locale.ENGLISH);
-        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        format.setTimeZone(TimeZone.getTimeZone(DEFAULT_TIMEZONE));
         return format.format(new Date(timestamp));
     }
 
     private static String convertToExifTime(long timestamp) {
         SimpleDateFormat format = new SimpleDateFormat(TIME_FORMAT, Locale.ENGLISH);
-        format.setTimeZone(TimeZone.getTimeZone("UTC"));
+        format.setTimeZone(TimeZone.getTimeZone(DEFAULT_TIMEZONE));
         return format.format(new Date(timestamp));
     }
 }

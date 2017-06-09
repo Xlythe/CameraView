@@ -12,6 +12,9 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+/**
+ * Loads images from disc into an {@link ImageView}.
+ */
 public class Image {
     private static Image sImage;
 
@@ -29,10 +32,18 @@ public class Image {
         mContext = context.getApplicationContext();
     }
 
+    /**
+     * @param file The image file.
+     * @return A handler to the task that will load the image. Call {@link Loader#into(ImageView)}
+     *         to finalize the task.
+     */
     public Loader load(File file) {
         return new Loader(file);
     }
 
+    /**
+     * Releases an ImageView from any pending transactions.
+     */
     public static void clear(ImageView imageView) {
         if (sImage != null) {
             Task task = sImage.mImageTasks.remove(imageView);
@@ -42,6 +53,9 @@ public class Image {
         }
     }
 
+    /**
+     * Loads an image file into an {@link ImageView}.
+     */
     public class Loader {
         private final File mFile;
 
@@ -49,6 +63,9 @@ public class Image {
             mFile = file;
         }
 
+        /**
+         * @param imageView The ImageView that should display the final result.
+         */
         public void into(ImageView imageView) {
             Task task = new Task(imageView);
             mImageTasks.put(imageView, task);
