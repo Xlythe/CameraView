@@ -8,6 +8,8 @@ import android.util.Log;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.text.ParseException;
+import java.text.ParsePosition;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
@@ -19,12 +21,14 @@ import java.util.TimeZone;
 public class Exif {
     private static final String TAG = Exif.class.getSimpleName();
 
-    private static final String DEFAULT_TIMEZONE = "UTC";
-    private static final String DATE_FORMAT = "yyyy:MM:dd";
-    private static final String TIME_FORMAT = "HH:mm:ss";
-    private static final String DATETIME_FORMAT = DATE_FORMAT + " " + TIME_FORMAT;
+    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy:MM:dd", Locale.ENGLISH);
+    private static final SimpleDateFormat TIME_FORMAT = new SimpleDateFormat("HH:mm:ss", Locale.ENGLISH);
+    private static final SimpleDateFormat DATETIME_FORMAT = new SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.ENGLISH);
 
     private final ExifInterface mExifInterface;
+
+    // When true, avoid saving any time. This is a privacy issue.
+    private boolean mRemoveTimestamp = false;
 
     public Exif(File file) throws IOException {
         this(file.toString());
@@ -46,17 +50,45 @@ public class Exif {
      * Persists changes to disc.
      */
     public void save() throws IOException {
+        if (!mRemoveTimestamp) {
+            attachLastModifiedTimestamp();
+        }
         mExifInterface.saveAttributes();
     }
 
     @Override
     public String toString() {
-        return String.format(Locale.ENGLISH, "Exif{location=%s, rotation=%d, isFlippedVertically=%s, isFlippedHorizontally=%s, timestamp=%s}",
-                getLocation(), getRotation(), isFlippedVertically(), isFlippedHorizontally(), getTimestamp());
+        return String.format(Locale.ENGLISH, "Exif{width=%s, height=%s, rotation=%d, "
+                        + "isFlippedVertically=%s, isFlippedHorizontally=%s, location=%s, "
+                        + "timestamp=%s, description=%s}",
+                getWidth(), getHeight(), getRotation(), isFlippedVertically(), isFlippedHorizontally(),
+                getLocation(), getTimestamp(), getDescription());
     }
 
     private int getOrientation() {
         return mExifInterface.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_UNDEFINED);
+    }
+
+    /**
+     * Returns the width of the photo in pixels.
+     */
+    public int getWidth() {
+        return mExifInterface.getAttributeInt(ExifInterface.TAG_IMAGE_WIDTH, 0);
+    }
+
+    /**
+     * Returns the height of the photo in pixels.
+     */
+    public int getHeight() {
+        return mExifInterface.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0);
+    }
+
+    public String getDescription() {
+        return mExifInterface.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION);
+    }
+
+    public void setDescription(@Nullable String description) {
+        mExifInterface.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description);
     }
 
     /**
@@ -143,11 +175,66 @@ public class Exif {
         }
     }
 
+    private void attachLastModifiedTimestamp() {
+        long now = System.currentTimeMillis();
+        String datetime = convertToExifDateTime(now);
+
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, datetime);
+
+        try {
+            String subsec = Long.toString(now - convertFromExifDateTime(datetime).getTime());
+            mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, subsec);
+        } catch (ParseException e) {}
+    }
+
+    /**
+     * @return The timestamp (in millis) that this picture was modified, or -1 if no time is available.
+     */
+    public long getLastModifiedTimestamp() {
+        long timestamp = parseTimestamp(mExifInterface.getAttribute(ExifInterface.TAG_DATETIME));
+        if (timestamp == -1) {
+            return -1;
+        }
+
+        String subSecs = mExifInterface.getAttribute(ExifInterface.TAG_SUBSEC_TIME);
+        if (subSecs != null) {
+            try {
+                long sub = Long.parseLong(subSecs);
+                while (sub > 1000) {
+                    sub /= 10;
+                }
+                timestamp += sub;
+            } catch (NumberFormatException e) {
+                // Ignored
+            }
+        }
+
+        return timestamp;
+    }
+
     /**
      * @return The timestamp (in millis) that this picture was taken, or -1 if no time is available.
      */
     public long getTimestamp() {
-        return mExifInterface.getDateTime();
+        long timestamp = parseTimestamp(mExifInterface.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        if (timestamp == -1) {
+            return -1;
+        }
+
+        String subSecs = mExifInterface.getAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL);
+        if (subSecs != null) {
+            try {
+                long sub = Long.parseLong(subSecs);
+                while (sub > 1000) {
+                    sub /= 10;
+                }
+                timestamp += sub;
+            } catch (NumberFormatException e) {
+                // Ignored
+            }
+        }
+
+        return timestamp;
     }
 
     /**
@@ -157,7 +244,12 @@ public class Exif {
     public Location getLocation() {
         String provider = mExifInterface.getAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD);
         double[] latlng = mExifInterface.getLatLong();
-        long timestamp = mExifInterface.getGpsDateTime();
+        double altitude = mExifInterface.getAltitude(0);
+        double speed = mExifInterface.getAttributeDouble(ExifInterface.TAG_GPS_SPEED, 0)
+                * mExifInterface.getAttributeDouble(ExifInterface.TAG_GPS_SPEED_REF, 1);
+        long timestamp = parseTimestamp(
+                mExifInterface.getAttribute(ExifInterface.TAG_GPS_DATESTAMP),
+                mExifInterface.getAttribute(ExifInterface.TAG_GPS_TIMESTAMP));
         if (latlng == null) {
             return null;
         }
@@ -168,6 +260,12 @@ public class Exif {
         Location location = new Location(provider);
         location.setLatitude(latlng[0]);
         location.setLongitude(latlng[1]);
+        if (altitude != 0) {
+            location.setAltitude(altitude);
+        }
+        if (speed != 0) {
+            location.setSpeed((float) speed);
+        }
         if (timestamp != -1) {
             location.setTime(timestamp);
         }
@@ -339,17 +437,32 @@ public class Exif {
      * Attaches the current timestamp to the file.
      */
     public void attachTimestamp() {
-        String timestamp = convertToExifDateTime(System.currentTimeMillis());
-        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, timestamp);
-        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, timestamp);
+        long now = System.currentTimeMillis();
+        String datetime = convertToExifDateTime(now);
+
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, datetime);
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, datetime);
+
+        try {
+            String subsec = Long.toString(now - convertFromExifDateTime(datetime).getTime());
+            mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subsec);
+            mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, subsec);
+        } catch (ParseException e) {}
+
+        mRemoveTimestamp = false;
     }
 
     /**
      * Removes the timestamp from the file.
      */
     public void removeTimestamp() {
-        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, null);
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, null);
+        mRemoveTimestamp = true;
     }
 
     /**
@@ -358,6 +471,14 @@ public class Exif {
     public void attachLocation(Location location) {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, location.getProvider());
         mExifInterface.setLatLong(location.getLatitude(), location.getLongitude());
+        if (location.hasAltitude()) {
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, Double.toString(location.getAltitude()));
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, Integer.toString(1));
+        }
+        if (location.hasSpeed()) {
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, Float.toString(location.getSpeed()));
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, Integer.toString(1));
+        }
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, convertToExifDate(location.getTime()));
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, convertToExifTime(location.getTime()));
     }
@@ -375,21 +496,65 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, null);
     }
 
+    /**
+     * @return The timestamp (in millis), or -1 if no time is available.
+     */
+    private long parseTimestamp(@Nullable String date, @Nullable String time) {
+        if (date == null && time == null) {
+            return -1;
+        }
+        if (time == null) {
+            try {
+                return convertFromExifDate(date).getTime();
+            } catch (ParseException e) {
+                return -1;
+            }
+        }
+        if (date == null) {
+            try {
+                return convertFromExifTime(time).getTime();
+            } catch (ParseException e) {
+                return -1;
+            }
+        }
+        return parseTimestamp(date + " " + time);
+    }
+
+    /**
+     * @return The timestamp (in millis), or -1 if no time is available.
+     */
+    private long parseTimestamp(@Nullable String datetime) {
+        if (datetime == null) {
+            return -1;
+        }
+        try {
+            return convertFromExifDateTime(datetime).getTime();
+        } catch (ParseException e) {
+            return -1;
+        }
+    }
+
     private static String convertToExifDateTime(long timestamp) {
-        SimpleDateFormat format = new SimpleDateFormat(DATETIME_FORMAT, Locale.ENGLISH);
-        format.setTimeZone(TimeZone.getTimeZone(DEFAULT_TIMEZONE));
-        return format.format(new Date(timestamp));
+        return DATETIME_FORMAT.format(new Date(timestamp));
+    }
+
+    private static Date convertFromExifDateTime(String dateTime) throws ParseException {
+        return DATETIME_FORMAT.parse(dateTime);
     }
 
     private static String convertToExifDate(long timestamp) {
-        SimpleDateFormat format = new SimpleDateFormat(DATE_FORMAT, Locale.ENGLISH);
-        format.setTimeZone(TimeZone.getTimeZone(DEFAULT_TIMEZONE));
-        return format.format(new Date(timestamp));
+        return DATE_FORMAT.format(new Date(timestamp));
+    }
+
+    private static Date convertFromExifDate(String date) throws ParseException {
+        return DATE_FORMAT.parse(date);
     }
 
     private static String convertToExifTime(long timestamp) {
-        SimpleDateFormat format = new SimpleDateFormat(TIME_FORMAT, Locale.ENGLISH);
-        format.setTimeZone(TimeZone.getTimeZone(DEFAULT_TIMEZONE));
-        return format.format(new Date(timestamp));
+        return TIME_FORMAT.format(new Date(timestamp));
+    }
+
+    private static Date convertFromExifTime(String time) throws ParseException {
+        return TIME_FORMAT.parse(time);
     }
 }
