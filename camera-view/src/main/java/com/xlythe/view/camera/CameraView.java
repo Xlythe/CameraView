@@ -173,6 +173,11 @@ public class CameraView extends FrameLayout {
     private boolean mIsImageConfirmationEnabled;
     private boolean mIsVideoConfirmationEnabled;
 
+    // When true, avoid adding/removing views. While usually harmless (although it can cause state
+    // loss), it's especially important since calling removeView(TextureView) after
+    // onSaveInstanceState() will trigger a NPE on Android N.
+    private boolean mHasSavedState = false;
+
     public CameraView(Context context) {
         this(context, null);
     }
@@ -262,6 +267,7 @@ public class CameraView extends FrameLayout {
         if (mVideoPendingConfirmation != null) {
             state.putString(EXTRA_PENDING_VIDEO_FILE_PATH, mVideoPendingConfirmation.getAbsolutePath());
         }
+        mHasSavedState = true;
         return state;
     }
 
@@ -297,6 +303,7 @@ public class CameraView extends FrameLayout {
         } else {
             super.onRestoreInstanceState(savedState);
         }
+        mHasSavedState = false;
     }
 
     protected synchronized Status getStatus() {
@@ -573,13 +580,15 @@ public class CameraView extends FrameLayout {
     protected void onClose() {
         mCameraModule.close();
 
-        // Destroy the TextureView we used for the previous round of camera activity. This is
-        // because the TextureView will continue to show a bitmap of the old view until the camera
-        // is able to draw to it again. We'd rather clear the TextureView, but since there's no such
-        // way, we destroy it instead.
-        removeView(mCameraView);
-        addView(mCameraView = new TextureView(getContext()), 0);
-        mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
+        if (!mHasSavedState) {
+            // Destroy the TextureView we used for the previous round of camera activity. This is
+            // because the TextureView will continue to show a bitmap of the old view until the camera
+            // is able to draw to it again. We'd rather clear the TextureView, but since there's no such
+            // way, we destroy it instead.
+            removeView(mCameraView);
+            addView(mCameraView = new TextureView(getContext()), 0 /* view position */);
+            mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
+        }
     }
 
     /**
