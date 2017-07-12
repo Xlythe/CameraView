@@ -56,8 +56,8 @@ abstract class SessionImpl implements Camera2Module.Session {
     }
 
     @NonNull
-    Handler getBackgroundHandler() {
-        return mCamera2Module.getBackgroundHandler();
+    Handler getHandler() {
+        return mCamera2Module.getHandler();
     }
 
     boolean hasFlash() {

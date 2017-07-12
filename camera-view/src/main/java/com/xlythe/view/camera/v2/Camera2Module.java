@@ -14,7 +14,7 @@ import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.HandlerThread;
+import android.os.Looper;
 import android.os.Parcelable;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
@@ -39,42 +39,44 @@ import java.util.Locale;
 public class Camera2Module extends ICameraModule {
     private static final int ZOOM_NOT_SUPPORTED = 1;
 
-    private static final long BACKGROUND_THREAD_SHUTDOWN_TIMEOUT = 10000;
-
     private static final String EXTRA_DEVICE_ID = "device_id";
 
-    // TODO Figure out why camera crashes when we use a size higher than 1080
+    // It seems like, when Lollipop was released, 1080p was settled on as the 'default' resolution.
+    // Camera2 has a long table of different combinations of preview, picture, and video with the
+    // repeated requirement "Up to either 1080p, or the largest size supported by the device.
+    // Whichever is smaller." To go past 1080p requires limiting another column on the table. As a
+    // general rule, we don't go past 1080p unless we test on a wide range of devices.
     static final Size MAX_SUPPORTED_SIZE = new Size(1920, 1080);
 
     /**
      * This is how we'll talk to the camera.
      */
+    @NonNull
     private final CameraManager mCameraManager;
 
     /**
      * This is the id of the camera (eg. front or back facing) that we're currently using.
      */
+    @Nullable
     private String mActiveCamera;
 
     /**
      * The current capture session. There is one capture session per {@link Session}.
      */
+    @Nullable
     private CameraCaptureSession mCaptureSession;
 
     /**
      * The currently active camera. This may be a front facing camera or a back facing one.
      */
+    @Nullable
     private CameraDevice mCameraDevice;
 
     /**
-     * A background thread to receive callbacks from the camera on.
+     * A handler to receive callbacks from the camera on.
      */
-    private HandlerThread mBackgroundThread;
-
-    /**
-     * A handler pointing to the background thread.
-     */
-    private Handler mBackgroundHandler;
+    @NonNull
+    private Handler mHandler;
 
     /**
      * The currently active session. See {@link PictureSession} and {@link VideoSession}.
@@ -109,10 +111,8 @@ public class Camera2Module extends ICameraModule {
         @Override
         public void onOpened(@NonNull CameraDevice cameraDevice) {
             // The camera has opened. Start the preview now.
-            synchronized (Camera2Module.this) {
-                mCameraDevice = cameraDevice;
-                setSession(new PictureSession(Camera2Module.this));
-            }
+            mCameraDevice = cameraDevice;
+            setSession(new PictureSession(Camera2Module.this));
         }
 
         @Override
@@ -147,9 +147,10 @@ public class Camera2Module extends ICameraModule {
     public Camera2Module(CameraView cameraView) {
         super(cameraView);
         mCameraManager = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
+        mHandler = new Handler(Looper.getMainLooper());
     }
 
-    private synchronized void setSession(final Session session) {
+    private void setSession(final Session session) {
         if (mCameraDevice == null) {
             if (DEBUG) Log.w(TAG, "Cannot start a session without a CameraDevice");
             return;
@@ -179,7 +180,7 @@ public class Camera2Module extends ICameraModule {
                 hasPreviousState = true;
             }
             if (hasPreviousState) {
-                mBackgroundHandler.post(new Runnable() {
+                mHandler.post(new Runnable() {
                     @Override
                     public void run() {
                         setSession(session);
@@ -190,7 +191,7 @@ public class Camera2Module extends ICameraModule {
 
             // Assume this is a brand new session that's never been set up. Initialize it so that
             // it can decide what size to set its surfaces to.
-            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
+            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(getActiveCamera());
             StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
             session.initialize(map);
 
@@ -198,23 +199,21 @@ public class Camera2Module extends ICameraModule {
             mCameraDevice.createCaptureSession(session.getSurfaces(), new CameraCaptureSession.StateCallback() {
                 @Override
                 public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
-                    synchronized (Camera2Module.this) {
-                        if (mCameraDevice == null) {
-                            return;
-                        }
+                    if (mCameraDevice == null) {
+                        return;
+                    }
 
-                        try {
-                            mCaptureSession = cameraCaptureSession;
-                            mActiveSession = session;
-                            if (!mIsPaused) {
-                                session.onAvailable(mCameraDevice, mCaptureSession);
-                            }
-                            if (mZoomLevel != 0) {
-                                setZoomLevel(mZoomLevel);
-                            }
-                        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
-                            Log.e(TAG, "Failed to start session", e);
+                    try {
+                        mCaptureSession = cameraCaptureSession;
+                        mActiveSession = session;
+                        if (!mIsPaused) {
+                            session.onAvailable(mCameraDevice, mCaptureSession);
                         }
+                        if (mZoomLevel != 0) {
+                            setZoomLevel(mZoomLevel);
+                        }
+                    } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+                        Log.e(TAG, "Failed to start session", e);
                     }
                 }
 
@@ -222,8 +221,8 @@ public class Camera2Module extends ICameraModule {
                 public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
                     Log.e(TAG, "Configure failed");
                 }
-            }, mBackgroundHandler);
-        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
+            }, mHandler);
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to create capture session", e);
         }
@@ -231,16 +230,12 @@ public class Camera2Module extends ICameraModule {
 
     @RequiresPermission(Manifest.permission.CAMERA)
     @Override
-    public synchronized void open() {
+    public void open() {
         mIsOpen = true;
-        if (mBackgroundThread == null) {
-            startBackgroundThread();
-        }
-
         try {
             mActiveCamera = getActiveCamera();
             if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
-            mCameraManager.openCamera(mActiveCamera, mStateCallback, mBackgroundHandler);
+            mCameraManager.openCamera(mActiveCamera, mStateCallback, mHandler);
         } catch (CameraAccessException e) {
             Log.e(TAG, "Failed to open camera", e);
         }
@@ -252,25 +247,20 @@ public class Camera2Module extends ICameraModule {
     }
 
     private void close(boolean shutdownThread) {
-        synchronized (this) {
-            if (mCaptureSession != null) {
-                mCaptureSession.close();
-                mCaptureSession = null;
-            }
-            if (mActiveSession != null) {
-                mActiveSession.close();
-                mActiveSession = null;
-            }
-            if (mCameraDevice != null) {
-                mCameraDevice.close();
-                mCameraDevice = null;
-            }
-            mIsPaused = false;
-            mIsOpen = false;
+        if (mCaptureSession != null) {
+            mCaptureSession.close();
+            mCaptureSession = null;
         }
-        if (shutdownThread) {
-            stopBackgroundThread();
+        if (mActiveSession != null) {
+            mActiveSession.close();
+            mActiveSession = null;
         }
+        if (mCameraDevice != null) {
+            mCameraDevice.close();
+            mCameraDevice = null;
+        }
+        mIsPaused = false;
+        mIsOpen = false;
     }
 
     @Override
@@ -298,12 +288,12 @@ public class Camera2Module extends ICameraModule {
 
     @RequiresPermission(Manifest.permission.CAMERA)
     @Override
-    public synchronized void toggleCamera() {
+    public void toggleCamera() {
         int position = 0;
 
         try {
             for (String cameraId : mCameraManager.getCameraIdList()) {
-                if (cameraId.equals(mActiveCamera)) {
+                if (cameraId.equals(getActiveCamera())) {
                     break;
                 }
                 position++;
@@ -323,7 +313,22 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public synchronized void focus(Rect focus, Rect metering) {
+    public void focus(Rect focus, Rect metering) {
+        if (mCaptureSession == null) {
+            if (DEBUG) Log.w(TAG, "Cannot focus. No capture session.");
+            return;
+        }
+
+        if (mActiveSession == null) {
+            if (DEBUG) Log.w(TAG, "Cannot focus. No active session.");
+            return;
+        }
+
+        if (mCameraDevice == null) {
+            if (DEBUG) Log.w(TAG, "Cannot focus. No camera device.");
+            return;
+        }
+
         try {
             if (!supportsFocus(getActiveCamera())) {
                 Log.w(TAG, "Focus not available on this camera");
@@ -349,7 +354,7 @@ public class Camera2Module extends ICameraModule {
             if (!mIsPaused) {
                 mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
             }
-        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to focus", e);
         }
@@ -375,16 +380,16 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public synchronized void setZoomLevel(int zoomLevel) {
+    public void setZoomLevel(int zoomLevel) {
         mZoomLevel = zoomLevel;
 
-        if (mActiveSession == null) {
+        if (mCameraDevice == null || mCaptureSession == null || mActiveSession == null) {
             Log.w(TAG, "No active session available");
             return;
         }
 
         try {
-            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
+            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(getActiveCamera());
             Rect m = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
             if (m == null) {
                 Log.w(TAG, "Zoom not supported");
@@ -409,21 +414,21 @@ public class Camera2Module extends ICameraModule {
             if (!mIsPaused) {
                 mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
             }
-        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to zoom", e);
         }
     }
 
     @Override
-    public synchronized int getZoomLevel() {
+    public int getZoomLevel() {
         return mZoomLevel;
     }
 
     @Override
-    public synchronized int getMaxZoomLevel() {
+    public int getMaxZoomLevel() {
         try {
-            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
+            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(getActiveCamera());
             Float maxZoom = (characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM));
             if (maxZoom == null) {
                 return ZOOM_NOT_SUPPORTED;
@@ -444,9 +449,9 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public synchronized boolean hasFlash() {
+    public boolean hasFlash() {
         try {
-            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(mActiveCamera);
+            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(getActiveCamera());
             Boolean hasFlash = (characteristics.get(CameraCharacteristics.FLASH_INFO_AVAILABLE));
             if (hasFlash == null) {
                 return false;
@@ -465,27 +470,45 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public synchronized void pause() {
+    public void pause() {
+        if (mCaptureSession == null) {
+            if (DEBUG) Log.w(TAG, "Cannot pause. No capture session.");
+            return;
+        }
+
         if (!mIsPaused) {
             try {
                 mCaptureSession.stopRepeating();
-            } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
+            } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
                 Log.e(TAG, "Failed to pause the camera", e);
             }
             mIsPaused = true;
         } else {
-            if (DEBUG) {
-                Log.w(TAG, "Cannot pause. Was never unpaused.");
-            }
+            if (DEBUG) Log.w(TAG, "Cannot pause. Was never unpaused.");
         }
     }
 
     @Override
-    public synchronized void resume() {
+    public void resume() {
+        if (mCaptureSession == null) {
+            if (DEBUG) Log.w(TAG, "Cannot pause. No capture session.");
+            return;
+        }
+
+        if (mActiveSession == null) {
+            if (DEBUG) Log.w(TAG, "Cannot pause. No active session.");
+            return;
+        }
+
+        if (mCameraDevice == null) {
+            if (DEBUG) Log.w(TAG, "Cannot pause. No camera device.");
+            return;
+        }
+
         if (mIsPaused) {
             try {
                 mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
-            } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
+            } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
                 Log.e(TAG, "Failed to pause the camera", e);
             }
             mIsPaused = false;
@@ -502,7 +525,7 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public synchronized void setQuality(CameraView.Quality quality) {
+    public void setQuality(CameraView.Quality quality) {
         super.setQuality(quality);
 
         // When quality changes, we need to update our session with the new dimensions
@@ -516,8 +539,23 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public synchronized void takePicture(File file) {
-        if (mActiveSession != null && mActiveSession instanceof PictureSession) {
+    public void takePicture(File file) {
+        if (mCaptureSession == null) {
+            if (DEBUG) Log.w(TAG, "Cannot take picture. No capture session.");
+            return;
+        }
+
+        if (mActiveSession == null) {
+            if (DEBUG) Log.w(TAG, "Cannot take picture. No active session.");
+            return;
+        }
+
+        if (mCameraDevice == null) {
+            if (DEBUG) Log.w(TAG, "Cannot take picture. No camera device.");
+            return;
+        }
+
+        if (mActiveSession instanceof PictureSession) {
             PictureSession pictureSession = (PictureSession) mActiveSession;
             pictureSession.takePicture(file, mCameraDevice, mCaptureSession);
         }
@@ -525,7 +563,7 @@ public class Camera2Module extends ICameraModule {
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
-    public synchronized void startRecording(File file) {
+    public void startRecording(File file) {
         // Quick fail if the CameraDevice was never created.
         if (mCameraDevice == null) {
             onVideoFailed();
@@ -543,7 +581,7 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public synchronized boolean isRecording() {
+    public boolean isRecording() {
         return mIsRecording;
     }
 
@@ -663,7 +701,8 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
-    synchronized String getActiveCamera() throws CameraAccessException {
+    @NonNull
+    String getActiveCamera() throws CameraAccessException {
         return mActiveCamera == null ? getDefaultCamera() : mActiveCamera;
     }
 
@@ -700,42 +739,19 @@ public class Camera2Module extends ICameraModule {
         return orientation == null ? 0 : orientation;
     }
 
-    private void startBackgroundThread() {
-        mBackgroundThread = new HandlerThread("CameraBackground");
-        mBackgroundThread.start();
-        mBackgroundHandler = new Handler(mBackgroundThread.getLooper());
+    Handler getHandler() {
+        return mHandler;
     }
-
-    private void stopBackgroundThread() {
-        if (mBackgroundThread == null) {
-            return;
-        }
-        mBackgroundHandler.removeCallbacksAndMessages(null);
-        mBackgroundThread.quitSafely();
-        try {
-            mBackgroundThread.join(BACKGROUND_THREAD_SHUTDOWN_TIMEOUT);
-            mBackgroundThread = null;
-            mBackgroundHandler = null;
-        } catch (InterruptedException e) {
-            Log.e(TAG, "Failed to join background thread", e);
-            Thread.currentThread().interrupt();
-        }
-    }
-
-    Handler getBackgroundHandler() {
-        return mBackgroundHandler;
-    }
-
 
     @Override
-    public synchronized Parcelable onSaveInstanceState() {
+    public Parcelable onSaveInstanceState() {
         Bundle state = new Bundle();
         state.putString(EXTRA_DEVICE_ID, mActiveCamera);
         return state;
     }
 
     @Override
-    public synchronized void onRestoreInstanceState(Parcelable state) {
+    public void onRestoreInstanceState(Parcelable state) {
         mActiveCamera = ((Bundle) state).getString(EXTRA_DEVICE_ID);
     }
 

@@ -13,8 +13,6 @@ import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 
-import com.xlythe.view.camera.CameraView;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -62,12 +60,12 @@ class PreviewSession extends SessionImpl {
 
     @Override
     public void onAvailable(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
-        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getBackgroundHandler());
+        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getHandler());
     }
 
     @Override
     public void onInvalidate(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
-        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getBackgroundHandler());
+        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getHandler());
     }
 
     @NonNull

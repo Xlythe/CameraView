@@ -22,8 +22,8 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
-import static com.xlythe.view.camera.ICameraModule.TAG;
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
+import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
 class VideoSession extends PreviewSession {
@@ -82,7 +82,7 @@ class VideoSession extends PreviewSession {
                     mVideoSurface.startRecording();
                 }
             }
-        }, getBackgroundHandler());
+        }, getHandler());
     }
 
     @Override
@@ -97,7 +97,7 @@ class VideoSession extends PreviewSession {
             return;
         }
 
-        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getBackgroundHandler());
+        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getHandler());
     }
 
     @Override

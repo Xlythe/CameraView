@@ -105,8 +105,8 @@ class PictureSession extends PreviewSession {
             if (mCropRegion != null) {
                 builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
             }
-            session.capture(builder.build(), null /* callback */, getBackgroundHandler());
-        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException | NullPointerException e) {
+            session.capture(builder.build(), null /* callback */, getHandler());
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to create capture request", e);
             onImageFailed();
@@ -284,7 +284,7 @@ class PictureSession extends PreviewSession {
         private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(final ImageReader reader) {
-                mCameraView.getBackgroundHandler().post(new Runnable() {
+                mCameraView.getHandler().post(new Runnable() {
                     @Override
                     public void run() {
                         try {
@@ -328,7 +328,7 @@ class PictureSession extends PreviewSession {
             if (DEBUG) Log.d(TAG, "Initializing PictureSession");
             super.initialize(chooseSize(getSizes(map), mPreviewSurface.mSize));
             mImageReader = ImageReader.newInstance(getWidth(), getHeight(), getImageFormat(getQuality()), 1 /* maxImages */);
-            mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getBackgroundHandler());
+            mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getHandler());
         }
 
         void initializePicture(File file) {
