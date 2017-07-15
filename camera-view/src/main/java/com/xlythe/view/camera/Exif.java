@@ -81,6 +81,7 @@ public class Exif {
         return mExifInterface.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0);
     }
 
+    @Nullable
     public String getDescription() {
         return mExifInterface.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION);
     }
