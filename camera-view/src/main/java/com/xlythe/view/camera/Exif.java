@@ -23,6 +23,10 @@ public class Exif {
     private static final SimpleDateFormat TIME_FORMAT = new SimpleDateFormat("HH:mm:ss", Locale.ENGLISH);
     private static final SimpleDateFormat DATETIME_FORMAT = new SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.ENGLISH);
 
+    private static final String KILOMETERS_PER_HOUR = "K";
+    private static final String MILES_PER_HOUR = "M";
+    private static final String KNOTS = "N";
+
     private final ExifInterface mExifInterface;
 
     // When true, avoid saving any time. This is a privacy issue.
@@ -244,8 +248,9 @@ public class Exif {
         String provider = mExifInterface.getAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD);
         double[] latlng = mExifInterface.getLatLong();
         double altitude = mExifInterface.getAltitude(0);
-        double speed = mExifInterface.getAttributeDouble(ExifInterface.TAG_GPS_SPEED, 0)
-                * mExifInterface.getAttributeDouble(ExifInterface.TAG_GPS_SPEED_REF, 1);
+        double speed = mExifInterface.getAttributeDouble(ExifInterface.TAG_GPS_SPEED, 0);
+        String speedRef = mExifInterface.getAttribute(ExifInterface.TAG_GPS_SPEED_REF);
+        speedRef = speedRef == null ? KILOMETERS_PER_HOUR : speedRef; // Ensure speedRef is not null
         long timestamp = parseTimestamp(
                 mExifInterface.getAttribute(ExifInterface.TAG_GPS_DATESTAMP),
                 mExifInterface.getAttribute(ExifInterface.TAG_GPS_TIMESTAMP));
@@ -263,6 +268,19 @@ public class Exif {
             location.setAltitude(altitude);
         }
         if (speed != 0) {
+            switch (speedRef) {
+                case MILES_PER_HOUR:
+                    speed = Speed.fromMilesPerHour(speed).toMetersPerSecond();
+                    break;
+                case KNOTS:
+                    speed = Speed.fromKnots(speed).toMetersPerSecond();
+                    break;
+                case KILOMETERS_PER_HOUR:
+                    // fall through
+                default:
+                    speed = Speed.fromKilometersPerHour(speed).toMetersPerSecond();
+                    break;
+            }
             location.setSpeed((float) speed);
         }
         if (timestamp != -1) {
@@ -475,8 +493,8 @@ public class Exif {
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, Integer.toString(1));
         }
         if (location.hasSpeed()) {
-            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, Float.toString(location.getSpeed()));
-            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, Integer.toString(1));
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, Double.toString(Speed.fromMetersPerSecond(location.getSpeed()).toKilometersPerHour()));
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, KILOMETERS_PER_HOUR);
         }
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, convertToExifDate(location.getTime()));
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, convertToExifTime(location.getTime()));
@@ -555,5 +573,47 @@ public class Exif {
 
     private static Date convertFromExifTime(String time) throws ParseException {
         return TIME_FORMAT.parse(time);
+    }
+
+    private static class Speed {
+        static Converter fromKilometersPerHour(double kph) {
+            return new Converter(kph * 0.621371);
+        }
+
+        static Converter fromMetersPerSecond(double mps) {
+            return new Converter(mps * 2.23694);
+        }
+
+        static Converter fromMilesPerHour(double mph) {
+            return new Converter(mph);
+        }
+
+        static Converter fromKnots(double knots) {
+            return new Converter(knots * 1.15078);
+        }
+
+        static class Converter {
+            final double mph;
+
+            Converter(double mph) {
+                this.mph = mph;
+            }
+
+            double toKilometersPerHour() {
+                return mph / 0.621371;
+            }
+
+            double toMilesPerHour() {
+                return mph;
+            }
+
+            double toKnots() {
+                return mph / 1.15078;
+            }
+
+            double toMetersPerSecond() {
+                return mph / 2.23694;
+            }
+        }
     }
 }
