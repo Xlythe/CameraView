@@ -509,6 +509,10 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, null);
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_LONGITUDE, null);
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, null);
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, null);
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, null);
     }
