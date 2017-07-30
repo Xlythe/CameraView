@@ -490,32 +490,35 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public void resume() {
-        if (mCaptureSession == null) {
-            if (DEBUG) Log.w(TAG, "Cannot pause. No capture session.");
-            return;
-        }
-
-        if (mActiveSession == null) {
-            if (DEBUG) Log.w(TAG, "Cannot pause. No active session.");
-            return;
-        }
-
-        if (mCameraDevice == null) {
-            if (DEBUG) Log.w(TAG, "Cannot pause. No camera device.");
-            return;
-        }
-
-        if (mIsPaused) {
-            try {
-                mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
-            } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
-                Log.e(TAG, "Failed to pause the camera", e);
+        try {
+            if (mCaptureSession == null) {
+                if (DEBUG) Log.w(TAG, "Cannot pause. No capture session.");
+                return;
             }
+
+            if (mActiveSession == null) {
+                if (DEBUG) Log.w(TAG, "Cannot pause. No active session.");
+                return;
+            }
+
+            if (mCameraDevice == null) {
+                if (DEBUG) Log.w(TAG, "Cannot pause. No camera device.");
+                return;
+            }
+
+            if (mIsPaused) {
+                try {
+                    mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
+                } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+                    Log.e(TAG, "Failed to resume the camera", e);
+                }
+            } else {
+                if (DEBUG) {
+                    Log.w(TAG, "Cannot resume. Was never paused.");
+                }
+            }
+        } finally {
             mIsPaused = false;
-        } else {
-            if (DEBUG) {
-                Log.w(TAG, "Cannot resume. Was never paused.");
-            }
         }
     }
 
