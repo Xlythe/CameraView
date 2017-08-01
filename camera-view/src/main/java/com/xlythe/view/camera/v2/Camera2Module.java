@@ -76,7 +76,7 @@ public class Camera2Module extends ICameraModule {
      * A handler to receive callbacks from the camera on.
      */
     @NonNull
-    private Handler mHandler;
+    private final Handler mHandler;
 
     /**
      * The currently active session. See {@link PictureSession} and {@link VideoSession}.
