@@ -50,9 +50,6 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     // If true, the video should be mirrored
     private boolean mIsMirrored = false;
 
-    // Used in hiding the surface. This matrix contains the original transformation.
-    @Nullable private Matrix mOriginalMatrix;
-
     public VideoView(Context context) {
         this(context, null);
     }
