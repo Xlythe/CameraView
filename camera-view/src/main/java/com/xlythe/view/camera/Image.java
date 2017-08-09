@@ -4,7 +4,9 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Matrix;
+import android.net.Uri;
 import android.os.AsyncTask;
+import android.util.Log;
 import android.widget.ImageView;
 
 import java.io.File;
@@ -16,6 +18,8 @@ import java.util.Map;
  * Loads images from disc into an {@link ImageView}.
  */
 public class Image {
+    private static final String TAG = "Image";
+
     private static Image sImage;
 
     private final Context mContext;
@@ -39,6 +43,15 @@ public class Image {
      */
     public Loader load(File file) {
         return new Loader(file);
+    }
+
+    /**
+     * @param uri A uri to a local file.
+     * @return A handler to the task that will load the image. Call {@link Loader#into(ImageView)} to
+     *         finalize the task.
+     */
+    public Loader load(Uri uri) {
+        return new Loader(new File(uri.getPath()));
     }
 
     /**
@@ -92,6 +105,9 @@ public class Image {
                 Exif exif = new Exif(file);
 
                 Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath());
+                if (bitmap == null) {
+                    throw new IOException("Unable to decode file");
+                }
 
                 Matrix matrix = new Matrix();
                 matrix.postRotate(exif.getRotation());
@@ -104,6 +120,7 @@ public class Image {
 
                 return Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
             } catch (IOException e) {
+                Log.e(TAG, "Failed to decode file " + params[0], e);
                 cancel(true);
                 return null;
             }
