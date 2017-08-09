@@ -87,18 +87,21 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         return mMediaPlayer;
     }
 
+    @Nullable
     public File getFile() {
         return mFile;
     }
 
-    public void setFile(File file) {
-        if (!file.equals(mFile)) {
-            if (DEBUG) Log.d(TAG, "File set to " + file);
-            this.mFile = file;
-            createTextureView();
-            if (mIsAvailable) {
-                prepare();
-            }
+    public void setFile(@Nullable File file) {
+        if (file == mFile || (file != null && file.equals(mFile))) {
+            return;
+        }
+
+        if (DEBUG) Log.d(TAG, "File set to " + file);
+        this.mFile = file;
+        createTextureView();
+        if (file != null && mIsAvailable) {
+            prepare();
         }
     }
 
