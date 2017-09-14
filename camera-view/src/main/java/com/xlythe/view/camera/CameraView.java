@@ -676,6 +676,7 @@ public class CameraView extends FrameLayout {
         if (mVideoPendingConfirmation == null) {
             throw new IllegalStateException("confirmVideo() called, but no video was awaiting confirmation");
         }
+        mVideoPreview.pause();
         mVideoPreview.setVisibility(View.GONE);
         getOnVideoCapturedListener().onVideoCaptured(mVideoPendingConfirmation);
         mVideoPendingConfirmation = null;
