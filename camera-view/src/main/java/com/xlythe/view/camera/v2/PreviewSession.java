@@ -118,6 +118,12 @@ class PreviewSession extends SessionImpl {
             super.initialize(chooseOptimalSize(getSizes(map), mCameraView.getWidth(), mCameraView.getHeight()));
 
             SurfaceTexture texture = mCameraView.getSurfaceTexture();
+            if (texture == null) {
+                // This will be caught in Camera2Module.setSession
+                throw new IllegalStateException(
+                        "Expected a SurfaceTexture to exist, but none does. "
+                            + "Was the SurfaceTexture already closed?");
+            }
             texture.setDefaultBufferSize(getWidth(), getHeight());
 
             // This is the output Surface we need to start the preview.
