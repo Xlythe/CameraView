@@ -11,6 +11,7 @@ import android.widget.ImageView;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.ref.WeakReference;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -87,15 +88,18 @@ public class Image {
     }
 
     private static class Task extends AsyncTask<File, Void, Bitmap> {
-        private final ImageView mImageView;
+        private final WeakReference<ImageView> mImageView;
 
         Task(ImageView imageView) {
-            mImageView = imageView;
+            mImageView = new WeakReference<>(imageView);
         }
 
         @Override
         protected void onPreExecute() {
-            mImageView.setImageDrawable(null);
+            ImageView imageView = mImageView.get();
+            if (imageView != null) {
+                imageView.setImageDrawable(null);
+            }
         }
 
         @Override
@@ -128,7 +132,10 @@ public class Image {
 
         @Override
         protected void onPostExecute(Bitmap result) {
-            mImageView.setImageBitmap(result);
+            ImageView imageView = mImageView.get();
+            if (imageView != null) {
+                imageView.setImageBitmap(result);
+            }
         }
     }
 }

@@ -164,17 +164,14 @@ public class LegacyCameraModule extends ICameraModule {
         mVideoRecorder.setMaxDuration((int) getMaxVideoDuration());
         mVideoRecorder.setMaxFileSize(getMaxVideoSize());
         mVideoRecorder.setOrientationHint(getRelativeCameraOrientation(false /* isPreview */));
-        mVideoRecorder.setOnInfoListener(new MediaRecorder.OnInfoListener() {
-            @Override
-            public void onInfo(MediaRecorder mr, int what, int extra) {
-                switch (what) {
-                    case MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED:
-                        Log.w(TAG, "Max duration for recording reached");
-                        break;
-                    case MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED:
-                        Log.w(TAG, "Max filesize for recording reached");
-                        break;
-                }
+        mVideoRecorder.setOnInfoListener((mr, what, extra) -> {
+            switch (what) {
+                case MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED:
+                    Log.w(TAG, "Max duration for recording reached");
+                    break;
+                case MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED:
+                    Log.w(TAG, "Max filesize for recording reached");
+                    break;
             }
         });
 
@@ -246,12 +243,9 @@ public class LegacyCameraModule extends ICameraModule {
             }
 
             mCamera.setParameters(parameters);
-            mCamera.autoFocus(new Camera.AutoFocusCallback() {
-                @Override
-                public void onAutoFocus(boolean success, Camera camera) {
-                    if (DEBUG) {
-                        Log.d(TAG, "AutoFocus: " + success);
-                    }
+            mCamera.autoFocus((success, camera) -> {
+                if (DEBUG) {
+                    Log.d(TAG, "AutoFocus: " + success);
                 }
             });
         } else {

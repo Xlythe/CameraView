@@ -9,6 +9,7 @@ import android.media.AudioManager;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
 import android.os.Build;
+import android.support.annotation.CheckResult;
 import android.support.annotation.Nullable;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -235,6 +236,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
     }
 
+    @CheckResult
     public boolean play() {
         if (DEBUG) Log.d(TAG, "play()");
         ensureMediaPlayer();
@@ -249,6 +251,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         return false;
     }
 
+    @CheckResult
     public boolean pause() {
         if (DEBUG) Log.d(TAG, "pause()");
         ensureMediaPlayer();

@@ -232,15 +232,15 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     }
 
     @Override
-    public void onViewCreated(View view, @Nullable Bundle savedInstanceState) {
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         mCameraHolder = view.findViewById(R.id.layout_camera);
         mPermissionPrompt = view.findViewById(R.id.layout_permissions);
         mPermissionRequest = view.findViewById(R.id.request_permissions);
-        mCamera = (CameraView) view.findViewById(R.id.camera);
-        mToggle = (CompoundButton) view.findViewById(R.id.toggle);
+        mCamera = view.findViewById(R.id.camera);
+        mToggle = view.findViewById(R.id.toggle);
         mCapture = mCameraHolder.findViewById(R.id.capture);
-        mProgress = (ProgressBar) view.findViewById(R.id.progress);
-        mDuration = (TextView) view.findViewById(R.id.duration);
+        mProgress = view.findViewById(R.id.progress);
+        mDuration = view.findViewById(R.id.duration);
         mCancel = view.findViewById(R.id.cancel);
         mConfirm = view.findViewById(R.id.confirm);
 
@@ -270,12 +270,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mCapture.setOnTouchListener(new OnTouchListener(getContext()));
 
         if (mConfirm != null) {
-            mConfirm.setOnClickListener(new View.OnClickListener() {
-                @Override
-                public void onClick(View view) {
-                    mCamera.confirmPicture();
-                }
-            });
+            mConfirm.setOnClickListener(v -> mCamera.confirmPicture());
             mCamera.setImageConfirmationEnabled(true);
             mCamera.setVideoConfirmationEnabled(true);
         } else {
@@ -283,12 +278,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             mCamera.setVideoConfirmationEnabled(false);
         }
 
-        mPermissionRequest.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                requestPermissions(concat(REQUIRED_PERMISSIONS, OPTIONAL_PERMISSIONS), REQUEST_CODE_PERMISSIONS);
-            }
-        });
+        mPermissionRequest.setOnClickListener(v -> requestPermissions(concat(REQUIRED_PERMISSIONS, OPTIONAL_PERMISSIONS), REQUEST_CODE_PERMISSIONS));
 
         if (mToggle != null) {
             mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
@@ -318,12 +308,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
         // Set listeners here, or else restoring state will trigger them.
         if (mToggle != null) {
-            mToggle.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-                @Override
-                public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                    mCamera.toggleCamera();
-                }
-            });
+            mToggle.setOnCheckedChangeListener((b, checked) -> mCamera.toggleCamera());
         }
     }
 
@@ -366,24 +351,21 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     @Override
     public void onVideoConfirmation() {
-        View.OnClickListener listener = new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                if (view == mCancel) {
-                    mCamera.rejectVideo();
-                } else {
-                    mCamera.confirmVideo();
-                }
+        View.OnClickListener listener = v -> {
+            if (v == mCancel) {
+                mCamera.rejectVideo();
+            } else {
+                mCamera.confirmVideo();
+            }
 
-                // After confirming/rejecting, show our buttons again
-                mConfirm.setVisibility(View.GONE);
-                mCapture.setVisibility(View.VISIBLE);
-                if (mCancel!= null) {
-                    mCancel.setVisibility(View.GONE);
-                }
-                if (mToggle != null) {
-                    mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
-                }
+            // After confirming/rejecting, show our buttons again
+            mConfirm.setVisibility(View.GONE);
+            mCapture.setVisibility(View.VISIBLE);
+            if (mCancel!= null) {
+                mCancel.setVisibility(View.GONE);
+            }
+            if (mToggle != null) {
+                mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
             }
         };
         if (mCancel != null) {
@@ -530,6 +512,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             return System.currentTimeMillis() - mDownEventTimestamp;
         }
 
+        @SuppressWarnings({"MissingPermission"})
         private void vibrate() {
             Vibrator vibrator = (Vibrator) getContext().getSystemService(Context.VIBRATOR_SERVICE);
             if (PermissionChecker.hasPermissions(getContext(), Manifest.permission.VIBRATE) && vibrator.hasVibrator()) {

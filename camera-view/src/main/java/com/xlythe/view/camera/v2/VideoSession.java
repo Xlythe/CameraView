@@ -215,17 +215,14 @@ class VideoSession extends PreviewSession {
                 mMediaRecorder.setOutputFile(mFile.getAbsolutePath());
                 mMediaRecorder.setMaxDuration((int) mCameraView.getMaxVideoDuration());
                 mMediaRecorder.setMaxFileSize(mCameraView.getMaxVideoSize());
-                mMediaRecorder.setOnInfoListener(new MediaRecorder.OnInfoListener() {
-                    @Override
-                    public void onInfo(MediaRecorder mr, int what, int extra) {
-                        switch (what) {
-                            case MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED:
-                                Log.w(TAG, "Max duration for recording reached");
-                                break;
-                            case MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED:
-                                Log.w(TAG, "Max filesize for recording reached");
-                                break;
-                        }
+                mMediaRecorder.setOnInfoListener((mr, what, extra) -> {
+                    switch (what) {
+                        case MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED:
+                            Log.w(TAG, "Max duration for recording reached");
+                            break;
+                        case MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED:
+                            Log.w(TAG, "Max filesize for recording reached");
+                            break;
                     }
                 });
                 mMediaRecorder.setVideoSize(getWidth(), getHeight());

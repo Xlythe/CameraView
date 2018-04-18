@@ -335,7 +335,9 @@ class PictureSession extends PreviewSession {
             mFile = file;
             if (mFile.exists()) {
                 Log.w(TAG, "File already exists. Deleting.");
-                mFile.delete();
+                if (!mFile.delete()) {
+                    Log.w(TAG, "Failed to delete existing file.");
+                }
             }
         }
 
