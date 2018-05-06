@@ -140,13 +140,10 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             mMediaPlayer = new MediaPlayer();
         }
 
-        mMediaPlayer.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
-            @Override
-            public void onCompletion(MediaPlayer mediaPlayer) {
-                setPlayingState(false);
-                if (mOnCompletionListener != null) {
-                    mOnCompletionListener.onCompletion(mediaPlayer);
-                }
+        mMediaPlayer.setOnCompletionListener(mediaPlayer -> {
+            setPlayingState(false);
+            if (mOnCompletionListener != null) {
+                mOnCompletionListener.onCompletion(mediaPlayer);
             }
         });
     }
@@ -219,14 +216,11 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         ensureMediaPlayer();
 
         try {
-            mMediaPlayer.setOnSeekCompleteListener(new MediaPlayer.OnSeekCompleteListener() {
-                @Override
-                public void onSeekComplete(MediaPlayer mediaPlayer) {
-                    if (DEBUG) Log.d(TAG, "Seek completed");
-                    mMediaPlayer.setOnSeekCompleteListener(null);
-                    if (!mIsPlaying) {
-                        mediaPlayer.pause();
-                    }
+            mMediaPlayer.setOnSeekCompleteListener(mediaPlayer -> {
+                if (DEBUG) Log.d(TAG, "Seek completed");
+                mMediaPlayer.setOnSeekCompleteListener(null);
+                if (!mIsPlaying) {
+                    mediaPlayer.pause();
                 }
             });
             mMediaPlayer.start();

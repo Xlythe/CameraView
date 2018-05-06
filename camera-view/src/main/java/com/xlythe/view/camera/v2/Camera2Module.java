@@ -243,10 +243,6 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public void close() {
-        close(true /* shutdownThread */);
-    }
-
-    private void close(boolean shutdownThread) {
         if (mCaptureSession != null) {
             mCaptureSession.close();
             mCaptureSession = null;
@@ -302,7 +298,7 @@ public class Camera2Module extends ICameraModule {
             // Close the old camera and open with the new camera id, but only if it was already
             // open before toggle was requested.
             boolean shouldOpen = mIsOpen;
-            close(false /* shutdownThread */);
+            close();
             mActiveCamera = mCameraManager.getCameraIdList()[(position + 1) % mCameraManager.getCameraIdList().length];
             if (shouldOpen) {
                 open();

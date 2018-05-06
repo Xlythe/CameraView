@@ -802,7 +802,7 @@ public class CameraView extends FrameLayout {
     /**
      * The area must be between -1000,-1000 and 1000,1000
      */
-    private Rect calculateTapArea(Rect rect, float x, float y, float coefficient) {
+    private void calculateTapArea(Rect rect, float x, float y, float coefficient) {
         int max = 1000;
         int min = -1000;
 
@@ -856,8 +856,6 @@ public class CameraView extends FrameLayout {
         rect.left = rangeLimit(rect.left, max, min);
         rect.bottom = rangeLimit(rect.bottom, max, min);
         rect.right = rangeLimit(rect.right, max, min);
-
-        return rect;
     }
 
     private int rangeLimit(int val, int max, int min) {

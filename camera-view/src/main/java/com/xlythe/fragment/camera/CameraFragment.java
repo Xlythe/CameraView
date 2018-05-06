@@ -317,24 +317,21 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     @Override
     public void onImageConfirmation() {
-        View.OnClickListener listener = new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                if (view == mCancel) {
-                    mCamera.rejectPicture();
-                } else {
-                    mCamera.confirmPicture();
-                }
+        View.OnClickListener listener = view -> {
+            if (view == mCancel) {
+                mCamera.rejectPicture();
+            } else {
+                mCamera.confirmPicture();
+            }
 
-                // After confirming/rejecting, show our buttons again
-                mConfirm.setVisibility(View.GONE);
-                mCapture.setVisibility(View.VISIBLE);
-                if (mCancel != null) {
-                    mCancel.setVisibility(View.GONE);
-                }
-                if (mToggle != null) {
-                    mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
-                }
+            // After confirming/rejecting, show our buttons again
+            mConfirm.setVisibility(View.GONE);
+            mCapture.setVisibility(View.VISIBLE);
+            if (mCancel != null) {
+                mCancel.setVisibility(View.GONE);
+            }
+            if (mToggle != null) {
+                mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
             }
         };
         if (mCancel != null) {
@@ -384,12 +381,9 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         private ProgressBarAnimator() {
             setInterpolator(new LinearInterpolator());
             setFloatValues(0f, 1f);
-            addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
-                @Override
-                public void onAnimationUpdate(ValueAnimator animation) {
-                    float percent = (float) animation.getAnimatedValue();
-                    onUpdate(percent);
-                }
+            addUpdateListener(animation -> {
+                float percent = (float) animation.getAnimatedValue();
+                onUpdate(percent);
             });
         }
 
