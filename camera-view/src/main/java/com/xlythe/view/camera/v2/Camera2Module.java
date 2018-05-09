@@ -263,8 +263,7 @@ public class Camera2Module extends ICameraModule {
     public boolean hasFrontFacingCamera() {
         try {
             for (String cameraId : mCameraManager.getCameraIdList()) {
-                boolean frontFacing = isFrontFacing(cameraId);
-                if (frontFacing) return true;
+                if (isFrontFacing(cameraId)) return true;
             }
         } catch (CameraAccessException e) {
             Log.e(TAG, "Failed to query camera", e);
