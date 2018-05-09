@@ -410,7 +410,7 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * When enabled, requires videos to be confirmed before
+     * When enabled, requires images to be confirmed before
      * {@link OnImageCapturedListener#onImageCaptured(File)} is triggered. A preview of the image
      * will be displayed in CameraView's preview.
      */
