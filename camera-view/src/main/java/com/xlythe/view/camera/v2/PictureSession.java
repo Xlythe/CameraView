@@ -284,31 +284,28 @@ class PictureSession extends PreviewSession {
         private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(final ImageReader reader) {
-                mCameraView.getHandler().post(new Runnable() {
-                    @Override
-                    public void run() {
-                        try {
-                            if (mFile != null) {
-                                final File file = mFile;
-                                new ImageSaver(
-                                        mCameraView.getContext(),
-                                        reader.acquireLatestImage(),
-                                        mCameraView.getRelativeCameraOrientation(),
-                                        isUsingFrontFacingCamera(),
-                                        mFile) {
-                                    @UiThread
-                                    @Override
-                                    protected void onPostExecute(Void aVoid) {
-                                        showImageConfirmation(file);
-                                    }
-                                }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
-                                mFile = null;
-                            } else {
-                                Log.w(TAG, "OnImageAvailable called but no file to write to");
-                            }
-                        } catch (IllegalStateException e) {
-                            Log.e(TAG, "Failed to save image", e);
+                mCameraView.getHandler().post(() -> {
+                    try {
+                        if (mFile != null) {
+                            final File file = mFile;
+                            new ImageSaver(
+                                    mCameraView.getContext(),
+                                    reader.acquireLatestImage(),
+                                    mCameraView.getRelativeCameraOrientation(),
+                                    isUsingFrontFacingCamera(),
+                                    mFile) {
+                                @UiThread
+                                @Override
+                                protected void onPostExecute(Void aVoid) {
+                                    showImageConfirmation(file);
+                                }
+                            }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+                            mFile = null;
+                        } else {
+                            Log.w(TAG, "OnImageAvailable called but no file to write to");
                         }
+                    } catch (IllegalStateException e) {
+                        Log.e(TAG, "Failed to save image", e);
                     }
                 });
             }

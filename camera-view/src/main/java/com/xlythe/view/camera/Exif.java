@@ -187,7 +187,9 @@ public class Exif {
         try {
             String subsec = Long.toString(now - convertFromExifDateTime(datetime).getTime());
             mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, subsec);
-        } catch (ParseException e) {}
+        } catch (ParseException e) {
+            e.printStackTrace();
+        }
     }
 
     /**
@@ -208,7 +210,7 @@ public class Exif {
                 }
                 timestamp += sub;
             } catch (NumberFormatException e) {
-                // Ignored
+                e.printStackTrace();
             }
         }
 
@@ -464,7 +466,9 @@ public class Exif {
             String subsec = Long.toString(now - convertFromExifDateTime(datetime).getTime());
             mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subsec);
             mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, subsec);
-        } catch (ParseException e) {}
+        } catch (ParseException e) {
+            e.printStackTrace();
+        }
 
         mRemoveTimestamp = false;
     }

@@ -180,12 +180,7 @@ public class Camera2Module extends ICameraModule {
                 hasPreviousState = true;
             }
             if (hasPreviousState) {
-                mHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        setSession(session);
-                    }
-                });
+                mHandler.post(() -> setSession(session));
                 return;
             }
 
