@@ -8,7 +8,6 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
-import android.support.annotation.NonNull;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -16,6 +15,8 @@ import android.view.Surface;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+
+import androidx.annotation.NonNull;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;

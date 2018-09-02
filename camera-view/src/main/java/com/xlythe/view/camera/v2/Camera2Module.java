@@ -16,9 +16,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
-import android.support.annotation.RequiresPermission;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -29,6 +26,10 @@ import com.xlythe.view.camera.ICameraModule;
 import java.io.File;
 import java.util.List;
 import java.util.Locale;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresPermission;
 
 /**
  * A wrapper around the Camera2 APIs. Camera2 has some peculiarities, such as crashing if you attach

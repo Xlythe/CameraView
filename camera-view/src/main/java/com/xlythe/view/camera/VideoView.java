@@ -9,8 +9,6 @@ import android.media.AudioManager;
 import android.media.MediaMetadataRetriever;
 import android.media.MediaPlayer;
 import android.os.Build;
-import android.support.annotation.CheckResult;
-import android.support.annotation.Nullable;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.MotionEvent;
@@ -22,6 +20,9 @@ import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.IOException;
+
+import androidx.annotation.CheckResult;
+import androidx.annotation.Nullable;
 
 public class VideoView extends FrameLayout implements TextureView.SurfaceTextureListener {
     private static final String TAG = VideoView.class.getSimpleName();
@@ -43,7 +44,8 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     private boolean mIsPlaying;
 
     // An optional listener for when videos have reached the end
-    @Nullable private MediaPlayer.OnCompletionListener mOnCompletionListener;
+    @Nullable
+    private MediaPlayer.OnCompletionListener mOnCompletionListener;
 
     // An optional listener for when videos are paused/played
     @Nullable private EventListener mEventListener;

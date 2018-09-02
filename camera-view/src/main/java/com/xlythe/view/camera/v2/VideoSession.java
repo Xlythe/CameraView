@@ -12,7 +12,6 @@ import android.hardware.camera2.params.StreamConfigurationMap;
 import android.location.Location;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
-import android.support.annotation.NonNull;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -21,6 +20,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
+
+import androidx.annotation.NonNull;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;

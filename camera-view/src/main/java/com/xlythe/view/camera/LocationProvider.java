@@ -8,12 +8,13 @@ import android.location.LocationListener;
 import android.location.LocationManager;
 import android.os.Bundle;
 import android.os.Looper;
-import android.support.annotation.Nullable;
-import android.support.annotation.RequiresPermission;
-import android.support.annotation.WorkerThread;
 
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresPermission;
+import androidx.annotation.WorkerThread;
 
 public class LocationProvider {
     @Nullable

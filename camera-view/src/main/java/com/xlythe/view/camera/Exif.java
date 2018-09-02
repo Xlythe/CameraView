@@ -1,8 +1,6 @@
 package com.xlythe.view.camera;
 
 import android.location.Location;
-import android.support.annotation.Nullable;
-import android.support.media.ExifInterface;
 import android.util.Log;
 
 import java.io.File;
@@ -12,6 +10,9 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+
+import androidx.annotation.Nullable;
+import androidx.exifinterface.media.ExifInterface;
 
 /**
  * Modifies metadata on JPEG files. Call {@link #save()} to persist changes to disc.

@@ -16,9 +16,6 @@ import android.media.Image;
 import android.media.ImageReader;
 import android.os.AsyncTask;
 import android.os.Build;
-import android.support.annotation.NonNull;
-import android.support.annotation.UiThread;
-import android.support.annotation.WorkerThread;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -33,6 +30,10 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.Arrays;
 import java.util.List;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.UiThread;
+import androidx.annotation.WorkerThread;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;

@@ -9,8 +9,6 @@ import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.location.Location;
 import android.os.Handler;
-import android.support.annotation.NonNull;
-import android.support.annotation.Nullable;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -25,6 +23,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;

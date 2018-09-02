@@ -10,9 +10,6 @@ import android.graphics.SurfaceTexture;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Parcelable;
-import android.support.annotation.Nullable;
-import android.support.annotation.RequiresPermission;
-import android.support.annotation.UiThread;
 import android.util.AttributeSet;
 import android.util.Log;
 import android.view.Display;
@@ -31,6 +28,10 @@ import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
+
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresPermission;
+import androidx.annotation.UiThread;
 
 /**
  * A {@link View} that displays a preview of the camera with methods {@link #takePicture(File)},

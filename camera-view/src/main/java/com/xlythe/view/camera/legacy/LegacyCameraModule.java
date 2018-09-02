@@ -9,7 +9,6 @@ import android.hardware.Camera;
 import android.location.Location;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
-import android.support.annotation.Nullable;
 import android.util.Log;
 
 import com.xlythe.view.camera.CameraView;
@@ -23,6 +22,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+
+import androidx.annotation.Nullable;
 
 @SuppressWarnings("deprecation")
 public class LegacyCameraModule extends ICameraModule {
