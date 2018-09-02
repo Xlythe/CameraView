@@ -13,7 +13,7 @@ Where to Download
 -----------------
 ```groovy
 dependencies {
-  compile 'com.xlythe:camera-view:1.2.7'
+  implementation 'com.xlythe:camera-view:1.2.7'
 }
 ```
 
