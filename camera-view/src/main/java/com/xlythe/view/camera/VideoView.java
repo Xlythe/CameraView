@@ -23,7 +23,9 @@ import java.io.IOException;
 
 import androidx.annotation.CheckResult;
 import androidx.annotation.Nullable;
+import androidx.annotation.RestrictTo;
 
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class VideoView extends FrameLayout implements TextureView.SurfaceTextureListener {
     private static final String TAG = VideoView.class.getSimpleName();
     private static final boolean DEBUG = false;

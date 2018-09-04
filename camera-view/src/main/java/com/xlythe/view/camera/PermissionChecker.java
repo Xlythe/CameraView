@@ -3,8 +3,10 @@ package com.xlythe.view.camera;
 import android.content.Context;
 import android.content.pm.PackageManager;
 
+import androidx.annotation.RestrictTo;
 import androidx.core.content.ContextCompat;
 
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class PermissionChecker {
     /**
      * Returns true if all given permissions are available

@@ -15,9 +15,12 @@ import java.lang.ref.WeakReference;
 import java.util.HashMap;
 import java.util.Map;
 
+import androidx.annotation.RestrictTo;
+
 /**
  * Loads images from disc into an {@link ImageView}.
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class Image {
     private static final String TAG = "Image";
 

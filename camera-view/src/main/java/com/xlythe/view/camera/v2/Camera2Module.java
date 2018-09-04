@@ -30,6 +30,7 @@ import java.util.Locale;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.RestrictTo;
 
 /**
  * A wrapper around the Camera2 APIs. Camera2 has some peculiarities, such as crashing if you attach
@@ -37,6 +38,7 @@ import androidx.annotation.RequiresPermission;
  * {@link Session}s that list out compatible surfaces and creates capture requests for them.
  */
 @TargetApi(21)
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class Camera2Module extends ICameraModule {
     private static final int ZOOM_NOT_SUPPORTED = 1;
 

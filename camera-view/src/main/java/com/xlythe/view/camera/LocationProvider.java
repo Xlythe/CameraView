@@ -14,8 +14,10 @@ import java.util.concurrent.TimeUnit;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.WorkerThread;
 
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LocationProvider {
     @Nullable
     @WorkerThread

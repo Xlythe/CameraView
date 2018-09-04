@@ -24,8 +24,10 @@ import java.util.Comparator;
 import java.util.List;
 
 import androidx.annotation.Nullable;
+import androidx.annotation.RestrictTo;
 
 @SuppressWarnings("deprecation")
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LegacyCameraModule extends ICameraModule {
     private static final int INVALID_CAMERA_ID = -1;
 
