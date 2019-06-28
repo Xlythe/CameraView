@@ -53,14 +53,9 @@ public abstract class ICameraModule {
         return mView.getTransform(matrix);
     }
 
-    protected void setTransform(final Matrix matrix) {
+    protected void setTransform(Matrix matrix) {
         if (Looper.myLooper() != Looper.getMainLooper()) {
-            mView.post(new Runnable() {
-                @Override
-                public void run() {
-                    setTransform(matrix);
-                }
-            });
+            mView.post(() -> setTransform(matrix));
         } else {
             mView.setTransform(matrix);
         }

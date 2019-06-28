@@ -26,6 +26,7 @@ import android.widget.ImageView;
 
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
+import com.xlythe.view.camera.v3.CameraXModule;
 
 import java.io.File;
 
@@ -45,6 +46,9 @@ import androidx.annotation.UiThread;
 public class CameraView extends FrameLayout {
     static final String TAG = CameraView.class.getSimpleName();
     static final boolean DEBUG = false;
+
+    // When enabled, CameraX will be used. It's currently unstable.
+    static final boolean USE_CAMERA_X = false;
 
     public static final int INDEFINITE_VIDEO_DURATION = -1;
     public static final int INDEFINITE_VIDEO_SIZE = -1;
@@ -199,7 +203,9 @@ public class CameraView extends FrameLayout {
     }
 
     private void init(Context context, @Nullable AttributeSet attrs) {
-        if (Build.VERSION.SDK_INT >= 21) {
+        if (USE_CAMERA_X && Build.VERSION.SDK_INT >= 21) {
+            mCameraModule = new CameraXModule(this);
+        } else if (Build.VERSION.SDK_INT >= 21) {
             mCameraModule = new Camera2Module(this);
         } else {
             mCameraModule = new LegacyCameraModule(this);
@@ -393,6 +399,10 @@ public class CameraView extends FrameLayout {
                 break;
         }
         return displayRotation;
+    }
+
+    public TextureView asTextureView() {
+        return mCameraView;
     }
 
     @UiThread
