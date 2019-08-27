@@ -1,4 +1,4 @@
-package com.xlythe.view.camera.v3;
+package com.xlythe.view.camera.x;
 
 import android.Manifest;
 import android.annotation.TargetApi;
@@ -6,6 +6,7 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.util.Log;
 import android.util.Rational;
+import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
@@ -84,6 +85,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     public void open() {
         mPreview = new Preview(new PreviewConfig.Builder()
                 .setTargetAspectRatio(getTargetAspectRatio())
+                .setTargetResolution(getTargetResolution())
                 .setTargetRotation(getTargetRotation())
                 .setLensFacing(getLensFacing())
                 .build());
@@ -306,6 +308,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     private Rational getTargetAspectRatio() {
         return new Rational(getWidth(), getHeight());
+    }
+
+    private Size getTargetResolution() {
+        return new Size(getWidth(), getHeight());
     }
 
     private int getTargetRotation() {

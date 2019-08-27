@@ -26,7 +26,7 @@ import android.widget.ImageView;
 
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
-import com.xlythe.view.camera.v3.CameraXModule;
+import com.xlythe.view.camera.x.CameraXModule;
 
 import java.io.File;
 
