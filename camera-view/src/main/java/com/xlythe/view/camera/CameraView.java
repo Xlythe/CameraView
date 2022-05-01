@@ -457,6 +457,7 @@ public class CameraView extends FrameLayout {
     }
 
     void showImageConfirmation(File file) {
+        Log.d(TAG, "Saved the picture to " + file);
         if (isImageConfirmationEnabled()) {
             mCameraModule.pause();
             mImagePreview.setVisibility(View.VISIBLE);
@@ -474,6 +475,7 @@ public class CameraView extends FrameLayout {
     }
 
     void onImageFailed() {
+        Log.d(TAG, "Failed to take a picture");
         if (isImageConfirmationEnabled()) {
             mCameraModule.resume();
         }
@@ -484,6 +486,7 @@ public class CameraView extends FrameLayout {
     }
 
     void showVideoConfirmation(File file) {
+        Log.d(TAG, "Saved the video to " + file);
         if (isVideoConfirmationEnabled()) {
             mCameraModule.pause();
 
@@ -508,6 +511,7 @@ public class CameraView extends FrameLayout {
     }
 
     void onVideoFailed() {
+        Log.d(TAG, "Failed to record a video");
         if (isVideoConfirmationEnabled()) {
             mCameraModule.resume();
         }
@@ -607,6 +611,7 @@ public class CameraView extends FrameLayout {
      * @param file The destination.
      */
     public void takePicture(File file) {
+        Log.v(TAG, "Taking a picture");
         if (isImageConfirmationEnabled()) {
             mCameraModule.pause();
         }
@@ -655,6 +660,7 @@ public class CameraView extends FrameLayout {
      * @param file The destination.
      */
     public void startRecording(File file) {
+        Log.v(TAG, "Recording a video");
         mCameraModule.startRecording(file);
     }
 
@@ -662,6 +668,7 @@ public class CameraView extends FrameLayout {
      * Stops an in progress video.
      */
     public void stopRecording() {
+        Log.v(TAG, "Stopped recording a video");
         if (isVideoConfirmationEnabled()) {
             mCameraModule.pause();
         }

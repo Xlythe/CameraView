@@ -79,6 +79,12 @@ class PictureSession extends PreviewSession {
         return surfaces;
     }
 
+    @Override
+    public void close() {
+        super.close();
+        mPictureSurface.close();
+    }
+
     void takePicture(@NonNull File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
         mPictureSurface.initializePicture(file);
         try {
@@ -304,9 +310,11 @@ class PictureSession extends PreviewSession {
                             mFile = null;
                         } else {
                             Log.w(TAG, "OnImageAvailable called but no file to write to");
+                            onImageFailed();
                         }
                     } catch (IllegalStateException e) {
                         Log.e(TAG, "Failed to save image", e);
+                        onImageFailed();
                     }
                 });
             }
@@ -315,6 +323,7 @@ class PictureSession extends PreviewSession {
         private final CameraSurface mPreviewSurface;
         private ImageReader mImageReader;
         private File mFile;
+        private boolean mIsTakingPhoto = false;
 
         PictureSurface(Camera2Module camera2Module, CameraSurface previewSurface) {
             super(camera2Module);
@@ -349,6 +358,10 @@ class PictureSession extends PreviewSession {
             if (mImageReader != null) {
                 mImageReader.close();
                 mImageReader = null;
+            }
+            if (mFile != null) {
+                onImageFailed();
+                mFile = null;
             }
         }
     }

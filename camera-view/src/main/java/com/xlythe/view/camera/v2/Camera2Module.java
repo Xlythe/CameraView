@@ -108,20 +108,49 @@ public class Camera2Module extends ICameraModule {
     private boolean mIsRecording = false;
 
     /**
+     *
+     */
+    private boolean mIsAttemptingToReopen = false;
+
+    /**
      * Callbacks for when the camera is available / unavailable
      */
     private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
         @Override
         public void onOpened(@NonNull CameraDevice cameraDevice) {
+            if (!mIsOpen) {
+                Log.w(TAG, "Camera was opened after CameraView was closed. Disconnecting from the camera.");
+                close();
+                return;
+            }
+
             // The camera has opened. Start the preview now.
             mCameraDevice = cameraDevice;
             setSession(new PictureSession(Camera2Module.this));
+
+            // Once we've successfully opened, we clean up any flags.
+            mIsAttemptingToReopen = false;
         }
 
         @Override
         public void onDisconnected(@NonNull CameraDevice cameraDevice) {
             Log.w(TAG, "Camera disconnected");
+
+            // The camera has disconnected or errored out and we need to close ourselves to reset state.
+            // We'll try one time to reconnect before accepting defeat.
+
+            // Cache if the CameraView wants us to be open. We could have disconnected because
+            // we were closed.
+            boolean isCameraViewOpen = mIsOpen;
+
+            // Close to clean up our state.
             close();
+
+            // If we should be open, and if we haven't attempted to reopen before, try opening again now.
+            if (isCameraViewOpen && !mIsAttemptingToReopen) {
+                mIsAttemptingToReopen = true;
+                open();
+            }
         }
 
         @Override
