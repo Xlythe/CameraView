@@ -4,29 +4,35 @@ import android.Manifest;
 import android.annotation.TargetApi;
 import android.graphics.Matrix;
 import android.graphics.Rect;
+import android.graphics.SurfaceTexture;
+import android.os.Handler;
 import android.util.Log;
-import android.util.Rational;
 import android.util.Size;
 import android.view.Surface;
 
+import com.google.common.util.concurrent.ListenableFuture;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ICameraModule;
 
 import java.io.File;
+import java.util.concurrent.ExecutionException;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
+import androidx.camera.core.Camera;
 import androidx.camera.core.CameraInfoUnavailableException;
-import androidx.camera.core.CameraX;
-import androidx.camera.core.FlashMode;
+import androidx.camera.core.CameraSelector;
+import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.ImageCapture;
-import androidx.camera.core.ImageCaptureConfig;
+import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.Preview;
-import androidx.camera.core.PreviewConfig;
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory;
 import androidx.camera.core.VideoCapture;
-import androidx.camera.core.VideoCaptureConfig;
+import androidx.camera.core.ZoomState;
+import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleOwner;
 
@@ -36,6 +42,11 @@ import androidx.lifecycle.LifecycleOwner;
 @TargetApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class CameraXModule extends ICameraModule implements LifecycleOwner {
+    /**
+     * The library can crash and fail to return events (even #onError).
+     * To work around that, we'll assume an error after this timeout.
+     */
+    private static final long LIB_TIMEOUT_MILLIS = 1000;
 
     /**
      * The CameraView we're attached to.
@@ -43,10 +54,27 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private final CameraView mView;
 
     /**
-     * This is the id of the camera (eg. front or back facing) that we're currently using.
+     * A future handle to the CameraX library. Until this is loaded, we cannot use CameraX.
+     */
+    private final ListenableFuture<ProcessCameraProvider> mCameraProviderFuture;
+
+    /**
+     * A handle to the CameraX library. You must wait until {@link #mCameraProviderFuture} has
+     * loaded before this becomes non-null.
      */
     @Nullable
-    private String mActiveCamera;
+    private ProcessCameraProvider mCameraProvider;
+
+    /**
+     * True if the module has been opened. This is checked when async operations haven't finished
+     * yet, as a way to release resources if we were closed before they loaded.
+     */
+    private boolean mIsOpen;
+
+    /**
+     * The currently active Camera. Null if the camera isn't open.
+     */
+    @Nullable private Camera mActiveCamera;
 
     /** The preview that draws to the texture surface. Non-null while open. */
     @Nullable private Preview mPreview;
@@ -72,6 +100,14 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     public CameraXModule(CameraView cameraView) {
         super(cameraView);
         mView = cameraView;
+        mCameraProviderFuture = ProcessCameraProvider.getInstance(cameraView.getContext());
+        mCameraProviderFuture.addListener(() -> {
+            try {
+                mCameraProvider = mCameraProviderFuture.get();
+            } catch (ExecutionException | InterruptedException e) {
+                Log.e(TAG, "Unable to load camera", e);
+            }
+        }, ContextCompat.getMainExecutor(getContext()));
     }
 
     @NonNull
@@ -83,36 +119,73 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @RequiresPermission(Manifest.permission.CAMERA)
     @Override
     public void open() {
-        mPreview = new Preview(new PreviewConfig.Builder()
-                .setTargetAspectRatio(getTargetAspectRatio())
+        mIsOpen = true;
+        loadPreview();
+    }
+
+    private void loadPreview() {
+        if (!mIsOpen) {
+            Log.v(TAG, "Ignoring call to load preview. The camera is no longer open.");
+            return;
+        }
+
+        // We haven't loaded our CameraProvider yet. We'll delay until we are loaded, and try again.
+        if (mCameraProvider == null) {
+            mCameraProviderFuture.addListener(this::loadPreview, ContextCompat.getMainExecutor(getContext()));
+            return;
+        }
+
+        mPreview = new Preview.Builder()
                 .setTargetResolution(getTargetResolution())
                 .setTargetRotation(getTargetRotation())
-                .setLensFacing(getLensFacing())
-                .build());
-        mPreview.setOnPreviewOutputUpdateListener(output -> {
-            mView.asTextureView().setSurfaceTexture(output.getSurfaceTexture());
-            Log.d(TAG, "Width="+output.getTextureSize().getWidth());
-            Log.d(TAG, "Height="+output.getTextureSize().getHeight());
-            Log.d(TAG, "RotationDegrees="+output.getRotationDegrees());
-            transformPreview(output.getTextureSize().getWidth(), output.getTextureSize().getHeight(), output.getRotationDegrees());
+                .build();
+        mPreview.setSurfaceProvider(request -> {
+            SurfaceTexture surfaceTexture = mView.getSurfaceTexture();
+            if (surfaceTexture == null) {
+                // Can happen if there's a race condition, and the texture is closed before we're
+                // asked to provide it.
+                request.willNotProvideSurface();
+                return;
+            }
+
+            Surface surface = new Surface(surfaceTexture);
+            request.provideSurface(surface, ContextCompat.getMainExecutor(getContext()), result -> {
+                // ignored
+            });
+
+            Log.d(TAG, "Width="+request.getResolution().getWidth());
+            Log.d(TAG, "Height="+request.getResolution().getHeight());
+            Log.d(TAG, "RotationDegrees="+0);
+            transformPreview(request.getResolution().getWidth(), request.getResolution().getHeight(), 0);
         });
-        CameraX.bindToLifecycle(this, mPreview);
+        mActiveCamera = mCameraProvider.bindToLifecycle(this, getCameraSelector(), mPreview);
     }
 
     @Override
     public void close() {
+        mIsOpen = false;
+
+        if (mCameraProvider == null) {
+            return;
+        }
+
         if (mPreview == null) {
             return;
         }
 
-        CameraX.unbind(mPreview);
+        mCameraProvider.unbind(mPreview);
         mPreview = null;
+        mActiveCamera = null;
     }
 
     @Override
     public boolean hasFrontFacingCamera() {
+        if (mCameraProvider == null) {
+            return false;
+        }
+
         try {
-            return CameraX.getCameraWithLensFacing(CameraX.LensFacing.FRONT) != null;
+            return mCameraProvider.hasCamera(new CameraSelector.Builder().requireLensFacing(CameraSelector.LENS_FACING_FRONT).build());
         } catch (CameraInfoUnavailableException e) {
             Log.e(TAG, "Failed to query for front facing camera", e);
             return false;
@@ -128,40 +201,40 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Override
     public void toggleCamera() {
         mIsFrontFacing = !mIsFrontFacing;
-        try {
-            mActiveCamera = CameraX.getCameraWithLensFacing(getLensFacing());
-        } catch (CameraInfoUnavailableException e) {
-            Log.e(TAG, "Failed to query for camera", e);
-        }
         close();
         open();
     }
 
     @Override
     public void focus(Rect focus, Rect metering) {
-        if (mPreview == null) {
+        if (mActiveCamera == null) {
             return;
         }
-        mPreview.focus(focus, metering);
+
+        SurfaceOrientedMeteringPointFactory factory = new SurfaceOrientedMeteringPointFactory(getWidth(), getHeight());
+        mActiveCamera.getCameraControl().startFocusAndMetering(new FocusMeteringAction.Builder(factory.createPoint(focus.centerX(), focus.centerY())).build());
     }
 
     @Override
     public void setZoomLevel(int zoomLevel) {
-        mZoomLevel = zoomLevel;
-        if (mPreview == null) {
+        if (mActiveCamera == null) {
             return;
         }
 
-        int maxZoom = getMaxZoomLevel();
+        ZoomState zoomState = mActiveCamera.getCameraInfo().getZoomState().getValue();
+        if (zoomState == null) {
+            return;
+        }
 
-        int minW = getWidth() / maxZoom;
-        int minH = getHeight() / maxZoom;
-        int difW = getWidth() - minW;
-        int difH = getHeight() - minH;
-        int cropW = difW * zoomLevel / maxZoom;
-        int cropH = difH * zoomLevel / maxZoom;
-        Rect cropRegion = new Rect(cropW, cropH, getWidth() - cropW, getHeight() - cropH);
-        mPreview.zoom(cropRegion);
+        float minRatio = zoomState.getMinZoomRatio();
+        float maxRatio = zoomState.getMaxZoomRatio();
+        float steps = (maxRatio - minRatio) / getMaxZoomLevel();
+
+        // Note: Because we're dealing with floats, we'll use Math.min to ensure we don't
+        // accidentally exceed the max with our multiplication.
+        float zoom = Math.min(minRatio + steps * zoomLevel, maxRatio);
+        mActiveCamera.getCameraControl().setZoomRatio(zoom);
+        mZoomLevel = zoomLevel;
     }
 
     @Override
@@ -181,30 +254,19 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @Override
     public boolean hasFlash() {
-        return true;
-    }
-
-    @NonNull
-    private String getActiveCamera() {
-        return mActiveCamera == null ? getDefaultCamera() : mActiveCamera;
-    }
-
-    private String getDefaultCamera() {
-        try {
-            return CameraX.getCameraWithLensFacing(CameraX.LensFacing.BACK);
-        } catch (CameraInfoUnavailableException e) {
-            Log.e(TAG, "Failed to get active camera");
-            return "";
+        if (mActiveCamera == null) {
+            return false;
         }
+
+        return mActiveCamera.getCameraInfo().hasFlashUnit();
     }
 
-    private int getSensorOrientation(String cameraId) {
-        try {
-            return CameraX.getCameraInfo(cameraId).getSensorRotationDegrees();
-        } catch (IllegalArgumentException | CameraInfoUnavailableException e) {
-            Log.e(TAG, "Failed to get sensor orientation state from camera " + cameraId);
+    private int getSensorOrientation() {
+        if (mActiveCamera == null) {
             return 0;
         }
+
+        return mActiveCamera.getCameraInfo().getSensorRotationDegrees();
     }
 
     @Override
@@ -226,31 +288,44 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @Override
     public void takePicture(File file) {
-        ImageCapture imageCapture = new ImageCapture(new ImageCaptureConfig.Builder()
-                .setTargetAspectRatio(getTargetAspectRatio())
+        if (mCameraProvider == null) {
+            onImageFailed();
+            return;
+        }
+
+        ImageCapture imageCapture = new ImageCapture.Builder()
+                .setTargetResolution(getTargetResolution())
                 .setTargetRotation(getTargetRotation())
-                .setLensFacing(getLensFacing())
                 .setFlashMode(getFlashMode())
                 .setCaptureMode(getCaptureMode())
-                .build());
+                .build();
+
         try {
-            CameraX.bindToLifecycle(this, imageCapture);
+            mCameraProvider.bindToLifecycle(this, getCameraSelector(), imageCapture);
         } catch (IllegalArgumentException e) {
             onImageFailed();
             return;
         }
 
-        imageCapture.takePicture(file, new ImageCapture.OnImageSavedListener() {
+        Handler cancellationHandler = new Handler();
+        cancellationHandler.postDelayed(() -> {
+            onImageFailed();
+            mCameraProvider.unbind(imageCapture);
+        }, LIB_TIMEOUT_MILLIS);
+
+        imageCapture.takePicture(new ImageCapture.OutputFileOptions.Builder(file).build(), ContextCompat.getMainExecutor(getContext()), new ImageCapture.OnImageSavedCallback() {
             @Override
-            public void onImageSaved(@NonNull File file) {
+            public void onImageSaved(@NonNull ImageCapture.OutputFileResults outputFileResults) {
                 showImageConfirmation(file);
-                CameraX.unbind(imageCapture);
+                mCameraProvider.unbind(imageCapture);
+                cancellationHandler.removeCallbacksAndMessages(null);
             }
 
             @Override
-            public void onError(@NonNull ImageCapture.UseCaseError useCaseError, @NonNull String message, @Nullable Throwable cause) {
+            public void onError(@NonNull ImageCaptureException exception) {
                 onImageFailed();
-                CameraX.unbind(imageCapture);
+                mCameraProvider.unbind(imageCapture);
+                cancellationHandler.removeCallbacksAndMessages(null);
             }
         });
     }
@@ -258,27 +333,33 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
     public void startRecording(File file) {
-        VideoCapture videoCapture = new VideoCapture(new VideoCaptureConfig.Builder()
-                .setTargetAspectRatio(getTargetAspectRatio())
+        if (mCameraProvider == null) {
+            onVideoFailed();
+            return;
+        }
+
+        VideoCapture videoCapture = new VideoCapture.Builder()
+                .setTargetResolution(getTargetResolution())
                 .setTargetRotation(getTargetRotation())
-                .setLensFacing(getLensFacing())
-                .build());
+                .build();
+
         try {
-            CameraX.bindToLifecycle(this, videoCapture);
+            mCameraProvider.bindToLifecycle(this, getCameraSelector(), videoCapture);
         } catch (IllegalArgumentException e) {
             onVideoFailed();
             return;
         }
 
-        videoCapture.startRecording(file, new VideoCapture.OnVideoSavedListener() {
+        videoCapture.startRecording(new VideoCapture.OutputFileOptions.Builder(file).build(), ContextCompat.getMainExecutor(getContext()), new VideoCapture.OnVideoSavedCallback() {
             @Override
-            public void onVideoSaved(File file) {
+            public void onVideoSaved(@NonNull VideoCapture.OutputFileResults outputFileResults) {
                 showVideoConfirmation(file);
                 stopRecording();
             }
 
             @Override
-            public void onError(VideoCapture.UseCaseError useCaseError, String message, @Nullable Throwable cause) {
+            public void onError(int videoCaptureError, @NonNull String message, @Nullable Throwable cause) {
+                Log.e(TAG, "Failed to start video recording. Error[" + videoCaptureError + "] " + message, cause);
                 onVideoFailed();
                 stopRecording();
             }
@@ -292,7 +373,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         mVideoCapture.stopRecording();
-        CameraX.unbind(mVideoCapture);
+        mCameraProvider.unbind(mVideoCapture);
         mVideoCapture = null;
     }
 
@@ -303,11 +384,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @Override
     protected int getRelativeCameraOrientation() {
-        return getRelativeImageOrientation(getDisplayRotation(), getSensorOrientation(getActiveCamera()), isUsingFrontFacingCamera(), false);
-    }
-
-    private Rational getTargetAspectRatio() {
-        return new Rational(getWidth(), getHeight());
+        return getRelativeImageOrientation(getDisplayRotation(), getSensorOrientation(), isUsingFrontFacingCamera(), false);
     }
 
     private Size getTargetResolution() {
@@ -328,28 +405,32 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return Surface.ROTATION_0;
     }
 
-    private CameraX.LensFacing getLensFacing() {
-        return mIsFrontFacing ? CameraX.LensFacing.FRONT : CameraX.LensFacing.BACK;
+    private CameraSelector getCameraSelector() {
+        return new CameraSelector.Builder().requireLensFacing(getLensFacing()).build();
     }
 
-    private FlashMode getFlashMode() {
+    private int getLensFacing() {
+        return mIsFrontFacing ? CameraSelector.LENS_FACING_FRONT : CameraSelector.LENS_FACING_BACK;
+    }
+
+    private int getFlashMode() {
         switch (getFlash()) {
             case ON:
-                return FlashMode.ON;
+                return ImageCapture.FLASH_MODE_ON;
             case OFF:
-                return FlashMode.OFF;
+                return ImageCapture.FLASH_MODE_OFF;
             case AUTO:
-                return FlashMode.AUTO;
+                return ImageCapture.FLASH_MODE_AUTO;
         }
-        return FlashMode.AUTO;
+        return ImageCapture.FLASH_MODE_AUTO;
     }
 
-    private ImageCapture.CaptureMode getCaptureMode() {
+    private int getCaptureMode() {
         switch (getQuality()) {
             case MAX:
-                return ImageCapture.CaptureMode.MAX_QUALITY;
+                return ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY;
             default:
-                return ImageCapture.CaptureMode.MIN_LATENCY;
+                return ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY;
         }
     }
 
@@ -357,7 +438,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
         int displayOrientation = getDisplayRotation();
-        int cameraOrientation = getSensorOrientation(getActiveCamera());
+        int cameraOrientation = getSensorOrientation();
 
         // Camera2 rotates the preview to always face in portrait mode, even if the phone is
         // currently in landscape. This is great for portrait mode, because there's less work to be done.
