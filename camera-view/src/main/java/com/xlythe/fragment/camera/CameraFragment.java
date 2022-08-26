@@ -2,6 +2,7 @@ package com.xlythe.fragment.camera;
 
 import android.Manifest;
 import android.animation.ValueAnimator;
+import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -140,6 +141,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             mDisplayListener = new DisplayManager.DisplayListener() {
                 int lastKnownWidth = -1;
                 int lastKnownHeight = -1;
+                int lastKnownRotation = -1;
 
                 @Override
                 public void onDisplayAdded(int displayId) {}
@@ -147,6 +149,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                 @Override
                 public void onDisplayRemoved(int displayId) {}
 
+                @SuppressLint("WrongConstant")
                 @SuppressWarnings({"MissingPermission"})
                 @Override
                 public void onDisplayChanged(int displayId) {
@@ -155,12 +158,15 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                     }
 
                     Display display = displayManager.getDisplay(displayId);
-                    if (lastKnownWidth == display.getWidth() && lastKnownHeight == display.getHeight()) {
+                    if (lastKnownWidth == display.getWidth()
+                            && lastKnownHeight == display.getHeight()
+                            && lastKnownRotation == display.getRotation()) {
                         return;
                     }
 
                     lastKnownWidth = display.getWidth();
                     lastKnownHeight = display.getHeight();
+                    lastKnownRotation = display.getRotation();
 
                     if (PermissionChecker.hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
                         if (mCamera.isOpen()) {

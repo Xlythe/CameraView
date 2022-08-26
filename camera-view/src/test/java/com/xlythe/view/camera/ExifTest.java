@@ -10,7 +10,6 @@ import org.junit.runner.RunWith;
 import org.mockito.Mockito;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
-import org.robolectric.shadows.ShadowLog;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -25,7 +24,6 @@ public class ExifTest {
 
     @Before
     public void setup() throws Exception {
-        ShadowLog.stream = System.out;
         exif = new Exif(Mockito.mock(InputStream.class));
     }
 

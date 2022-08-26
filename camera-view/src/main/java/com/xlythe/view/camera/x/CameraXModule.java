@@ -45,7 +45,6 @@ import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory;
-import androidx.camera.core.SurfaceRequest;
 import androidx.camera.core.UseCase;
 import androidx.camera.core.VideoCapture;
 import androidx.camera.core.ZoomState;
@@ -184,6 +183,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 return;
             }
 
+            int cameraWidth = request.getResolution().getWidth();
+            int cameraHeight = request.getResolution().getHeight();
+            // Required or the preview will start drawing in odd aspect ratios.
+            surfaceTexture.setDefaultBufferSize(cameraWidth, cameraHeight);
+
             Surface surface = new Surface(surfaceTexture);
             request.provideSurface(surface, ContextCompat.getMainExecutor(getContext()), result -> {
                 if (DEBUG) {
@@ -191,8 +195,6 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 }
             });
 
-            int cameraWidth = request.getResolution().getWidth();
-            int cameraHeight = request.getResolution().getHeight();
             transformPreview(cameraWidth, cameraHeight);
         });
 
@@ -327,7 +329,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @Override
     public int getMaxZoomLevel() {
-        return 10;
+        return 100;
     }
 
     @Override

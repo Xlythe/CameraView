@@ -47,7 +47,12 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     public void open() {
         Log.d(TAG, "onOpen() activeCamera="+getActiveCamera());
-        mCamera = Camera.open(getActiveCamera());
+        try {
+            mCamera = Camera.open(getActiveCamera());
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Failed to open camera", e);
+            return;
+        }
 
         try {
             mCamera.setPreviewTexture(getSurfaceTexture());
