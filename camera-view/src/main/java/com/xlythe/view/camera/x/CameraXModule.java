@@ -1,10 +1,16 @@
 package com.xlythe.view.camera.x;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
+import android.content.Intent;
+import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.hardware.camera2.CameraCharacteristics;
+import android.location.Location;
+import android.os.Build;
 import android.os.Handler;
 import android.util.Log;
 import android.util.Size;
@@ -12,23 +18,35 @@ import android.view.Surface;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.LocationProvider;
+import com.xlythe.view.camera.PermissionChecker;
 
 import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
+import androidx.camera.camera2.interop.Camera2CameraInfo;
+import androidx.camera.core.AspectRatio;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraInfoUnavailableException;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
+import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory;
+import androidx.camera.core.SurfaceRequest;
+import androidx.camera.core.UseCase;
 import androidx.camera.core.VideoCapture;
 import androidx.camera.core.ZoomState;
 import androidx.camera.lifecycle.ProcessCameraProvider;
@@ -46,12 +64,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * The library can crash and fail to return events (even #onError).
      * To work around that, we'll assume an error after this timeout.
      */
-    private static final long LIB_TIMEOUT_MILLIS = 1000;
+    private static final long LIB_TIMEOUT_MILLIS = 5000;
 
-    /**
-     * The CameraView we're attached to.
-     */
-    private final CameraView mView;
+    /** When this flag is off, we attempt to write the file ourselves instead of using CameraX's convenience method. */
+    private static final boolean SUPPORTS_WRITE_TO_FILE = true;
+
+    /** CameraX breaks if you unbind the preview while taking a picture. When this flag is off, we won't unbind. */
+    private static final boolean SUPPORTS_PICTURE_WITHOUT_PREVIEW = false;
+
+    /** CameraX can get into a bad state when taking pictures. When this is true, we attempt to forcefully get back into a good state. */
+    private static final boolean SUPPORTS_FORCE_RESTORE = false;
+
+    /** The time (in milliseconds) that we consider a GPS signal to be relevant. */
+    private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
+
+    /** The time (in milliseconds) to wait for a GPS signal. This runs on the UI thread and so must be short. */
+    private static final long GPS_TIMEOUT_MILLIS = 10;
 
     /**
      * A future handle to the CameraX library. Until this is loaded, we cannot use CameraX.
@@ -79,6 +107,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** The preview that draws to the texture surface. Non-null while open. */
     @Nullable private Preview mPreview;
 
+    /** Allows us to take pictures. Non-null while open, but is temporarily unbound while recording a video. */
+    @Nullable private ImageCapture mImageCapture;
+
     /** A video capture that captures what's visible on the screen. Non-null while taking a video. */
     @Nullable private VideoCapture mVideoCapture;
 
@@ -99,11 +130,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     public CameraXModule(CameraView cameraView) {
         super(cameraView);
-        mView = cameraView;
-        mCameraProviderFuture = ProcessCameraProvider.getInstance(cameraView.getContext());
+        mCameraProviderFuture = ProcessCameraProvider.getInstance(getContext());
         mCameraProviderFuture.addListener(() -> {
             try {
                 mCameraProvider = mCameraProviderFuture.get();
+                getContext().sendBroadcast(new Intent(CameraView.ACTION_CAMERA_STATE_CHANGED).setPackage(getContext().getPackageName()));
             } catch (ExecutionException | InterruptedException e) {
                 Log.e(TAG, "Unable to load camera", e);
             }
@@ -121,6 +152,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     public void open() {
         mIsOpen = true;
         loadPreview();
+
+        if (DEBUG) {
+            Log.d(TAG, "CameraXModule opened");
+        }
     }
 
     private void loadPreview() {
@@ -137,10 +172,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
         mPreview = new Preview.Builder()
                 .setTargetResolution(getTargetResolution())
+                //.setTargetAspectRatio(getTargetAspectRatio())
                 .setTargetRotation(getTargetRotation())
                 .build();
         mPreview.setSurfaceProvider(request -> {
-            SurfaceTexture surfaceTexture = mView.getSurfaceTexture();
+            SurfaceTexture surfaceTexture = getSurfaceTexture();
             if (surfaceTexture == null) {
                 // Can happen if there's a race condition, and the texture is closed before we're
                 // asked to provide it.
@@ -150,15 +186,39 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
             Surface surface = new Surface(surfaceTexture);
             request.provideSurface(surface, ContextCompat.getMainExecutor(getContext()), result -> {
-                // ignored
+                if (DEBUG) {
+                    Log.d(TAG, "Surface no longer needed. Result Code: " + result.getResultCode());
+                }
             });
 
-            Log.d(TAG, "Width="+request.getResolution().getWidth());
-            Log.d(TAG, "Height="+request.getResolution().getHeight());
-            Log.d(TAG, "RotationDegrees="+0);
-            transformPreview(request.getResolution().getWidth(), request.getResolution().getHeight(), 0);
+            int cameraWidth = request.getResolution().getWidth();
+            int cameraHeight = request.getResolution().getHeight();
+            transformPreview(cameraWidth, cameraHeight);
         });
-        mActiveCamera = mCameraProvider.bindToLifecycle(this, getCameraSelector(), mPreview);
+
+        // We previously attempted to register the ImageCapture just in time, while taking a picture.
+        // However, CameraX doesn't handle that well and #takePicture would silently fail. Instead,
+        // we'll keep it registered whenever the preview is registered.
+        mImageCapture = new ImageCapture.Builder()
+                .setTargetResolution(getTargetResolution())
+                //.setTargetAspectRatio(getTargetAspectRatio())
+                .setTargetRotation(getTargetRotation())
+                .setFlashMode(getFlashMode())
+                .setCaptureMode(getCaptureMode())
+                .build();
+
+        if (!bind(mPreview, mImageCapture)) {
+            Log.e(TAG, "Failed to load camera preview");
+        }
+
+        if (DEBUG) {
+            Log.d(TAG, "Preview loaded");
+            if (mActiveCamera != null) {
+                mActiveCamera.getCameraInfo().getCameraState().observe(this, cameraState -> {
+                    Log.d(TAG, "CameraState changed: type=" + cameraState.getType() + ", error=" + cameraState.getError());
+                });
+            }
+        }
     }
 
     @Override
@@ -173,14 +233,29 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
 
-        mCameraProvider.unbind(mPreview);
+        if (mImageCapture == null) {
+            return;
+        }
+
+        if (isRecording()) {
+            stopRecording();
+        }
+
+        unbind(mPreview, mImageCapture);
+
         mPreview = null;
+        mImageCapture = null;
         mActiveCamera = null;
+
+        if (DEBUG) {
+            Log.d(TAG, "CameraXModule closed");
+        }
     }
 
     @Override
     public boolean hasFrontFacingCamera() {
         if (mCameraProvider == null) {
+            Log.w(TAG, "Failed to query for front facing camera. CameraProvider is not available yet.");
             return false;
         }
 
@@ -197,12 +272,20 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return mIsFrontFacing;
     }
 
-    @RequiresPermission(Manifest.permission.CAMERA)
+    @SuppressLint("MissingPermission")
     @Override
     public void toggleCamera() {
         mIsFrontFacing = !mIsFrontFacing;
         close();
         open();
+    }
+
+    @SuppressLint({"RestrictedApi", "MissingPermission"})
+    private void attemptToRecover() {
+        Log.w(TAG, "Camera is likely in a failed state. Attempting to recover.");
+
+        getView().close();
+        getView().open();
     }
 
     @Override
@@ -271,13 +354,18 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @Override
     public void pause() {
-        close();
+        if (SUPPORTS_PICTURE_WITHOUT_PREVIEW) {
+            unbind(mPreview);
+        }
         mIsPaused = true;
     }
 
+    @RequiresPermission(Manifest.permission.CAMERA)
     @Override
     public void resume() {
-        open();
+        if (SUPPORTS_PICTURE_WITHOUT_PREVIEW) {
+            bind(mPreview);
+        }
         mIsPaused = false;
     }
 
@@ -286,56 +374,164 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return mIsPaused;
     }
 
+    @SuppressLint("MissingPermission")
     @Override
     public void takePicture(File file) {
         if (mCameraProvider == null) {
+            Log.w(TAG, "Failed to take a picture. CameraProvider is not available yet.");
             onImageFailed();
             return;
         }
 
-        ImageCapture imageCapture = new ImageCapture.Builder()
-                .setTargetResolution(getTargetResolution())
-                .setTargetRotation(getTargetRotation())
-                .setFlashMode(getFlashMode())
-                .setCaptureMode(getCaptureMode())
-                .build();
-
-        try {
-            mCameraProvider.bindToLifecycle(this, getCameraSelector(), imageCapture);
-        } catch (IllegalArgumentException e) {
+        if (mImageCapture == null) {
+            Log.w(TAG, "Failed to take a picture. ImageCapture is not available yet.");
             onImageFailed();
             return;
         }
+
+        if (isRecording()) {
+            Log.w(TAG, "Failed to take a picture. Pictures cannot be taken while recording.");
+            onImageFailed();
+            return;
+        }
+
+        AtomicBoolean reportedFailure = new AtomicBoolean(false);
 
         Handler cancellationHandler = new Handler();
         cancellationHandler.postDelayed(() -> {
-            onImageFailed();
-            mCameraProvider.unbind(imageCapture);
+            Log.w(TAG, "Failed to take a picture. Timed out while waiting for picture callback.");
+            if (!reportedFailure.get()) {
+                onImageFailed();
+                reportedFailure.set(true);
+            }
+
+            // Note: We cannot attempt to recover immediately, as unbinding the ImageCapture starts
+            // a chain of events internally. A small delay is enough, though.
+            if (SUPPORTS_FORCE_RESTORE) {
+                unbind(mImageCapture);
+                new Handler().postDelayed(this::attemptToRecover, 150);
+            }
         }, LIB_TIMEOUT_MILLIS);
 
-        imageCapture.takePicture(new ImageCapture.OutputFileOptions.Builder(file).build(), ContextCompat.getMainExecutor(getContext()), new ImageCapture.OnImageSavedCallback() {
-            @Override
-            public void onImageSaved(@NonNull ImageCapture.OutputFileResults outputFileResults) {
-                showImageConfirmation(file);
-                mCameraProvider.unbind(imageCapture);
-                cancellationHandler.removeCallbacksAndMessages(null);
-            }
+        if (SUPPORTS_WRITE_TO_FILE) {
+            ImageCapture.Metadata metadata = new ImageCapture.Metadata();
+            metadata.setLocation(getLocation());
+            metadata.setReversedHorizontal(isUsingFrontFacingCamera());
+            ImageCapture.OutputFileOptions options = new ImageCapture.OutputFileOptions.Builder(file).setMetadata(metadata).build();
+            mImageCapture.takePicture(options, ContextCompat.getMainExecutor(getContext()), new ImageCapture.OnImageSavedCallback() {
+                @Override
+                public void onImageSaved(@NonNull ImageCapture.OutputFileResults outputFileResults) {
+                    showImageConfirmation(file);
+                    cancellationHandler.removeCallbacksAndMessages(null);
+                }
 
-            @Override
-            public void onError(@NonNull ImageCaptureException exception) {
-                onImageFailed();
-                mCameraProvider.unbind(imageCapture);
-                cancellationHandler.removeCallbacksAndMessages(null);
-            }
-        });
+                @Override
+                public void onError(@NonNull ImageCaptureException e) {
+                    Log.w(TAG, "Failed to take a picture. ImageCapture failed.", e);
+                    if (!reportedFailure.get()) {
+                        onImageFailed();
+                        reportedFailure.set(true);
+                    }
+                    cancellationHandler.removeCallbacksAndMessages(null);
+                }
+            });
+        } else {
+            mImageCapture.takePicture(ContextCompat.getMainExecutor(getContext()), new ImageCapture.OnImageCapturedCallback() {
+                public void onCaptureSuccess(@NonNull ImageProxy image) {
+                    if (save(file, image)) {
+                        showImageConfirmation(file);
+                    } else {
+                        if (!reportedFailure.get()) {
+                            onImageFailed();
+                            reportedFailure.set(true);
+                        }
+                    }
+
+                    cancellationHandler.removeCallbacksAndMessages(null);
+                }
+
+                public void onError(@NonNull final ImageCaptureException e) {
+                    Log.w(TAG, "Failed to take a picture. ImageCapture failed.", e);
+                    if (!reportedFailure.get()) {
+                        onImageFailed();
+                        reportedFailure.set(true);
+                    }
+                    cancellationHandler.removeCallbacksAndMessages(null);
+                }
+            });
+        }
     }
 
+    private boolean save(File file, ImageProxy image) {
+        if (image.getFormat() != ImageFormat.JPEG) {
+            throw new IllegalArgumentException("Received ImageProxy with unexpected format " + image.getFormat());
+        }
+
+        ImageProxy.PlaneProxy planeProxy = image.getPlanes()[0];
+        ByteBuffer buffer = planeProxy.getBuffer();
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+
+        FileOutputStream output = null;
+        try {
+            output = new FileOutputStream(file);
+            output.write(bytes);
+            writeExif(file);
+            return true;
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to write the file", e);
+        } finally {
+            image.close();
+            if (output != null) {
+                try {
+                    output.close();
+                } catch (IOException e) {
+                    Log.e(TAG, "Failed to close the output stream", e);
+                }
+            }
+        }
+        return false;
+    }
+
+    private void writeExif(File file) throws IOException {
+        Exif exif = new Exif(file);
+        exif.attachTimestamp();
+        exif.rotate(getSensorOrientation());
+        if (isUsingFrontFacingCamera()) {
+            exif.flipHorizontally();
+        }
+        Location location = getLocation();
+        if (location != null) {
+            exif.attachLocation(location);
+        }
+        exif.save();
+    }
+
+    @SuppressLint("MissingPermission")
+    @Nullable
+    private Location getLocation() {
+        if (PermissionChecker.hasPermissions(getContext(), Manifest.permission.ACCESS_FINE_LOCATION)) {
+            // Our GPS timeout is purposefully low. We're not intending to wait until GPS is acquired
+            // but we want a last known location for the next time a picture is taken.
+            return LocationProvider.getGPSLocation(getContext(), STALE_LOCATION_MILLIS, GPS_TIMEOUT_MILLIS);
+        }
+
+        return null;
+    }
+
+    @SuppressLint("RestrictedApi")
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
     public void startRecording(File file) {
         if (mCameraProvider == null) {
+            Log.w(TAG, "Failed to take a video. CameraProvider is not available yet.");
             onVideoFailed();
             return;
+        }
+
+        if (areUseCasesMutuallyExclusive()) {
+            // Images and Video are mutually exclusive. We'll unbind the ImageCapture while recording.
+            unbind(mImageCapture);
         }
 
         VideoCapture videoCapture = new VideoCapture.Builder()
@@ -343,10 +539,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .setTargetRotation(getTargetRotation())
                 .build();
 
-        try {
-            mCameraProvider.bindToLifecycle(this, getCameraSelector(), videoCapture);
-        } catch (IllegalArgumentException e) {
+        if (!bind(videoCapture)) {
+            Log.w(TAG, "Failed to take a video. VideoCapture failed.");
             onVideoFailed();
+            if (areUseCasesMutuallyExclusive()) {
+                bind(mImageCapture);
+            }
             return;
         }
 
@@ -367,19 +565,62 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mVideoCapture = videoCapture;
     }
 
+    @SuppressLint("RestrictedApi")
     @Override
     public void stopRecording() {
         if (mVideoCapture == null) {
             return;
         }
         mVideoCapture.stopRecording();
-        mCameraProvider.unbind(mVideoCapture);
+        unbind(mVideoCapture);
+        if (areUseCasesMutuallyExclusive()) {
+            bind(mImageCapture);
+        }
         mVideoCapture = null;
     }
 
     @Override
     public boolean isRecording() {
         return mVideoCapture != null;
+    }
+
+    private boolean areUseCasesMutuallyExclusive() {
+        return !isAtLeastLimited();
+    }
+
+    private boolean isAtLeastLimited() {
+        switch (getHardwareLevel()) {
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3:
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL:
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL:
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED:
+                return true;
+            case CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY:
+            default:
+                return false;
+        }
+    }
+
+    @SuppressLint("UnsafeOptInUsageError")
+    private int getHardwareLevel() {
+        if (mCameraProvider == null) {
+            return -1;
+        }
+
+        if (mActiveCamera == null) {
+            return -1;
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
+            return CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY;
+        }
+
+        Integer hardwareLevel = Camera2CameraInfo.from(mActiveCamera.getCameraInfo()).getCameraCharacteristic(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+        if (hardwareLevel == null) {
+            return CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY;
+        }
+
+        return hardwareLevel;
     }
 
     @Override
@@ -389,6 +630,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     private Size getTargetResolution() {
         return new Size(getWidth(), getHeight());
+    }
+
+    @AspectRatio.Ratio
+    private int getTargetAspectRatio() {
+        Size resolution = getTargetResolution();
+
+        int width = Math.max(resolution.getWidth(), resolution.getHeight());
+        int height = Math.min(resolution.getWidth(), resolution.getHeight());
+        float aspectRatio = (float) width / (float) height;
+        // 1.55 is halfway between 1.33 (4:3) and 1.77 (16:9). As those are the only
+        // supported aspect ratios, we will use the closer one.
+        if (aspectRatio > 1.55) {
+            return AspectRatio.RATIO_16_9;
+        } else {
+            return AspectRatio.RATIO_4_3;
+        }
     }
 
     private int getTargetRotation() {
@@ -425,16 +682,39 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return ImageCapture.FLASH_MODE_AUTO;
     }
 
+    @SuppressLint("UnsafeOptInUsageError")
     private int getCaptureMode() {
         switch (getQuality()) {
             case MAX:
                 return ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY;
             default:
-                return ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY;
+                return ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG;
         }
     }
 
-    private void transformPreview(int previewWidth, int previewHeight, int rotation) {
+    private boolean bind(UseCase... useCases) {
+        if (mCameraProvider == null) {
+            return false;
+        }
+
+        try {
+            mActiveCamera = mCameraProvider.bindToLifecycle(this, getCameraSelector(), useCases);
+            return true;
+        } catch (IllegalArgumentException e) {
+            Log.w(TAG, "Failed to bind UseCase.", e);
+            return false;
+        }
+    }
+
+    private void unbind(UseCase... useCases) {
+        if (mCameraProvider == null) {
+            return;
+        }
+
+        mCameraProvider.unbind(useCases);
+    }
+
+    private void transformPreview(int previewWidth, int previewHeight) {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
         int displayOrientation = getDisplayRotation();
@@ -509,7 +789,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
 
         // Finally, with our photo scaled and centered, we apply a rotation.
-        rotation = -displayOrientation;
+        int rotation = -displayOrientation;
 
         matrix.setScale(scaleX, scaleY);
         matrix.postTranslate(translateX, translateY);

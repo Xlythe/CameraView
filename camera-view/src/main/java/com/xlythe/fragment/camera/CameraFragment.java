@@ -2,7 +2,10 @@ package com.xlythe.fragment.camera;
 
 import android.Manifest;
 import android.animation.ValueAnimator;
+import android.content.BroadcastReceiver;
 import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
 import android.os.Build;
@@ -11,6 +14,7 @@ import android.os.Handler;
 import android.os.Message;
 import android.os.Vibrator;
 import android.text.format.DateFormat;
+import android.view.Display;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -39,8 +43,20 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     private static final String[] OPTIONAL_PERMISSIONS;
 
     static {
-        // In KitKat+, WRITE_EXTERNAL_STORAGE is optional
-        if (Build.VERSION.SDK_INT >= 19) {
+        if (Build.VERSION.SDK_INT >= 33) {
+            // In T+, READ_EXTERNAL_STORAGE is removed and replaced with READ_MEDIA_IMAGES and READ_MEDIA_VIDEO
+            REQUIRED_PERMISSIONS = new String[] {
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.RECORD_AUDIO
+            };
+            OPTIONAL_PERMISSIONS = new String[] {
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.VIBRATE,
+                    Manifest.permission.READ_MEDIA_IMAGES,
+                    Manifest.permission.READ_MEDIA_VIDEO
+            };
+        } else if (Build.VERSION.SDK_INT >= 19) {
+            // In KitKat+, WRITE_EXTERNAL_STORAGE is optional
             REQUIRED_PERMISSIONS = new String[] {
                     Manifest.permission.CAMERA,
                     Manifest.permission.RECORD_AUDIO
@@ -92,9 +108,16 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @Nullable
     private View mCancel;
 
-    private ProgressBarAnimator mAnimator = new ProgressBarAnimator();
+    private final ProgressBarAnimator mAnimator = new ProgressBarAnimator();
 
     private DisplayManager.DisplayListener mDisplayListener;
+
+    private final BroadcastReceiver mStateChangedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            invalidate();
+        }
+    };
 
     @SuppressWarnings({"MissingPermission"})
     @Override
@@ -112,8 +135,12 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     public void onAttach(Context context) {
         super.onAttach(context);
 
-        if (Build.VERSION.SDK_INT > 17) {
+        if (Build.VERSION.SDK_INT >= 17) {
+            DisplayManager displayManager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
             mDisplayListener = new DisplayManager.DisplayListener() {
+                int lastKnownWidth = -1;
+                int lastKnownHeight = -1;
+
                 @Override
                 public void onDisplayAdded(int displayId) {}
 
@@ -123,6 +150,18 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                 @SuppressWarnings({"MissingPermission"})
                 @Override
                 public void onDisplayChanged(int displayId) {
+                    if (getDisplayId() != displayId) {
+                        return;
+                    }
+
+                    Display display = displayManager.getDisplay(displayId);
+                    if (lastKnownWidth == display.getWidth() && lastKnownHeight == display.getHeight()) {
+                        return;
+                    }
+
+                    lastKnownWidth = display.getWidth();
+                    lastKnownHeight = display.getHeight();
+
                     if (PermissionChecker.hasPermissions(getContext(), REQUIRED_PERMISSIONS)) {
                         if (mCamera.isOpen()) {
                             mCamera.close();
@@ -131,13 +170,28 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                     }
                 }
             };
-            DisplayManager displayManager = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
             displayManager.registerDisplayListener(mDisplayListener, new Handler());
         }
+
+        context.registerReceiver(mStateChangedReceiver, new IntentFilter(CameraView.ACTION_CAMERA_STATE_CHANGED));
+    }
+
+    private int getDisplayId() {
+        if (Build.VERSION.SDK_INT < 17) {
+            return -1;
+        }
+
+        View view = getView();
+        if (view == null) {
+            return -1;
+        }
+
+        return view.getDisplay().getDisplayId();
     }
 
     @Override
     public void onDetach() {
+        getContext().unregisterReceiver(mStateChangedReceiver);
         if (Build.VERSION.SDK_INT > 17) {
             DisplayManager displayManager = (DisplayManager) getContext().getSystemService(Context.DISPLAY_SERVICE);
             displayManager.unregisterDisplayListener(mDisplayListener);
@@ -265,6 +319,10 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             throw new IllegalStateException("No View found with id R.id.request_permissions");
         }
 
+        invalidate();
+    }
+
+    private void invalidate() {
         mCamera.setOnImageCapturedListener(this);
         mCamera.setOnVideoCapturedListener(this);
 

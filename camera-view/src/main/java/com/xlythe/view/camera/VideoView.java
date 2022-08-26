@@ -55,6 +55,9 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     // If true, the video should be mirrored
     private boolean mIsMirrored = false;
 
+    // If true, the video should loop
+    private boolean mIsLooping = false;
+
     public VideoView(Context context) {
         this(context, null);
     }
@@ -212,7 +215,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         if (metadata == null) {
             return 0;
         }
-        return Integer.valueOf(metadata);
+        return Integer.parseInt(metadata);
     }
 
     public void seekToFirstFrame() {
@@ -229,6 +232,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             });
             mMediaPlayer.start();
             mMediaPlayer.seekTo(1);
+            mMediaPlayer.setLooping(isLooping());
         } catch (IllegalStateException e) {
             if (DEBUG) e.printStackTrace();
         }
@@ -241,6 +245,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
         try {
             mMediaPlayer.start();
+            mMediaPlayer.setLooping(isLooping());
             setPlayingState(true);
             return true;
         } catch (IllegalStateException e) {
@@ -294,6 +299,14 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     public boolean isMirrored() {
         return mIsMirrored;
+    }
+
+    public void setShouldLoop(boolean loop) {
+        mIsLooping = loop;
+    }
+
+    public boolean isLooping() {
+        return mIsLooping;
     }
 
     public void setVolume(float volume) {

@@ -11,7 +11,7 @@ import android.util.Log;
 import java.io.File;
 
 public abstract class ICameraModule {
-    public static final String TAG = "CameraModule";
+    public static final String TAG = CameraView.TAG;
     public static final boolean DEBUG = CameraView.DEBUG;
 
     private final CameraView mView;
@@ -31,6 +31,10 @@ public abstract class ICameraModule {
 
     public Context getContext() {
         return mView.getContext();
+    }
+
+    public CameraView getView() {
+        return mView;
     }
 
     public int getWidth() {

@@ -50,8 +50,13 @@ public class CameraView extends FrameLayout {
     // When enabled, CameraX will be used. It's currently unstable.
     static final boolean USE_CAMERA_X = false;
 
+    // When enabled, CameraV2 will be used. It's currently stable.
+    static final boolean USE_CAMERA_V2 = true;
+
     public static final int INDEFINITE_VIDEO_DURATION = -1;
     public static final int INDEFINITE_VIDEO_SIZE = -1;
+
+    public static final String ACTION_CAMERA_STATE_CHANGED = "com.xlythe.view.camera.CAMERA_STATE_CHANGED";
 
     private static final String EXTRA_SUPER = "super";
     private static final String EXTRA_MODULE = "module";
@@ -205,7 +210,7 @@ public class CameraView extends FrameLayout {
     private void init(Context context, @Nullable AttributeSet attrs) {
         if (USE_CAMERA_X && Build.VERSION.SDK_INT >= 21) {
             mCameraModule = new CameraXModule(this);
-        } else if (Build.VERSION.SDK_INT >= 21) {
+        } else if (USE_CAMERA_V2 && Build.VERSION.SDK_INT >= 21) {
             mCameraModule = new Camera2Module(this);
         } else {
             mCameraModule = new LegacyCameraModule(this);
@@ -492,6 +497,7 @@ public class CameraView extends FrameLayout {
 
             mVideoPreview.setVisibility(View.VISIBLE);
             mVideoPreview.setShouldMirror(isUsingFrontFacingCamera());
+            mVideoPreview.setShouldLoop(true);
             mVideoPreview.setVolume(0.3f);
             mVideoPreview.setFile(file);
             if (!mVideoPreview.play()) {
