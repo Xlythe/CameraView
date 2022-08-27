@@ -282,7 +282,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         open();
     }
 
-    @SuppressLint({"RestrictedApi", "MissingPermission"})
+    @SuppressLint("MissingPermission")
     private void attemptToRecover() {
         Log.w(TAG, "Camera is likely in a failed state. Attempting to recover.");
 
@@ -376,7 +376,6 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return mIsPaused;
     }
 
-    @SuppressLint("MissingPermission")
     @Override
     public void takePicture(File file) {
         if (mCameraProvider == null) {
@@ -550,7 +549,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
 
-        videoCapture.startRecording(new VideoCapture.OutputFileOptions.Builder(file).build(), ContextCompat.getMainExecutor(getContext()), new VideoCapture.OnVideoSavedCallback() {
+        VideoCapture.Metadata metadata = new VideoCapture.Metadata();
+        metadata.location = getLocation();
+        VideoCapture.OutputFileOptions options = new VideoCapture.OutputFileOptions.Builder(file).setMetadata(metadata).build();
+        videoCapture.startRecording(options, ContextCompat.getMainExecutor(getContext()), new VideoCapture.OnVideoSavedCallback() {
             @Override
             public void onVideoSaved(@NonNull VideoCapture.OutputFileResults outputFileResults) {
                 showVideoConfirmation(file);
