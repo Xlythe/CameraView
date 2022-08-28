@@ -494,12 +494,12 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, location.getProvider());
         mExifInterface.setLatLong(location.getLatitude(), location.getLongitude());
         if (location.hasAltitude()) {
-            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, Double.toString(location.getAltitude()));
-            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, Integer.toString(1));
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, Integer.toString(0));
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, Double.toString(location.getAltitude()) + "/1");
         }
         if (location.hasSpeed()) {
-            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, Double.toString(Speed.fromMetersPerSecond(location.getSpeed()).toKilometersPerHour()));
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, KILOMETERS_PER_HOUR);
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, Double.toString(Speed.fromMetersPerSecond(location.getSpeed()).toKilometersPerHour()) + "/1");
         }
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, convertToExifDate(location.getTime()));
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, convertToExifTime(location.getTime()));

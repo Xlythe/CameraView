@@ -70,7 +70,7 @@ dependencies {
     api 'androidx.camera:camera-core:+'
     api 'androidx.camera:camera-camera2:+'
     api 'androidx.camera:camera-lifecycle:+'
-    testImplementation 'org.robolectric:robolectric:3.1.1'
-    testImplementation 'org.mockito:mockito-core:2.+'
-    testImplementation 'junit:junit:4.12'
+    testImplementation 'org.robolectric:robolectric:+'
+    testImplementation 'org.mockito:mockito-core:+'
+    testImplementation 'junit:junit:+'
 }

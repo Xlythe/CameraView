@@ -18,7 +18,7 @@ import static junit.framework.Assert.assertEquals;
 import static junit.framework.Assert.assertNotNull;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk=23, constants = BuildConfig.class)
+@Config(minSdk=14)
 public class ExifTest {
     Exif exif;
 
@@ -126,7 +126,10 @@ public class ExifTest {
         location.setLongitude(114);
         location.setTime(System.currentTimeMillis() / 1000 * 1000);
         exif.attachLocation(location);
-        assertEquals(location, exif.getLocation());
+        assertEquals(location.getProvider(), exif.getLocation().getProvider());
+        assertEquals(location.getLatitude(), exif.getLocation().getLatitude());
+        assertEquals(location.getLongitude(), exif.getLocation().getLongitude());
+        assertEquals(location.getTime(), exif.getLocation().getTime());
 
         exif.removeLocation();
         assertEquals(null, exif.getLocation());
@@ -140,7 +143,11 @@ public class ExifTest {
         location.setTime(System.currentTimeMillis() / 1000 * 1000);
         location.setAltitude(5.0);
         exif.attachLocation(location);
-        assertEquals(location, exif.getLocation());
+        assertEquals(location.getProvider(), exif.getLocation().getProvider());
+        assertEquals(location.getLatitude(), exif.getLocation().getLatitude());
+        assertEquals(location.getLongitude(), exif.getLocation().getLongitude());
+        assertEquals(location.getTime(), exif.getLocation().getTime());
+        assertEquals(location.getAltitude(), exif.getLocation().getAltitude());
     }
 
     @Test
@@ -151,7 +158,11 @@ public class ExifTest {
         location.setTime(System.currentTimeMillis() / 1000 * 1000);
         location.setSpeed(5.0f);
         exif.attachLocation(location);
-        assertEquals(location, exif.getLocation());
+        assertEquals(location.getProvider(), exif.getLocation().getProvider());
+        assertEquals(location.getLatitude(), exif.getLocation().getLatitude());
+        assertEquals(location.getLongitude(), exif.getLocation().getLongitude());
+        assertEquals(location.getTime(), exif.getLocation().getTime());
+        assertWithin(location.getSpeed(), exif.getLocation().getSpeed(), 0.1f);
     }
 
     @Test
@@ -175,7 +186,7 @@ public class ExifTest {
             // expected
         }
 
-        assertWithin(System.currentTimeMillis(), exif.getLastModifiedTimestamp(), 3);
+        assertWithin(System.currentTimeMillis(), exif.getLastModifiedTimestamp(), 100);
 
         // removeTimestamp should also be clearing the last modified timestamp
         exif.removeTimestamp();
@@ -206,6 +217,12 @@ public class ExifTest {
     }
 
     private static void assertWithin(long expected, long actual, long variance) {
+        if ((variance - Math.abs(actual - expected)) < 0) {
+            throw new AssertionFailedError(String.format("\nExpected :%s\nActual   :%s", expected, actual));
+        }
+    }
+
+    private static void assertWithin(float expected, float actual, float variance) {
         if ((variance - Math.abs(actual - expected)) < 0) {
             throw new AssertionFailedError(String.format("\nExpected :%s\nActual   :%s", expected, actual));
         }
