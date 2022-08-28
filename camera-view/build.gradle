@@ -4,6 +4,9 @@ apply plugin: 'maven-publish'
 Properties projectProperties = new Properties()
 projectProperties.load(rootProject.file('gradle.properties').newDataInputStream())
 
+Properties localProperties = new Properties()
+localProperties.load(project.rootProject.file('local.properties').newDataInputStream())
+
 android {
     compileSdkVersion 33
 
@@ -57,6 +60,16 @@ afterEvaluate {
                         developerConnection = projectProperties.getProperty("bintray.gitUrl")
                         url = projectProperties.getProperty("bintray.siteUrl")
                     }
+                }
+            }
+        }
+        repositories {
+            maven {
+                name = "MavenCentral"
+                url = "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
+                credentials {
+                    username = localProperties.getProperty("bintray.username")
+                    password = localProperties.getProperty("bintray.password")
                 }
             }
         }
