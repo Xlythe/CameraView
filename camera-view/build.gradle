@@ -1,4 +1,8 @@
 apply plugin: 'com.android.library'
+apply plugin: 'maven-publish'
+
+Properties projectProperties = new Properties()
+projectProperties.load(rootProject.file('gradle.properties').newDataInputStream())
 
 android {
     compileSdkVersion 33
@@ -14,6 +18,49 @@ android {
     lint {
         abortOnError false
     }
+    publishing {
+        singleVariant("release") {
+            withSourcesJar()
+            withJavadocJar()
+        }
+    }
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            release(MavenPublication) {
+                from components.release
+                groupId = group = projectProperties.getProperty("bintray.groupId")
+                artifactId = projectProperties.getProperty("bintray.artifact")
+                version = projectProperties.getProperty("bintray.libraryVersion")
+
+                pom {
+                    name = projectProperties.getProperty("bintray.libraryName")
+                    description = projectProperties.getProperty("bintray.libraryDescription")
+                    url = projectProperties.getProperty("bintray.siteUrl")
+                    licenses {
+                        license {
+                            name = projectProperties.getProperty("bintray.licenseName")
+                            url = projectProperties.getProperty("bintray.licenseUrl")
+                        }
+                    }
+                    developers {
+                        developer {
+                            id = projectProperties.getProperty("bintray.developerId")
+                            name = projectProperties.getProperty("bintray.developerName")
+                            email = projectProperties.getProperty("bintray.developerEmail")
+                        }
+                    }
+                    scm {
+                        connection = projectProperties.getProperty("bintray.gitUrl")
+                        developerConnection = projectProperties.getProperty("bintray.gitUrl")
+                        url = projectProperties.getProperty("bintray.siteUrl")
+                    }
+                }
+            }
+        }
+    }
 }
 
 dependencies {
@@ -27,6 +74,3 @@ dependencies {
     testImplementation 'org.mockito:mockito-core:2.+'
     testImplementation 'junit:junit:4.12'
 }
-
-// jCenter has been shut down. This script no longer compiles and needs to be updated to point to MavenCentral.
-// apply from: 'https://raw.githubusercontent.com/bourdakos1/jCenter-Upload/master/upload.gradle'
