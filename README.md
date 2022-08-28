@@ -13,7 +13,7 @@ Where to Download
 -----------------
 ```groovy
 dependencies {
-  implementation 'com.xlythe:camera-view:1.2.8'
+  implementation 'com.xlythe:camera-view:1.3'
 }
 ```
 
@@ -29,6 +29,8 @@ The following permissions are required in your AndroidManfiest.xml
 <!-- Optional camera permissions -->
 <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 <uses-permission android:name="android.permission.VIBRATE" />
+<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+<uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
 ```
 
 CameraFragment
