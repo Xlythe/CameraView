@@ -17,12 +17,14 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
 
+import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.SettableFuture;
 import com.xlythe.view.camera.CameraView;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 
 import static android.os.Process.THREAD_PRIORITY_DISPLAY;
@@ -42,6 +44,8 @@ public class VideoRecorder {
   private static final int DEFAULT_BIT_RATE = 6000000;    // 6M bit/s
   private static final int DEFAULT_FRAME_RATE = 15;       // 15fps
   private static final int DEFAULT_IFRAME_INTERVAL = 10;  // 10 seconds between I-frames
+
+  private static final int NO_TIMEOUT = -1;
 
   /** The stream to write to. */
   private final OutputStream mOutputStream;
@@ -87,14 +91,6 @@ public class VideoRecorder {
     this.mOutputStream = outputStream;
   }
 
-  public int getWidth() {
-    return 1280;//mCanvas.getWidth();
-  }
-
-  public int getHeight() {
-    return 960;//mCanvas.getHeight();
-  }
-
   /** Sets the desired bit rate. */
   public void setBitRate(@IntRange(from = 0) int bitRate) {
     mBitRate = bitRate;
@@ -116,7 +112,7 @@ public class VideoRecorder {
   }
 
   /** Sets the iframe interval. */
-  public void getIFrameInterval(int iframeInterval) {
+  public void setIFrameInterval(int iframeInterval) {
     mIFrameInterval = iframeInterval;
   }
 
@@ -156,10 +152,10 @@ public class VideoRecorder {
                   return;
                 }
 
-                SettableFuture<Size> requestedSizeFuture = SettableFuture.create();
+                SettableFuture<CameraMetadata> requestedSizeFuture = SettableFuture.create();
                 SettableFuture<Surface> providedSurface = SettableFuture.create();
-                SurfaceProvider surfaceProvider = (width, height) -> {
-                  requestedSizeFuture.set(new Size(width, height));
+                SurfaceProvider surfaceProvider = (width, height, orientation) -> {
+                  requestedSizeFuture.set(new CameraMetadata(width, height, orientation));
                   try {
                     return providedSurface.get();
                   } catch (ExecutionException | InterruptedException e) {
@@ -171,7 +167,7 @@ public class VideoRecorder {
                 MediaCodec encoder = null;
                 Surface surface = null;
                 try {
-                  Size size = requestedSizeFuture.get();
+                  CameraMetadata size = Objects.requireNonNull(requestedSizeFuture.get());
                   MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, size.getWidth(), size.getHeight());
 
                   // Failing to specify some of these can cause the MediaCodec configure() call to
@@ -180,6 +176,9 @@ public class VideoRecorder {
                   format.setInteger(MediaFormat.KEY_BIT_RATE, getBitRate());
                   format.setInteger(MediaFormat.KEY_FRAME_RATE, getFrameRate());
                   format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, getIFrameInterval());
+
+                  // Pass this info to the remote device.
+                  write(size.getWidth(), size.getHeight(), size.getOrientation(), getBitRate(), getFrameRate(), getIFrameInterval());
 
                   encoder = MediaCodec.createByCodecName(codecInfo.getName());
                   encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
@@ -190,7 +189,7 @@ public class VideoRecorder {
 
                   MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
                   while (isRecording()) {
-                    int statusOrIndex = encoder.dequeueOutputBuffer(info, -1);
+                    int statusOrIndex = encoder.dequeueOutputBuffer(info, NO_TIMEOUT);
                     if (statusOrIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
                       Thread.sleep(100);
                       continue;
@@ -212,8 +211,7 @@ public class VideoRecorder {
                       byte[] data = new byte[info.size];
                       encodedData.get(data);
                       encodedData.position(info.offset);
-
-                      mOutputStream.write(data);
+                      write(data, info.presentationTimeUs, info.flags);
                       encoder.releaseOutputBuffer(statusOrIndex, false);
                     }
                   }
@@ -235,6 +233,35 @@ public class VideoRecorder {
               }
             };
     mThread.start();
+  }
+
+  private void write(int width, int height, int orientation, int bitRate, int frameRate, int iframeInterval) throws IOException {
+    byte[] frame = new VideoFrame.Builder(VideoFrame.Type.HEADER)
+            .width(width)
+            .height(height)
+            .orientation(orientation)
+            .bitRate(bitRate)
+            .frameRate(frameRate)
+            .iframeInterval(iframeInterval)
+            .build()
+            .asBytes();
+
+    mOutputStream.write(Ints.toByteArray(frame.length));
+    mOutputStream.write(frame);
+    mOutputStream.flush();
+  }
+
+  private void write(byte[] data, long presentationTimeUs, int flags) throws IOException {
+    byte[] frame = new VideoFrame.Builder(VideoFrame.Type.DATA)
+            .data(data)
+            .presentationTimeUs(presentationTimeUs)
+            .flags(flags)
+            .build()
+            .asBytes();
+
+    mOutputStream.write(Ints.toByteArray(frame.length));
+    mOutputStream.write(frame);
+    mOutputStream.flush();
   }
 
   private void stopInternal() {
@@ -283,11 +310,42 @@ public class VideoRecorder {
   public interface Canvas {
     void attachSurface(SurfaceProvider surfaceProvider);
     void detachSurface(SurfaceProvider surfaceProvider);
-    int getWidth();
-    int getHeight();
   }
 
   public interface SurfaceProvider {
-    Surface getSurface(int width, int height);
+    Surface getSurface(int width, int height, int orientation);
+  }
+
+  private static class CameraMetadata {
+    final int width;
+    final int height;
+    final int orientation;
+
+    CameraMetadata(int width, int height, int orientation) {
+      this.width = width;
+      this.height = height;
+      this.orientation = orientation;
+    }
+
+    int getWidth() {
+      return width;
+    }
+
+    int getHeight() {
+      return height;
+    }
+
+    int getOrientation() {
+      return orientation;
+    }
+
+    @Override
+    public String toString() {
+      return "CameraMetadata{" +
+              "width=" + width +
+              ", height=" + height +
+              ", orientation=" + orientation +
+              '}';
+    }
   }
 }

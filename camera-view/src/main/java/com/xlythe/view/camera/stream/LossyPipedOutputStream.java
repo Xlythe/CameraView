@@ -11,6 +11,7 @@ public class LossyPipedOutputStream extends PipedOutputStream {
   private static final int MAX_BUFFER_SIZE = 0;
 
   private PipedInputStream snk;
+  private boolean canDropNextPacket = false;
 
   public LossyPipedOutputStream() {
     super();
@@ -51,6 +52,12 @@ public class LossyPipedOutputStream extends PipedOutputStream {
     super.write(b, off, len);
   }
 
+  @Override
+  public synchronized void flush() throws IOException {
+    super.flush();
+    canDropNextPacket = true;
+  }
+
   private boolean shouldDropPacket() throws IOException {
     PipedInputStream pipedInputStream = snk;
     if (snk == null) {
@@ -58,6 +65,11 @@ public class LossyPipedOutputStream extends PipedOutputStream {
     }
 
     int bytesWritten = pipedInputStream.available();
-    return false;//bytesWritten > MAX_BUFFER_SIZE;
+    if (canDropNextPacket && bytesWritten > MAX_BUFFER_SIZE) {
+      return true;
+    }
+
+    canDropNextPacket = false;
+    return false;
   }
 }

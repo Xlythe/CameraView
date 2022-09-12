@@ -737,7 +737,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 //.setTargetAspectRatio(getTargetAspectRatio())
                 .setTargetRotation(getTargetRotation())
                 .build();
-        useCase.setSurfaceProvider(request -> request.provideSurface(surfaceProvider.getSurface(request.getResolution().getWidth(), request.getResolution().getHeight()), ContextCompat.getMainExecutor(getContext()), result -> {
+        useCase.setSurfaceProvider(request ->
+                request.provideSurface(surfaceProvider.getSurface(request.getResolution().getWidth(), request.getResolution().getHeight(), getSensorOrientation()), ContextCompat.getMainExecutor(getContext()), result -> {
             if (DEBUG) {
                 Log.d(TAG, "Surface no longer needed. Result Code: " + result.getResultCode());
             }
@@ -763,24 +764,6 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
 
         transformPreview(mPreviewSize.getWidth(), mPreviewSize.getHeight());
-    }
-
-    @Override
-    protected int getPreviewWidth() {
-        if (mPreviewSize == null) {
-            return 0;
-        }
-
-        return mPreviewSize.getWidth();
-    }
-
-    @Override
-    protected int getPreviewHeight() {
-        if (mPreviewSize == null) {
-            return 0;
-        }
-
-        return mPreviewSize.getHeight();
     }
 
     private void transformPreview(int previewWidth, int previewHeight) {

@@ -9,15 +9,20 @@ import android.util.Size;
 import android.view.Surface;
 
 import androidx.annotation.IntRange;
+import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 
+import com.google.common.primitives.Ints;
 import com.xlythe.view.camera.CameraView;
 
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 
+import static android.media.MediaCodec.INFO_TRY_AGAIN_LATER;
+import static android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED;
+import static android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED;
 import static android.os.Process.THREAD_PRIORITY_DISPLAY;
 import static android.os.Process.THREAD_PRIORITY_VIDEO;
 import static android.os.Process.setThreadPriority;
@@ -33,15 +38,19 @@ public class VideoPlayer {
   private static final String TAG = CameraView.class.getSimpleName();
 
   private static final String MIME_TYPE = "video/avc";    // H.264 Advanced Video Coding
-  private static final int DEFAULT_BIT_RATE = 6000000;    // 6M bit/s
-  private static final int DEFAULT_FRAME_RATE = 15;       // 15fps
-  private static final int DEFAULT_IFRAME_INTERVAL = 10;  // 10 seconds between I-frames
+
+  private static final int INFO_SUCCESS = 0;
+  private static final int TIMEOUT_USEC = 10000;
+  private static final int NO_TIMEOUT = -1;
 
   /** The surface we're drawing to. */
   private final Surface mSurface;
 
   /** The video stream we're reading from. */
   private final InputStream mInputStream;
+
+  /** A callback that fires once we know what the video parameters are. */
+  @Nullable private OnMetadataAvailableListener mOnMetadataAvailableListener;
 
   /**
    * If true, the background thread will continue to loop and play video. Once false, the thread
@@ -51,18 +60,6 @@ public class VideoPlayer {
 
   /** The background thread playing video for us. */
   private Thread mThread;
-
-  /** The size of a frame, in pixels. */
-  private Size mSize = new Size(0, 0);
-
-  /** The bit rate, in bits per second. */
-  private int mBitRate = DEFAULT_BIT_RATE;
-
-  /** The frame rate, in frames per second. */
-  private int mFrameRate = DEFAULT_FRAME_RATE;
-
-  /** The iframe interval, in bits per second. */
-  private int mIFrameInterval = DEFAULT_IFRAME_INTERVAL;
 
   /**
    * A simple audio player.
@@ -74,56 +71,8 @@ public class VideoPlayer {
     this.mInputStream = inputStream;
   }
 
-  /** Sets the desired frame size and bit rate. */
-  public void setSize(@IntRange(from = 0) int width, @IntRange(from = 0) int height) {
-    setSize(new Size(width, height));
-  }
-
-  /** Sets the desired frame size and bit rate. */
-  public void setSize(Size size) {
-    if ((size.getWidth() % 16) != 0 || (size.getHeight() % 16) != 0) {
-      Log.w(TAG, "WARNING: width or height not multiple of 16");
-    }
-
-    mSize = size;
-  }
-
-  public int getWidth() {
-    return mSize.getWidth();
-  }
-
-  public int getHeight() {
-    return mSize.getHeight();
-  }
-
-  /** Sets the desired bit rate. */
-  public void setBitRate(@IntRange(from = 0) int bitRate) {
-    mBitRate = bitRate;
-  }
-
-  /** Returns the desired bit rate. */
-  public int getBitRate() {
-    return mBitRate;
-  }
-
-  /** Sets the frame rate. */
-  public void setFrameRate(int frameRate) {
-    mFrameRate = frameRate;
-  }
-
-  /** Returns the frame rate. */
-  public int getFrameRate() {
-    return mFrameRate;
-  }
-
-  /** Sets the iframe interval. */
-  public void setIFrameInterval(int iframeInterval) {
-    mIFrameInterval = iframeInterval;
-  }
-
-  /** Returns the iframe interval. */
-  public int getIFrameInterval() {
-    return mIFrameInterval;
+  public void setOnMetadataAvailableListener(OnMetadataAvailableListener l) {
+    mOnMetadataAvailableListener = l;
   }
 
   /** @return True if currently playing. */
@@ -144,18 +93,22 @@ public class VideoPlayer {
                   setThreadPriority(THREAD_PRIORITY_DISPLAY);
                 }
 
-                MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, getWidth(), getHeight());
-
-                // Failing to specify some of these can cause the MediaCodec configure() call to
-                // throw an unhelpful exception.
-                format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-                format.setInteger(MediaFormat.KEY_BIT_RATE, getBitRate());
-                format.setInteger(MediaFormat.KEY_FRAME_RATE, getFrameRate());
-                format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, getIFrameInterval());
-                Log.d(TAG, "VideoPlayer with bit rate " + getBitRate() + ", frame rate " + getFrameRate() + ", and iframe interval " + getIFrameInterval() + " started");
-
                 MediaCodec decoder = null;
                 try {
+                  VideoFrame header = readHeader();
+                  if (mOnMetadataAvailableListener != null) {
+                    mOnMetadataAvailableListener.onMetadataAvailable(header.getWidth(), header.getHeight(), header.getOrientation());
+                  }
+
+                  MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, header.getWidth(), header.getHeight());
+
+                  // Failing to specify some of these can cause the MediaCodec configure() call to
+                  // throw an unhelpful exception.
+                  format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+                  format.setInteger(MediaFormat.KEY_BIT_RATE, header.getBitRate());
+                  format.setInteger(MediaFormat.KEY_FRAME_RATE, header.getFrameRate());
+                  format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, header.getIFrameInterval());
+
                   // Create a MediaCodec for the decoder, just based on the MIME type.
                   // The various format details will be passed through the csd-0 meta-data later on.
                   decoder = MediaCodec.createDecoderByType(MIME_TYPE);
@@ -163,34 +116,31 @@ public class VideoPlayer {
                   decoder.start();
                   Log.d(TAG, "Started playing video");
 
-                  MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-                  while (isPlaying() && !isEndOfStream(info)) {
-                    Log.d(TAG, "De-queuing next buffer");
-                    int statusOrIndex = decoder.dequeueOutputBuffer(info, -1);
-                    Log.d(TAG, "VideoPlayer got status " + statusOrIndex);
-                    if (statusOrIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                      Thread.sleep(100);
-                      continue;
-                    } else if (statusOrIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                      Log.d(TAG, "Video decoder output format changed: " + decoder.getOutputFormat());
-                    } else if (statusOrIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-                      Log.d(TAG, "Video decoder output buffers changed");
-                    } else if (statusOrIndex < 0) {
-                      throw new IOException("Unknown decoder status " + statusOrIndex);
-                    } else {  // index >= 0
-                      int index = decoder.dequeueInputBuffer(-1);
-                      ByteBuffer inputBuffer = decoder.getInputBuffers()[index];
-                      inputBuffer.clear();
-                      byte[] data = new byte[info.size];
-                      readFully(data);
-                      inputBuffer.put(data);
-                      decoder.queueInputBuffer(index, 0, info.size, info.presentationTimeUs, info.flags);
+                  VideoFrame dataFrame = new VideoFrame.Builder().build();
+                  while (isPlaying() && !isEndOfStream(dataFrame.getFlags())) {
+                    // MediaCodec will consume data through #queueInputBuffer,
+                    // while transforming/caching the data in the output buffer.
+                    // MediaCodec only draws to the surface after calling
+                    // #releaseOutputBuffer(..., true).
+                    // Before we start writing more data into the input buffer,
+                    // we must first make sure the output buffer is drained
+                    // so that we have space to write.
+                    drainOutputBuffer(decoder);
 
-                      boolean doRender = info.size != 0;
-                      decoder.releaseOutputBuffer(statusOrIndex, doRender);
+                    // Now that we have space, we can write the next few bytes.
+                    int index = decoder.dequeueInputBuffer(NO_TIMEOUT);
+                    if (index < 0) {
+                      throw new IOException("No space left to decode");
                     }
+                    ByteBuffer inputBuffer = decoder.getInputBuffers()[index];
+                    inputBuffer.clear();
+
+                    dataFrame = readFrame();
+
+                    inputBuffer.put(dataFrame.getData());
+                    decoder.queueInputBuffer(index, 0, dataFrame.getData().length, dataFrame.getPresentationTimeUs(), dataFrame.getFlags());
                   }
-                } catch (IOException | IllegalArgumentException | InterruptedException e) {
+                } catch (IOException | IllegalArgumentException e) {
                   Log.e(TAG, "Exception with playing video stream", e);
                 } finally {
                   stopInternal();
@@ -203,6 +153,69 @@ public class VideoPlayer {
               }
             };
     mThread.start();
+  }
+
+  private void drainOutputBuffer(MediaCodec decoder) throws IOException {
+    MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+    while (isPlaying()) {
+      // This grabs the next frame off of the MediaCodec. If no frame is ready yet,
+      // MediaCodec#INFO_TRY_AGAIN_LATER is returned. #TIMEOUT_USEC is purposefully
+      // small, because this will otherwise block until data is ready.
+      int statusOrIndex = decoder.dequeueOutputBuffer(info, TIMEOUT_USEC);
+      int status = getStatus(statusOrIndex);
+      int index = getIndex(statusOrIndex);
+
+      switch (status) {
+        case INFO_SUCCESS:
+          boolean doRender = info.size != 0;
+          decoder.releaseOutputBuffer(index, doRender);
+          break;
+        case INFO_TRY_AGAIN_LATER:
+          // Fully drained. We're done here.
+          return;
+        case INFO_OUTPUT_FORMAT_CHANGED:
+          Log.d(TAG, "Video decoder output format changed: " + decoder.getOutputFormat());
+          break;
+        case INFO_OUTPUT_BUFFERS_CHANGED:
+          Log.d(TAG, "Video decoder output buffers changed");
+          break;
+        default:
+          throw new IOException("Unknown decoder status " + status);
+      }
+    }
+  }
+
+  private int getStatus(int statusOrIndex) {
+    return Math.min(statusOrIndex, 0);
+  }
+
+  private int getIndex(int statusOrIndex) {
+    return Math.max(statusOrIndex, 0);
+  }
+
+  private VideoFrame readHeader() throws IOException {
+    VideoFrame frame = readFrame();
+    if (frame.getType() != VideoFrame.Type.HEADER) {
+      throw new IOException("Received frame of unexpected type " + frame.getType());
+    }
+    return frame;
+  }
+
+  private VideoFrame readFrame() throws IOException {
+    int len = readInt();
+    if (len < 0) {
+      throw new IOException("Negative length");
+    }
+
+    byte[] buffer = new byte[len];
+    readFully(buffer);
+    return VideoFrame.fromBytes(buffer);
+  }
+
+  private int readInt() throws IOException {
+    byte[] buffer = new byte[4];
+    readFully(buffer);
+    return Ints.fromByteArray(buffer);
   }
 
   private void readFully(byte[] buffer) throws IOException {
@@ -237,7 +250,11 @@ public class VideoPlayer {
   /** The stream has now ended. */
   protected void onFinish() {}
 
-  private boolean isEndOfStream(MediaCodec.BufferInfo info) {
-    return (info.flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+  private boolean isEndOfStream(int flags) {
+    return (flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
+  }
+
+  public interface OnMetadataAvailableListener {
+    void onMetadataAvailable(int width, int height, int orientation);
   }
 }

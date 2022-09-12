@@ -59,14 +59,6 @@ public abstract class ICameraModule {
 
     }
 
-    protected int getPreviewWidth() {
-        return mView.getWidth();
-    }
-
-    protected int getPreviewHeight() {
-        return mView.getHeight();
-    }
-
     @RequiresApi(21)
     public VideoRecorder.Canvas getCanvas() {
         return new VideoRecorder.Canvas() {
@@ -78,16 +70,6 @@ public abstract class ICameraModule {
             @Override
             public void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
                 new Handler(Looper.getMainLooper()).post(() -> ICameraModule.this.detachSurface(surfaceProvider));
-            }
-
-            @Override
-            public int getWidth() {
-                return ICameraModule.this.getPreviewWidth();
-            }
-
-            @Override
-            public int getHeight() {
-                return ICameraModule.this.getPreviewHeight();
             }
         };
     }

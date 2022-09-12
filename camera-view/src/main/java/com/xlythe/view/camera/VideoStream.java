@@ -2,7 +2,6 @@ package com.xlythe.view.camera;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-import android.util.Size;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -28,12 +27,6 @@ public class VideoStream implements Closeable {
   @Nullable private final AudioRecorder mAudioRecorder;
   /** Encodes a video stream. Non-null for video streams of type {@link InputType.CAMERA_MODULE}. */
   @Nullable private final VideoRecorder mVideoRecorder;
-
-  // ---------- From byte stream ----------
-  private final Size mSize;
-  private final int mBitRate;
-  private final int mFrameRate;
-  private final int mIFrameInterval;
 
   // ---------- Output ----------
   /** Exposes a handle to read the encoded audio bytes from the stream. Non-null for audio streams. */
@@ -73,6 +66,15 @@ public class VideoStream implements Closeable {
       try {
         videoInputStream = new PipedInputStream();
         videoRecorder = new VideoRecorder(cameraModule.getCanvas(), new LossyPipedOutputStream(videoInputStream));
+        if (params.getBitRate() != 0) {
+          videoRecorder.setBitRate(params.getBitRate());
+        }
+        if (params.getFrameRate() != 0) {
+          videoRecorder.setFrameRate(params.getFrameRate());
+        }
+        if (params.getIFrameInterval() != 0) {
+          videoRecorder.setIFrameInterval(params.getIFrameInterval());
+        }
         videoRecorder.start();
       } catch (IOException e) {
         videoRecorder = null;
@@ -85,26 +87,10 @@ public class VideoStream implements Closeable {
       mVideoRecorder = null;
       mVideoInputStream = null;
     }
-
-    if (mVideoRecorder != null) {
-      mSize = new Size(mVideoRecorder.getWidth(), mVideoRecorder.getHeight());
-      mBitRate = mVideoRecorder.getBitRate();
-      mFrameRate = mVideoRecorder.getFrameRate();
-      mIFrameInterval = mVideoRecorder.getIFrameInterval();
-    } else {
-      mSize = new Size(0, 0);
-      mBitRate = 0;
-      mFrameRate = 0;
-      mIFrameInterval = 0;
-    }
   }
 
   private VideoStream(@Nullable InputStream audioStream,
-                      @Nullable InputStream videoStream,
-                      Size size,
-                      int bitRate,
-                      int frameRate,
-                      int iFrameInterval) {
+                      @Nullable InputStream videoStream) {
     mInputType = InputType.INPUT_STREAM;
 
     mAudioRecorder = null;
@@ -112,11 +98,6 @@ public class VideoStream implements Closeable {
 
     mAudioInputStream = audioStream;
     mVideoInputStream = videoStream;
-
-    mSize = size;
-    mBitRate = bitRate;
-    mFrameRate = frameRate;
-    mIFrameInterval = iFrameInterval;
   }
 
   @Override
@@ -165,26 +146,6 @@ public class VideoStream implements Closeable {
     return mVideoInputStream;
   }
 
-  public int getBitRate() {
-    return mBitRate;
-  }
-
-  public int getFrameRate() {
-    return mFrameRate;
-  }
-
-  public int getIFrameInterval() {
-    return mIFrameInterval;
-  }
-
-  public int getWidth() {
-    return mSize.getWidth();
-  }
-
-  public int getHeight() {
-    return mSize.getHeight();
-  }
-
   @NonNull
   @Override
   public String toString() {
@@ -205,10 +166,6 @@ public class VideoStream implements Closeable {
     @Nullable private ICameraModule mCameraModule;
     @Nullable private InputStream mAudioStream;
     @Nullable private InputStream mVideoStream;
-    private Size mSize;
-    private int mBitRate;
-    private int mFrameRate;
-    private int mIFrameInterval;
 
     Builder setParams(Params params) {
       mParams = params;
@@ -219,7 +176,6 @@ public class VideoStream implements Closeable {
     Builder attach(ICameraModule cameraModule) {
       setInputType(InputType.CAMERA_MODULE);
       mCameraModule = cameraModule;
-      setSize(mCameraModule.getPreviewWidth(), mCameraModule.getPreviewHeight());
       return this;
     }
 
@@ -232,30 +188,6 @@ public class VideoStream implements Closeable {
     public Builder withVideoStream(InputStream videoStream) {
       setInputType(InputType.INPUT_STREAM);
       mVideoStream = videoStream;
-      return this;
-    }
-
-    public Builder setSize(int width, int height) {
-      return setSize(new Size(width, height));
-    }
-
-    public Builder setSize(Size size) {
-      mSize = size;
-      return this;
-    }
-
-    public Builder setBitRate(int bitRate) {
-      mBitRate = bitRate;
-      return this;
-    }
-
-    public Builder setFrameRate(int frameRate) {
-      mFrameRate = frameRate;
-      return this;
-    }
-
-    public Builder setIFrameInterval(int iFrameInterval) {
-      mIFrameInterval = iFrameInterval;
       return this;
     }
 
@@ -277,7 +209,7 @@ public class VideoStream implements Closeable {
         case CAMERA_MODULE:
           return new VideoStream(mCameraModule, mParams);
         case INPUT_STREAM:
-          return new VideoStream(mAudioStream, mVideoStream, mSize, mBitRate, mFrameRate, mIFrameInterval);
+          return new VideoStream(mAudioStream, mVideoStream);
         case UNKNOWN:
         default:
           throw new IllegalStateException("Cannot create a VideoStream without a source");
@@ -286,42 +218,82 @@ public class VideoStream implements Closeable {
   }
 
   public static class Params {
-    private final boolean audioEnabled;
-    private final boolean videoEnabled;
+    private final boolean mAudioEnabled;
+    private final boolean mVideoEnabled;
+    private final int mBitRate;
+    private final int mFrameRate;
+    private final int mIFrameInterval;
 
-    private Params(boolean audioEnabled, boolean videoEnabled) {
-      this.audioEnabled = audioEnabled;
-      this.videoEnabled = videoEnabled;
+    private Params(boolean audioEnabled,
+                   boolean videoEnabled,
+                   int bitRate,
+                   int frameRate,
+                   int iframeInterval) {
+      this.mAudioEnabled = audioEnabled;
+      this.mVideoEnabled = videoEnabled;
+      this.mBitRate = bitRate;
+      this.mFrameRate = frameRate;
+      this.mIFrameInterval = iframeInterval;
     }
 
     public boolean isAudioEnabled() {
-      return audioEnabled;
+      return mAudioEnabled;
     }
 
     public boolean isVideoEnabled() {
-      return videoEnabled;
+      return mVideoEnabled;
+    }
+
+    public int getBitRate() {
+      return mBitRate;
+    }
+
+    public int getFrameRate() {
+      return mFrameRate;
+    }
+
+    public int getIFrameInterval() {
+      return mIFrameInterval;
     }
 
     public static class Builder {
-      private boolean audioEnabled = true;
-      private boolean videoEnabled = true;
+      private boolean mAudioEnabled = true;
+      private boolean mVideoEnabled = true;
+      private int mBitRate;
+      private int mFrameRate;
+      private int mIFrameInterval;
 
       public Builder setAudioEnabled(boolean audioEnabled) {
-        this.audioEnabled = audioEnabled;
+        this.mAudioEnabled = audioEnabled;
         return this;
       }
 
       public Builder setVideoEnabled(boolean videoEnabled) {
-        this.videoEnabled = videoEnabled;
+        this.mVideoEnabled = videoEnabled;
+        return this;
+      }
+
+      public Builder setBitRate(int bitRate) {
+        mBitRate = bitRate;
+        return this;
+      }
+
+      public Builder setFrameRate(int frameRate) {
+        mFrameRate = frameRate;
+        return this;
+      }
+
+      public Builder setIFrameInterval(int iFrameInterval) {
+        mIFrameInterval = iFrameInterval;
         return this;
       }
 
       public Params build() {
-        if (!audioEnabled && !videoEnabled) {
+        if (!mAudioEnabled && !mVideoEnabled) {
           throw new IllegalStateException("Cannot create a stream with both audio and video disabled");
         }
 
-        return new Params(audioEnabled, videoEnabled);
+        return new Params(mAudioEnabled, mVideoEnabled, mBitRate, mFrameRate, mIFrameInterval);
       }
     }
   }

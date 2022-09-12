@@ -241,7 +241,7 @@ public class Camera2Module extends ICameraModule {
                             setZoomLevel(mZoomLevel);
                         }
                     } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
-                        Log.e(TAG, "Failed to start session", e);
+                        Log.e(TAG, "Failed to start session " + session.getClass().getSimpleName(), e);
                     }
                 }
 
@@ -560,6 +560,8 @@ public class Camera2Module extends ICameraModule {
                 setSession(new PictureSession(this));
             } else if (mActiveSession instanceof VideoSession) {
                 setSession(new VideoSession(this, ((VideoSession) mActiveSession).getFile()));
+            } else if (mActiveSession instanceof StreamSession) {
+                setSession(new StreamSession(this, ((StreamSession) mActiveSession).getSurfaceProvider()));
             }
         }
     }
@@ -625,10 +627,12 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        setSession(new StreamSession(this, surfaceProvider));
     }
 
     @Override
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        setSession(new PictureSession(this));
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {
@@ -771,6 +775,14 @@ public class Camera2Module extends ICameraModule {
         CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(cameraId);
         Integer orientation = characteristics.get(CameraCharacteristics.SENSOR_ORIENTATION);
         return orientation == null ? 0 : orientation;
+    }
+
+    protected int getSensorOrientation() {
+        try {
+            return getSensorOrientation(getActiveCamera());
+        } catch (CameraAccessException e) {
+            return 0;
+        }
     }
 
     Handler getHandler() {

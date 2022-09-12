@@ -57,7 +57,7 @@ public class CameraView extends FrameLayout {
     //   metadata manually to fix this failed (and I'm not sure why...).
     // * There is no official way to record videos with CameraX. Video capture is currently working,
     //   but through unofficial APIs that may break in the future.
-    static final boolean USE_CAMERA_X = true;
+    static final boolean USE_CAMERA_X = false;
 
     // When enabled, CameraV2 will be used. It's currently stable.
     static final boolean USE_CAMERA_V2 = true;
