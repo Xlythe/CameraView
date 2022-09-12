@@ -93,6 +93,7 @@ dependencies {
     api 'androidx.camera:camera-core:[1.1.0,)'
     api 'androidx.camera:camera-camera2:[1.1.0,)'
     api 'androidx.camera:camera-lifecycle:[1.1.0,)'
+    api 'com.google.guava:guava:[31.1-android,)'
     testImplementation 'org.robolectric:robolectric:+'
     testImplementation 'org.mockito:mockito-core:+'
     testImplementation 'junit:junit:+'

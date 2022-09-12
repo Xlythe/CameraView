@@ -1,6 +1,7 @@
 <resources>
 
     <string name="app_name">Camera</string>
+    <string name="app_name_stream">Stream Demo</string>
     <string name="app_name_resizing">Resizing Demo</string>
 
     <string name="btn_request_permissions">Request Permissions</string>

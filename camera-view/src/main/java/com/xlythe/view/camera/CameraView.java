@@ -33,6 +33,7 @@ import java.io.File;
 import java.io.OutputStream;
 
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
 
@@ -56,7 +57,7 @@ public class CameraView extends FrameLayout {
     //   metadata manually to fix this failed (and I'm not sure why...).
     // * There is no official way to record videos with CameraX. Video capture is currently working,
     //   but through unofficial APIs that may break in the future.
-    static final boolean USE_CAMERA_X = false;
+    static final boolean USE_CAMERA_X = true;
 
     // When enabled, CameraV2 will be used. It's currently stable.
     static final boolean USE_CAMERA_V2 = true;
@@ -143,7 +144,6 @@ public class CameraView extends FrameLayout {
             synchronized (CameraView.this) {
                 if (getStatus() == Status.AWAITING_TEXTURE) {
                     setStatus(Status.OPEN);
-                    onOpen();
                 }
             }
         }
@@ -187,6 +187,9 @@ public class CameraView extends FrameLayout {
     private boolean mIsPinchToZoomEnabled = true;
 
     private ICameraModule mCameraModule;
+
+    @Nullable
+    private OnCameraStateChangedListener mOnCameraStateChangedListener;
 
     private TextureView mCameraView;
     private ImageView mImagePreview;
@@ -346,6 +349,15 @@ public class CameraView extends FrameLayout {
             Log.v(TAG, "Camera state set to " + status.name());
         }
         mStatus = status;
+
+        switch (mStatus) {
+            case OPEN:
+                onOpen();
+                break;
+            case CLOSED:
+                onClose();
+                break;
+        }
     }
 
     /*
@@ -364,7 +376,6 @@ public class CameraView extends FrameLayout {
     public synchronized void open() {
         if (mCameraView.isAvailable()) {
             setStatus(Status.OPEN);
-            onOpen();
         } else {
             setStatus(Status.AWAITING_TEXTURE);
         }
@@ -375,7 +386,6 @@ public class CameraView extends FrameLayout {
      */
     public synchronized void close() {
         setStatus(Status.CLOSED);
-        onClose();
     }
 
     /**
@@ -611,6 +621,10 @@ public class CameraView extends FrameLayout {
 
     protected void onOpen() {
         mCameraModule.open();
+
+        if (mOnCameraStateChangedListener != null) {
+            mOnCameraStateChangedListener.onCameraOpened();
+        }
     }
 
     protected void onClose() {
@@ -624,6 +638,10 @@ public class CameraView extends FrameLayout {
             removeView(mCameraView);
             addView(mCameraView = new TextureView(getContext()), 0 /* view position */);
             mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
+        }
+
+        if (mOnCameraStateChangedListener != null) {
+            mOnCameraStateChangedListener.onCameraClosed();
         }
     }
 
@@ -738,6 +756,38 @@ public class CameraView extends FrameLayout {
             Log.w(TAG, "Attempted to clean up pending video file, but failed");
         }
         mVideoPendingConfirmation = null;
+    }
+
+    /**
+     * Starts a video stream. The stream will continue until {@link VideoStream#close} is called.
+     *
+     * @return A stream that can be shared to a remote device.
+     */
+    @RequiresPermission(allOf = {
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+    })
+    @RequiresApi(21)
+    public VideoStream stream() {
+        return stream(new VideoStream.Params.Builder().build());
+    }
+
+    /**
+     * Starts a video stream. The stream will continue until {@link VideoStream#close} is called.
+     *
+     * @return A stream that can be shared to a remote device.
+     */
+    @RequiresPermission(allOf = {
+            Manifest.permission.CAMERA,
+            Manifest.permission.RECORD_AUDIO
+    })
+    @RequiresApi(21)
+    public VideoStream stream(VideoStream.Params params) {
+        if (params.isVideoEnabled() && !isOpen()) {
+            throw new IllegalStateException("Camera must be open before starting a video stream");
+        }
+
+        return new VideoStream.Builder().attach(mCameraModule).setParams(params).build();
     }
 
     /**
@@ -996,6 +1046,17 @@ public class CameraView extends FrameLayout {
         return mOnVideoCapturedListener;
     }
 
+    /**
+     * Enables listening for callbacks about the camera being opened or closed.
+     */
+    public void setOnCameraStateChangedListener(OnCameraStateChangedListener l) {
+        mOnCameraStateChangedListener = l;
+    }
+
+    protected OnCameraStateChangedListener getOnCameraStateChangedListener() {
+        return mOnCameraStateChangedListener;
+    }
+
     public interface OnImageCapturedListener {
         void onImageConfirmation();
         void onImageCaptured(File file);
@@ -1006,6 +1067,11 @@ public class CameraView extends FrameLayout {
         void onVideoConfirmation();
         void onVideoCaptured(File file);
         void onFailure();
+    }
+
+    public interface OnCameraStateChangedListener {
+        void onCameraOpened();
+        void onCameraClosed();
     }
 
     private class PinchToZoomGestureDetector extends ScaleGestureDetector implements ScaleGestureDetector.OnScaleGestureListener {

@@ -358,7 +358,8 @@ public class LegacyCameraModule extends ICameraModule {
         return mActiveCamera;
     }
 
-    private int getPreviewWidth() {
+    @Override
+    protected int getPreviewWidth() {
         if (mPreviewSize == null) {
             return 0;
         }
@@ -366,7 +367,8 @@ public class LegacyCameraModule extends ICameraModule {
         return mPreviewSize.width;
     }
 
-    private int getPreviewHeight() {
+    @Override
+    protected int getPreviewHeight() {
         if (mPreviewSize == null) {
             return 0;
         }

@@ -22,11 +22,13 @@ import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.LocationProvider;
 import com.xlythe.view.camera.PermissionChecker;
+import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -40,6 +42,7 @@ import androidx.camera.core.Camera;
 import androidx.camera.core.CameraInfoUnavailableException;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.FocusMeteringAction;
+import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
 import androidx.camera.core.ImageProxy;
@@ -49,6 +52,7 @@ import androidx.camera.core.UseCase;
 import androidx.camera.core.VideoCapture;
 import androidx.camera.core.ZoomState;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.collection.ArrayMap;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Lifecycle;
 import androidx.lifecycle.LifecycleOwner;
@@ -103,6 +107,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     @Nullable private Camera mActiveCamera;
 
+    /** The size of the preview. Cached in case we need to adjust our view size. */
     @Nullable private Size mPreviewSize;
 
     /** The preview that draws to the texture surface. Non-null while open. */
@@ -113,6 +118,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     /** A video capture that captures what's visible on the screen. Non-null while taking a video. */
     @Nullable private VideoCapture mVideoCapture;
+
+    /** Custom use cases, beyond the typical Preview/Image/Video ones. */
+    private final Map<VideoRecorder.SurfaceProvider, UseCase> mCustomUseCases = new ArrayMap<>();
 
     /**
      * True if using the front facing camera. False otherwise.
@@ -723,12 +731,56 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @Override
+    protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        Preview useCase = new Preview.Builder()
+                .setTargetResolution(getTargetResolution())
+                //.setTargetAspectRatio(getTargetAspectRatio())
+                .setTargetRotation(getTargetRotation())
+                .build();
+        useCase.setSurfaceProvider(request -> request.provideSurface(surfaceProvider.getSurface(request.getResolution().getWidth(), request.getResolution().getHeight()), ContextCompat.getMainExecutor(getContext()), result -> {
+            if (DEBUG) {
+                Log.d(TAG, "Surface no longer needed. Result Code: " + result.getResultCode());
+            }
+        }));
+        if (bind(useCase)) {
+            mCustomUseCases.put(surfaceProvider, useCase);
+            Log.d(TAG, "Successfully bound custom surface");
+        }
+    }
+
+    @Override
+    protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        UseCase useCase = mCustomUseCases.remove(surfaceProvider);
+        if (useCase != null) {
+            unbind(useCase);
+        }
+    }
+
+    @Override
     public void onLayoutChanged() {
         if (mPreviewSize == null) {
             return;
         }
 
         transformPreview(mPreviewSize.getWidth(), mPreviewSize.getHeight());
+    }
+
+    @Override
+    protected int getPreviewWidth() {
+        if (mPreviewSize == null) {
+            return 0;
+        }
+
+        return mPreviewSize.getWidth();
+    }
+
+    @Override
+    protected int getPreviewHeight() {
+        if (mPreviewSize == null) {
+            return 0;
+        }
+
+        return mPreviewSize.getHeight();
     }
 
     private void transformPreview(int previewWidth, int previewHeight) {

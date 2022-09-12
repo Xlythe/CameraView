@@ -4,9 +4,15 @@ import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
+import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
 import android.util.Log;
+import android.view.Surface;
+
+import androidx.annotation.RequiresApi;
+
+import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
 
@@ -43,6 +49,47 @@ public abstract class ICameraModule {
 
     public int getHeight() {
         return mView.getHeight();
+    }
+
+    protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+
+    }
+
+    protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+
+    }
+
+    protected int getPreviewWidth() {
+        return mView.getWidth();
+    }
+
+    protected int getPreviewHeight() {
+        return mView.getHeight();
+    }
+
+    @RequiresApi(21)
+    public VideoRecorder.Canvas getCanvas() {
+        return new VideoRecorder.Canvas() {
+            @Override
+            public void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+                new Handler(Looper.getMainLooper()).post(() -> ICameraModule.this.attachSurface(surfaceProvider));
+            }
+
+            @Override
+            public void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+                new Handler(Looper.getMainLooper()).post(() -> ICameraModule.this.detachSurface(surfaceProvider));
+            }
+
+            @Override
+            public int getWidth() {
+                return ICameraModule.this.getPreviewWidth();
+            }
+
+            @Override
+            public int getHeight() {
+                return ICameraModule.this.getPreviewHeight();
+            }
+        };
     }
 
     public int getDisplayRotation() {

@@ -22,6 +22,7 @@ import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
 import java.util.List;
@@ -620,6 +621,14 @@ public class Camera2Module extends ICameraModule {
     public void onVideoFailed() {
         super.onVideoFailed();
         mIsRecording = false;
+    }
+
+    @Override
+    protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+    }
+
+    @Override
+    protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {

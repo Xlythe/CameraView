@@ -39,7 +39,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.fragment.app.Fragment;
 
-public abstract class CameraFragment extends Fragment implements CameraView.OnImageCapturedListener, CameraView.OnVideoCapturedListener {
+public abstract class CameraFragment extends Fragment implements CameraView.OnImageCapturedListener, CameraView.OnVideoCapturedListener, CameraView.OnCameraStateChangedListener {
     private static final String[] REQUIRED_PERMISSIONS;
     private static final String[] OPTIONAL_PERMISSIONS;
 
@@ -197,9 +197,9 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     @Override
     public void onDetach() {
-        getContext().unregisterReceiver(mStateChangedReceiver);
+        requireContext().unregisterReceiver(mStateChangedReceiver);
         if (Build.VERSION.SDK_INT > 17) {
-            DisplayManager displayManager = (DisplayManager) getContext().getSystemService(Context.DISPLAY_SERVICE);
+            DisplayManager displayManager = (DisplayManager) requireContext().getSystemService(Context.DISPLAY_SERVICE);
             displayManager.unregisterDisplayListener(mDisplayListener);
         }
         super.onDetach();
@@ -219,6 +219,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @Override
     public void onStop() {
         mCamera.close();
+        onCameraClosed();
         super.onStop();
     }
 
@@ -259,6 +260,12 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     protected void onRecordStart() {}
 
     protected void onRecordStop() {}
+
+    @Override
+    public void onCameraOpened() {}
+
+    @Override
+    public void onCameraClosed() {}
 
     @RequiresPermission(allOf = {
             Manifest.permission.CAMERA,
@@ -331,6 +338,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     private void invalidate() {
         mCamera.setOnImageCapturedListener(this);
         mCamera.setOnVideoCapturedListener(this);
+        mCamera.setOnCameraStateChangedListener(this);
 
         mCapture.setOnTouchListener(new OnTouchListener(getContext()));
 
@@ -473,6 +481,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
         private long mDownEventTimestamp;
         private Rect mViewBoundsRect;
+        @SuppressLint("HandlerLeak")
         private final Handler mHandler = new Handler() {
             @Override
             public void handleMessage(Message msg) {
@@ -532,6 +541,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             onRecordStop();
         }
 
+        @SuppressLint("ClickableViewAccessibility")
         @Override
         public boolean onTouch(View v, MotionEvent event) {
             switch (event.getAction()) {

@@ -1,5 +1,6 @@
 package com.xlythe.view.camera;
 
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
@@ -20,43 +21,53 @@ import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.util.Objects;
 
 import androidx.annotation.CheckResult;
 import androidx.annotation.Nullable;
-import androidx.annotation.RestrictTo;
+import androidx.annotation.RequiresApi;
 
-@RestrictTo(RestrictTo.Scope.LIBRARY)
+import com.xlythe.view.camera.stream.AudioPlayer;
+import com.xlythe.view.camera.stream.VideoPlayer;
+
 public class VideoView extends FrameLayout implements TextureView.SurfaceTextureListener {
     private static final String TAG = VideoView.class.getSimpleName();
     private static final boolean DEBUG = false;
 
+    // ---------- General ----------
+
     // The view we draw the video on to
     private TextureView mTextureView;
-
-    // Controls video playback
-    private MediaPlayer mMediaPlayer;
-
-    // The file of the video to play
-    private File mFile;
-
+    // Whether to play a file or a stream
+    private InputType mInputType = InputType.UNKNOWN;
     // If true, the texture view is ready to be drawn on
     private boolean mIsAvailable;
-
     // If true, we should be playing
     private boolean mIsPlaying;
-
-    // An optional listener for when videos have reached the end
-    @Nullable
-    private MediaPlayer.OnCompletionListener mOnCompletionListener;
-
     // An optional listener for when videos are paused/played
     @Nullable private EventListener mEventListener;
-
     // If true, the video should be mirrored
     private boolean mIsMirrored = false;
 
+    // ---------- File ----------
+
+    // Controls video playback
+    @Nullable private MediaPlayer mMediaPlayer;
+    // The file of the video to play
+    @Nullable private File mFile;
+    // An optional listener for when videos have reached the end
+    @Nullable private MediaPlayer.OnCompletionListener mOnCompletionListener;
     // If true, the video should loop
     private boolean mIsLooping = false;
+
+    // ---------- Stream ----------
+
+    // The stream to play
+    @Nullable private VideoStream mVideoStream;
+    // Plays the audio half of the VideoStream
+    @Nullable private AudioPlayer mAudioPlayer;
+    // Plays the video half of the VideoStream
+    @Nullable private VideoPlayer mVideoPlayer;
 
     public VideoView(Context context) {
         this(context, null);
@@ -98,14 +109,49 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     }
 
     public void setFile(@Nullable File file) {
-        if (file == mFile || (file != null && file.equals(mFile))) {
+        if (Objects.equals(file, mFile) && mInputType.equals(InputType.FILE)) {
             return;
         }
 
         if (DEBUG) Log.d(TAG, "File set to " + file);
         this.mFile = file;
+        if (mVideoStream != null) {
+            if (Build.VERSION.SDK_INT <= 21) {
+                throw new RuntimeException("API not available");
+            }
+            mVideoStream.close();
+            mVideoStream = null;
+        }
+        this.mInputType = InputType.FILE;
         createTextureView();
         if (file != null && mIsAvailable) {
+            prepare();
+        }
+    }
+
+    @RequiresApi(21)
+    public boolean hasStream() {
+        return mVideoStream != null;
+    }
+
+    @Nullable
+    @RequiresApi(21)
+    public VideoStream getStream() {
+        return mVideoStream;
+    }
+
+    @RequiresApi(21)
+    public void setStream(VideoStream videoStream) {
+        if (Objects.equals(videoStream, mVideoStream) && mInputType.equals(InputType.STREAM)) {
+            return;
+        }
+
+        if (DEBUG) Log.d(TAG, "Stream set");
+        this.mVideoStream = videoStream;
+        this.mFile = null;
+        this.mInputType = InputType.STREAM;
+        createTextureView();
+        if (videoStream != null && mIsAvailable) {
             prepare();
         }
     }
@@ -114,7 +160,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
         if (DEBUG) Log.d(TAG, "Texture available");
         mIsAvailable = true;
-        if (mFile != null) {
+        if (mFile != null || mVideoStream != null) {
             prepare();
         }
     }
@@ -123,20 +169,35 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     public void onSurfaceTextureSizeChanged(SurfaceTexture texture, int width, int height) {}
 
     @Override
+    public void onSurfaceTextureUpdated(SurfaceTexture texture) {}
+
+    @Override
     public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
         if (DEBUG) Log.d(TAG, "Texture destroyed");
         mIsAvailable = false;
         setPlayingState(false);
 
-        ensureMediaPlayer();
-        mMediaPlayer.release();
-        mMediaPlayer = null;
+        switch (mInputType) {
+            case FILE:
+                ensureMediaPlayer();
+                if (mMediaPlayer != null) {
+                    mMediaPlayer.release();
+                    mMediaPlayer = null;
+                }
+                break;
+            case STREAM:
+                if (mVideoStream != null) {
+                    if (Build.VERSION.SDK_INT < 21) {
+                        throw new RuntimeException("API not available");
+                    }
+                    mVideoStream.close();
+                    mVideoStream = null;
+                }
+                break;
+        }
 
         return true;
     }
-
-    @Override
-    public void onSurfaceTextureUpdated(SurfaceTexture texture) {}
 
     /**
      * MediaPlayer is null after being destroyed. Call this before any calls to MediaPlayer to
@@ -164,6 +225,19 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     }
 
     protected void prepare() {
+        switch (mInputType) {
+            case UNKNOWN:
+                throw new IllegalStateException("Must set a file ot stream before preparing");
+            case FILE:
+                prepareFile();
+                break;
+            case STREAM:
+                prepareStream();
+                break;
+        }
+    }
+
+    protected void prepareFile() {
         if (DEBUG) Log.d(TAG, "Preparing video");
         ensureMediaPlayer();
 
@@ -188,7 +262,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             Surface surface = new Surface(mTextureView.getSurfaceTexture());
 
             try {
-                mMediaPlayer.stop();
+                Objects.requireNonNull(mMediaPlayer).stop();
             } catch (IllegalStateException e) {
                 if (DEBUG) e.printStackTrace();
             }
@@ -210,6 +284,33 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         seekToFirstFrame();
     }
 
+    protected void prepareStream() {
+        if (DEBUG) Log.d(TAG, "Preparing stream");
+        if (mVideoStream == null) {
+            throw new IllegalStateException("Cannot prepare a null stream");
+        }
+        if (Build.VERSION.SDK_INT < 21) {
+            throw new RuntimeException("API not available");
+        }
+
+        if (mVideoStream.hasAudio()) {
+            mAudioPlayer = new AudioPlayer(mVideoStream.getAudioInputStream());
+        }
+
+        if (mVideoStream.hasVideo()) {
+            Surface surface = new Surface(mTextureView.getSurfaceTexture());
+            mVideoPlayer = new VideoPlayer(surface, mVideoStream.getVideoInputStream());
+            mVideoPlayer.setSize(mVideoStream.getWidth(), mVideoStream.getHeight());
+            mVideoPlayer.setBitRate(mVideoStream.getBitRate());
+            mVideoPlayer.setFrameRate(mVideoStream.getFrameRate());
+            mVideoPlayer.setIFrameInterval(mVideoStream.getIFrameInterval());
+        }
+
+        if (mIsPlaying) {
+            playStream();
+        }
+    }
+
     private int extractAsInt(MediaMetadataRetriever retriever, int key) {
         String metadata = retriever.extractMetadata(key);
         if (metadata == null) {
@@ -223,7 +324,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         ensureMediaPlayer();
 
         try {
-            mMediaPlayer.setOnSeekCompleteListener(mediaPlayer -> {
+            Objects.requireNonNull(mMediaPlayer).setOnSeekCompleteListener(mediaPlayer -> {
                 if (DEBUG) Log.d(TAG, "Seek completed");
                 mMediaPlayer.setOnSeekCompleteListener(null);
                 if (!mIsPlaying) {
@@ -241,10 +342,22 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     @CheckResult
     public boolean play() {
         if (DEBUG) Log.d(TAG, "play()");
+
+        switch (mInputType) {
+            case FILE:
+                return playFile();
+            case STREAM:
+                return playStream();
+            default:
+                return false;
+        }
+    }
+
+    private boolean playFile() {
         ensureMediaPlayer();
 
         try {
-            mMediaPlayer.start();
+            Objects.requireNonNull(mMediaPlayer).start();
             mMediaPlayer.setLooping(isLooping());
             setPlayingState(true);
             return true;
@@ -254,13 +367,42 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         return false;
     }
 
+    private boolean playStream() {
+        if (DEBUG) Log.d(TAG, "Playing stream");
+        if (mAudioPlayer != null) {
+            if (DEBUG) Log.d(TAG, "Playing audio stream");
+            mAudioPlayer.start();
+        }
+        if (mVideoPlayer != null) {
+            if (DEBUG) Log.d(TAG, "Playing video stream");
+            if (Build.VERSION.SDK_INT <= 21) {
+                throw new RuntimeException("API not available");
+            }
+            mVideoPlayer.start();
+        }
+        setPlayingState(true);
+        return true;
+    }
+
     @CheckResult
     public boolean pause() {
         if (DEBUG) Log.d(TAG, "pause()");
+
+        switch (mInputType) {
+            case FILE:
+                return pauseFile();
+            case STREAM:
+                return pauseStream();
+            default:
+                return false;
+        }
+    }
+
+    private boolean pauseFile() {
         ensureMediaPlayer();
 
         try {
-            mMediaPlayer.pause();
+            Objects.requireNonNull(mMediaPlayer).pause();
             setPlayingState(false);
             return true;
         } catch (IllegalStateException e) {
@@ -270,14 +412,22 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         return false;
     }
 
-    public boolean isPlaying() {
-        ensureMediaPlayer();
-        try {
-            return mMediaPlayer.isPlaying();
-        } catch (IllegalStateException e) {
-            if (DEBUG) e.printStackTrace();
+    private boolean pauseStream() {
+        if (mAudioPlayer != null) {
+            mAudioPlayer.stop();
         }
-        return false;
+        if (mVideoPlayer != null) {
+            if (Build.VERSION.SDK_INT <= 21) {
+                throw new RuntimeException("API not available");
+            }
+            mVideoPlayer.stop();
+        }
+        setPlayingState(false);
+        return true;
+    }
+
+    public boolean isPlaying() {
+        return mIsPlaying;
     }
 
     private void setPlayingState(boolean state) {
@@ -311,7 +461,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     public void setVolume(float volume) {
         ensureMediaPlayer();
-        mMediaPlayer.setVolume(volume, volume);
+        Objects.requireNonNull(mMediaPlayer).setVolume(volume, volume);
     }
 
     void transformPreview(int videoWidth, int videoHeight) {
@@ -377,6 +527,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
     }
 
+    @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouchEvent(MotionEvent event) {
         if (!super.onTouchEvent(event)) {
@@ -399,5 +550,9 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     public interface EventListener {
         void onPlay();
         void onPause();
+    }
+
+    private enum InputType {
+        UNKNOWN, FILE, STREAM
     }
 }

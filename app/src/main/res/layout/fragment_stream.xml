@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:camera="http://schemas.android.com/apk/res-auto"
+    android:orientation="vertical"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent">
+
+    <FrameLayout
+        android:id="@id/layout_permissions"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <Button
+            android:id="@id/request_permissions"
+            android:text="@string/btn_request_permissions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            style="?android:buttonBarButtonStyle" />
+
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@id/layout_camera"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical">
+
+        <com.xlythe.view.camera.CameraView
+            android:id="@id/camera"
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
+            android:layout_weight="1"
+            camera:quality="high" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="58dp">
+
+            <Button
+                android:id="@id/cancel"
+                android:text="@string/btn_cancel"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                style="?android:buttonBarButtonStyle" />
+
+            <Button
+                android:id="@id/confirm"
+                android:text="@string/btn_confirm"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                style="?android:buttonBarButtonStyle" />
+
+            <Button
+                android:id="@id/capture"
+                android:text="@string/btn_capture"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                style="?android:buttonBarButtonStyle" />
+
+            <CheckBox
+                android:id="@id/toggle"
+                android:layout_width="50dp"
+                android:layout_height="match_parent" />
+
+        </LinearLayout>
+
+    </LinearLayout>
+
+    <com.xlythe.view.camera.VideoView
+        android:id="@+id/video_stream"
+        android:layout_width="300dp"
+        android:layout_height="170dp"
+        android:layout_gravity="bottom|end"
+        android:layout_marginBottom="58dp"
+        android:background="#000000" />
+
+</FrameLayout>
