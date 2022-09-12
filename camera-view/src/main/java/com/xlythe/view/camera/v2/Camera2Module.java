@@ -780,11 +780,23 @@ public class Camera2Module extends ICameraModule {
         mActiveCamera = ((Bundle) state).getString(EXTRA_DEVICE_ID);
     }
 
+    @Override
+    public void onLayoutChanged() {
+        if (mActiveSession != null) {
+            try {
+                mActiveSession.onLayoutChanged();
+            } catch (CameraAccessException e) {
+                Log.e(TAG, "Failed to adjust the camera after a layout change", e);
+            }
+        }
+    }
+
     /**
      * A session has multiple surfaces for the camera to draw to.
      */
     interface Session {
         void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException;
+        void onLayoutChanged() throws CameraAccessException;
         @NonNull List<Surface> getSurfaces();
         void setMeteringRectangle(@Nullable MeteringRectangle meteringRectangle);
         @Nullable MeteringRectangle getMeteringRectangle();

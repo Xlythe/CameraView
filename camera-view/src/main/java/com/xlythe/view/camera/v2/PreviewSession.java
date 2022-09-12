@@ -45,6 +45,11 @@ class PreviewSession extends SessionImpl {
         transformPreview(mPreviewSurface.getWidth(), mPreviewSurface.getHeight());
     }
 
+    @Override
+    public void onLayoutChanged() throws CameraAccessException {
+        transformPreview(mPreviewSurface.getWidth(), mPreviewSurface.getHeight());
+    }
+
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);

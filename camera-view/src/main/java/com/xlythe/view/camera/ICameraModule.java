@@ -201,6 +201,8 @@ public abstract class ICameraModule {
 
     public void onRestoreInstanceState(Parcelable savedState) {}
 
+    public void onLayoutChanged() {}
+
     public void setOnImageCapturedListener(CameraView.OnImageCapturedListener l) {
         mOnImageCapturedListener = l;
     }

@@ -36,6 +36,7 @@ public class LegacyCameraModule extends ICameraModule {
 
     private int mActiveCamera = INVALID_CAMERA_ID;
     private Camera mCamera;
+    @Nullable private Camera.Size mPreviewSize;
 
     private MediaRecorder mVideoRecorder;
     private File mVideoFile;
@@ -60,11 +61,11 @@ public class LegacyCameraModule extends ICameraModule {
             Camera.Parameters parameters = mCamera.getParameters();
             int cameraOrientation = getRelativeCameraOrientation();
             mCamera.setDisplayOrientation(cameraOrientation);
-            Camera.Size previewSize = chooseOptimalPreviewSize(mCamera.getParameters().getSupportedPreviewSizes(), getWidth(), getHeight());
-            parameters.setPreviewSize(previewSize.width, previewSize.height);
+            mPreviewSize = chooseOptimalPreviewSize(mCamera.getParameters().getSupportedPreviewSizes(), getWidth(), getHeight());
+            parameters.setPreviewSize(getPreviewWidth(), getPreviewHeight());
             parameters.setPictureFormat(ImageFormat.JPEG);
             mCamera.setParameters(parameters);
-            transformPreview(getWidth(), getHeight(), previewSize.width, previewSize.height, cameraOrientation);
+            transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
             mCamera.startPreview();
         } catch (IOException e) {
@@ -79,7 +80,18 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera.stopPreview();
             mCamera.release();
             mCamera = null;
+            mPreviewSize = null;
         }
+    }
+
+    @Override
+    public void onLayoutChanged() {
+        if (mPreviewSize == null) {
+            return;
+        }
+
+        int cameraOrientation = getRelativeCameraOrientation();
+        transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
     }
 
     private void transformPreview(int viewWidth, int viewHeight, int previewWidth, int previewHeight, int cameraOrientation) {
@@ -344,6 +356,22 @@ public class LegacyCameraModule extends ICameraModule {
 
         mActiveCamera = 0;
         return mActiveCamera;
+    }
+
+    private int getPreviewWidth() {
+        if (mPreviewSize == null) {
+            return 0;
+        }
+
+        return mPreviewSize.width;
+    }
+
+    private int getPreviewHeight() {
+        if (mPreviewSize == null) {
+            return 0;
+        }
+
+        return mPreviewSize.height;
     }
 
     private static Camera.Size chooseOptimalPreviewSize(List<Camera.Size> choices, int width, int height) {

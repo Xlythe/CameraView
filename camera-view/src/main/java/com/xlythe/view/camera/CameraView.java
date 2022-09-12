@@ -9,6 +9,7 @@ import android.graphics.Rect;
 import android.graphics.SurfaceTexture;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.Parcelable;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -29,6 +30,7 @@ import com.xlythe.view.camera.v2.Camera2Module;
 import com.xlythe.view.camera.x.CameraXModule;
 
 import java.io.File;
+import java.io.OutputStream;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
@@ -168,8 +170,15 @@ public class CameraView extends FrameLayout {
     private OnImageCapturedListener mOnImageCapturedListener;
     private OnVideoCapturedListener mOnVideoCapturedListener;
 
+    // For overriding onTouch
+    private final int mTouchSlop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
+    private final int mLongPressTimeout = ViewConfiguration.getLongPressTimeout();
+    private final Handler mHandler = new Handler();
+    private float mInitialMotionEventX;
+    private float mInitialMotionEventY;
+    private boolean mIsLongPressMotionEvent;
+
     // For tap-to-focus
-    private long mDownEventTimestamp;
     private final Rect mFocusingRect = new Rect();
     private final Rect mMeteringRect = new Rect();
 
@@ -785,8 +794,12 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getRelativeCameraOrientation();
     }
 
-    private long delta() {
-        return System.currentTimeMillis() - mDownEventTimestamp;
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        if (changed) {
+            mCameraModule.onLayoutChanged();
+        }
     }
 
     @Override
@@ -795,7 +808,7 @@ public class CameraView extends FrameLayout {
         if (mImagePendingConfirmation != null
                 || mVideoPendingConfirmation != null
                 || mCameraModule.isPaused()) {
-            return false;
+            return super.onTouchEvent(event);
         }
 
         mScaleDetector.onTouchEvent(event);
@@ -806,16 +819,37 @@ public class CameraView extends FrameLayout {
         // Camera focus
         switch (event.getAction()) {
             case MotionEvent.ACTION_DOWN:
-                mDownEventTimestamp = System.currentTimeMillis();
+                mInitialMotionEventX = event.getX();
+                mInitialMotionEventY = event.getY();
+                mIsLongPressMotionEvent = false;
+                mHandler.postDelayed(() -> {
+                    if (Build.VERSION.SDK_INT >= 24) {
+                        performLongClick(mInitialMotionEventX, mInitialMotionEventY);
+                    } else {
+                        performLongClick();
+                    }
+                    mIsLongPressMotionEvent = true;
+                }, mLongPressTimeout);
+                break;
+            case MotionEvent.ACTION_CANCEL:
+                mHandler.removeCallbacksAndMessages(null);
                 break;
             case MotionEvent.ACTION_UP:
-                if (delta() < ViewConfiguration.getLongPressTimeout()) {
-                    calculateTapArea(mFocusingRect, event.getX(), event.getY(), 1f);
-                    calculateTapArea(mMeteringRect, event.getX(), event.getY(), 1.5f);
-                    if (area(mFocusingRect) == 0 || area(mMeteringRect) == 0) {
-                        break;
+                float distanceX = event.getX() - mInitialMotionEventX;
+                float distanceY = event.getY() - mInitialMotionEventY;
+                float distanceMoved = (float) Math.sqrt(distanceX * distanceX + distanceY * distanceY);
+                if (distanceMoved > mTouchSlop && !mIsLongPressMotionEvent) {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1
+                            && hasOnClickListeners()) {
+                        performClick();
+                    } else {
+                        calculateTapArea(mFocusingRect, event.getX(), event.getY(), 1f);
+                        calculateTapArea(mMeteringRect, event.getX(), event.getY(), 1.5f);
+                        if (area(mFocusingRect) != 0 && area(mMeteringRect) != 0) {
+                            focus(mFocusingRect, mMeteringRect);
+                        }
                     }
-                    focus(mFocusingRect, mMeteringRect);
+                    mHandler.removeCallbacksAndMessages(null);
                 }
                 break;
         }

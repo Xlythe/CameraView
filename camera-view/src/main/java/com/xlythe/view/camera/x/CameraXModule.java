@@ -103,6 +103,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     @Nullable private Camera mActiveCamera;
 
+    @Nullable private Size mPreviewSize;
+
     /** The preview that draws to the texture surface. Non-null while open. */
     @Nullable private Preview mPreview;
 
@@ -195,6 +197,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 }
             });
 
+            mPreviewSize = new Size(cameraWidth, cameraHeight);
             transformPreview(cameraWidth, cameraHeight);
         });
 
@@ -245,6 +248,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
         unbind(mPreview, mImageCapture);
 
+        mPreviewSize = null;
         mPreview = null;
         mImageCapture = null;
         mActiveCamera = null;
@@ -716,6 +720,15 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
 
         mCameraProvider.unbind(useCases);
+    }
+
+    @Override
+    public void onLayoutChanged() {
+        if (mPreviewSize == null) {
+            return;
+        }
+
+        transformPreview(mPreviewSize.getWidth(), mPreviewSize.getHeight());
     }
 
     private void transformPreview(int previewWidth, int previewHeight) {
