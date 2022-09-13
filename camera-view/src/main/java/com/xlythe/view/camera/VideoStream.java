@@ -2,6 +2,7 @@ package com.xlythe.view.camera;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.util.Log;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -19,6 +20,8 @@ import java.io.PipedInputStream;
 
 @RequiresApi(18)
 public class VideoStream implements Closeable {
+  private static final String TAG = VideoStream.class.getSimpleName();
+
   /** Determines if this is encoding or decoding a video stream. */
   private final InputType mInputType;
 
@@ -122,6 +125,7 @@ public class VideoStream implements Closeable {
         // ignored
       }
     }
+    Log.d(TAG, "VideoStream closed");
   }
 
   @Override

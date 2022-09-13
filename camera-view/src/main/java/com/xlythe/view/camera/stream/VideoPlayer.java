@@ -232,7 +232,13 @@ public class VideoPlayer {
   private void readFully(byte[] buffer) throws IOException {
     int bytesRead = 0;
     while (bytesRead != buffer.length) {
-      bytesRead += mInputStream.read(buffer, bytesRead, buffer.length - bytesRead);
+      int off = bytesRead;
+      int len = buffer.length - off;
+      int read = mInputStream.read(buffer, off, len);
+      if (read == -1) {
+        throw new IOException("Stream closed");
+      }
+      bytesRead += read;
     }
   }
 
