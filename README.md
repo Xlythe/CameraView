@@ -13,7 +13,7 @@ Where to Download
 -----------------
 ```groovy
 dependencies {
-  implementation 'com.xlythe:camera-view:1.3'
+  implementation 'com.xlythe:camera-view:2.0'
 }
 ```
 
@@ -134,6 +134,7 @@ maxVideoDuration [milliseconds], and maxVideoSize [bytes].
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     camera:quality="high"
+    camera:lensFacing="back"
     camera:maxVideoDuration="10000"
     camera:maxVideoSize="10000000" />
 ```
@@ -152,6 +153,10 @@ mCameraView.startRecording(file);
 Stops recording
 ```java
 mCameraView.stopRecording();
+```
+Returns a stream of bytes for both audio and video channels. These bytes can then be played with VideoView.
+```java
+mCameraView.stream();
 ```
 Toggles between the various cameras on the device (typically the front and back cameras)
 ```java
@@ -175,6 +180,11 @@ VideoView
 VideoView is another simplified Android View. In this case, as the name implies, it plays Videos.
 ```java
 mVideoView.setFile(file);
+mVideoView.play();
+mVideoView.pause();
+```
+```java
+mVideoView.setStream(new VideoStream.Builder().withAudioStream(...).withVideoStream(...).build());
 mVideoView.play();
 mVideoView.pause();
 ```
