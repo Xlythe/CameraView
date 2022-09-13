@@ -244,13 +244,6 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     @Override
-    public void toggleCamera() {
-        close();
-        mActiveCamera = (mActiveCamera + 1) % Camera.getNumberOfCameras();
-        open();
-    }
-
-    @Override
     public void focus(Rect focus, Rect metering) {
         if (DEBUG) {
             Log.d(TAG, String.format("Focus: focus=%s, metering=%s", focus, metering));
@@ -309,6 +302,38 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     public boolean isZoomSupported() {
         return mCamera.getParameters().isZoomSupported();
+    }
+
+    @Override
+    public void toggleCamera() {
+        boolean shouldOpen = getView().isOpen();
+        close();
+        mActiveCamera = (mActiveCamera + 1) % Camera.getNumberOfCameras();
+        if (shouldOpen) {
+            open();
+        }
+    }
+
+    @Override
+    public void setLensFacing(CameraView.LensFacing lensFacing) {
+        boolean shouldOpen = getView().isOpen();
+        close();
+
+        // Search for the properly facing camera
+        int numberOfCameras = Camera.getNumberOfCameras();
+        for (int i = 0; i < numberOfCameras; i++) {
+            Camera.CameraInfo info = new Camera.CameraInfo();
+            Camera.getCameraInfo(i, info);
+            if ((info.facing == Camera.CameraInfo.CAMERA_FACING_FRONT && lensFacing.equals(CameraView.LensFacing.FRONT))
+                    || (info.facing == Camera.CameraInfo.CAMERA_FACING_BACK && lensFacing.equals(CameraView.LensFacing.BACK))) {
+                mActiveCamera = i;
+                break;
+            }
+        }
+
+        if (shouldOpen) {
+            open();
+        }
     }
 
     @Override

@@ -153,6 +153,8 @@ public abstract class ICameraModule {
         mView.onVideoFailed();
     }
 
+    public abstract void setLensFacing(CameraView.LensFacing lensFacing);
+
     public abstract void toggleCamera();
 
     public abstract boolean hasFrontFacingCamera();

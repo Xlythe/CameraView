@@ -74,6 +74,7 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_PINCH_TO_ZOOM_ENABLED = "pinch_to_zoom_enabled";
     private static final String EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR = "pinch_to_zoom_scale_factor";
     private static final String EXTRA_FLASH = "flash";
+    private static final String EXTRA_LENS_FACING = "lens_facing";
     private static final String EXTRA_MAX_VIDEO_DURATION = "max_video_duration";
     private static final String EXTRA_MAX_VIDEO_SIZE = "max_video_size";
     private static final String EXTRA_CONFIRM_IMAGE = "confirm_image";
@@ -106,8 +107,8 @@ public class CameraView extends FrameLayout {
         }
 
         static Quality fromId(int id) {
-            for (Quality f : values()) {
-                if (f.id == id) return f;
+            for (Quality q : values()) {
+                if (q.id == id) return q;
             }
             throw new IllegalArgumentException();
         }
@@ -128,6 +129,26 @@ public class CameraView extends FrameLayout {
         static Flash fromId(int id) {
             for (Flash f : values()) {
                 if (f.id == id) return f;
+            }
+            throw new IllegalArgumentException();
+        }
+    }
+
+    /**
+     * Adjusts which camera to use.
+     */
+    public enum LensFacing {
+        BACK(0), FRONT(1);
+
+        private final int id;
+
+        LensFacing(int id) {
+            this.id = id;
+        }
+
+        static LensFacing fromId(int id) {
+            for (LensFacing lf : values()) {
+                if (lf.id == id) return lf;
             }
             throw new IllegalArgumentException();
         }
@@ -238,6 +259,7 @@ public class CameraView extends FrameLayout {
             TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView);
             setQuality(Quality.fromId(a.getInteger(R.styleable.CameraView_quality, getQuality().id)));
             setFlash(Flash.fromId(a.getInteger(R.styleable.CameraView_flash, getFlash().id)));
+            setLensFacing(LensFacing.fromId(a.getInteger(R.styleable.CameraView_lensFacing, getLensFacing().id)));
             setPinchToZoomEnabled(a.getBoolean(R.styleable.CameraView_pinchToZoomEnabled, isPinchToZoomEnabled()));
             if (a.hasValue(R.styleable.CameraView_maxVideoDuration)) {
                 setMaxVideoDuration(a.getInteger(R.styleable.CameraView_maxVideoDuration, INDEFINITE_VIDEO_DURATION));
@@ -286,6 +308,7 @@ public class CameraView extends FrameLayout {
         state.putBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED, isPinchToZoomEnabled());
         state.putFloat(EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR, mScaleDetector.getCumulativeScaleFactor());
         state.putInt(EXTRA_FLASH, getFlash().id);
+        state.putInt(EXTRA_LENS_FACING, getLensFacing().id);
         state.putLong(EXTRA_MAX_VIDEO_DURATION, getMaxVideoDuration());
         state.putLong(EXTRA_MAX_VIDEO_SIZE, getMaxVideoSize());
         state.putBoolean(EXTRA_CONFIRM_IMAGE, isImageConfirmationEnabled());
@@ -312,6 +335,7 @@ public class CameraView extends FrameLayout {
             setPinchToZoomEnabled(state.getBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED));
             mScaleDetector.setCumulativeScaleFactor(state.getFloat(EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR, mScaleDetector.getCumulativeScaleFactor()));
             setFlash(Flash.fromId(state.getInt(EXTRA_FLASH)));
+            setLensFacing(LensFacing.fromId(state.getInt(EXTRA_LENS_FACING)));
             setMaxVideoDuration(state.getLong(EXTRA_MAX_VIDEO_DURATION));
             setMaxVideoSize(state.getLong(EXTRA_MAX_VIDEO_SIZE));
             setImageConfirmationEnabled(state.getBoolean(EXTRA_CONFIRM_IMAGE));
@@ -810,6 +834,24 @@ public class CameraView extends FrameLayout {
      */
     public void toggleCamera() {
         mCameraModule.toggleCamera();
+    }
+
+    /**
+     * Sets which camera (front or back) to use.
+     */
+    public void setLensFacing(LensFacing lensFacing) {
+        if (getLensFacing().equals(lensFacing)) {
+            return;
+        }
+
+        mCameraModule.setLensFacing(lensFacing);
+    }
+
+    /**
+     * Returns which camera (front or back) is being used.
+     */
+    public LensFacing getLensFacing() {
+        return mCameraModule.isUsingFrontFacingCamera() ? LensFacing.FRONT : LensFacing.BACK;
     }
 
     /**

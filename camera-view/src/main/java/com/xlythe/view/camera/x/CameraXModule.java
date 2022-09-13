@@ -290,8 +290,24 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Override
     public void toggleCamera() {
         mIsFrontFacing = !mIsFrontFacing;
+
+        boolean shouldOpen = mIsOpen;
         close();
-        open();
+        if (shouldOpen) {
+            open();
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    @Override
+    public void setLensFacing(CameraView.LensFacing lensFacing) {
+        mIsFrontFacing = lensFacing.equals(CameraView.LensFacing.FRONT);
+
+        boolean shouldOpen = mIsOpen;
+        close();
+        if (shouldOpen) {
+            open();
+        }
     }
 
     @SuppressLint("MissingPermission")

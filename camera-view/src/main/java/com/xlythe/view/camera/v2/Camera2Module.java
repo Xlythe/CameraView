@@ -336,6 +336,33 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
+    public void setLensFacing(CameraView.LensFacing lensFacing) {
+        int position = 0;
+
+        try {
+            for (String cameraId : mCameraManager.getCameraIdList()) {
+                boolean isFrontFacing = isFrontFacing(cameraId);
+                if ((isFrontFacing && lensFacing.equals(CameraView.LensFacing.FRONT))
+                    || (!isFrontFacing && lensFacing.equals(CameraView.LensFacing.BACK))) {
+                    break;
+                }
+                position++;
+            }
+
+            // Close the old camera and open with the new camera id, but only if it was already
+            // open before toggle was requested.
+            boolean shouldOpen = mIsOpen;
+            close();
+            mActiveCamera = mCameraManager.getCameraIdList()[position % mCameraManager.getCameraIdList().length];
+            if (shouldOpen) {
+                open();
+            }
+        } catch (CameraAccessException e) {
+            Log.e(TAG, "Failed to query camera", e);
+        }
+    }
+
+    @Override
     public void focus(Rect focus, Rect metering) {
         if (mCaptureSession == null) {
             if (DEBUG) Log.w(TAG, "Cannot focus. No capture session.");

@@ -18,6 +18,10 @@
         <attr name="confirmVideos" format="boolean" />
         <attr name="pinchToZoomEnabled" format="boolean" />
         <attr name="matchPreviewAspectRatio" format="boolean" />
+        <attr name="lensFacing" format="enum">
+            <enum name="back" value="0"/>
+            <enum name="front" value="1"/>
+        </attr>
     </declare-styleable>
     <declare-styleable name="VideoView">
         <attr name="filePath" format="string" />
