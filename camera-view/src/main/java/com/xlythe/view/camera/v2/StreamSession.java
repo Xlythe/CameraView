@@ -122,7 +122,7 @@ class StreamSession extends PreviewSession {
 
         @Override
         Surface getSurface() {
-            return mSurfaceProvider.getSurface(getWidth(), getHeight(), mCameraView.getSensorOrientation());
+            return mSurfaceProvider.getSurface(getWidth(), getHeight(), mCameraView.getSensorOrientation(), mCameraView.isUsingFrontFacingCamera());
         }
 
         @Override

@@ -29,6 +29,7 @@ public class VideoFrame {
   private static final byte FIELD_DATA = 8;
   private static final byte FIELD_PRESENTATION_TIME_US = 9;
   private static final byte FIELD_FLAGS = 10;
+  private static final byte FIELD_FLIPPED = 11;
 
   // The frame's type.
   @Type private final int type;
@@ -41,6 +42,8 @@ public class VideoFrame {
   private final int height;
   // The orientation of the video.
   private final int orientation;
+  // If the video feed is flipped horizontally.
+  private final boolean flipped;
   // The bit rate of the video.
   private final int bitRate;
   // The frame rate of the video.
@@ -62,6 +65,7 @@ public class VideoFrame {
           int width,
           int height,
           int orientation,
+          boolean flipped,
           int bitRate,
           int frameRate,
           int iframeInterval,
@@ -72,6 +76,7 @@ public class VideoFrame {
     this.width = width;
     this.height = height;
     this.orientation = orientation;
+    this.flipped = flipped;
     this.bitRate = bitRate;
     this.frameRate = frameRate;
     this.iframeInterval = iframeInterval;
@@ -107,6 +112,9 @@ public class VideoFrame {
           case FIELD_ORIENTATION:
             builder.orientation(Ints.fromByteArray(data));
             break;
+          case FIELD_FLIPPED:
+            builder.flipped(data[0] == 1);
+            break;
           case FIELD_BIT_RATE:
             builder.bitRate(Ints.fromByteArray(data));
             break;
@@ -126,7 +134,7 @@ public class VideoFrame {
             builder.flags(Ints.fromByteArray(data));
             break;
         }
-      } catch (IllegalArgumentException e) {
+      } catch (IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
         // skip
       }
     }
@@ -142,6 +150,7 @@ public class VideoFrame {
           write(os, FIELD_WIDTH, Ints.toByteArray(width));
           write(os, FIELD_HEIGHT, Ints.toByteArray(height));
           write(os, FIELD_ORIENTATION, Ints.toByteArray(orientation));
+          write(os, FIELD_FLIPPED, new byte[] { (byte) (flipped ? 1 : 0) });
           write(os, FIELD_BIT_RATE, Ints.toByteArray(bitRate));
           write(os, FIELD_FRAME_RATE, Ints.toByteArray(frameRate));
           write(os, FIELD_I_FRAME_INTERVAL, Ints.toByteArray(iframeInterval));
@@ -185,6 +194,10 @@ public class VideoFrame {
     return orientation;
   }
 
+  public boolean isFlipped() {
+    return flipped;
+  }
+
   public int getBitRate() {
     return bitRate;
   }
@@ -225,6 +238,7 @@ public class VideoFrame {
     private int width;
     private int height;
     private int orientation;
+    private boolean flipped;
     private int bitRate;
     private int frameRate;
     private int iframeInterval;
@@ -255,6 +269,11 @@ public class VideoFrame {
 
     Builder orientation(int orientation) {
       this.orientation = orientation;
+      return this;
+    }
+
+    Builder flipped(boolean flipped) {
+      this.flipped = flipped;
       return this;
     }
 
@@ -289,7 +308,7 @@ public class VideoFrame {
     }
 
     VideoFrame build() {
-      return new VideoFrame(type, width, height, orientation, bitRate, frameRate, iframeInterval, data, presentationTimeUs, flags);
+      return new VideoFrame(type, width, height, orientation, flipped, bitRate, frameRate, iframeInterval, data, presentationTimeUs, flags);
     }
   }
 }

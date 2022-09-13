@@ -366,7 +366,7 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
         if (mCamera != null && mPreviewSize != null) {
-            LegacySurfaceHolder surfaceHolder = new LegacySurfaceHolder(getContext(), surfaceProvider, mPreviewSize.width, mPreviewSize.height, getSensorOrientation());
+            LegacySurfaceHolder surfaceHolder = new LegacySurfaceHolder(getContext(), surfaceProvider, mPreviewSize.width, mPreviewSize.height, getSensorOrientation(), isUsingFrontFacingCamera());
             mSurfaceProviders.put(surfaceProvider, surfaceHolder);
             mCamera.setPreviewCallback((data, camera) -> {
                 Canvas canvas = surfaceHolder.lockCanvas();

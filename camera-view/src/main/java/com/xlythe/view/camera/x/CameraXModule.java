@@ -754,7 +754,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .setTargetRotation(getTargetRotation())
                 .build();
         useCase.setSurfaceProvider(request ->
-                request.provideSurface(surfaceProvider.getSurface(request.getResolution().getWidth(), request.getResolution().getHeight(), getSensorOrientation()), ContextCompat.getMainExecutor(getContext()), result -> {
+                request.provideSurface(surfaceProvider.getSurface(request.getResolution().getWidth(), request.getResolution().getHeight(), getSensorOrientation(), isUsingFrontFacingCamera()), ContextCompat.getMainExecutor(getContext()), result -> {
             if (DEBUG) {
                 Log.d(TAG, "Surface no longer needed. Result Code: " + result.getResultCode());
             }

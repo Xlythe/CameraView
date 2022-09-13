@@ -304,7 +304,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         if (mVideoStream.hasVideo()) {
             Surface surface = new Surface(mTextureView.getSurfaceTexture());
             mVideoPlayer = new VideoPlayer(surface, mVideoStream.getVideoInputStream());
-            mVideoPlayer.setOnMetadataAvailableListener((width, height, orientation) -> new Handler(Looper.getMainLooper()).post(() -> transformPreview(width, height, orientation)));
+            mVideoPlayer.setOnMetadataAvailableListener((width, height, orientation, flipped) -> new Handler(Looper.getMainLooper()).post(() -> transformPreview(width, height, orientation, flipped)));
         }
 
         if (mIsPlaying) {
@@ -548,7 +548,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         return true;
     }
 
-    private void transformPreview(int previewWidth, int previewHeight, int cameraOrientation) {
+    private void transformPreview(int previewWidth, int previewHeight, int cameraOrientation, boolean flipped) {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
         int displayOrientation = getDisplayRotation();
@@ -627,6 +627,9 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         matrix.setScale(scaleX, scaleY);
         matrix.postTranslate(translateX, translateY);
         matrix.postRotate(rotation, (int) Math.ceil(viewWidth / 2d), (int) Math.ceil(viewHeight / 2d));
+        if (flipped) {
+            matrix.postScale(-1, 1, (int) Math.ceil(viewWidth / 2d), (int) Math.ceil(viewHeight / 2d));
+        }
 
         if (DEBUG) {
             Log.d(TAG, String.format("transformPreview: displayOrientation=%s, cameraOrientation=%s, "

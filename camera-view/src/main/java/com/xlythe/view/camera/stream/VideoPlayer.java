@@ -113,7 +113,7 @@ public class VideoPlayer {
                   }
 
                   if (mOnMetadataAvailableListener != null) {
-                    mOnMetadataAvailableListener.onMetadataAvailable(header.getWidth(), header.getHeight(), orientationFixed ? 0 : header.getOrientation());
+                    mOnMetadataAvailableListener.onMetadataAvailable(header.getWidth(), header.getHeight(), orientationFixed ? 0 : header.getOrientation(), header.isFlipped());
                   }
 
                   // Create a MediaCodec for the decoder, just based on the MIME type.
@@ -266,6 +266,6 @@ public class VideoPlayer {
   }
 
   public interface OnMetadataAvailableListener {
-    void onMetadataAvailable(int width, int height, int orientation);
+    void onMetadataAvailable(int width, int height, int orientation, boolean isFlipped);
   }
 }

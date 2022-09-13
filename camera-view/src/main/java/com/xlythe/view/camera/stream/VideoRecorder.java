@@ -11,6 +11,7 @@ import android.util.Log;
 import android.view.Surface;
 
 import androidx.annotation.IntRange;
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
@@ -157,8 +158,8 @@ public class VideoRecorder {
 
                 SettableFuture<CameraMetadata> requestedSizeFuture = SettableFuture.create();
                 SettableFuture<Surface> providedSurface = SettableFuture.create();
-                SurfaceProvider surfaceProvider = (width, height, orientation) -> {
-                  requestedSizeFuture.set(new CameraMetadata(width, height, orientation));
+                SurfaceProvider surfaceProvider = (width, height, orientation, flipped) -> {
+                  requestedSizeFuture.set(new CameraMetadata(width, height, orientation, flipped));
                   try {
                     return providedSurface.get();
                   } catch (ExecutionException | InterruptedException e) {
@@ -170,8 +171,8 @@ public class VideoRecorder {
                 MediaCodec encoder = null;
                 Surface surface = null;
                 try {
-                  CameraMetadata size = Objects.requireNonNull(requestedSizeFuture.get());
-                  MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, size.getWidth(), size.getHeight());
+                  CameraMetadata metadata = Objects.requireNonNull(requestedSizeFuture.get());
+                  MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, metadata.getWidth(), metadata.getHeight());
 
                   // Failing to specify some of these can cause the MediaCodec configure() call to
                   // throw an unhelpful exception.
@@ -184,14 +185,20 @@ public class VideoRecorder {
                   }
 
                   // Pass this info to the remote device.
-                  write(size.getWidth(), size.getHeight(), size.getOrientation(), getBitRate(), getFrameRate(), getIFrameInterval());
+                  write(metadata.getWidth(),
+                          metadata.getHeight(),
+                          metadata.getOrientation(),
+                          metadata.isFlipped(),
+                          getBitRate(),
+                          getFrameRate(),
+                          getIFrameInterval());
 
                   encoder = MediaCodec.createByCodecName(codecInfo.getName());
                   encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
                   surface = encoder.createInputSurface();
                   providedSurface.set(surface);
                   encoder.start();
-                  Log.d(TAG, "Started recording video with dimensions " + size);
+                  Log.d(TAG, "Started recording video with dimensions " + metadata);
 
                   MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
                   while (isRecording()) {
@@ -255,11 +262,18 @@ public class VideoRecorder {
     return Math.max(statusOrIndex, 0);
   }
 
-  private void write(int width, int height, int orientation, int bitRate, int frameRate, int iframeInterval) throws IOException {
+  private void write(int width,
+                     int height,
+                     int orientation,
+                     boolean flipped,
+                     int bitRate,
+                     int frameRate,
+                     int iframeInterval) throws IOException {
     byte[] frame = new VideoFrame.Builder(VideoFrame.Type.HEADER)
             .width(width)
             .height(height)
             .orientation(orientation)
+            .flipped(flipped)
             .bitRate(bitRate)
             .frameRate(frameRate)
             .iframeInterval(iframeInterval)
@@ -333,18 +347,20 @@ public class VideoRecorder {
   }
 
   public interface SurfaceProvider {
-    Surface getSurface(int width, int height, int orientation);
+    Surface getSurface(int width, int height, int orientation, boolean flipped);
   }
 
   private static class CameraMetadata {
     final int width;
     final int height;
     final int orientation;
+    final boolean flipped;
 
-    CameraMetadata(int width, int height, int orientation) {
+    CameraMetadata(int width, int height, int orientation, boolean flipped) {
       this.width = width;
       this.height = height;
       this.orientation = orientation;
+      this.flipped = flipped;
     }
 
     int getWidth() {
@@ -359,12 +375,18 @@ public class VideoRecorder {
       return orientation;
     }
 
+    boolean isFlipped() {
+      return flipped;
+    }
+
+    @NonNull
     @Override
     public String toString() {
       return "CameraMetadata{" +
               "width=" + width +
               ", height=" + height +
               ", orientation=" + orientation +
+              ", flipped=" + flipped +
               '}';
     }
   }

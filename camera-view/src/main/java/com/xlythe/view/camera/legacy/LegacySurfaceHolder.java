@@ -23,6 +23,7 @@ public class LegacySurfaceHolder implements SurfaceHolder {
   private final VideoRecorder.SurfaceProvider mSurfaceProvider;
   private final Set<Callback> mCallbacks = new ArraySet<>();
   private final int mCameraOrientation;
+  private final boolean mIsUsingFrontFacingCamera;
 
   @Nullable private Surface mSurface;
   @Nullable private Canvas mCanvas;
@@ -36,12 +37,14 @@ public class LegacySurfaceHolder implements SurfaceHolder {
           VideoRecorder.SurfaceProvider surfaceProvider,
           int defaultWidth,
           int defaultHeight,
-          int cameraOrientation) {
+          int cameraOrientation,
+          boolean isUsingFrontFacingCamera) {
     this.mContext = context;
     this.mSurfaceProvider = surfaceProvider;
     this.mWidth = defaultWidth;
     this.mHeight = defaultHeight;
     this.mCameraOrientation = cameraOrientation;
+    this.mIsUsingFrontFacingCamera = isUsingFrontFacingCamera;
   }
 
   @Override
@@ -147,7 +150,7 @@ public class LegacySurfaceHolder implements SurfaceHolder {
   @Override
   public Surface getSurface() {
     if (mSurface == null) {
-      mSurface = mSurfaceProvider.getSurface(mWidth, mHeight, mCameraOrientation);
+      mSurface = mSurfaceProvider.getSurface(mWidth, mHeight, mCameraOrientation, mIsUsingFrontFacingCamera);
       for (Callback callback : mCallbacks) {
         callback.surfaceCreated(this);
       }
