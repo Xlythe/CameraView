@@ -561,7 +561,7 @@ public class Camera2Module extends ICameraModule {
             } else if (mActiveSession instanceof VideoSession) {
                 setSession(new VideoSession(this, ((VideoSession) mActiveSession).getFile()));
             } else if (mActiveSession instanceof StreamSession) {
-                setSession(new StreamSession(this, ((StreamSession) mActiveSession).getSurfaceProvider()));
+                // Ignored. Streams cannot be restarted so we'll update quality once the stream ends.
             }
         }
     }

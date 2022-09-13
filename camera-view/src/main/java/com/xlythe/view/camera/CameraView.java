@@ -767,7 +767,7 @@ public class CameraView extends FrameLayout {
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
     })
-    @RequiresApi(21)
+    @RequiresApi(18)
     public VideoStream stream() {
         return stream(new VideoStream.Params.Builder().build());
     }
@@ -781,7 +781,7 @@ public class CameraView extends FrameLayout {
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
     })
-    @RequiresApi(21)
+    @RequiresApi(18)
     public VideoStream stream(VideoStream.Params params) {
         if (params.isVideoEnabled() && !isOpen()) {
             throw new IllegalStateException("Camera must be open before starting a video stream");
