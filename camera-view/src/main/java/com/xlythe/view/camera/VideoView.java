@@ -133,18 +133,18 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
     }
 
-    @RequiresApi(21)
+    @RequiresApi(18)
     public boolean hasStream() {
         return mVideoStream != null;
     }
 
     @Nullable
-    @RequiresApi(21)
+    @RequiresApi(18)
     public VideoStream getStream() {
         return mVideoStream;
     }
 
-    @RequiresApi(21)
+    @RequiresApi(18)
     public void setStream(VideoStream videoStream) {
         if (Objects.equals(videoStream, mVideoStream) && mInputType.equals(InputType.STREAM)) {
             return;

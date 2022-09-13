@@ -17,17 +17,17 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.util.Set;
 
-@RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+@RequiresApi(18)
 public class LegacySurfaceHolder implements SurfaceHolder {
   private final Context mContext;
   private final VideoRecorder.SurfaceProvider mSurfaceProvider;
   private final Set<Callback> mCallbacks = new ArraySet<>();
+  private final int mCameraOrientation;
 
   @Nullable private Surface mSurface;
   @Nullable private Canvas mCanvas;
   private int mWidth;
   private int mHeight;
-  private int mCameraOrientation;
 
   @Nullable private PowerManager.WakeLock mWakeLock;
 

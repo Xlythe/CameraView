@@ -30,7 +30,7 @@ import static android.os.Process.setThreadPriority;
  * called, the input stream will be read from until either {@link #stop()} is called or the stream
  * ends.
  */
-@RequiresApi(21)
+@RequiresApi(18)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class VideoPlayer {
   private static final String TAG = CameraView.class.getSimpleName();

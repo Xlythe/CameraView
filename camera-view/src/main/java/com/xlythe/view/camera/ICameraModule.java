@@ -8,7 +8,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
 import android.util.Log;
-import android.view.Surface;
 
 import androidx.annotation.RequiresApi;
 
@@ -59,7 +58,7 @@ public abstract class ICameraModule {
 
     }
 
-    @RequiresApi(21)
+    @RequiresApi(18)
     public VideoRecorder.Canvas getCanvas() {
         return new VideoRecorder.Canvas() {
             @Override

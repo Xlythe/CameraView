@@ -37,7 +37,7 @@ import static android.os.Process.setThreadPriority;
  * When created, you must pass a {@link ParcelFileDescriptor}. Once {@link #start()} is called, the
  * file descriptor will be written to until {@link #stop()} is called.
  */
-@RequiresApi(21)
+@RequiresApi(18)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class VideoRecorder {
   private static final String TAG = CameraView.class.getSimpleName();

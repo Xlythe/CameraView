@@ -48,12 +48,20 @@ public class StreamFragment extends CameraFragment {
     @SuppressLint({"CheckResult", "MissingPermission"})
     @Override
     public void onCameraOpened() {
+        if (Build.VERSION.SDK_INT < 18) {
+            return;
+        }
+
         mViewStreamView.setStream(mCameraView.stream());
         mViewStreamView.play();
     }
 
     @Override
     public void onCameraClosed() {
+        if (Build.VERSION.SDK_INT < 18) {
+            return;
+        }
+
         if (mViewStreamView.hasStream()) {
             Objects.requireNonNull(mViewStreamView.getStream()).close();
         }

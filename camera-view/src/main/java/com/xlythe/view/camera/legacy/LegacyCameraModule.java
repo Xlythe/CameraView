@@ -337,7 +337,7 @@ public class LegacyCameraModule extends ICameraModule {
         return getRelativeCameraOrientation(true /* isPreview */);
     }
 
-    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    @RequiresApi(18)
     @Override
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
         if (mCamera != null && mPreviewSize != null) {
@@ -351,7 +351,7 @@ public class LegacyCameraModule extends ICameraModule {
         }
     }
 
-    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    @RequiresApi(18)
     @Override
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
         LegacySurfaceHolder surfaceHolder = mSurfaceProviders.remove(surfaceProvider);

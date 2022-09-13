@@ -17,7 +17,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PipedInputStream;
 
-@RequiresApi(21)
+@RequiresApi(18)
 public class VideoStream implements Closeable {
   /** Determines if this is encoding or decoding a video stream. */
   private final InputType mInputType;

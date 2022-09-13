@@ -2,13 +2,19 @@ package com.xlythe.view.camera.v2;
 
 import android.annotation.TargetApi;
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.ImageFormat;
+import android.graphics.Matrix;
+import android.graphics.Paint;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.location.Location;
@@ -59,6 +65,31 @@ class StreamSession extends PreviewSession {
         mStreamSurface.initialize(map);
     }
 
+    private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
+        CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
+        builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+        if (mMeteringRectangle != null) {
+            builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
+            builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
+        }
+        if (mCropRegion != null) {
+            builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
+        }
+        builder.addTarget(getPreviewSurface().getSurface());
+        builder.addTarget(mStreamSurface.getSurface());
+        return builder.build();
+    }
+
+    @Override
+    public void onAvailable(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
+        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getHandler());
+    }
+
+    @Override
+    public void onInvalidate(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
+        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getHandler());
+    }
+
     @NonNull
     @Override
     public List<Surface> getSurfaces() {
@@ -91,12 +122,12 @@ class StreamSession extends PreviewSession {
 
         @Override
         Surface getSurface() {
-            Log.d(TAG, "Created stream surface");
             return mSurfaceProvider.getSurface(getWidth(), getHeight(), mCameraView.getSensorOrientation());
         }
 
         @Override
         void close() {
+            mPreviewSurface.close();
         }
     }
 }
