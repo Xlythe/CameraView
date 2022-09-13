@@ -2,31 +2,41 @@ package com.xlythe.view.camera.legacy;
 
 import android.Manifest;
 import android.content.Context;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Canvas;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
+import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.YuvImage;
 import android.hardware.Camera;
 import android.location.Location;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
+import android.os.Build;
 import android.util.Log;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.LocationProvider;
 import com.xlythe.view.camera.PermissionChecker;
+import com.xlythe.view.camera.stream.VideoRecorder;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
+import androidx.collection.ArrayMap;
 
-@SuppressWarnings("deprecation")
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LegacyCameraModule extends ICameraModule {
     private static final int INVALID_CAMERA_ID = -1;
@@ -40,6 +50,8 @@ public class LegacyCameraModule extends ICameraModule {
 
     private MediaRecorder mVideoRecorder;
     private File mVideoFile;
+
+    private final Map<VideoRecorder.SurfaceProvider, LegacySurfaceHolder> mSurfaceProviders = new ArrayMap<>();
 
     public LegacyCameraModule(CameraView view) {
         super(view);
@@ -69,7 +81,7 @@ public class LegacyCameraModule extends ICameraModule {
 
             mCamera.startPreview();
         } catch (IOException e) {
-            e.printStackTrace();
+            Log.e(TAG, "Failed to properly initialize camera", e);
         }
     }
 
@@ -127,7 +139,7 @@ public class LegacyCameraModule extends ICameraModule {
         matrix.setScale((float) newWidth / (float) viewWidth, (float) newHeight / (float) viewHeight);
 
         // And then we reposition it so that it's centered
-        matrix.postTranslate((viewWidth - newWidth) / 2, (viewHeight - newHeight) / 2);
+        matrix.postTranslate((viewWidth - newWidth) / 2f, (viewHeight - newHeight) / 2f);
 
         // And once we're done, we apply our changes.
         setTransform(matrix);
@@ -323,6 +335,44 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     protected int getRelativeCameraOrientation() {
         return getRelativeCameraOrientation(true /* isPreview */);
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    @Override
+    protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        if (mCamera != null && mPreviewSize != null) {
+            LegacySurfaceHolder surfaceHolder = new LegacySurfaceHolder(getContext(), surfaceProvider, mPreviewSize.width, mPreviewSize.height, getSensorOrientation());
+            mSurfaceProviders.put(surfaceProvider, surfaceHolder);
+            mCamera.setPreviewCallback((data, camera) -> {
+                Canvas canvas = surfaceHolder.lockCanvas();
+                canvas.drawBitmap(toBitmap(data, camera), new Matrix(), new Paint());
+                surfaceHolder.unlockCanvasAndPost(canvas);
+            });
+        }
+    }
+
+    @RequiresApi(api = Build.VERSION_CODES.LOLLIPOP)
+    @Override
+    protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        LegacySurfaceHolder surfaceHolder = mSurfaceProviders.remove(surfaceProvider);
+        if (surfaceHolder != null) {
+            surfaceHolder.close();
+            mCamera.setPreviewCallback(null);
+        }
+    }
+
+    private Bitmap toBitmap(byte[] data, Camera camera) {
+        Camera.Parameters parameters = camera.getParameters();
+        int width = parameters.getPreviewSize().width;
+        int height = parameters.getPreviewSize().height;
+
+        YuvImage yuv = new YuvImage(data, parameters.getPreviewFormat(), width, height, null);
+
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        yuv.compressToJpeg(new Rect(0, 0, width, height), 50, out);
+
+        byte[] bytes = out.toByteArray();
+        return BitmapFactory.decodeByteArray(bytes, 0, bytes.length);
     }
 
     private int getRelativeCameraOrientation(boolean isPreview) {

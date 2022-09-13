@@ -8,7 +8,6 @@ import android.media.MediaFormat;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
-import android.util.Size;
 import android.view.Surface;
 
 import androidx.annotation.IntRange;
@@ -27,6 +26,9 @@ import java.nio.ByteBuffer;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 
+import static android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED;
+import static android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED;
+import static android.media.MediaCodec.INFO_TRY_AGAIN_LATER;
 import static android.os.Process.THREAD_PRIORITY_DISPLAY;
 import static android.os.Process.THREAD_PRIORITY_VIDEO;
 import static android.os.Process.setThreadPriority;
@@ -45,6 +47,7 @@ public class VideoRecorder {
   private static final int DEFAULT_FRAME_RATE = 15;       // 15fps
   private static final int DEFAULT_IFRAME_INTERVAL = 10;  // 10 seconds between I-frames
 
+  private static final int INFO_SUCCESS = 0;
   private static final int NO_TIMEOUT = -1;
 
   /** The stream to write to. */
@@ -176,6 +179,9 @@ public class VideoRecorder {
                   format.setInteger(MediaFormat.KEY_BIT_RATE, getBitRate());
                   format.setInteger(MediaFormat.KEY_FRAME_RATE, getFrameRate());
                   format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, getIFrameInterval());
+                  if (Build.VERSION.SDK_INT >= 31) {
+                    format.setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, /*true=*/1);
+                  }
 
                   // Pass this info to the remote device.
                   write(size.getWidth(), size.getHeight(), size.getOrientation(), getBitRate(), getFrameRate(), getIFrameInterval());
@@ -190,29 +196,35 @@ public class VideoRecorder {
                   MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
                   while (isRecording()) {
                     int statusOrIndex = encoder.dequeueOutputBuffer(info, NO_TIMEOUT);
-                    if (statusOrIndex == MediaCodec.INFO_TRY_AGAIN_LATER) {
-                      Thread.sleep(100);
-                      continue;
-                    } else if (statusOrIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                      Log.d(TAG, "Video encoder output format changed: " + encoder.getOutputFormat());
-                    } else if (statusOrIndex == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) {
-                      Log.d(TAG, "Video encoder output buffers changed");
-                    } else if (statusOrIndex < 0) {
-                      throw new IOException("Unknown encoder status " + statusOrIndex);
-                    } else { // index >= 0
-                      ByteBuffer encodedData = encoder.getOutputBuffers()[statusOrIndex];
-                      if (encodedData == null) {
-                        throw new IOException("ByteBuffer for " + statusOrIndex + " was null");
-                      }
+                    int status = getStatus(statusOrIndex);
+                    int index = getIndex(statusOrIndex);
 
-                      // It's usually necessary to adjust the ByteBuffer values to match BufferInfo.
-                      encodedData.position(info.offset);
-                      encodedData.limit(info.offset + info.size);
-                      byte[] data = new byte[info.size];
-                      encodedData.get(data);
-                      encodedData.position(info.offset);
-                      write(data, info.presentationTimeUs, info.flags);
-                      encoder.releaseOutputBuffer(statusOrIndex, false);
+                    switch (status) {
+                      case INFO_SUCCESS:
+                        ByteBuffer encodedData = encoder.getOutputBuffers()[index];
+                        if (encodedData == null) {
+                          throw new IOException("ByteBuffer for " + index + " was null");
+                        }
+
+                        // It's usually necessary to adjust the ByteBuffer values to match BufferInfo.
+                        encodedData.position(info.offset);
+                        encodedData.limit(info.offset + info.size);
+                        byte[] data = new byte[info.size];
+                        encodedData.get(data);
+                        encodedData.position(info.offset);
+                        write(data, info.presentationTimeUs, info.flags);
+                        encoder.releaseOutputBuffer(index, false);
+                        break;
+                      case INFO_TRY_AGAIN_LATER:
+                        Log.d(TAG, "Video not ready yet. Trying again later.");
+                        Thread.sleep(100);
+                        continue;
+                      case INFO_OUTPUT_FORMAT_CHANGED:
+                        Log.d(TAG, "Video encoder output format changed: " + encoder.getOutputFormat());
+                        break;
+                      case INFO_OUTPUT_BUFFERS_CHANGED:
+                        Log.d(TAG, "Video encoder output buffers changed");
+                        break;
                     }
                   }
 
@@ -233,6 +245,14 @@ public class VideoRecorder {
               }
             };
     mThread.start();
+  }
+
+  private int getStatus(int statusOrIndex) {
+    return Math.min(statusOrIndex, 0);
+  }
+
+  private int getIndex(int statusOrIndex) {
+    return Math.max(statusOrIndex, 0);
   }
 
   private void write(int width, int height, int orientation, int bitRate, int frameRate, int iframeInterval) throws IOException {

@@ -124,6 +124,11 @@ public class VideoStream implements Closeable {
     }
   }
 
+  @Override
+  protected void finalize() {
+    close();
+  }
+
   public boolean hasAudio() {
     return mAudioInputStream != null;
   }

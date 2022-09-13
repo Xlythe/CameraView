@@ -5,10 +5,8 @@ import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
 import android.os.Build;
 import android.util.Log;
-import android.util.Size;
 import android.view.Surface;
 
-import androidx.annotation.IntRange;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
@@ -20,9 +18,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 
-import static android.media.MediaCodec.INFO_TRY_AGAIN_LATER;
-import static android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED;
 import static android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED;
+import static android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED;
+import static android.media.MediaCodec.INFO_TRY_AGAIN_LATER;
 import static android.os.Process.THREAD_PRIORITY_DISPLAY;
 import static android.os.Process.THREAD_PRIORITY_VIDEO;
 import static android.os.Process.setThreadPriority;
@@ -96,9 +94,6 @@ public class VideoPlayer {
                 MediaCodec decoder = null;
                 try {
                   VideoFrame header = readHeader();
-                  if (mOnMetadataAvailableListener != null) {
-                    mOnMetadataAvailableListener.onMetadataAvailable(header.getWidth(), header.getHeight(), header.getOrientation());
-                  }
 
                   MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, header.getWidth(), header.getHeight());
 
@@ -108,6 +103,18 @@ public class VideoPlayer {
                   format.setInteger(MediaFormat.KEY_BIT_RATE, header.getBitRate());
                   format.setInteger(MediaFormat.KEY_FRAME_RATE, header.getFrameRate());
                   format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, header.getIFrameInterval());
+                  if (Build.VERSION.SDK_INT >= 31) {
+                    format.setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, /*true=*/1);
+                  }
+                  boolean orientationFixed = false;
+                  if (Build.VERSION.SDK_INT >= 23) {
+                    orientationFixed = true;
+                    format.setInteger(MediaFormat.KEY_ROTATION, header.getOrientation());
+                  }
+
+                  if (mOnMetadataAvailableListener != null) {
+                    mOnMetadataAvailableListener.onMetadataAvailable(header.getWidth(), header.getHeight(), orientationFixed ? 0 : header.getOrientation());
+                  }
 
                   // Create a MediaCodec for the decoder, just based on the MIME type.
                   // The various format details will be passed through the csd-0 meta-data later on.
@@ -140,12 +147,16 @@ public class VideoPlayer {
                     inputBuffer.put(dataFrame.getData());
                     decoder.queueInputBuffer(index, 0, dataFrame.getData().length, dataFrame.getPresentationTimeUs(), dataFrame.getFlags());
                   }
-                } catch (IOException | IllegalArgumentException e) {
+                } catch (IOException | IllegalArgumentException | IllegalStateException e) {
                   Log.e(TAG, "Exception with playing video stream", e);
                 } finally {
                   stopInternal();
                   if (decoder != null) {
-                    decoder.stop();
+                    try {
+                      decoder.stop();
+                    } catch (IllegalStateException e) {
+                      Log.e(TAG, "Exception with playing video stream", e);
+                    }
                     decoder.release();
                   }
                   onFinish();

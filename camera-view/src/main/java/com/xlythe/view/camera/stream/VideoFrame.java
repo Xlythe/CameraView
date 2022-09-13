@@ -93,37 +93,41 @@ public class VideoFrame {
       byte[] data = new byte[len - 1];
       buffer.get(data);
 
-      switch (frameType) {
-        case FIELD_TYPE:
-          builder.type(Ints.fromByteArray(data));
-          break;
-        case FIELD_WIDTH:
-          builder.width(Ints.fromByteArray(data));
-          break;
-        case FIELD_HEIGHT:
-          builder.height(Ints.fromByteArray(data));
-          break;
-        case FIELD_ORIENTATION:
-          builder.orientation(Ints.fromByteArray(data));
-          break;
-        case FIELD_BIT_RATE:
-          builder.bitRate(Ints.fromByteArray(data));
-          break;
-        case FIELD_FRAME_RATE:
-          builder.frameRate(Ints.fromByteArray(data));
-          break;
-        case FIELD_I_FRAME_INTERVAL:
-          builder.iframeInterval(Ints.fromByteArray(data));
-          break;
-        case FIELD_DATA:
-          builder.data(data);
-          break;
-        case FIELD_PRESENTATION_TIME_US:
-          builder.presentationTimeUs(Longs.fromByteArray(data));
-          break;
-        case FIELD_FLAGS:
-          builder.flags(Ints.fromByteArray(data));
-          break;
+      try {
+        switch (frameType) {
+          case FIELD_TYPE:
+            builder.type(Ints.fromByteArray(data));
+            break;
+          case FIELD_WIDTH:
+            builder.width(Ints.fromByteArray(data));
+            break;
+          case FIELD_HEIGHT:
+            builder.height(Ints.fromByteArray(data));
+            break;
+          case FIELD_ORIENTATION:
+            builder.orientation(Ints.fromByteArray(data));
+            break;
+          case FIELD_BIT_RATE:
+            builder.bitRate(Ints.fromByteArray(data));
+            break;
+          case FIELD_FRAME_RATE:
+            builder.frameRate(Ints.fromByteArray(data));
+            break;
+          case FIELD_I_FRAME_INTERVAL:
+            builder.iframeInterval(Ints.fromByteArray(data));
+            break;
+          case FIELD_DATA:
+            builder.data(data);
+            break;
+          case FIELD_PRESENTATION_TIME_US:
+            builder.presentationTimeUs(Longs.fromByteArray(data));
+            break;
+          case FIELD_FLAGS:
+            builder.flags(Ints.fromByteArray(data));
+            break;
+        }
+      } catch (IllegalArgumentException e) {
+        // skip
       }
     }
     return builder.build();
