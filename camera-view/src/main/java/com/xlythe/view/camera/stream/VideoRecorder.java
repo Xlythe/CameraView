@@ -237,7 +237,7 @@ public class VideoRecorder {
                   }
 
                   encoder.signalEndOfInputStream();
-                } catch (IOException | IllegalArgumentException | InterruptedException | ExecutionException e) {
+                } catch (IOException | IllegalArgumentException | IllegalStateException | InterruptedException | ExecutionException e) {
                   Log.e(TAG, "Exception with recording video stream", e);
                 } finally {
                   stopInternal();
