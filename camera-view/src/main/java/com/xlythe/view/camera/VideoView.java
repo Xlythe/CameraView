@@ -289,27 +289,28 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     protected void prepareStream() {
         if (DEBUG) Log.d(TAG, "Preparing stream");
-        if (mVideoStream == null) {
+        VideoStream videoStream = mVideoStream;
+        if (videoStream == null) {
             throw new IllegalStateException("Cannot prepare a null stream");
         }
         if (Build.VERSION.SDK_INT < 18) {
             throw new RuntimeException("API not available");
         }
 
-        if (mVideoStream.hasAudio()) {
-            mAudioPlayer = new AudioPlayer(mVideoStream.getAudioInputStream());
+        if (videoStream.hasAudio()) {
+            mAudioPlayer = new AudioPlayer(videoStream.getAudioInputStream());
             mAudioPlayer.setStreamEndListener(() -> new Handler(Looper.getMainLooper()).post(() -> {
                 setPlayingState(false);
-                mVideoStream.close();
+                videoStream.close();
             }));
         }
 
-        if (mVideoStream.hasVideo()) {
+        if (videoStream.hasVideo()) {
             @SuppressLint("Recycle") Surface surface = new Surface(mTextureView.getSurfaceTexture());
-            mVideoPlayer = new VideoPlayer(surface, mVideoStream.getVideoInputStream());
+            mVideoPlayer = new VideoPlayer(surface, videoStream.getVideoInputStream());
             mVideoPlayer.setStreamEndListener(() -> new Handler(Looper.getMainLooper()).post(() -> {
                 setPlayingState(false);
-                mVideoStream.close();
+                videoStream.close();
             }));
             mVideoPlayer.setOnMetadataAvailableListener((width, height, orientation, flipped) -> new Handler(Looper.getMainLooper()).post(() -> transformPreview(width, height, orientation, flipped)));
         }
