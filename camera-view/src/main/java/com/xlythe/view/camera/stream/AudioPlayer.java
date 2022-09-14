@@ -59,7 +59,8 @@ public class AudioPlayer {
   /** Starts playing the stream. */
   public void start() {
     if (mThread != null) {
-      throw new IllegalStateException("AudioPlayer cannot be started more than once");
+      Log.w(TAG, "AudioPlayer cannot be started more than once");
+      return;
     }
 
     mIsAlive = true;
@@ -115,7 +116,8 @@ public class AudioPlayer {
   /** Stops playing the stream. */
   public void stop() {
     if (mThread == null) {
-      throw new IllegalStateException("AudioPlayer not started");
+      Log.w(TAG, "AudioPlayer not started");
+      return;
     }
 
     stopInternal();

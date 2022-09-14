@@ -89,7 +89,8 @@ public class VideoPlayer {
   /** Starts playing the stream. */
   public void start() {
     if (mThread != null) {
-      throw new IllegalStateException("VideoPlayer cannot be started more than once");
+      Log.w(TAG, "VideoPlayer cannot be started more than once");
+      return;
     }
 
     mIsAlive = true;
@@ -278,7 +279,8 @@ public class VideoPlayer {
   /** Stops playing the stream. */
   public void stop() {
     if (mThread == null) {
-      throw new IllegalStateException("VideoPlayer not started");
+      Log.w(TAG, "VideoPlayer not started");
+      return;
     }
 
     stopInternal();
