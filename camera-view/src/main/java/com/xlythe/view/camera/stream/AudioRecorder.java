@@ -1,8 +1,5 @@
 package com.xlythe.view.camera.stream;
 
-import static android.os.Process.THREAD_PRIORITY_AUDIO;
-import static android.os.Process.setThreadPriority;
-
 import android.Manifest;
 import android.media.AudioFormat;
 import android.media.AudioRecord;
@@ -11,12 +8,14 @@ import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import androidx.annotation.RequiresPermission;
-import androidx.annotation.RestrictTo;
 
 import com.xlythe.view.camera.CameraView;
 
 import java.io.IOException;
 import java.io.OutputStream;
+
+import static android.os.Process.THREAD_PRIORITY_AUDIO;
+import static android.os.Process.setThreadPriority;
 
 /**
  * When created, you must pass a {@link ParcelFileDescriptor}. Once {@link #start()} is called, the

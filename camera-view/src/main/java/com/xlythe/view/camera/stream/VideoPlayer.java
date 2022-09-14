@@ -9,7 +9,6 @@ import android.view.Surface;
 
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
-import androidx.annotation.RestrictTo;
 
 import com.google.common.primitives.Ints;
 import com.xlythe.view.camera.CameraView;
@@ -46,8 +45,13 @@ public class VideoPlayer {
   /** The video stream we're reading from. */
   private final InputStream mInputStream;
 
+  @Nullable private volatile MediaCodec mDecoder;
+
   /** A callback that fires once we know what the video parameters are. */
-  @Nullable private OnMetadataAvailableListener mOnMetadataAvailableListener;
+  @Nullable private volatile OnMetadataAvailableListener mOnMetadataAvailableListener;
+
+  /** An optional listener that fires when the InputStream has ended. */
+  @Nullable private volatile VideoPlayer.StreamEndListener mStreamEndListener;
 
   /**
    * If true, the background thread will continue to loop and play video. Once false, the thread
@@ -68,6 +72,10 @@ public class VideoPlayer {
     this.mInputStream = inputStream;
   }
 
+  public void setStreamEndListener(@Nullable VideoPlayer.StreamEndListener listener) {
+    mStreamEndListener = listener;
+  }
+
   public void setOnMetadataAvailableListener(OnMetadataAvailableListener l) {
     mOnMetadataAvailableListener = l;
   }
@@ -79,6 +87,10 @@ public class VideoPlayer {
 
   /** Starts playing the stream. */
   public void start() {
+    if (mThread != null) {
+      throw new IllegalStateException("VideoPlayer cannot be started more than once");
+    }
+
     mIsAlive = true;
     mThread =
             new Thread() {
@@ -90,7 +102,6 @@ public class VideoPlayer {
                   setThreadPriority(THREAD_PRIORITY_DISPLAY);
                 }
 
-                MediaCodec decoder = null;
                 try {
                   VideoFrame header = readHeader();
 
@@ -111,13 +122,15 @@ public class VideoPlayer {
                     format.setInteger(MediaFormat.KEY_ROTATION, header.getOrientation());
                   }
 
-                  if (mOnMetadataAvailableListener != null) {
-                    mOnMetadataAvailableListener.onMetadataAvailable(header.getWidth(), header.getHeight(), orientationFixed ? 0 : header.getOrientation(), header.isFlipped());
+                  OnMetadataAvailableListener listener = mOnMetadataAvailableListener;
+                  if (listener != null) {
+                    listener.onMetadataAvailable(header.getWidth(), header.getHeight(), orientationFixed ? 0 : header.getOrientation(), header.isFlipped());
                   }
 
                   // Create a MediaCodec for the decoder, just based on the MIME type.
                   // The various format details will be passed through the csd-0 meta-data later on.
-                  decoder = MediaCodec.createDecoderByType(MIME_TYPE);
+                  MediaCodec decoder = MediaCodec.createDecoderByType(MIME_TYPE);
+                  mDecoder = decoder;
                   decoder.configure(format, mSurface, null, 0);
                   decoder.start();
                   Log.d(TAG, "Started playing video");
@@ -131,7 +144,7 @@ public class VideoPlayer {
                     // Before we start writing more data into the input buffer,
                     // we must first make sure the output buffer is drained
                     // so that we have space to write.
-                    drainOutputBuffer(decoder);
+                    drainOutputBuffer(mDecoder);
 
                     // Now that we have space, we can write the next few bytes.
                     int index = decoder.dequeueInputBuffer(NO_TIMEOUT);
@@ -150,19 +163,28 @@ public class VideoPlayer {
                   Log.e(TAG, "Exception with playing video stream", e);
                 } finally {
                   stopInternal();
-                  if (decoder != null) {
-                    try {
-                      decoder.stop();
-                    } catch (IllegalStateException e) {
-                      Log.e(TAG, "Exception with playing video stream", e);
-                    }
-                    decoder.release();
+                  closeDecoder();
+
+                  VideoPlayer.StreamEndListener listener = mStreamEndListener;
+                  if (listener != null) {
+                    listener.onStreamEnded();
                   }
-                  onFinish();
                 }
               }
             };
     mThread.start();
+  }
+
+  private void closeDecoder() {
+    MediaCodec decoder = mDecoder;
+    if (decoder != null) {
+      try {
+        decoder.stop();
+      } catch (IllegalStateException e) {
+        Log.e(TAG, "Exception with playing video stream", e);
+      }
+      decoder.release();
+    }
   }
 
   private void drainOutputBuffer(MediaCodec decoder) throws IOException {
@@ -249,22 +271,24 @@ public class VideoPlayer {
       Log.e(TAG, "Failed to close video input stream", e);
     }
     mSurface.release();
+    closeDecoder();
     Log.d(TAG, "Stopped playing video");
   }
 
   /** Stops playing the stream. */
   public void stop() {
+    if (mThread == null) {
+      throw new IllegalStateException("VideoPlayer not started");
+    }
+
     stopInternal();
     try {
-      mThread.join();
+      mThread.join(300);
     } catch (InterruptedException e) {
       Log.e(TAG, "Interrupted while joining VideoPlayer thread", e);
       Thread.currentThread().interrupt();
     }
   }
-
-  /** The stream has now ended. */
-  protected void onFinish() {}
 
   private boolean isEndOfStream(int flags) {
     return (flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0;
@@ -272,5 +296,9 @@ public class VideoPlayer {
 
   public interface OnMetadataAvailableListener {
     void onMetadataAvailable(int width, int height, int orientation, boolean isFlipped);
+  }
+
+  public interface StreamEndListener {
+    void onStreamEnded();
   }
 }

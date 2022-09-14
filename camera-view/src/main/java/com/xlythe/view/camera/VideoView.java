@@ -27,7 +27,6 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.Objects;
 
-import androidx.annotation.CheckResult;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 
@@ -120,7 +119,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         if (DEBUG) Log.d(TAG, "File set to " + file);
         this.mFile = file;
         if (mVideoStream != null) {
-            if (Build.VERSION.SDK_INT <= 21) {
+            if (Build.VERSION.SDK_INT <= 18) {
                 throw new RuntimeException("API not available");
             }
             mVideoStream.close();
@@ -191,7 +190,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 break;
             case STREAM:
                 if (mVideoStream != null) {
-                    if (Build.VERSION.SDK_INT < 21) {
+                    if (Build.VERSION.SDK_INT < 18) {
                         throw new RuntimeException("API not available");
                     }
                     mVideoStream.close();
@@ -293,17 +292,25 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         if (mVideoStream == null) {
             throw new IllegalStateException("Cannot prepare a null stream");
         }
-        if (Build.VERSION.SDK_INT < 21) {
+        if (Build.VERSION.SDK_INT < 18) {
             throw new RuntimeException("API not available");
         }
 
         if (mVideoStream.hasAudio()) {
             mAudioPlayer = new AudioPlayer(mVideoStream.getAudioInputStream());
+            mAudioPlayer.setStreamEndListener(() -> {
+                setPlayingState(false);
+                mVideoStream.close();
+            });
         }
 
         if (mVideoStream.hasVideo()) {
-            Surface surface = new Surface(mTextureView.getSurfaceTexture());
+            @SuppressLint("Recycle") Surface surface = new Surface(mTextureView.getSurfaceTexture());
             mVideoPlayer = new VideoPlayer(surface, mVideoStream.getVideoInputStream());
+            mVideoPlayer.setStreamEndListener(() -> {
+                setPlayingState(false);
+                mVideoStream.close();
+            });
             mVideoPlayer.setOnMetadataAvailableListener((width, height, orientation, flipped) -> new Handler(Looper.getMainLooper()).post(() -> transformPreview(width, height, orientation, flipped)));
         }
 
@@ -340,7 +347,6 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
     }
 
-    @CheckResult
     public boolean play() {
         if (DEBUG) Log.d(TAG, "play()");
 
@@ -376,7 +382,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
         if (mVideoPlayer != null) {
             if (DEBUG) Log.d(TAG, "Playing video stream");
-            if (Build.VERSION.SDK_INT <= 21) {
+            if (Build.VERSION.SDK_INT <= 18) {
                 throw new RuntimeException("API not available");
             }
             mVideoPlayer.start();
@@ -385,7 +391,6 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         return true;
     }
 
-    @CheckResult
     public boolean pause() {
         if (DEBUG) Log.d(TAG, "pause()");
 
@@ -418,7 +423,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             mAudioPlayer.stop();
         }
         if (mVideoPlayer != null) {
-            if (Build.VERSION.SDK_INT <= 21) {
+            if (Build.VERSION.SDK_INT <= 18) {
                 throw new RuntimeException("API not available");
             }
             mVideoPlayer.stop();

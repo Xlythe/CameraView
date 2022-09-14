@@ -1,7 +1,5 @@
 package com.xlythe.view.camera.stream;
 
-import androidx.annotation.RestrictTo;
-
 import java.io.IOException;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;

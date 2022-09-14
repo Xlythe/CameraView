@@ -1,19 +1,19 @@
 package com.xlythe.view.camera.stream;
 
-import static android.os.Process.THREAD_PRIORITY_AUDIO;
-import static android.os.Process.setThreadPriority;
-
 import android.media.AudioFormat;
 import android.media.AudioManager;
 import android.media.AudioTrack;
 import android.util.Log;
 
-import androidx.annotation.RestrictTo;
+import androidx.annotation.Nullable;
 
 import com.xlythe.view.camera.CameraView;
 
 import java.io.IOException;
 import java.io.InputStream;
+
+import static android.os.Process.THREAD_PRIORITY_AUDIO;
+import static android.os.Process.setThreadPriority;
 
 /**
  * A fire-once class. When created, you must pass a {@link InputStream}. Once {@link #start()} is
@@ -25,6 +25,9 @@ public class AudioPlayer {
 
   /** The audio stream we're reading from. */
   private final InputStream mInputStream;
+
+  /** An optional listener that fires when the InputStream has ended. */
+  @Nullable private volatile StreamEndListener mStreamEndListener;
 
   /**
    * If true, the background thread will continue to loop and play audio. Once false, the thread
@@ -44,6 +47,10 @@ public class AudioPlayer {
     this.mInputStream = inputStream;
   }
 
+  public void setStreamEndListener(@Nullable StreamEndListener listener) {
+    mStreamEndListener = listener;
+  }
+
   /** @return True if currently playing. */
   public boolean isPlaying() {
     return mIsAlive;
@@ -51,6 +58,10 @@ public class AudioPlayer {
 
   /** Starts playing the stream. */
   public void start() {
+    if (mThread != null) {
+      throw new IllegalStateException("AudioPlayer cannot be started more than once");
+    }
+
     mIsAlive = true;
     mThread =
             new Thread() {
@@ -80,7 +91,11 @@ public class AudioPlayer {
                 } finally {
                   stopInternal();
                   audioTrack.release();
-                  onFinish();
+
+                  StreamEndListener listener = mStreamEndListener;
+                  if (listener != null) {
+                    listener.onStreamEnded();
+                  }
                 }
               }
             };
@@ -99,17 +114,18 @@ public class AudioPlayer {
 
   /** Stops playing the stream. */
   public void stop() {
+    if (mThread == null) {
+      throw new IllegalStateException("AudioPlayer not started");
+    }
+
     stopInternal();
     try {
-      mThread.join();
+      mThread.join(300);
     } catch (InterruptedException e) {
       Log.e(TAG, "Interrupted while joining AudioPlayer thread", e);
       Thread.currentThread().interrupt();
     }
   }
-
-  /** The stream has now ended. */
-  protected void onFinish() {}
 
   private static class Buffer extends AudioBuffer {
     @Override
@@ -122,5 +138,9 @@ public class AudioPlayer {
       return AudioTrack.getMinBufferSize(
               sampleRate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_16BIT);
     }
+  }
+
+  public interface StreamEndListener {
+    void onStreamEnded();
   }
 }
