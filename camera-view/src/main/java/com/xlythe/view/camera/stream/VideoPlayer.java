@@ -31,7 +31,6 @@ import static android.os.Process.setThreadPriority;
  * ends.
  */
 @RequiresApi(18)
-@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class VideoPlayer {
   private static final String TAG = CameraView.class.getSimpleName();
 

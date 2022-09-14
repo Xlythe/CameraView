@@ -18,7 +18,7 @@ import java.nio.ByteBuffer;
  * All frames have a {@link VideoFrame.Type}, along with type-specific data that go along with it.
  */
 @RestrictTo(RestrictTo.Scope.LIBRARY)
-public class VideoFrame {
+class VideoFrame {
   private static final byte FIELD_TYPE = 1;
   private static final byte FIELD_WIDTH = 2;
   private static final byte FIELD_HEIGHT = 3;

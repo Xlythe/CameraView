@@ -39,7 +39,6 @@ import static android.os.Process.setThreadPriority;
  * file descriptor will be written to until {@link #stop()} is called.
  */
 @RequiresApi(18)
-@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class VideoRecorder {
   private static final String TAG = CameraView.class.getSimpleName();
 

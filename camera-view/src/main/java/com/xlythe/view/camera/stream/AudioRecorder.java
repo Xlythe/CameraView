@@ -22,7 +22,6 @@ import java.io.OutputStream;
  * When created, you must pass a {@link ParcelFileDescriptor}. Once {@link #start()} is called, the
  * file descriptor will be written to until {@link #stop()} is called.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class AudioRecorder {
   private static final String TAG = CameraView.class.getSimpleName();
 

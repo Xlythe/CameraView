@@ -6,7 +6,6 @@ import java.io.IOException;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
 
-@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LossyPipedOutputStream extends PipedOutputStream {
   private static final int MAX_BUFFER_SIZE = 0;
 

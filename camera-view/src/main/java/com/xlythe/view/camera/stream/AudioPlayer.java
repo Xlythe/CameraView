@@ -20,7 +20,6 @@ import java.io.InputStream;
  * called, the input stream will be read from until either {@link #stop()} is called or the stream
  * ends.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY)
 public class AudioPlayer {
   private static final String TAG = CameraView.class.getSimpleName();
 
