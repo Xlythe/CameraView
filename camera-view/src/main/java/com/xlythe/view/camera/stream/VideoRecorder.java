@@ -52,6 +52,9 @@ public class VideoRecorder {
   /** The stream to write to. */
   private final OutputStream mOutputStream;
 
+  /** The encoder that writes bytes into the OutputStream. */
+  @Nullable private volatile MediaCodec mEncoder;
+
   /** Draws on our surface. */
   private final Canvas mCanvas;
 
@@ -166,7 +169,6 @@ public class VideoRecorder {
                 };
                 mCanvas.attachSurface(surfaceProvider);
 
-                MediaCodec encoder = null;
                 Surface surface = null;
                 try {
                   CameraMetadata metadata = Objects.requireNonNull(requestedSizeFuture.get());
@@ -191,7 +193,8 @@ public class VideoRecorder {
                           getFrameRate(),
                           getIFrameInterval());
 
-                  encoder = MediaCodec.createByCodecName(codecInfo.getName());
+                  MediaCodec encoder = MediaCodec.createByCodecName(codecInfo.getName());
+                  mEncoder = encoder;
                   encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
                   surface = encoder.createInputSurface();
                   providedSurface.set(surface);
@@ -238,10 +241,6 @@ public class VideoRecorder {
                   Log.e(TAG, "Exception with recording video stream", e);
                 } finally {
                   stopInternal();
-                  if (encoder != null) {
-                    encoder.stop();
-                    encoder.release();
-                  }
                   if (surface != null) {
                     mCanvas.detachSurface(surfaceProvider);
                     surface.release();
@@ -250,6 +249,18 @@ public class VideoRecorder {
               }
             };
     mThread.start();
+  }
+
+  private void closeEncoder() {
+    MediaCodec encoder = mEncoder;
+    if (encoder != null) {
+      try {
+        encoder.stop();
+      } catch (IllegalStateException e) {
+        Log.e(TAG, "Exception with recording video stream", e);
+      }
+      encoder.release();
+    }
   }
 
   private int getStatus(int statusOrIndex) {
@@ -303,13 +314,14 @@ public class VideoRecorder {
     } catch (IOException e) {
       Log.e(TAG, "Failed to close video output stream", e);
     }
+    closeEncoder();
   }
 
   /** Stops recording video. */
   public void stop() {
     stopInternal();
     try {
-      mThread.join();
+      mThread.join(300);
     } catch (InterruptedException e) {
       Log.e(TAG, "Interrupted while joining VideoRecorder thread", e);
       Thread.currentThread().interrupt();

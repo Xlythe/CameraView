@@ -134,7 +134,7 @@ public class AudioRecorder {
   public void stop() {
     stopInternal();
     try {
-      mThread.join();
+      mThread.join(300);
     } catch (InterruptedException e) {
       Log.e(TAG, "Interrupted while joining AudioRecorder thread", e);
       Thread.currentThread().interrupt();

@@ -45,6 +45,7 @@ public class VideoPlayer {
   /** The video stream we're reading from. */
   private final InputStream mInputStream;
 
+  /** The decoder that parses bytes off the InputStream. */
   @Nullable private volatile MediaCodec mDecoder;
 
   /** A callback that fires once we know what the video parameters are. */
@@ -144,7 +145,7 @@ public class VideoPlayer {
                     // Before we start writing more data into the input buffer,
                     // we must first make sure the output buffer is drained
                     // so that we have space to write.
-                    drainOutputBuffer(mDecoder);
+                    drainOutputBuffer(decoder);
 
                     // Now that we have space, we can write the next few bytes.
                     int index = decoder.dequeueInputBuffer(NO_TIMEOUT);
@@ -163,7 +164,6 @@ public class VideoPlayer {
                   Log.e(TAG, "Exception with playing video stream", e);
                 } finally {
                   stopInternal();
-                  closeDecoder();
 
                   VideoPlayer.StreamEndListener listener = mStreamEndListener;
                   if (listener != null) {
