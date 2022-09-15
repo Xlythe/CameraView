@@ -79,10 +79,10 @@ public class AudioRecorder {
                 AudioRecord record =
                         new AudioRecord(
                                 MediaRecorder.AudioSource.DEFAULT,
-                                buffer.mSampleRate,
+                                buffer.getSampleRate(),
                                 AudioFormat.CHANNEL_IN_MONO,
                                 AudioFormat.ENCODING_PCM_16BIT,
-                                buffer.mSize);
+                                buffer.getSize());
 
                 if (record.getState() != AudioRecord.STATE_INITIALIZED) {
                   Log.w(TAG, "Failed to start recording audio");
@@ -97,9 +97,9 @@ public class AudioRecorder {
                 // to our output stream.
                 try {
                   while (isRecording()) {
-                    int len = record.read(buffer.mData, 0, buffer.mSize);
-                    if (len >= 0 && len <= buffer.mSize) {
-                      mOutputStream.write(buffer.mData, 0, len);
+                    int len = record.read(buffer.data(), 0, buffer.getSize());
+                    if (len >= 0 && len <= buffer.getSize()) {
+                      mOutputStream.write(buffer.data(), 0, len);
                       mOutputStream.flush();
                     } else {
                       Log.w(TAG, "Unexpected length returned: " + len);

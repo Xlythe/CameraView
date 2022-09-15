@@ -11,9 +11,9 @@ public abstract class AudioBuffer {
   private static final int[] POSSIBLE_SAMPLE_RATES =
           new int[] {8000, 11025, 16000, 22050, 44100, 48000};
 
-  final int mSize;
-  final int mSampleRate;
-  final byte[] mData;
+  private final int mSize;
+  private final int mSampleRate;
+  private final byte[] mData;
 
   protected AudioBuffer() {
     int size = -1;
@@ -37,6 +37,18 @@ public abstract class AudioBuffer {
     this.mSize = size;
     this.mSampleRate = sampleRate;
     mData = new byte[size];
+  }
+
+  public int getSize() {
+    return mSize;
+  }
+
+  public int getSampleRate() {
+    return mSampleRate;
+  }
+
+  public byte[] data() {
+    return mData;
   }
 
   protected abstract boolean validSize(int size);

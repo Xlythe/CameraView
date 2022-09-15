@@ -51,6 +51,14 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     @Nullable private EventListener mEventListener;
     // If true, the video should be mirrored
     private boolean mIsMirrored = false;
+    // The last known video width.
+    private int mVideoWidth;
+    // The last known video height.
+    private int mVideoHeight;
+    // The last known video orientation.
+    private int mVideoOrientation;
+    // The last known info about the video being mirrored.
+    private boolean mVideoMirrored;
 
     // ---------- File ----------
 
@@ -98,6 +106,29 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 setFile(new File(a.getString(R.styleable.VideoView_filePath)));
             }
             a.recycle();
+        }
+    }
+
+    @Override
+    protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
+        super.onLayout(changed, left, top, right, bottom);
+        if (changed) {
+            if (mVideoWidth == 0 || mVideoHeight == 0) {
+                // Ignore layout changed event. Video isn't prepared yet.
+                return;
+            }
+
+            switch (mInputType) {
+                case FILE:
+                    transformPreview(mVideoWidth, mVideoHeight);
+                    break;
+                case STREAM:
+                    transformPreview(mVideoWidth, mVideoHeight, mVideoOrientation, mVideoMirrored);
+                    break;
+                case UNKNOWN:
+                    // ignored
+                    break;
+            }
         }
     }
 
@@ -472,6 +503,11 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     }
 
     void transformPreview(int videoWidth, int videoHeight) {
+        mVideoWidth = videoWidth;
+        mVideoHeight = videoHeight;
+        mVideoOrientation = 0;
+        mVideoMirrored = false;
+
         int viewWidth = getWidth();
         int viewHeight = getHeight();
 
@@ -555,9 +591,17 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     }
 
     private void transformPreview(int previewWidth, int previewHeight, int cameraOrientation, boolean flipped) {
+        mVideoWidth = previewWidth;
+        mVideoHeight = previewHeight;
+        mVideoOrientation = cameraOrientation;
+        mVideoMirrored = flipped;
+
         int viewWidth = getWidth();
         int viewHeight = getHeight();
         int displayOrientation = getDisplayRotation();
+        if (isMirrored()) {
+            flipped = !flipped;
+        }
 
         // Camera2 rotates the preview to always face in portrait mode, even if the phone is
         // currently in landscape. This is great for portrait mode, because there's less work to be done.

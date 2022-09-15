@@ -73,19 +73,19 @@ public class AudioPlayer {
                 Buffer buffer = new Buffer();
                 AudioTrack audioTrack =
                         new AudioTrack(
-                                AudioManager.STREAM_MUSIC,
-                                buffer.mSampleRate,
+                                AudioManager.STREAM_VOICE_CALL,
+                                buffer.getSampleRate(),
                                 AudioFormat.CHANNEL_OUT_MONO,
                                 AudioFormat.ENCODING_PCM_16BIT,
-                                buffer.mSize,
+                                buffer.getSize(),
                                 AudioTrack.MODE_STREAM);
                 audioTrack.play();
                 Log.d(TAG, "Started playing audio");
 
                 int len;
                 try {
-                  while (isPlaying() && (len = mInputStream.read(buffer.mData)) > 0) {
-                    audioTrack.write(buffer.mData, 0, len);
+                  while (isPlaying() && (len = mInputStream.read(buffer.data())) > 0) {
+                    audioTrack.write(buffer.data(), 0, len);
                   }
                 } catch (IOException e) {
                   Log.e(TAG, "Exception with playing audio stream", e);
