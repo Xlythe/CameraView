@@ -274,7 +274,9 @@ public class Camera2Module extends ICameraModule {
         if (mCaptureSession != null) {
             try {
                 mCaptureSession.close();
-            } catch (CameraAccessException e) {
+            } catch (Exception e) {
+                // Instance of CameraAccessException (although not declared).
+                // Nothing we can do but swallow it.
                 Log.e(TAG, "Failed to close camera", e);
             }
             mCaptureSession = null;
