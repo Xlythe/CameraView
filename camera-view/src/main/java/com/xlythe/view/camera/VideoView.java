@@ -573,6 +573,10 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouchEvent(MotionEvent event) {
+        if (mInputType == InputType.STREAM) {
+            return super.onTouchEvent(event);
+        }
+
         if (!super.onTouchEvent(event)) {
             switch (event.getAction()) {
                 case MotionEvent.ACTION_DOWN:
