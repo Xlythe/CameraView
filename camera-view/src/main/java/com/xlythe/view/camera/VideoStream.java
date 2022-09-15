@@ -17,6 +17,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.PipedInputStream;
+import java.io.PipedOutputStream;
 
 @RequiresApi(18)
 public class VideoStream implements Closeable {
@@ -49,7 +50,7 @@ public class VideoStream implements Closeable {
       PipedInputStream audioInputStream;
       try {
         audioInputStream = new PipedInputStream();
-        audioRecorder = new AudioRecorder(new LossyPipedOutputStream(audioInputStream));
+        audioRecorder = new AudioRecorder(params.isLossy() ? new LossyPipedOutputStream(audioInputStream) : new PipedOutputStream(audioInputStream));
         audioRecorder.start();
       } catch (IOException e) {
         audioRecorder = null;
@@ -68,7 +69,9 @@ public class VideoStream implements Closeable {
       PipedInputStream videoInputStream;
       try {
         videoInputStream = new PipedInputStream();
-        videoRecorder = new VideoRecorder(cameraModule.getCanvas(), new LossyPipedOutputStream(videoInputStream));
+        videoRecorder = new VideoRecorder(
+                cameraModule.getCanvas(),
+                params.isLossy() ? new LossyPipedOutputStream(videoInputStream) : new PipedOutputStream(videoInputStream));
         if (params.getBitRate() != 0) {
           videoRecorder.setBitRate(params.getBitRate());
         }
@@ -232,17 +235,20 @@ public class VideoStream implements Closeable {
     private final int mBitRate;
     private final int mFrameRate;
     private final int mIFrameInterval;
+    private final boolean mIsLossy;
 
     private Params(boolean audioEnabled,
                    boolean videoEnabled,
                    int bitRate,
                    int frameRate,
-                   int iframeInterval) {
+                   int iframeInterval,
+                   boolean isLossy) {
       this.mAudioEnabled = audioEnabled;
       this.mVideoEnabled = videoEnabled;
       this.mBitRate = bitRate;
       this.mFrameRate = frameRate;
       this.mIFrameInterval = iframeInterval;
+      this.mIsLossy = isLossy;
     }
 
     public boolean isAudioEnabled() {
@@ -265,12 +271,17 @@ public class VideoStream implements Closeable {
       return mIFrameInterval;
     }
 
+    public boolean isLossy() {
+      return mIsLossy;
+    }
+
     public static class Builder {
       private boolean mAudioEnabled = true;
       private boolean mVideoEnabled = true;
       private int mBitRate;
       private int mFrameRate;
       private int mIFrameInterval;
+      private boolean mIsLossy = true;
 
       public Builder setAudioEnabled(boolean audioEnabled) {
         this.mAudioEnabled = audioEnabled;
@@ -297,12 +308,17 @@ public class VideoStream implements Closeable {
         return this;
       }
 
+      public Builder setIsLossy(boolean isLossy) {
+        mIsLossy = isLossy;
+        return this;
+      }
+
       public Params build() {
         if (!mAudioEnabled && !mVideoEnabled) {
           throw new IllegalStateException("Cannot create a stream with both audio and video disabled");
         }
 
-        return new Params(mAudioEnabled, mVideoEnabled, mBitRate, mFrameRate, mIFrameInterval);
+        return new Params(mAudioEnabled, mVideoEnabled, mBitRate, mFrameRate, mIFrameInterval, mIsLossy);
       }
     }
   }

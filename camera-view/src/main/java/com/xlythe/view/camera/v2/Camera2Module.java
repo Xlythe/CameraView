@@ -272,7 +272,11 @@ public class Camera2Module extends ICameraModule {
     @Override
     public void close() {
         if (mCaptureSession != null) {
-            mCaptureSession.close();
+            try {
+                mCaptureSession.close();
+            } catch (CameraAccessException e) {
+                Log.e(TAG, "Failed to close camera", e);
+            }
             mCaptureSession = null;
         }
         if (mActiveSession != null) {

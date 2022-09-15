@@ -115,6 +115,9 @@ public class VideoPlayer {
                   format.setInteger(MediaFormat.KEY_BIT_RATE, header.getBitRate());
                   format.setInteger(MediaFormat.KEY_FRAME_RATE, header.getFrameRate());
                   format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, header.getIFrameInterval());
+                  if (Build.VERSION.SDK_INT >= 30) {
+                    format.setInteger(MediaFormat.KEY_LOW_LATENCY, /*true=*/1);
+                  }
                   if (Build.VERSION.SDK_INT >= 31) {
                     format.setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, /*true=*/1);
                   }
