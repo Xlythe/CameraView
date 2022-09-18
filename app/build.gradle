@@ -17,6 +17,7 @@ android {
     lint {
         abortOnError false
     }
+    namespace 'com.xlythe.sample.camera'
 }
 
 dependencies {

@@ -25,17 +25,16 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
+import androidx.annotation.RequiresPermission;
+import androidx.annotation.UiThread;
+
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 import com.xlythe.view.camera.x.CameraXModule;
 
 import java.io.File;
-import java.io.OutputStream;
-
-import androidx.annotation.Nullable;
-import androidx.annotation.RequiresApi;
-import androidx.annotation.RequiresPermission;
-import androidx.annotation.UiThread;
 
 /**
  * A {@link View} that displays a preview of the camera with methods {@link #takePicture(File)},
@@ -55,8 +54,7 @@ public class CameraView extends FrameLayout {
     // * Pictures taken with CameraX may be rotated. CameraX does apply exif rotation itself, but
     //   incorrectly (eg. Samsung Fold 3 front facing camera). Attempts to overwrite the exif
     //   metadata manually to fix this failed (and I'm not sure why...).
-    // * There is no official way to record videos with CameraX. Video capture is currently working,
-    //   but through unofficial APIs that may break in the future.
+    // * Videos taken with CameraX appear squished.
     static final boolean USE_CAMERA_X = false;
 
     // When enabled, CameraV2 will be used. It's currently stable.

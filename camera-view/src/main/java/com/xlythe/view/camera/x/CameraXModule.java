@@ -16,6 +16,38 @@ import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.RequiresPermission;
+import androidx.annotation.RestrictTo;
+import androidx.camera.camera2.interop.Camera2CameraInfo;
+import androidx.camera.core.AspectRatio;
+import androidx.camera.core.Camera;
+import androidx.camera.core.CameraInfoUnavailableException;
+import androidx.camera.core.CameraSelector;
+import androidx.camera.core.FocusMeteringAction;
+import androidx.camera.core.FocusMeteringResult;
+import androidx.camera.core.ImageCapture;
+import androidx.camera.core.ImageCaptureException;
+import androidx.camera.core.ImageProxy;
+import androidx.camera.core.Preview;
+import androidx.camera.core.SurfaceOrientedMeteringPointFactory;
+import androidx.camera.core.UseCase;
+import androidx.camera.core.ZoomState;
+import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.camera.video.FileOutputOptions;
+import androidx.camera.video.PendingRecording;
+import androidx.camera.video.Quality;
+import androidx.camera.video.QualitySelector;
+import androidx.camera.video.Recorder;
+import androidx.camera.video.Recording;
+import androidx.camera.video.VideoCapture;
+import androidx.camera.video.VideoRecordEvent;
+import androidx.collection.ArrayMap;
+import androidx.core.content.ContextCompat;
+import androidx.lifecycle.Lifecycle;
+import androidx.lifecycle.LifecycleOwner;
+
 import com.google.common.util.concurrent.ListenableFuture;
 import com.google.common.util.concurrent.MoreExecutors;
 import com.xlythe.view.camera.CameraView;
@@ -29,35 +61,12 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import androidx.annotation.NonNull;
-import androidx.annotation.Nullable;
-import androidx.annotation.RequiresPermission;
-import androidx.annotation.RestrictTo;
-import androidx.camera.camera2.interop.Camera2CameraInfo;
-import androidx.camera.core.AspectRatio;
-import androidx.camera.core.Camera;
-import androidx.camera.core.CameraInfoUnavailableException;
-import androidx.camera.core.CameraSelector;
-import androidx.camera.core.FocusMeteringAction;
-import androidx.camera.core.FocusMeteringResult;
-import androidx.camera.core.ImageAnalysis;
-import androidx.camera.core.ImageCapture;
-import androidx.camera.core.ImageCaptureException;
-import androidx.camera.core.ImageProxy;
-import androidx.camera.core.Preview;
-import androidx.camera.core.SurfaceOrientedMeteringPointFactory;
-import androidx.camera.core.UseCase;
-import androidx.camera.core.VideoCapture;
-import androidx.camera.core.ZoomState;
-import androidx.camera.lifecycle.ProcessCameraProvider;
-import androidx.collection.ArrayMap;
-import androidx.core.content.ContextCompat;
-import androidx.lifecycle.Lifecycle;
-import androidx.lifecycle.LifecycleOwner;
 
 /**
  * A wrapper around the CameraX APIs.
@@ -86,9 +95,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** The time (in milliseconds) to wait for a GPS signal. This runs on the UI thread and so must be short. */
     private static final long GPS_TIMEOUT_MILLIS = 10;
 
-    /**
-     * A future handle to the CameraX library. Until this is loaded, we cannot use CameraX.
-     */
+    /** A future handle to the CameraX library. Until this is loaded, we cannot use CameraX. */
     private final ListenableFuture<ProcessCameraProvider> mCameraProviderFuture;
 
     /**
@@ -104,9 +111,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     private boolean mIsOpen;
 
-    /**
-     * The currently active Camera. Null if the camera isn't open.
-     */
+    /** The currently active Camera. Null if the camera isn't open. */
     @Nullable private Camera mActiveCamera;
 
     /** The size of the preview. Cached in case we need to adjust our view size. */
@@ -119,24 +124,21 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Nullable private ImageCapture mImageCapture;
 
     /** A video capture that captures what's visible on the screen. Non-null while taking a video. */
-    @Nullable private VideoCapture mVideoCapture;
+    @Nullable private VideoCapture<Recorder> mVideoCapture;
+
+    /** A helper class for mVideoCapture that allows us to stop the recording. */
+    @Nullable private Recording mVideoRecording;
 
     /** Custom use cases, beyond the typical Preview/Image/Video ones. */
     private final Map<VideoRecorder.SurfaceProvider, UseCase> mCustomUseCases = new ArrayMap<>();
 
-    /**
-     * True if using the front facing camera. False otherwise.
-     */
+    /** True if using the front facing camera. False otherwise. */
     private boolean mIsFrontFacing = false;
 
-    /**
-     * The current zoom level, from 0 to {@link #getMaxZoomLevel()}.
-     */
+    /** The current zoom level, from 0 to {@link #getMaxZoomLevel()}. */
     private int mZoomLevel;
 
-    /**
-     * True if the preview is currently paused.
-     */
+    /** True if the preview is currently paused. */
     private boolean mIsPaused = false;
 
     public CameraXModule(CameraView cameraView) {
@@ -229,9 +231,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         if (DEBUG) {
             Log.d(TAG, "Preview loaded");
             if (mActiveCamera != null) {
-                mActiveCamera.getCameraInfo().getCameraState().observe(this, cameraState -> {
-                    Log.d(TAG, "CameraState changed: type=" + cameraState.getType() + ", error=" + cameraState.getError());
-                });
+                mActiveCamera.getCameraInfo().getCameraState().observe(this, cameraState -> Log.d(TAG, "CameraState changed: type=" + cameraState.getType() + ", error=" + cameraState.getError()));
             }
         }
     }
@@ -570,7 +570,6 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return null;
     }
 
-    @SuppressLint("RestrictedApi")
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
     public void startRecording(File file) {
@@ -585,10 +584,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             unbind(mImageCapture);
         }
 
-        VideoCapture videoCapture = new VideoCapture.Builder()
-                .setTargetResolution(getTargetResolution())
-                .setTargetRotation(getTargetRotation())
-                .build();
+        VideoCapture<Recorder> videoCapture = VideoCapture.withOutput(new Recorder.Builder()
+                .setQualitySelector(QualitySelector.fromOrderedList(getVideoQualityPriority()))
+                .build());
 
         if (!bind(videoCapture)) {
             Log.w(TAG, "Failed to take a video. VideoCapture failed.");
@@ -599,38 +597,109 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
 
-        VideoCapture.Metadata metadata = new VideoCapture.Metadata();
-        metadata.location = getLocation();
-        VideoCapture.OutputFileOptions options = new VideoCapture.OutputFileOptions.Builder(file).setMetadata(metadata).build();
-        videoCapture.startRecording(options, ContextCompat.getMainExecutor(getContext()), new VideoCapture.OnVideoSavedCallback() {
-            @Override
-            public void onVideoSaved(@NonNull VideoCapture.OutputFileResults outputFileResults) {
-                showVideoConfirmation(file);
-                stopRecording();
-            }
+        Recorder recorder = videoCapture.getOutput();
+        PendingRecording pendingRecording = recorder.prepareRecording(getContext(), new FileOutputOptions.Builder(file).setFileSizeLimit(getMaxVideoSize()).build());
+        Recording recording = pendingRecording.withAudioEnabled().start(ContextCompat.getMainExecutor(getContext()), videoRecordEvent -> {
+            if (videoRecordEvent instanceof VideoRecordEvent.Start) {
+                Log.d(TAG, "Started video recording");
+            } else if (videoRecordEvent instanceof VideoRecordEvent.Pause) {
+                Log.d(TAG, "Paused video recording");
+            } else if (videoRecordEvent instanceof VideoRecordEvent.Resume) {
+                Log.d(TAG, "Resumed video recording");
+            } else if (videoRecordEvent instanceof VideoRecordEvent.Status) {
+                Log.d(TAG, "Received video recording status update");
+            } else if (videoRecordEvent instanceof VideoRecordEvent.Finalize) {
+                VideoRecordEvent.Finalize finalizeEvent = (VideoRecordEvent.Finalize) videoRecordEvent;
+                switch (finalizeEvent.getError()) {
+                    case VideoRecordEvent.Finalize.ERROR_NONE:
+                    case VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED:
+                        // The good cases.
+                        showVideoConfirmation(file);
+                        stopRecording();
+                        break;
+                    case VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE:
+                        // The possibly good cases.
+                        if (file.exists()) {
+                            showVideoConfirmation(file);
+                            stopRecording();
+                            break;
+                        }
 
-            @Override
-            public void onError(int videoCaptureError, @NonNull String message, @Nullable Throwable cause) {
-                Log.e(TAG, "Failed to start video recording. Error[" + videoCaptureError + "] " + message, cause);
-                onVideoFailed();
-                stopRecording();
+                        // Fall through on failure
+                    case VideoRecordEvent.Finalize.ERROR_ENCODING_FAILED:
+                    case VideoRecordEvent.Finalize.ERROR_INVALID_OUTPUT_OPTIONS:
+                    case VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA:
+                    case VideoRecordEvent.Finalize.ERROR_RECORDER_ERROR:
+                    case VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE:
+                    case VideoRecordEvent.Finalize.ERROR_UNKNOWN:
+                        // The bad cases
+                        Log.e(TAG, "Failed to start video recording: " + toString(finalizeEvent));
+                        onVideoFailed();
+                        stopRecording();
+                        break;
+                }
             }
         });
+
         mVideoCapture = videoCapture;
+        mVideoRecording = recording;
     }
 
-    @SuppressLint("RestrictedApi")
+    private List<Quality> getVideoQualityPriority() {
+        List<Quality> qualities = new ArrayList<>();
+        switch (getQuality()) {
+            case MAX:
+                qualities.add(Quality.UHD);
+                // fall through
+            case HIGH:
+                qualities.add(Quality.FHD);
+                // fall through
+            case MEDIUM:
+                qualities.add(Quality.HD);
+                // fall through
+            case LOW:
+                qualities.add(Quality.SD);
+        }
+        return qualities;
+    }
+
+    private String toString(VideoRecordEvent.Finalize event) {
+        switch (event.getError()) {
+            case VideoRecordEvent.Finalize.ERROR_NONE:
+                return "ERROR_NONE";
+            case VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED:
+                return "ERROR_FILE_SIZE_LIMIT_REACHED";
+            case VideoRecordEvent.Finalize.ERROR_INSUFFICIENT_STORAGE:
+                return "ERROR_INSUFFICIENT_STORAGE";
+            case VideoRecordEvent.Finalize.ERROR_ENCODING_FAILED:
+                return "ERROR_ENCODING_FAILED";
+            case VideoRecordEvent.Finalize.ERROR_INVALID_OUTPUT_OPTIONS:
+                return "ERROR_INVALID_OUTPUT_OPTIONS";
+            case VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA:
+                return "ERROR_NO_VALID_DATA";
+            case VideoRecordEvent.Finalize.ERROR_RECORDER_ERROR:
+                return "ERROR_RECORDER_ERROR";
+            case VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE:
+                return "ERROR_SOURCE_INACTIVE";
+            case VideoRecordEvent.Finalize.ERROR_UNKNOWN:
+            default:
+                return String.format(Locale.US, "[%d]ERROR_UNKNOWN", event.getError());
+        }
+    }
+
     @Override
     public void stopRecording() {
-        if (mVideoCapture == null) {
+        if (mVideoCapture == null || mVideoRecording == null) {
             return;
         }
-        mVideoCapture.stopRecording();
+
+        mVideoRecording.stop();
         unbind(mVideoCapture);
         if (areUseCasesMutuallyExclusive()) {
             bind(mImageCapture);
         }
         mVideoCapture = null;
+        mVideoRecording = null;
     }
 
     @Override
