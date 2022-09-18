@@ -33,6 +33,8 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
 
+import static java.lang.String.format;
+
 /**
  * A wrapper around the Camera2 APIs. Camera2 has some peculiarities, such as crashing if you attach
  * too many surfaces (or too large a surface) to a capture session. To get around that, we define
@@ -81,6 +83,12 @@ public class Camera2Module extends ICameraModule {
      */
     @NonNull
     private final Handler mHandler;
+
+    /**
+     * A session that's attempting, but has not yet become, the active session.
+     */
+    @Nullable
+    private Session mRegisteringSession;
 
     /**
      * The currently active session. See {@link PictureSession} and {@link VideoSession}.
@@ -174,7 +182,7 @@ public class Camera2Module extends ICameraModule {
             case CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE:
                 return "ERROR_MAX_CAMERAS_IN_USE";
         }
-        return String.format(Locale.US, "UNKNOWN_ERROR(%d)", error);
+        return format(Locale.US, "UNKNOWN_ERROR(%d)", error);
     }
 
     public Camera2Module(CameraView cameraView) {
@@ -203,6 +211,17 @@ public class Camera2Module extends ICameraModule {
                 mCaptureSession = null;
                 hasPreviousState = true;
             }
+            if (mRegisteringSession != null) {
+                Log.d(TAG, format("%s is replacing %s", session.getClass().getSimpleName(), mRegisteringSession.getClass().getSimpleName()));
+
+                // Restore state from the previous session
+                session.setMeteringRectangle(mRegisteringSession.getMeteringRectangle());
+                session.setCropRegion(mRegisteringSession.getCropRegion());
+
+                mRegisteringSession.close();
+                mRegisteringSession = null;
+                hasPreviousState = true;
+            }
             if (mActiveSession != null) {
                 // Restore state from the previous session
                 session.setMeteringRectangle(mActiveSession.getMeteringRectangle());
@@ -224,6 +243,7 @@ public class Camera2Module extends ICameraModule {
             session.initialize(map);
 
             // Now, with all of our surfaces, we'll ask for a new session
+            mRegisteringSession = session;
             mCameraDevice.createCaptureSession(session.getSurfaces(), new CameraCaptureSession.StateCallback() {
                 @Override
                 public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
@@ -234,6 +254,9 @@ public class Camera2Module extends ICameraModule {
                     try {
                         mCaptureSession = cameraCaptureSession;
                         mActiveSession = session;
+                        if (mRegisteringSession == session) {
+                            mRegisteringSession = null;
+                        }
                         if (!mIsPaused) {
                             session.onAvailable(mCameraDevice, mCaptureSession);
                         }
@@ -750,7 +773,7 @@ public class Camera2Module extends ICameraModule {
         matrix.postRotate(rotation, (int) Math.ceil(viewWidth / 2d), (int) Math.ceil(viewHeight / 2d));
 
         if (DEBUG) {
-            Log.d(TAG, String.format("transformPreview: displayOrientation=%s, cameraOrientation=%s, "
+            Log.d(TAG, format("transformPreview: displayOrientation=%s, cameraOrientation=%s, "
                             + "viewWidth=%s, viewHeight=%s, viewAspectRatio=%s, previewWidth=%s, previewHeight=%s, previewAspectRatio=%s, "
                             + "newWidth=%s, newHeight=%s, scaleX=%s, scaleY=%s, scale=%s, "
                             + "translateX=%s, translateY=%s, rotation=%s",

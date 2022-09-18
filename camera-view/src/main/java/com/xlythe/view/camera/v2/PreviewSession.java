@@ -16,6 +16,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+import androidx.annotation.CallSuper;
 import androidx.annotation.NonNull;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
@@ -82,6 +83,13 @@ class PreviewSession extends SessionImpl {
         return surfaces;
     }
 
+    @CallSuper
+    @Override
+    public void close() {
+        super.close();
+        mPreviewSurface.close();
+    }
+
     private static final class PreviewSurface extends CameraSurface {
         private Size chooseOptimalSize(List<Size> choices, int viewWidth, int viewHeight) {
             if (DEBUG) {
@@ -142,6 +150,8 @@ class PreviewSession extends SessionImpl {
         }
 
         @Override
-        void close() {}
+        void close() {
+            mSurface.release();
+        }
     }
 }
