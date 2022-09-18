@@ -17,6 +17,7 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.google.common.util.concurrent.ListenableFuture;
+import com.google.common.util.concurrent.MoreExecutors;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ICameraModule;
@@ -42,6 +43,7 @@ import androidx.camera.core.Camera;
 import androidx.camera.core.CameraInfoUnavailableException;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.FocusMeteringAction;
+import androidx.camera.core.FocusMeteringResult;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
@@ -325,7 +327,17 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
 
         SurfaceOrientedMeteringPointFactory factory = new SurfaceOrientedMeteringPointFactory(getWidth(), getHeight());
-        mActiveCamera.getCameraControl().startFocusAndMetering(new FocusMeteringAction.Builder(factory.createPoint(focus.centerX(), focus.centerY())).build());
+        ListenableFuture<FocusMeteringResult> result = mActiveCamera.getCameraControl()
+                .startFocusAndMetering(new FocusMeteringAction.Builder(factory.createPoint(focus.centerX(), focus.centerY())).build());
+        result.addListener(() -> {
+            boolean isSuccessful = false;
+            try {
+                isSuccessful = result.get().isFocusSuccessful();
+            } catch (ExecutionException | InterruptedException e) {
+                e.printStackTrace();
+            }
+            Log.d(TAG, isSuccessful ? "Successfully focused" : "Failed to focus");
+        }, MoreExecutors.directExecutor());
     }
 
     @Override
@@ -346,7 +358,17 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         // Note: Because we're dealing with floats, we'll use Math.min to ensure we don't
         // accidentally exceed the max with our multiplication.
         float zoom = Math.min(minRatio + steps * zoomLevel, maxRatio);
-        mActiveCamera.getCameraControl().setZoomRatio(zoom);
+        ListenableFuture<Void> result = mActiveCamera.getCameraControl().setZoomRatio(zoom);
+        result.addListener(() -> {
+            boolean isSuccessful = false;
+            try {
+                result.get();
+                isSuccessful = true;
+            } catch (ExecutionException | InterruptedException e) {
+                e.printStackTrace();
+            }
+            Log.d(TAG, isSuccessful ? "Successfully zoomed" : "Failed to zoom");
+        }, MoreExecutors.directExecutor());
         mZoomLevel = zoomLevel;
     }
 
