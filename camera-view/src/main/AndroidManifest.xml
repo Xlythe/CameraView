@@ -1,8 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest package="com.xlythe.view.camera"
-    xmlns:tools="http://schemas.android.com/tools">
+<manifest xmlns:tools="http://schemas.android.com/tools">
 
-    <uses-sdk tools:overrideLibrary="androidx.camera.camera2, androidx.camera.core" />
+    <uses-sdk tools:overrideLibrary="
+        androidx.camera.camera2,
+        androidx.camera.core,
+        com.google.mlkit.vision.barcode.bundled,
+        com.google.mlkit.vision.barcode.common,
+        com.google.mlkit.vision.common,
+        com.google.mlkit.common,
+        com.google.mlkit.vision.interfaces,
+        com.google.android.odml.image" />
 
     <application/>
 

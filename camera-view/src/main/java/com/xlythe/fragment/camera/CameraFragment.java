@@ -381,8 +381,15 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
         // Set listeners here, or else restoring state will trigger them.
         if (mToggle != null) {
-            mToggle.setOnCheckedChangeListener((b, checked) -> mCamera.toggleCamera());
+            mToggle.setOnCheckedChangeListener((b, checked) -> {
+                mCamera.toggleCamera();
+                onToggle();
+            });
         }
+    }
+
+    protected void onToggle() {
+
     }
 
     @Override
