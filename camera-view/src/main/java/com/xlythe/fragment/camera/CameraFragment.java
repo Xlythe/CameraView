@@ -223,6 +223,16 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         super.onStop();
     }
 
+    @Override
+    public void onImageCaptured(File file) {
+
+    }
+
+    @Override
+    public void onVideoCaptured(File file) {
+
+    }
+
     public void setEnabled(boolean enabled) {
         mCapture.setEnabled(enabled);
     }

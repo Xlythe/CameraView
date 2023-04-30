@@ -1,5 +1,8 @@
 package com.xlythe.sample.camera;
 
+import static com.xlythe.sample.camera.MainActivity.TAG;
+
+import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.hardware.Camera;
 import android.net.Uri;
@@ -27,8 +30,6 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 
 public class ResizingFragment extends CameraFragment {
-    private static final String TAG = "CameraSample";
-
     private boolean isTransitionedToEnd = false;
 
     @Override
@@ -46,6 +47,7 @@ public class ResizingFragment extends CameraFragment {
         return view;
     }
 
+    @SuppressLint("StaticFieldLeak")
     @Override
     public void onImageCaptured(final File file) {
         new FileTransferAsyncTask() {
@@ -56,13 +58,14 @@ public class ResizingFragment extends CameraFragment {
                 // Print out metadata about the picture
                 try {
                     Log.d(TAG, new Exif(file).toString());
-                } catch (IOException e) {}
+                } catch (IOException ignored) {}
 
                 broadcastPicture(file);
             }
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
     }
 
+    @SuppressLint("StaticFieldLeak")
     @Override
     public void onVideoCaptured(final File file) {
         new FileTransferAsyncTask() {
@@ -93,7 +96,7 @@ public class ResizingFragment extends CameraFragment {
         if (Build.VERSION.SDK_INT < 24) {
             Intent intent = new Intent(Camera.ACTION_NEW_PICTURE);
             intent.setData(Uri.fromFile(file));
-            getActivity().sendBroadcast(intent);
+            requireActivity().sendBroadcast(intent);
         }
     }
 
@@ -101,7 +104,7 @@ public class ResizingFragment extends CameraFragment {
         if (Build.VERSION.SDK_INT < 24) {
             Intent intent = new Intent(Camera.ACTION_NEW_VIDEO);
             intent.setData(Uri.fromFile(file));
-            getActivity().sendBroadcast(intent);
+            requireActivity().sendBroadcast(intent);
         }
     }
 

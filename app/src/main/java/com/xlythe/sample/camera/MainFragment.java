@@ -1,5 +1,8 @@
 package com.xlythe.sample.camera;
 
+import static com.xlythe.sample.camera.MainActivity.TAG;
+
+import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.hardware.Camera;
 import android.net.Uri;
@@ -26,13 +29,13 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 public class MainFragment extends CameraFragment {
-    private static final String TAG = "CameraSample";
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         return inflater.inflate(R.layout.fragment_main, container, false);
     }
 
+    @SuppressLint("StaticFieldLeak")
     @Override
     public void onImageCaptured(final File file) {
         new FileTransferAsyncTask() {
@@ -50,6 +53,7 @@ public class MainFragment extends CameraFragment {
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
     }
 
+    @SuppressLint("StaticFieldLeak")
     @Override
     public void onVideoCaptured(final File file) {
         new FileTransferAsyncTask() {
@@ -80,7 +84,7 @@ public class MainFragment extends CameraFragment {
         if (Build.VERSION.SDK_INT < 24) {
             Intent intent = new Intent(Camera.ACTION_NEW_PICTURE);
             intent.setData(Uri.fromFile(file));
-            getActivity().sendBroadcast(intent);
+            requireActivity().sendBroadcast(intent);
         }
     }
 
@@ -88,7 +92,7 @@ public class MainFragment extends CameraFragment {
         if (Build.VERSION.SDK_INT < 24) {
             Intent intent = new Intent(Camera.ACTION_NEW_VIDEO);
             intent.setData(Uri.fromFile(file));
-            getActivity().sendBroadcast(intent);
+            requireActivity().sendBroadcast(intent);
         }
     }
 

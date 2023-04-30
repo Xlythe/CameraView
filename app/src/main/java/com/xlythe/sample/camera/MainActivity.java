@@ -23,6 +23,8 @@ import com.google.android.material.navigation.NavigationView;
 import java.util.Objects;
 
 public class MainActivity extends AppCompatActivity {
+    static final String TAG = "CameraSample";
+
     private AppBarConfiguration mAppBarConfiguration;
 
     @Override

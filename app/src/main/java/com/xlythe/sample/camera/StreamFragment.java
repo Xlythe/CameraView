@@ -1,5 +1,7 @@
 package com.xlythe.sample.camera;
 
+import static com.xlythe.sample.camera.MainActivity.TAG;
+
 import android.annotation.SuppressLint;
 import android.content.Intent;
 import android.hardware.Camera;
@@ -31,8 +33,6 @@ import java.nio.channels.FileChannel;
 import java.util.Objects;
 
 public class StreamFragment extends CameraFragment {
-    private static final String TAG = "CameraSample";
-
     private CameraView mCameraView;
     private VideoView mViewStreamView;
 
