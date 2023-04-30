@@ -287,7 +287,7 @@ public class Camera2Module extends ICameraModule {
             mActiveCamera = getActiveCamera();
             if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
             mCameraManager.openCamera(mActiveCamera, mStateCallback, mHandler);
-        } catch (CameraAccessException e) {
+        } catch (CameraAccessException | IllegalArgumentException e) {
             Log.e(TAG, "Failed to open camera", e);
         }
     }
