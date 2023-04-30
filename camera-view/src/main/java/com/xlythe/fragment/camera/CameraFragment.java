@@ -93,8 +93,10 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     private View mPermissionRequest;
 
+    @Nullable
     private View mCapture;
 
+    @Nullable
     private View mConfirm;
 
     @Nullable
@@ -234,11 +236,19 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     }
 
     public void setEnabled(boolean enabled) {
-        mCapture.setEnabled(enabled);
+        if (mCapture != null) {
+            mCapture.setEnabled(enabled);
+        } else {
+            mCamera.setEnabled(enabled);
+        }
     }
 
     public boolean isEnabled() {
-        return mCapture.isEnabled();
+        if (mCapture != null) {
+            return mCapture.isEnabled();
+        } else {
+            return mCamera.isEnabled();
+        }
     }
 
     public void setQuality(CameraView.Quality quality) {
@@ -330,10 +340,6 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             throw new IllegalStateException("No CameraView found with id R.id.camera");
         }
 
-        if (mCapture == null) {
-            throw new IllegalStateException("No CameraView found with id R.id.capture");
-        }
-
         if (mPermissionPrompt == null) {
             throw new IllegalStateException("No View found with id R.id.layout_permissions");
         }
@@ -350,7 +356,9 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mCamera.setOnVideoCapturedListener(this);
         mCamera.setOnCameraStateChangedListener(this);
 
-        mCapture.setOnTouchListener(new OnTouchListener(getContext()));
+        if (mCapture != null) {
+            mCapture.setOnTouchListener(new OnTouchListener(getContext()));
+        }
 
         if (mConfirm != null) {
             mConfirm.setOnClickListener(v -> mCamera.confirmPicture());
@@ -415,8 +423,12 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             }
 
             // After confirming/rejecting, show our buttons again
-            mConfirm.setVisibility(View.GONE);
-            mCapture.setVisibility(View.VISIBLE);
+            if (mConfirm != null) {
+                mConfirm.setVisibility(View.GONE);
+            }
+            if (mCapture != null) {
+                mCapture.setVisibility(View.VISIBLE);
+            }
             if (mCancel != null) {
                 mCancel.setVisibility(View.GONE);
             }
@@ -431,9 +443,13 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         if (mToggle != null) {
             mToggle.setVisibility(View.GONE);
         }
-        mCapture.setVisibility(View.GONE);
-        mConfirm.setVisibility(View.VISIBLE);
-        mConfirm.setOnClickListener(listener);
+        if (mCapture != null) {
+            mCapture.setVisibility(View.GONE);
+        }
+        if (mConfirm != null) {
+            mConfirm.setVisibility(View.VISIBLE);
+            mConfirm.setOnClickListener(listener);
+        }
     }
 
     @Override
@@ -446,9 +462,13 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             }
 
             // After confirming/rejecting, show our buttons again
-            mConfirm.setVisibility(View.GONE);
-            mCapture.setVisibility(View.VISIBLE);
-            if (mCancel!= null) {
+            if (mConfirm != null) {
+                mConfirm.setVisibility(View.GONE);
+            }
+            if (mCapture != null) {
+                mCapture.setVisibility(View.VISIBLE);
+            }
+            if (mCancel != null) {
                 mCancel.setVisibility(View.GONE);
             }
             if (mToggle != null) {
@@ -462,9 +482,13 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         if (mToggle != null) {
             mToggle.setVisibility(View.GONE);
         }
-        mCapture.setVisibility(View.GONE);
-        mConfirm.setVisibility(View.VISIBLE);
-        mConfirm.setOnClickListener(listener);
+        if (mCapture != null) {
+            mCapture.setVisibility(View.GONE);
+        }
+        if (mConfirm != null) {
+            mConfirm.setVisibility(View.VISIBLE);
+            mConfirm.setOnClickListener(listener);
+        }
     }
 
     private class ProgressBarAnimator extends ValueAnimator {
