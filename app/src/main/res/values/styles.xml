@@ -1,6 +1,16 @@
 <resources>
 
     <!-- Base application theme. -->
-    <style name="AppTheme" parent="Theme.AppCompat.NoActionBar" />
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="colorPrimary">#8D6E63</item>
+        <item name="colorPrimaryDark">#795548</item>
+        <item name="colorAccent">#388E3C</item>
+        <item name="textAppearanceHeadline6">@style/TextAppearance.App.Headline6</item>
+        <item name="textAppearanceBody2">@style/TextAppearance.App.Body2</item>
+    </style>
+
+    <style name="TextAppearance.App.Headline6" parent="TextAppearance.MaterialComponents.Subtitle1" />
+
+    <style name="TextAppearance.App.Body2" parent="TextAppearance.MaterialComponents.Subtitle1" />
 
 </resources>

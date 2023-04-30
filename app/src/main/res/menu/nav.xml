@@ -1,0 +1,14 @@
+<menu xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:id="@+id/main_fragment"
+        android:icon="@drawable/ic_main"
+        android:title="@string/app_name_main" />
+    <item
+        android:id="@+id/stream_fragment"
+        android:icon="@drawable/ic_stream"
+        android:title="@string/app_name_stream" />
+    <item
+        android:id="@+id/resizing_fragment"
+        android:icon="@drawable/ic_resizing"
+        android:title="@string/app_name_resizing" />
+</menu>

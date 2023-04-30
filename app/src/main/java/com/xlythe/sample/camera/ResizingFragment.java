@@ -33,7 +33,7 @@ public class ResizingFragment extends CameraFragment {
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        View view = View.inflate(getContext(), R.layout.fragment_resizing, container);
+        View view = inflater.inflate(R.layout.fragment_resizing, container, false);
         MotionLayout motionLayout = view.findViewById(R.id.layout_camera);
         view.findViewById(R.id.resize).setOnClickListener(v -> {
             if (isTransitionedToEnd) {

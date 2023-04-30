@@ -30,7 +30,7 @@ public class MainFragment extends CameraFragment {
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        return View.inflate(getContext(), R.layout.fragment_main, container);
+        return inflater.inflate(R.layout.fragment_main, container, false);
     }
 
     @Override

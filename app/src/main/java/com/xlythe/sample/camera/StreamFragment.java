@@ -8,6 +8,7 @@ import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -37,7 +38,7 @@ public class StreamFragment extends CameraFragment {
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
-        View view = View.inflate(getContext(), R.layout.fragment_stream, container);
+        View view = inflater.inflate(R.layout.fragment_stream, container, false);
 
         mCameraView = view.findViewById(R.id.camera);
         mViewStreamView = view.findViewById(R.id.video_stream);
@@ -54,6 +55,19 @@ public class StreamFragment extends CameraFragment {
 
         mViewStreamView.setStream(mCameraView.stream());
         mViewStreamView.play();
+    }
+
+    @SuppressLint({"CheckResult", "MissingPermission"})
+    @Override
+    protected void onToggle() {
+        if (Build.VERSION.SDK_INT < 18) {
+            return;
+        }
+
+        new Handler().postDelayed(() -> {
+            mViewStreamView.setStream(mCameraView.stream());
+            mViewStreamView.play();
+        }, 1000);
     }
 
     @Override
