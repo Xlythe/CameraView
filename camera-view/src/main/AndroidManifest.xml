@@ -4,12 +4,14 @@
     <uses-sdk tools:overrideLibrary="
         androidx.camera.camera2,
         androidx.camera.core,
+        androidx.camera.video,
         com.google.mlkit.vision.barcode.bundled,
         com.google.mlkit.vision.barcode.common,
         com.google.mlkit.vision.common,
         com.google.mlkit.common,
         com.google.mlkit.vision.interfaces,
-        com.google.android.odml.image" />
+        com.google.android.odml.image,
+        androidx.camera.lifecycle" />
 
     <application/>
 

@@ -613,6 +613,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 switch (finalizeEvent.getError()) {
                     case VideoRecordEvent.Finalize.ERROR_NONE:
                     case VideoRecordEvent.Finalize.ERROR_FILE_SIZE_LIMIT_REACHED:
+                    case VideoRecordEvent.Finalize.ERROR_DURATION_LIMIT_REACHED:
                         // The good cases.
                         showVideoConfirmation(file);
                         stopRecording();
@@ -631,7 +632,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                     case VideoRecordEvent.Finalize.ERROR_NO_VALID_DATA:
                     case VideoRecordEvent.Finalize.ERROR_RECORDER_ERROR:
                     case VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE:
+                    case VideoRecordEvent.Finalize.ERROR_RECORDING_GARBAGE_COLLECTED:
                     case VideoRecordEvent.Finalize.ERROR_UNKNOWN:
+                    default:
                         // The bad cases
                         Log.e(TAG, "Failed to start video recording: " + toString(finalizeEvent));
                         onVideoFailed();
@@ -810,6 +813,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         switch (getQuality()) {
             case MAX:
                 return ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY;
+            case HIGH:
+                return ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY;
             default:
                 return ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG;
         }
