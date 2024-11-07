@@ -45,7 +45,18 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     private static final String[] OPTIONAL_PERMISSIONS;
 
     static {
-        if (Build.VERSION.SDK_INT >= 33) {
+        if (Build.VERSION.SDK_INT >= 34) {
+            // In U+, READ_MEDIA_IMAGES and READ_MEDIA_VIDEO no longer give access to the file system and the user must manually select files from a system window.
+            // As this experience is terrible, support for reading previews of images taken is removed. An image that was taken immediately can still be previewed.
+            REQUIRED_PERMISSIONS = new String[] {
+                    Manifest.permission.CAMERA,
+                    Manifest.permission.RECORD_AUDIO
+            };
+            OPTIONAL_PERMISSIONS = new String[] {
+                    Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.VIBRATE,
+            };
+        } else if (Build.VERSION.SDK_INT >= 33) {
             // In T+, READ_EXTERNAL_STORAGE is removed and replaced with READ_MEDIA_IMAGES and READ_MEDIA_VIDEO
             REQUIRED_PERMISSIONS = new String[] {
                     Manifest.permission.CAMERA,
