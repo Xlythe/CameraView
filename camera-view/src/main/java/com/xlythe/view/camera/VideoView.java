@@ -75,6 +75,8 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     // The stream to play
     @Nullable private VideoStream mVideoStream;
+    // The latest prepared stream. Used to avoid a race condition where the texture is destroyed and cleans up the wrong stream.
+    @Nullable private VideoStream mPreparedVideoStream;
     // Plays the audio half of the VideoStream
     @Nullable private AudioPlayer mAudioPlayer;
     // Plays the video half of the VideoStream
@@ -153,8 +155,10 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             if (Build.VERSION.SDK_INT <= 18) {
                 throw new RuntimeException("API not available");
             }
+            if (DEBUG) Log.d(TAG, "Stream replaced with file");
             mVideoStream.close();
             mVideoStream = null;
+            mPreparedVideoStream = null;
         }
         this.mInputType = InputType.FILE;
         createTextureView();
@@ -176,6 +180,9 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     @RequiresApi(18)
     public void setStream(VideoStream videoStream) {
+        if (videoStream == null) {
+            throw new NullPointerException("VideoStream cannot be null");
+        }
         if (Objects.equals(videoStream, mVideoStream) && mInputType.equals(InputType.STREAM)) {
             return;
         }
@@ -184,10 +191,13 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         this.mVideoStream = videoStream;
         this.mFile = null;
         this.mInputType = InputType.STREAM;
+        if (DEBUG) Log.d(TAG, "Preparing TextureView");
         createTextureView();
         if (videoStream != null && mIsAvailable) {
+            if (DEBUG) Log.d(TAG, "Preparing stream");
             prepare();
         }
+        if (DEBUG) Log.d(TAG, "Stream ready");
     }
 
     @Override
@@ -195,8 +205,11 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         if (DEBUG) Log.d(TAG, "Texture available");
         mIsAvailable = true;
         if (mFile != null || mVideoStream != null) {
+            if (DEBUG) Log.d(TAG, "Preparing file or stream");
             prepare();
         }
+        if (DEBUG) Log.d(TAG, "onSurfaceTextureAvailable: " + mFile);
+        if (DEBUG) Log.d(TAG, "onSurfaceTextureAvailable: " + mVideoStream);
     }
 
     @Override
@@ -220,12 +233,14 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 }
                 break;
             case STREAM:
-                if (mVideoStream != null) {
+                if (mVideoStream != null && mPreparedVideoStream == mVideoStream) {
                     if (Build.VERSION.SDK_INT < 18) {
                         throw new RuntimeException("API not available");
                     }
+                    if (DEBUG) Log.d(TAG, "Stream destroyed");
                     mVideoStream.close();
                     mVideoStream = null;
+                    mPreparedVideoStream = null;
                 }
                 break;
         }
@@ -261,11 +276,14 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     protected void prepare() {
         switch (mInputType) {
             case UNKNOWN:
-                throw new IllegalStateException("Must set a file ot stream before preparing");
+                if (DEBUG) Log.d(TAG, "Oops");
+                throw new IllegalStateException("Must set a file to stream before preparing");
             case FILE:
+                if (DEBUG) Log.d(TAG, "Preparing file");
                 prepareFile();
                 break;
             case STREAM:
+                if (DEBUG) Log.d(TAG, "Preparing stream");
                 prepareStream();
                 break;
         }
@@ -346,6 +364,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             mVideoPlayer.setOnMetadataAvailableListener((width, height, orientation, flipped) -> new Handler(Looper.getMainLooper()).post(() -> transformPreview(width, height, orientation, flipped)));
         }
 
+        mPreparedVideoStream = videoStream;
         if (mIsPlaying) {
             playStream();
         }
