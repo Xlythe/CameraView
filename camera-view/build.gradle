@@ -9,11 +9,11 @@ Properties localProperties = new Properties()
 localProperties.load(project.rootProject.file('local.properties').newDataInputStream())
 
 android {
-    compileSdkVersion 34
+    compileSdkVersion 35
 
     defaultConfig {
-        minSdkVersion 14
-        targetSdkVersion 34
+        minSdkVersion 21
+        targetSdkVersion 35
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8

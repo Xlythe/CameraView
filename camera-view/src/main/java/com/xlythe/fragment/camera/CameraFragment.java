@@ -37,6 +37,7 @@ import java.util.Locale;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
+import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
 
 public abstract class CameraFragment extends Fragment implements CameraView.OnImageCapturedListener, CameraView.OnVideoCapturedListener, CameraView.OnCameraStateChangedListener {
@@ -181,7 +182,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             displayManager.registerDisplayListener(mDisplayListener, new Handler());
         }
 
-        context.registerReceiver(mStateChangedReceiver, new IntentFilter(CameraView.ACTION_CAMERA_STATE_CHANGED));
+        ContextCompat.registerReceiver(context, mStateChangedReceiver, new IntentFilter(CameraView.ACTION_CAMERA_STATE_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED);
     }
 
     private int getDisplayId() {
