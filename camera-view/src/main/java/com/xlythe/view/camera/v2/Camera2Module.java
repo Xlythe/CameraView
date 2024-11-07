@@ -642,6 +642,8 @@ public class Camera2Module extends ICameraModule {
         if (mActiveSession instanceof PictureSession) {
             PictureSession pictureSession = (PictureSession) mActiveSession;
             pictureSession.takePicture(file, mCameraDevice, mCaptureSession);
+        } else {
+            onImageFailed();
         }
     }
 

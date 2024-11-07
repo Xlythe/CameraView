@@ -64,10 +64,8 @@ public class StreamFragment extends CameraFragment {
             return;
         }
 
-        new Handler().postDelayed(() -> {
-            mViewStreamView.setStream(mCameraView.stream());
-            mViewStreamView.play();
-        }, 1000);
+        mViewStreamView.setStream(mCameraView.stream());
+        mViewStreamView.play();
     }
 
     @Override
