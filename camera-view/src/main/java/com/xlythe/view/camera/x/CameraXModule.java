@@ -645,6 +645,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                         stopRecording();
                         break;
                 }
+            } else {
+                Log.w(TAG, "Received unknown video recording event " + videoRecordEvent);
             }
         });
 
