@@ -598,7 +598,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
 
         Recorder recorder = videoCapture.getOutput();
-        PendingRecording pendingRecording = recorder.prepareRecording(getContext(), new FileOutputOptions.Builder(file).setFileSizeLimit(getMaxVideoSize()).build());
+        FileOutputOptions.Builder options = new FileOutputOptions.Builder(file);
+        if (getMaxVideoSize() != CameraView.INDEFINITE_VIDEO_SIZE) {
+            options.setFileSizeLimit(getMaxVideoSize());
+        }
+        PendingRecording pendingRecording = recorder.prepareRecording(getContext(), options.build());
         Recording recording = pendingRecording.withAudioEnabled().start(ContextCompat.getMainExecutor(getContext()), videoRecordEvent -> {
             if (videoRecordEvent instanceof VideoRecordEvent.Start) {
                 Log.d(TAG, "Started video recording");
