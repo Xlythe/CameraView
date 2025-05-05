@@ -207,6 +207,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 if (DEBUG) {
                     Log.d(TAG, "Surface no longer needed. Result Code: " + result.getResultCode());
                 }
+                surface.release();
             });
 
             mPreviewSize = new Size(cameraWidth, cameraHeight);

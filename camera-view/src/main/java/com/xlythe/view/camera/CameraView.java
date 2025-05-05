@@ -35,6 +35,7 @@ import com.xlythe.view.camera.v2.Camera2Module;
 import com.xlythe.view.camera.x.CameraXModule;
 
 import java.io.File;
+import java.util.List;
 
 /**
  * A {@link View} that displays a preview of the camera with methods {@link #takePicture(File)},
@@ -219,6 +220,9 @@ public class CameraView extends FrameLayout {
 
     private boolean mIsImageConfirmationEnabled;
     private boolean mIsVideoConfirmationEnabled;
+
+    @Nullable
+    private BarcodeScanner mBarcodeScanner;
 
     // When true, avoid adding/removing views. While usually harmless (although it can cause state
     // loss), it's especially important since calling removeView(TextureView) after
@@ -650,6 +654,9 @@ public class CameraView extends FrameLayout {
     }
 
     protected void onClose() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            exitBarcodeScanner();
+        }
         mCameraModule.close();
 
         if (!mHasSavedState) {
@@ -810,6 +817,33 @@ public class CameraView extends FrameLayout {
         }
 
         return new VideoStream.Builder().attach(mCameraModule).setParams(params).build();
+    }
+
+    public interface BarcodeDetectorListener {
+        void onBarcodeFound(List<Barcode> barcodes);
+    }
+
+    @RequiresApi(19)
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public void enterBarcodeScanner(BarcodeDetectorListener listener, @Barcode.Format int format, @Barcode.Format int... formats) {
+        if (!isOpen()) {
+            throw new IllegalStateException("Camera must be open before scanning for barcodes");
+        }
+
+        if (mBarcodeScanner != null) {
+            throw new IllegalStateException("Barcode scanner cannot be started twice");
+        }
+
+        mBarcodeScanner = new BarcodeScanner(mCameraModule.getCanvas(), listener, format, formats);
+        mBarcodeScanner.start();
+    }
+
+    @RequiresApi(19)
+    public void exitBarcodeScanner() {
+        if (mBarcodeScanner != null) {
+            mBarcodeScanner.stop();
+            mBarcodeScanner = null;
+        }
     }
 
     /**

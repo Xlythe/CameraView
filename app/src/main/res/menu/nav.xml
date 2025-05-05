@@ -11,4 +11,8 @@
         android:id="@+id/resizing_fragment"
         android:icon="@drawable/ic_resizing"
         android:title="@string/app_name_resizing" />
+    <item
+        android:id="@+id/qr_code_fragment"
+        android:icon="@drawable/ic_qr_code"
+        android:title="@string/app_name_qr_code" />
 </menu>

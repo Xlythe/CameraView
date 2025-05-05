@@ -23,4 +23,10 @@
         android:label="@string/app_name_resizing"
         tools:layout="@layout/fragment_resizing" />
 
+    <fragment
+        android:id="@+id/qr_code_fragment"
+        android:name="com.xlythe.sample.camera.QrCodeFragment"
+        android:label="@string/app_name_qr_code"
+        tools:layout="@layout/fragment_qr_code" />
+
 </navigation>

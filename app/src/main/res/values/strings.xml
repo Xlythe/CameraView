@@ -4,6 +4,7 @@
     <string name="app_name_main">Simple Demo</string>
     <string name="app_name_stream">Stream Demo</string>
     <string name="app_name_resizing">Resizing Demo</string>
+    <string name="app_name_qr_code">QR Code Demo</string>
 
     <string name="header_title">@string/app_name</string>
     <string name="header_description">Examples</string>
