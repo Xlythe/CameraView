@@ -33,6 +33,49 @@ The following permissions are required in your AndroidManfiest.xml
 <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
 ```
 
+Camera
+-----------------
+Camera is a Composable that simplifies the Android Camera APIs.
+
+Camera includes the optional attributes quality [max, high, medium, low],
+maxVideoDuration [milliseconds], and maxVideoSize [bytes].
+```kotlin
+val cameraController = remember { mutableStateOf<CameraController?>(null) }
+Camera(
+    modifier = Modifier,
+    quality = Camera.Quality.HIGH,
+    lensFacing = Camera.LensFacing.BACK,
+    maxVideoDuration = 10000,
+    maxVideoSize = 10000000,
+    controller = cameraController,
+    controller = cameraController
+)
+```
+
+CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
+handle binding the Views to the appropriate methods on CameraView.
+
+Takes a picture and saves it to the given file
+```kotlin
+cameraController.takePicture(file)
+```
+Starts recording until stopRecording is called, the max duration is reached, or the max file size is reached
+```kotlin
+cameraController.startRecording(file)
+```
+Stops recording
+```kotlin
+cameraController.stopRecording()
+```
+Returns a stream of bytes for both audio and video channels. These bytes can then be played with VideoView.
+```kotlin
+cameraController.stream()
+```
+Toggles between the various cameras on the device (typically the front and back cameras)
+```kotlin
+cameraController.toggleCamera()
+```
+
 CameraFragment
 -----------------
 CameraFragment allows for simple use cases of CameraView without requiring much more logic than a

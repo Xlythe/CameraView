@@ -1,6 +1,10 @@
-apply plugin: 'com.android.library'
-apply plugin: 'maven-publish'
-apply plugin: 'signing'
+plugins {
+    id 'com.android.library'
+    id 'maven-publish'
+    id 'signing'
+    id 'org.jetbrains.kotlin.android'
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.1.20'
+}
 
 Properties projectProperties = new Properties()
 projectProperties.load(rootProject.file('gradle.properties').newDataInputStream())
@@ -9,16 +13,25 @@ Properties localProperties = new Properties()
 localProperties.load(project.rootProject.file('local.properties').newDataInputStream())
 
 android {
-    compileSdkVersion 35
+    compileSdkVersion 36
 
     defaultConfig {
         minSdkVersion 21
-        targetSdkVersion 35
+        targetSdkVersion 36
     }
+
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+
+    buildFeatures {
+        compose = true
+    }
+
     lint {
         abortOnError false
     }
@@ -97,6 +110,8 @@ dependencies {
     api 'androidx.camera:camera-video:[1.4.2,)'
     api 'com.google.guava:guava:[31.1-android,)'
     api 'com.google.mlkit:barcode-scanning:[17.3.0,)'
+    api 'androidx.activity:activity-compose:[1.10.1,)'
+    api 'androidx.lifecycle:lifecycle-runtime-ktx:[2.8.7,)'
     testImplementation 'org.robolectric:robolectric:+'
     testImplementation 'org.mockito:mockito-core:+'
     testImplementation 'junit:junit:+'

@@ -1,1 +1,1 @@
-include ':app', ':camera-view'
+include ':app', ':app-compose', ':camera-view'
