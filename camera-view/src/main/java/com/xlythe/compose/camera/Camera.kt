@@ -23,7 +23,7 @@ import com.xlythe.view.camera.CameraView
 import com.xlythe.view.camera.VideoStream
 import java.io.File
 
-private val TAG = "Camera"
+private const val TAG = "Camera"
 
 enum class Quality {
     LOW,

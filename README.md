@@ -52,8 +52,7 @@ Camera(
 )
 ```
 
-CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
-handle binding the Views to the appropriate methods on CameraView.
+Camera's methods are rather straight forward.
 
 Takes a picture and saves it to the given file
 ```kotlin
@@ -67,7 +66,7 @@ Stops recording
 ```kotlin
 cameraController.stopRecording()
 ```
-Returns a stream of bytes for both audio and video channels. These bytes can then be played with VideoView.
+Returns a stream of bytes for both audio and video channels. These bytes can then be played with Video.
 ```kotlin
 cameraController.stream()
 ```
