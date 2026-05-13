@@ -44,6 +44,9 @@ android {
     namespace 'com.xlythe.view.camera'
     testOptions {
         targetSdk 37
+        unitTests.all {
+            maxHeapSize = "2g"
+        }
     }
 }
 

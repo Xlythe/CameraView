@@ -18,6 +18,12 @@ android {
         abortOnError false
     }
     namespace 'com.xlythe.sample.camera'
+    testOptions {
+        unitTests.includeAndroidResources = true
+        unitTests.all {
+            maxHeapSize = "2g"
+        }
+    }
 }
 
 dependencies {
@@ -29,4 +35,6 @@ dependencies {
     implementation 'androidx.navigation:navigation-fragment:+'
     implementation 'androidx.navigation:navigation-ui:+'
     implementation 'com.google.android.material:material:+'
+    testImplementation 'junit:junit:+'
+    testImplementation 'org.robolectric:robolectric:+'
 }
