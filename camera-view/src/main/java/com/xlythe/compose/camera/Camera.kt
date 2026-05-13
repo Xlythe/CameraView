@@ -224,8 +224,9 @@ fun Camera(
     val cameraController = remember(cameraView) {
         CameraControllerImpl { cameraView }
     }
-    LaunchedEffect(cameraController) {
+    DisposableEffect(cameraController) {
         controller.value = cameraController
+        onDispose {}
     }
 
     // Monitor lifecycle states.

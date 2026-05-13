@@ -95,8 +95,9 @@ fun Video(
     val videoController = remember(videoView) {
         VideoControllerImpl { videoView }
     }
-    LaunchedEffect(videoController) {
+    DisposableEffect(videoController) {
         controller.value = videoController
+        onDispose {}
     }
 
     // Monitor lifecycle states.
@@ -116,7 +117,11 @@ fun Video(
         view.setShouldMirror(mirror)
         view.setShouldLoop(loop)
         view.setVolume(volume)
-        view.file = file
-        view.stream = stream
+        if (file != null) {
+            view.file = file
+        }
+        if (stream != null) {
+            view.stream = stream
+        }
     }, modifier = modifier)
 }
