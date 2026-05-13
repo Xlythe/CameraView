@@ -33,8 +33,12 @@ import androidx.camera.core.ImageProxy;
 import androidx.camera.core.Preview;
 import androidx.camera.core.SurfaceOrientedMeteringPointFactory;
 import androidx.camera.core.UseCase;
+import androidx.camera.core.UseCaseGroup;
+import androidx.camera.core.ViewPort;
+import android.util.Rational;
 import androidx.camera.core.ZoomState;
 import androidx.camera.lifecycle.ProcessCameraProvider;
+import androidx.lifecycle.ViewTreeLifecycleOwner;
 import androidx.camera.video.FileOutputOptions;
 import androidx.camera.video.PendingRecording;
 import androidx.camera.video.Quality;
@@ -129,6 +133,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** A helper class for mVideoCapture that allows us to stop the recording. */
     @Nullable private Recording mVideoRecording;
 
+    private int mLastWidth = 0;
+    private int mLastHeight = 0;
+
     /** Custom use cases, beyond the typical Preview/Image/Video ones. */
     private final Map<VideoRecorder.SurfaceProvider, UseCase> mCustomUseCases = new ArrayMap<>();
 
@@ -152,11 +159,28 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 Log.e(TAG, "Unable to load camera", e);
             }
         }, ContextCompat.getMainExecutor(getContext()));
+
+        getView().addOnAttachStateChangeListener(new android.view.View.OnAttachStateChangeListener() {
+            @Override
+            public void onViewAttachedToWindow(android.view.View v) {
+                Log.d(TAG, "View attached to window, rebinding use cases.");
+                rebindUseCases();
+            }
+
+            @Override
+            public void onViewDetachedFromWindow(android.view.View v) {
+                Log.d(TAG, "View detached from window.");
+            }
+        });
     }
 
     @NonNull
     @Override
     public Lifecycle getLifecycle() {
+        LifecycleOwner owner = ViewTreeLifecycleOwner.get(getView());
+        if (owner != null) {
+            return owner.getLifecycle();
+        }
         return ((LifecycleOwner) getContext()).getLifecycle();
     }
 
@@ -225,7 +249,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .setCaptureMode(getCaptureMode())
                 .build();
 
-        if (!bind(mPreview, mImageCapture)) {
+        if (!rebindUseCases()) {
             Log.e(TAG, "Failed to load camera preview");
         }
 
@@ -257,7 +281,13 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             stopRecording();
         }
 
-        unbind(mPreview, mImageCapture);
+        List<UseCase> toUnbind = new ArrayList<>();
+        if (mPreview != null) toUnbind.add(mPreview);
+        if (mImageCapture != null) toUnbind.add(mImageCapture);
+        if (mVideoCapture != null) toUnbind.add(mVideoCapture);
+        toUnbind.addAll(mCustomUseCases.values());
+        
+        unbind(toUnbind.toArray(new UseCase[0]));
 
         mPreviewSize = null;
         mPreview = null;
@@ -580,21 +610,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
 
-        if (areUseCasesMutuallyExclusive()) {
-            // Images and Video are mutually exclusive. We'll unbind the ImageCapture while recording.
-            unbind(mImageCapture);
-        }
-
         VideoCapture<Recorder> videoCapture = VideoCapture.withOutput(new Recorder.Builder()
                 .setQualitySelector(QualitySelector.fromOrderedList(getVideoQualityPriority()))
                 .build());
 
-        if (!bind(videoCapture)) {
+        mVideoCapture = videoCapture;
+        if (!rebindUseCases()) {
             Log.w(TAG, "Failed to take a video. VideoCapture failed.");
             onVideoFailed();
-            if (areUseCasesMutuallyExclusive()) {
-                bind(mImageCapture);
-            }
+            mVideoCapture = null;
+            rebindUseCases();
             return;
         }
 
@@ -705,11 +730,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
         mVideoRecording.stop();
         unbind(mVideoCapture);
-        if (areUseCasesMutuallyExclusive()) {
-            bind(mImageCapture);
-        }
         mVideoCapture = null;
         mVideoRecording = null;
+        rebindUseCases();
     }
 
     @Override
@@ -833,7 +856,20 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
 
         try {
-            mActiveCamera = mCameraProvider.bindToLifecycle(this, getCameraSelector(), useCases);
+            int width = getWidth();
+            int height = getHeight();
+            if (width > 0 && height > 0) {
+                Rational aspect = new Rational(width, height);
+                ViewPort viewPort = new ViewPort.Builder(aspect, getTargetRotation()).build();
+                UseCaseGroup.Builder builder = new UseCaseGroup.Builder()
+                        .setViewPort(viewPort);
+                for (UseCase useCase : useCases) {
+                    builder.addUseCase(useCase);
+                }
+                mActiveCamera = mCameraProvider.bindToLifecycle(this, getCameraSelector(), builder.build());
+            } else {
+                mActiveCamera = mCameraProvider.bindToLifecycle(this, getCameraSelector(), useCases);
+            }
             return true;
         } catch (IllegalArgumentException e) {
             Log.w(TAG, "Failed to bind UseCase.", e);
@@ -847,6 +883,39 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
 
         mCameraProvider.unbind(useCases);
+    }
+
+    private boolean rebindUseCases() {
+        if (!mIsOpen || mCameraProvider == null) {
+            return false;
+        }
+
+        List<UseCase> toUnbind = new ArrayList<>();
+        if (mPreview != null) toUnbind.add(mPreview);
+        if (mImageCapture != null) toUnbind.add(mImageCapture);
+        if (mVideoCapture != null) toUnbind.add(mVideoCapture);
+        toUnbind.addAll(mCustomUseCases.values());
+        
+        mCameraProvider.unbind(toUnbind.toArray(new UseCase[0]));
+
+        List<UseCase> useCases = new ArrayList<>();
+        if (mPreview != null) {
+            useCases.add(mPreview);
+        }
+        if (mVideoCapture != null) {
+            useCases.add(mVideoCapture);
+            if (!areUseCasesMutuallyExclusive() && mImageCapture != null) {
+                useCases.add(mImageCapture);
+            }
+        } else if (mImageCapture != null) {
+            useCases.add(mImageCapture);
+        }
+        useCases.addAll(mCustomUseCases.values());
+
+        if (!useCases.isEmpty()) {
+            return bind(useCases.toArray(new UseCase[0]));
+        }
+        return false;
     }
 
     @Override
@@ -883,6 +952,14 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
 
         transformPreview(mPreviewSize.getWidth(), mPreviewSize.getHeight());
+
+        int width = getWidth();
+        int height = getHeight();
+        if (width != mLastWidth || height != mLastHeight) {
+            mLastWidth = width;
+            mLastHeight = height;
+            getView().post(() -> rebindUseCases());
+        }
     }
 
     private void transformPreview(int previewWidth, int previewHeight) {

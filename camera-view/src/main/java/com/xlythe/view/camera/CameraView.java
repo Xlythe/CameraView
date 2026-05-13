@@ -55,7 +55,10 @@ public class CameraView extends FrameLayout {
     // * Pictures taken with CameraX may be rotated. CameraX does apply exif rotation itself, but
     //   incorrectly (eg. Samsung Fold 3 front facing camera). Attempts to overwrite the exif
     //   metadata manually to fix this failed (and I'm not sure why...).
-    // * Videos taken with CameraX appear squished.
+    // * Rotating the device breaks the ability to take pictures/images unless a new CameraView is
+    //   used.
+    // * The video preview doesn't match the same dimensions of the video that is being recorded.
+    // * Streaming videos isn't working.
     static final boolean USE_CAMERA_X = false;
 
     // When enabled, CameraV2 will be used. It's currently stable.
