@@ -1,10 +1,9 @@
 package com.xlythe.view.camera;
 
 import android.Manifest;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
-import android.graphics.SurfaceTexture;
-import android.opengl.GLES20;
+import android.graphics.ImageFormat;
+import android.media.Image;
+import android.media.ImageReader;
 import android.os.Build;
 import android.util.Log;
 import android.view.Surface;
@@ -22,6 +21,7 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import java.util.concurrent.ExecutionException;
 
 import static android.os.Process.THREAD_PRIORITY_DISPLAY;
@@ -92,9 +92,11 @@ class BarcodeScanner {
                   setThreadPriority(THREAD_PRIORITY_DISPLAY);
                 }
 
+                SettableFuture<CameraMetadata> requestedSizeFuture = SettableFuture.create();
                 SettableFuture<Surface> providedSurface = SettableFuture.create();
                 VideoRecorder.SurfaceProvider surfaceProvider = (width, height, orientation, flipped) -> {
                   mCameraOrientation = orientation;
+                  requestedSizeFuture.set(new CameraMetadata(width, height, orientation, flipped));
                   try {
                     return providedSurface.get();
                   } catch (ExecutionException | InterruptedException e) {
@@ -103,24 +105,38 @@ class BarcodeScanner {
                 };
                 mCanvas.attachSurface(surfaceProvider);
 
-                Surface surface = createSurface();
+                ImageReader imageReader = null;
                 try {
-                  providedSurface.set(surface);
+                  CameraMetadata metadata = Objects.requireNonNull(requestedSizeFuture.get());
+                  imageReader = ImageReader.newInstance(metadata.getWidth(), metadata.getHeight(), ImageFormat.YUV_420_888, 2);
+                  providedSurface.set(imageReader.getSurface());
 
                   while (isAlive()) {
-                    Canvas canvas = surface.lockCanvas(null);
-
-                    surface.unlockCanvasAndPost(canvas);
-                    Bitmap bitmap = Bitmap.createBitmap(canvas.getWidth(), canvas.getHeight(), Bitmap.Config.ARGB_8888);
-                    Canvas bitmapCanvas = new Canvas(bitmap);
-
-                    //processFrame(canvas.);
+                    Image image = imageReader.acquireLatestImage();
+                    if (image != null) {
+                      try {
+                        processFrame(image);
+                      } finally {
+                        image.close();
+                      }
+                    } else {
+                      try {
+                        Thread.sleep(10);
+                      } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                      }
+                    }
                   }
 
+                } catch (ExecutionException | InterruptedException e) {
+                  Log.e(TAG, "Exception with barcode scanner stream", e);
                 } finally {
                   stopInternal();
-                  mCanvas.detachSurface(surfaceProvider);
-                  surface.release();
+                  if (imageReader != null) {
+                    mCanvas.detachSurface(surfaceProvider);
+                    imageReader.close();
+                  }
                 }
               }
             };
@@ -134,50 +150,18 @@ class BarcodeScanner {
   /** Stops scanning. */
   public void stop() {
     stopInternal();
-    try {
-      mThread.join(300);
-    } catch (InterruptedException e) {
-      Log.e(TAG, "Interrupted while joining BarcodeScanner thread", e);
-      Thread.currentThread().interrupt();
+    if (mThread != null) {
+      try {
+        mThread.join(300);
+      } catch (InterruptedException e) {
+        Log.e(TAG, "Interrupted while joining BarcodeScanner thread", e);
+        Thread.currentThread().interrupt();
+      }
     }
   }
 
-  private Surface createSurface() {
-    int textureId = createTexture();
-    SurfaceTexture surfaceTexture = createSurfaceTexture(textureId);
-    return new Surface(surfaceTexture) {
-      @Override
-      public void release() {
-        super.release();
-        surfaceTexture.release();
-        GLES20.glDeleteTextures(1, new int[]{textureId}, 0);
-      }
-    };
-  }
-
-  private SurfaceTexture createSurfaceTexture(int textureId) {
-    SurfaceTexture surfaceTexture = new SurfaceTexture(textureId);
-    surfaceTexture.setDefaultBufferSize(100, 100); // TODO
-    return surfaceTexture;
-  }
-
-  private int createTexture() {
-    int[] textures = new int[1];
-    GLES20.glGenTextures(1, textures, 0);
-    int textureId = textures[0];
-
-    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textureId);
-
-    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
-    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
-    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
-    GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
-
-    return textureId;
-  }
-
-  private void processFrame(Bitmap bitmap) {
-    InputImage image = InputImage.fromBitmap(bitmap, mCameraOrientation);
+  private void processFrame(Image mediaImage) {
+    InputImage image = InputImage.fromMediaImage(mediaImage, mCameraOrientation);
     try {
       List<com.google.mlkit.vision.barcode.common.Barcode> barcodes = Tasks.await(mScanner.process(image));
       List<Barcode> list = new ArrayList<>(barcodes.size());
@@ -187,6 +171,36 @@ class BarcodeScanner {
       mListener.onBarcodeFound(list);
     } catch (ExecutionException | InterruptedException e) {
       Log.w(TAG, "Barcode processing failed", e);
+    }
+  }
+
+  private static class CameraMetadata {
+    final int width;
+    final int height;
+    final int orientation;
+    final boolean flipped;
+
+    CameraMetadata(int width, int height, int orientation, boolean flipped) {
+      this.width = width;
+      this.height = height;
+      this.orientation = orientation;
+      this.flipped = flipped;
+    }
+
+    int getWidth() {
+      return width;
+    }
+
+    int getHeight() {
+      return height;
+    }
+
+    int getOrientation() {
+      return orientation;
+    }
+
+    boolean isFlipped() {
+      return flipped;
     }
   }
 }

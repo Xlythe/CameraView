@@ -539,47 +539,56 @@ public class Barcode {
 
   @Nullable
   public CalendarEvent getCalendarEvent() {
-    return new CalendarEvent(mBarcode.getCalendarEvent());
+    com.google.mlkit.vision.barcode.common.Barcode.CalendarEvent event = mBarcode.getCalendarEvent();
+    return event == null ? null : new CalendarEvent(event);
   }
 
   @Nullable
   public ContactInfo getContactInfo() {
-    return new ContactInfo(mBarcode.getContactInfo());
+    com.google.mlkit.vision.barcode.common.Barcode.ContactInfo info = mBarcode.getContactInfo();
+    return info == null ? null : new ContactInfo(info);
   }
 
   @Nullable
   public DriverLicense getDriverLicense() {
-    return new DriverLicense(mBarcode.getDriverLicense());
+    com.google.mlkit.vision.barcode.common.Barcode.DriverLicense license = mBarcode.getDriverLicense();
+    return license == null ? null : new DriverLicense(license);
   }
 
   @Nullable
   public Email getEmail() {
-    return new Email(mBarcode.getEmail());
+    com.google.mlkit.vision.barcode.common.Barcode.Email email = mBarcode.getEmail();
+    return email == null ? null : new Email(email);
   }
 
   @Nullable
   public GeoPoint getGeoPoint() {
-    return new GeoPoint(mBarcode.getGeoPoint());
+    com.google.mlkit.vision.barcode.common.Barcode.GeoPoint point = mBarcode.getGeoPoint();
+    return point == null ? null : new GeoPoint(point);
   }
 
   @Nullable
   public Phone getPhone() {
-    return new Phone(mBarcode.getPhone());
+    com.google.mlkit.vision.barcode.common.Barcode.Phone phone = mBarcode.getPhone();
+    return phone == null ? null : new Phone(phone);
   }
 
   @Nullable
   public Sms getSms() {
-    return new Sms(mBarcode.getSms());
+    com.google.mlkit.vision.barcode.common.Barcode.Sms sms = mBarcode.getSms();
+    return sms == null ? null : new Sms(sms);
   }
 
   @Nullable
   public UrlBookmark getUrl() {
-    return new UrlBookmark(mBarcode.getUrl());
+    com.google.mlkit.vision.barcode.common.Barcode.UrlBookmark url = mBarcode.getUrl();
+    return url == null ? null : new UrlBookmark(url);
   }
 
   @Nullable
   public WiFi getWifi() {
-    return new WiFi(mBarcode.getWifi());
+    com.google.mlkit.vision.barcode.common.Barcode.WiFi wifi = mBarcode.getWifi();
+    return wifi == null ? null : new WiFi(wifi);
   }
 
   @Nullable

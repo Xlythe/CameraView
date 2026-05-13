@@ -2,9 +2,10 @@ package com.xlythe.sample.camera
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
-import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -13,7 +14,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
@@ -66,6 +65,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.xlythe.view.camera.Barcode
 import com.xlythe.compose.camera.Camera
 import com.xlythe.compose.camera.CameraController
 import com.xlythe.compose.camera.Permissions
@@ -399,8 +399,9 @@ fun ResizingDemoScreen() {
 
 @Composable
 fun QrCodeDemoScreen() {
+    val context = LocalContext.current
     val cameraController = remember { mutableStateOf<CameraController?>(null) }
-    var barcodeCount by remember { mutableStateOf(0) }
+    var detectedBarcodes by remember { mutableStateOf<List<Barcode>>(emptyList()) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
 
     val allPermissions = remember { (Permissions.REQUIRED_PERMISSIONS + Permissions.OPTIONAL_PERMISSIONS).distinct().toTypedArray() }
@@ -412,8 +413,8 @@ fun QrCodeDemoScreen() {
 
     LaunchedEffect(cameraController.value) {
         cameraController.value?.enterBarcodeScanner(
-            listener = { barcodes -> barcodeCount = barcodes.size },
-            com.xlythe.view.camera.Barcode.Format.QR_CODE
+            listener = { barcodes -> detectedBarcodes = barcodes },
+            com.xlythe.view.camera.Barcode.Format.ALL_FORMATS
         )
     }
 
@@ -428,7 +429,7 @@ fun QrCodeDemoScreen() {
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = "QR Codes detected: $barcodeCount",
+                text = "Barcodes detected: ${detectedBarcodes.size}",
                 modifier = Modifier.padding(16.dp).align(Alignment.CenterHorizontally),
                 style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = Color.White)
             )
@@ -442,6 +443,66 @@ fun QrCodeDemoScreen() {
                     modifier = Modifier.fillMaxSize(),
                     controller = cameraController
                 )
+
+                if (detectedBarcodes.isNotEmpty()) {
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .padding(16.dp)
+                            .fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        detectedBarcodes.forEach { barcode ->
+                            val url = barcode.url
+                            val wifi = barcode.wifi
+                            val phone = barcode.phone
+                            val email = barcode.email
+                            val sms = barcode.sms
+                            val geo = barcode.geoPoint
+                            val text = barcode.displayValue ?: barcode.rawValue
+
+                            val (title, action) = when {
+                                url != null && url.url != null -> "Open URL: ${url.url}" to {
+                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url.url))) } catch (_: Exception) {}
+                                }
+                                wifi != null && wifi.ssid != null -> "Connect Wi-Fi: ${wifi.ssid}" to {
+                                    Toast.makeText(context, "Connecting to Wi-Fi: ${wifi.ssid}", Toast.LENGTH_SHORT).show()
+                                }
+                                phone != null && phone.number != null -> "Call: ${phone.number}" to {
+                                    try { context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:${phone.number}"))) } catch (_: Exception) {}
+                                }
+                                email != null && email.address != null -> "Email: ${email.address}" to {
+                                    try { context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:${email.address}"))) } catch (_: Exception) {}
+                                }
+                                sms != null && sms.phoneNumber != null -> "SMS: ${sms.phoneNumber}" to {
+                                    try { context.startActivity(Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:${sms.phoneNumber}"))) } catch (_: Exception) {}
+                                }
+                                geo != null -> "Location: ${geo.lat}, ${geo.lng}" to {
+                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("geo:${geo.lat},${geo.lng}"))) } catch (_: Exception) {}
+                                }
+                                text != null -> "Search: $text" to {
+                                    try { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.google.com/search?q=${Uri.encode(text)}"))) } catch (_: Exception) {}
+                                }
+                                else -> "Barcode detected" to {}
+                            }
+
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { action() },
+                                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+                                shape = RoundedCornerShape(16.dp),
+                                elevation = CardDefaults.cardElevation(6.dp)
+                            ) {
+                                Text(
+                                    text = title,
+                                    modifier = Modifier.padding(16.dp),
+                                    style = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                                )
+                            }
+                        }
+                    }
+                }
             }
         } else {
             Button(onClick = { permissionLauncher.launch(allPermissions) }) {

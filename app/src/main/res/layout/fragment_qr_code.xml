@@ -37,6 +37,27 @@
             android:layout_height="match_parent"
             camera:quality="high" />
 
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/suggestion_card"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:layout_margin="16dp"
+            android:visibility="gone"
+            app:cardBackgroundColor="#388E3C"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="8dp">
+
+            <TextView
+                android:id="@+id/suggestion_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="16dp"
+                android:textColor="#FFFFFF"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+        </com.google.android.material.card.MaterialCardView>
+
     </RelativeLayout>
 
 </FrameLayout>
