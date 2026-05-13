@@ -13,6 +13,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -25,9 +26,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Transform
@@ -202,7 +205,7 @@ fun SimpleDemoScreen() {
     val context = LocalContext.current
     val cameraController = remember { mutableStateOf<CameraController?>(null) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
-    var uiStatusText by remember { mutableStateOf("Camera Ready") }
+    var uiStatusText by remember { mutableStateOf("") }
 
     val allPermissions = remember { (Permissions.REQUIRED_PERMISSIONS + Permissions.OPTIONAL_PERMISSIONS).distinct().toTypedArray() }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
@@ -217,19 +220,21 @@ fun SimpleDemoScreen() {
             .padding(16.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Card(
-            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
-            shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(
-                text = uiStatusText,
-                modifier = Modifier.padding(16.dp).align(Alignment.CenterHorizontally),
-                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = Color.White)
-            )
-        }
+        if (uiStatusText.isNotEmpty()) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = uiStatusText,
+                    modifier = Modifier.padding(16.dp).align(Alignment.CenterHorizontally),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = Color.White)
+                )
+            }
 
-        Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(16.dp))
+        }
 
         if (hasRequiredPermissions) {
             Box(
@@ -259,9 +264,14 @@ fun SimpleDemoScreen() {
                 Button(
                     onClick = { cameraController.value?.toggleCamera() },
                     shape = RoundedCornerShape(20.dp),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF388E3C))
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
                 ) {
-                    Text("Toggle Camera")
+                    Icon(Icons.Default.Cameraswitch, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Toggle Camera", fontWeight = FontWeight.SemiBold)
                 }
 
                 Button(
@@ -278,7 +288,9 @@ fun SimpleDemoScreen() {
                     shape = RoundedCornerShape(20.dp),
                     colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
-                    Text("Take Picture")
+                    Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("Take Picture", fontWeight = FontWeight.SemiBold)
                 }
             }
         } else {
@@ -364,18 +376,26 @@ fun ResizingDemoScreen() {
 
     LaunchedEffect(Unit) { permissionLauncher.launch(allPermissions) }
 
-    val boxWidth by animateDpAsState(targetValue = if (isResized) 200.dp else 360.dp, animationSpec = tween(400), label = "width")
-    val boxHeight by animateDpAsState(targetValue = if (isResized) 150.dp else 500.dp, animationSpec = tween(400), label = "height")
+    val boxPadding by animateDpAsState(targetValue = if (isResized) 16.dp else 0.dp, animationSpec = tween(400), label = "padding")
+    val boxWidth by animateDpAsState(targetValue = if (isResized) 180.dp else 360.dp, animationSpec = tween(400), label = "width")
+    val boxHeight by animateDpAsState(targetValue = if (isResized) 120.dp else 500.dp, animationSpec = tween(400), label = "height")
+    val horizontalBias by animateFloatAsState(targetValue = if (isResized) 1f else 0f, animationSpec = tween(400), label = "hBias")
+    val verticalBias by animateFloatAsState(targetValue = if (isResized) 1f else -1f, animationSpec = tween(400), label = "vBias")
+    val cornerRadius by animateDpAsState(targetValue = if (isResized) 12.dp else 24.dp, animationSpec = tween(400), label = "cornerRadius")
 
     Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         if (hasRequiredPermissions) {
-            Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-                Box(modifier = Modifier.size(width = boxWidth, height = boxHeight).clip(RoundedCornerShape(24.dp))) {
-                    Camera(
-                        modifier = Modifier.fillMaxSize(),
-                        controller = cameraController
-                    )
-                }
+            Box(
+                modifier = Modifier
+                    .size(width = boxWidth, height = boxHeight)
+                    .align(androidx.compose.ui.BiasAlignment(horizontalBias, verticalBias))
+                    .padding(boxPadding)
+                    .clip(RoundedCornerShape(cornerRadius))
+            ) {
+                Camera(
+                    modifier = Modifier.fillMaxSize(),
+                    controller = cameraController
+                )
             }
 
             Button(

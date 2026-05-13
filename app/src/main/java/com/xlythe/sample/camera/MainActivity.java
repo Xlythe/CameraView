@@ -39,7 +39,7 @@ public class MainActivity extends AppCompatActivity {
         NavHostFragment navHostFragment = (NavHostFragment) getSupportFragmentManager().findFragmentById(R.id.nav_host_fragment);
         assert navHostFragment != null;
         NavController navController = navHostFragment.getNavController();
-        mAppBarConfiguration = new AppBarConfiguration.Builder(R.id.main_fragment, R.id.stream_fragment, R.id.resizing_fragment)
+        mAppBarConfiguration = new AppBarConfiguration.Builder(R.id.main_fragment, R.id.stream_fragment, R.id.resizing_fragment, R.id.qr_code_fragment)
                 .setOpenableLayout(drawerLayout)
                 .build();
         Toolbar toolbar = findViewById(R.id.toolbar);
