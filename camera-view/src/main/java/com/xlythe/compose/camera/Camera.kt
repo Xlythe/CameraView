@@ -172,7 +172,12 @@ fun Camera(
 
     // Initialize and then cache our CameraView.
     val cameraView = remember {
-        CameraView(context).apply {
+        object : CameraView(context) {
+            override fun onClose() {
+                onSaveInstanceState()
+                super.onClose()
+            }
+        }.apply {
             this.onFinishInflate()
 
             this.setOnImageCapturedListener(object : CameraView.OnImageCapturedListener {
