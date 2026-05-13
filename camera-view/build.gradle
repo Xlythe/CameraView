@@ -3,7 +3,7 @@ plugins {
     id 'maven-publish'
     id 'signing'
     id 'org.jetbrains.kotlin.android'
-    id 'org.jetbrains.kotlin.plugin.compose' version '2.1.20'
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.2.10'
 }
 
 Properties projectProperties = new Properties()
@@ -13,11 +13,10 @@ Properties localProperties = new Properties()
 localProperties.load(project.rootProject.file('local.properties').newDataInputStream())
 
 android {
-    compileSdkVersion 36
+    compileSdkVersion 37
 
     defaultConfig {
         minSdkVersion 21
-        targetSdkVersion 36
     }
 
     compileOptions {
@@ -34,6 +33,7 @@ android {
 
     lint {
         abortOnError false
+        targetSdk 37
     }
     publishing {
         singleVariant("release") {
@@ -42,6 +42,9 @@ android {
         }
     }
     namespace 'com.xlythe.view.camera'
+    testOptions {
+        targetSdk 37
+    }
 }
 
 afterEvaluate {
@@ -116,10 +119,10 @@ dependencies {
     testImplementation 'org.mockito:mockito-core:+'
     testImplementation 'junit:junit:+'
     constraints {
-        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.0") {
+        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.2.20") {
             because("kotlin-stdlib-jdk7 is now a part of kotlin-stdlib")
         }
-        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.0") {
+        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.2.20") {
             because("kotlin-stdlib-jdk8 is now a part of kotlin-stdlib")
         }
     }
