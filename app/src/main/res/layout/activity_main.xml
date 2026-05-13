@@ -16,7 +16,10 @@
         <androidx.appcompat.widget.Toolbar
             android:id="@+id/toolbar"
             android:layout_width="match_parent"
-            android:layout_height="?actionBarSize" />
+            android:layout_height="?actionBarSize"
+            android:background="#1E1E1E"
+            android:theme="@style/ThemeOverlay.MaterialComponents.Dark.ActionBar"
+            app:titleTextColor="#FFFFFF" />
 
         <androidx.fragment.app.FragmentContainerView
             android:id="@+id/nav_host_fragment"
@@ -33,7 +36,10 @@
         android:layout_width="wrap_content"
         android:layout_height="match_parent"
         android:layout_gravity="start"
+        android:background="#1E1E1E"
         android:fitsSystemWindows="true"
+        app:itemIconTint="#FFFFFF"
+        app:itemTextColor="#FFFFFF"
         app:menu="@menu/nav"
         app:headerLayout="@layout/header_navigation_drawer" />
 

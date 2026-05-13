@@ -10,3 +10,4 @@
 gradlew
 gradlew.bat
 *.apk
+.vscode/settings.json

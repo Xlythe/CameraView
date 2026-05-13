@@ -6,7 +6,9 @@ import android.content.Context
 import android.hardware.display.DisplayManager
 import android.hardware.display.DisplayManager.DisplayListener
 import android.os.Handler
+import android.os.Parcelable
 import android.util.Log
+import android.util.SparseArray
 import androidx.annotation.RequiresPermission
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -19,6 +21,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.xlythe.view.camera.Barcode
 import com.xlythe.view.camera.CameraView
 import com.xlythe.view.camera.VideoStream
 import java.io.File
@@ -51,6 +54,8 @@ interface CameraController {
     fun toggleCamera()
     fun confirmPicture()
     fun confirmVideo()
+    fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, vararg formats: Int)
+    fun exitBarcodeScanner()
 }
 
 private class CameraControllerImpl(
@@ -93,6 +98,24 @@ private class CameraControllerImpl(
     override fun confirmVideo() {
         getView()?.confirmVideo()
             ?: Log.e(TAG, "View not available for confirmVideo")
+    }
+
+    @SuppressLint("MissingPermission")
+    override fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, vararg formats: Int) {
+        if (formats.isNotEmpty()) {
+            val first = formats[0]
+            val rest = if (formats.size > 1) formats.sliceArray(1 until formats.size) else IntArray(0)
+            getView()?.enterBarcodeScanner({ barcodes -> listener(barcodes) }, first, *rest)
+                ?: Log.e(TAG, "View not available for enterBarcodeScanner")
+        } else {
+            getView()?.enterBarcodeScanner({ barcodes -> listener(barcodes) }, com.xlythe.view.camera.Barcode.Format.QR_CODE)
+                ?: Log.e(TAG, "View not available for enterBarcodeScanner")
+        }
+    }
+
+    override fun exitBarcodeScanner() {
+        getView()?.exitBarcodeScanner()
+            ?: Log.e(TAG, "View not available for exitBarcodeScanner")
     }
 }
 
@@ -140,6 +163,8 @@ fun Camera(
     onVideoConfirmation: () -> Unit = {},
     onVideoCaptured: (file: File) -> Unit = {},
     onVideoCaptureFailed: () -> Unit = {},
+    onCameraOpened: () -> Unit = {},
+    onCameraClosed: () -> Unit = {},
 ) {
     // Grab system variables
     val context = LocalContext.current
@@ -175,6 +200,16 @@ fun Camera(
 
                 override fun onFailure() {
                     onVideoCaptureFailed()
+                }
+            })
+
+            this.setOnCameraStateChangedListener(object : CameraView.OnCameraStateChangedListener {
+                override fun onCameraOpened() {
+                    onCameraOpened()
+                }
+
+                override fun onCameraClosed() {
+                    onCameraClosed()
                 }
             })
         }
@@ -245,6 +280,8 @@ fun Camera(
             lifecycleOwner.lifecycle.removeObserver(observer)
             displayManager.unregisterDisplayListener(displayListener)
 
+            val sparseArray = SparseArray<Parcelable>()
+            cameraView.saveHierarchyState(sparseArray)
             cameraView.close()
             if (controller.value === cameraController) {
                 controller.value = null

@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
 
-    <style name="Theme.CameraView" parent="android:Theme.Material.Light.NoActionBar" />
+    <style name="Theme.CameraView" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#121212</item>
+        <item name="android:windowSplashScreenBackground">#000000</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    </style>
 </resources>

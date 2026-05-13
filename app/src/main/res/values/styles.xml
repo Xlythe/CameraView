@@ -1,16 +1,23 @@
 <resources>
 
     <!-- Base application theme. -->
-    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
-        <item name="colorPrimary">#8D6E63</item>
-        <item name="colorPrimaryDark">#795548</item>
+    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#1E1E1E</item>
+        <item name="colorPrimaryDark">#121212</item>
         <item name="colorAccent">#388E3C</item>
+        <item name="android:windowBackground">#121212</item>
+        <item name="android:windowSplashScreenBackground">#000000</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
         <item name="textAppearanceHeadline6">@style/TextAppearance.App.Headline6</item>
         <item name="textAppearanceBody2">@style/TextAppearance.App.Body2</item>
     </style>
 
-    <style name="TextAppearance.App.Headline6" parent="TextAppearance.MaterialComponents.Subtitle1" />
+    <style name="TextAppearance.App.Headline6" parent="TextAppearance.MaterialComponents.Subtitle1">
+        <item name="android:textColor">#FFFFFF</item>
+    </style>
 
-    <style name="TextAppearance.App.Body2" parent="TextAppearance.MaterialComponents.Subtitle1" />
+    <style name="TextAppearance.App.Body2" parent="TextAppearance.MaterialComponents.Subtitle1">
+        <item name="android:textColor">#B0B0B0</item>
+    </style>
 
 </resources>

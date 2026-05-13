@@ -11,161 +11,441 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.Transform
+import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.NavigationDrawerItem
+import androidx.compose.material3.NavigationDrawerItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.material3.rememberDrawerState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.xlythe.compose.camera.Camera
 import com.xlythe.compose.camera.CameraController
 import com.xlythe.compose.camera.Permissions
+import com.xlythe.compose.camera.Video
+import com.xlythe.compose.camera.VideoController
 import com.xlythe.sample.camera.ui.theme.CameraViewTheme
+import kotlinx.coroutines.launch
 import java.io.File
 import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+enum class DemoScreen(val title: String) {
+    SIMPLE("Simple Demo"),
+    STREAM("Stream Demo"),
+    RESIZING("Resizing Demo"),
+    QR_CODE("QR Code Demo")
+}
+
+/**
+ * MainActivity showcases a multi-screen Jetpack Compose application mirroring the Java sample.
+ * It features premium dark aesthetics and demonstrates all library capabilities: basic capture, live streaming, dynamic resizing, and barcode scanning.
+ */
+@OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
     @SuppressLint("MissingPermission")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            CameraViewTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    val context = LocalContext.current
-                    val cameraController = remember { mutableStateOf<CameraController?>(null) }
-                    var hasRequiredPermissions by remember { mutableStateOf(false) }
-                    var uiStatusText by remember { mutableStateOf("Request Permission") }
+            CameraViewTheme(darkTheme = true) {
+                val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+                val scope = rememberCoroutineScope()
+                var currentScreen by remember { mutableStateOf(DemoScreen.SIMPLE) }
 
-                    // --- Permission Handling ---
-                    val allPermissionsToRequest = remember {
-                        (Permissions.REQUIRED_PERMISSIONS + Permissions.OPTIONAL_PERMISSIONS).distinct().toTypedArray()
-                    }
-                    val permissionLauncher = rememberLauncherForActivityResult(
-                        contract = ActivityResultContracts.RequestMultiplePermissions(),
-                        onResult = { permissionsMap ->
-                            hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }
-                            uiStatusText = if (hasRequiredPermissions) "Required Permissions Granted" else "Required Permissions Needed"
-                            Log.d("MainActivity", "Required permissions granted: $hasRequiredPermissions")
+                ModalNavigationDrawer(
+                    drawerState = drawerState,
+                    drawerContent = {
+                        ModalDrawerSheet(
+                            drawerContainerColor = Color(0xFF1E1E1E),
+                            drawerContentColor = Color.White
+                        ) {
+                            Spacer(Modifier.height(32.dp))
+                            Text(
+                                text = "Camera Demo",
+                                modifier = Modifier.padding(horizontal = 24.dp, vertical = 16.dp),
+                                style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                            )
+                            Spacer(Modifier.height(16.dp))
 
-                            // --- Log status of ALL requested permissions ---
-                            Log.d("MainActivity", "Full permission status:")
-                            permissionsMap.forEach { (perm, granted) ->
-                                Log.d("MainActivity", "  $perm: ${if (granted) "Granted" else "Denied"}")
+                            DemoScreen.entries.forEach { screen ->
+                                NavigationDrawerItem(
+                                    label = { Text(screen.title, style = MaterialTheme.typography.bodyLarge) },
+                                    selected = currentScreen == screen,
+                                    onClick = {
+                                        currentScreen = screen
+                                        scope.launch { drawerState.close() }
+                                    },
+                                    icon = {
+                                        when (screen) {
+                                            DemoScreen.SIMPLE -> Icon(Icons.Default.CameraAlt, contentDescription = null)
+                                            DemoScreen.STREAM -> Icon(Icons.Default.Videocam, contentDescription = null)
+                                            DemoScreen.RESIZING -> Icon(Icons.Default.Transform, contentDescription = null)
+                                            DemoScreen.QR_CODE -> Icon(Icons.Default.QrCode, contentDescription = null)
+                                        }
+                                    },
+                                    modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
+                                    colors = NavigationDrawerItemDefaults.colors(
+                                        selectedContainerColor = MaterialTheme.colorScheme.primary,
+                                        selectedTextColor = Color.White,
+                                        selectedIconColor = Color.White,
+                                        unselectedTextColor = Color(0xFFB0B0B0),
+                                        unselectedIconColor = Color(0xFFB0B0B0)
+                                    )
+                                )
                             }
                         }
-                    )
-
-                    // Request permission when the composable first enters composition
-                    LaunchedEffect(Unit) {
-                        Log.d("MainActivity", "Requesting permissions...")
-                        permissionLauncher.launch(allPermissionsToRequest)
                     }
-
-                    // --- File Creation Logic ---
-                    @Throws(IOException::class)
-                    fun createImageFile(context: Context): File {
-                        val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                        val imageFileName = "JPEG_${timeStamp}_"
-                        val storageDir: File? = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-                        if (storageDir == null || (!storageDir.exists() && !storageDir.mkdirs())) {
-                            throw IOException("Cannot create directory for image file.")
-                        }
-                        return File.createTempFile(imageFileName, ".jpg", storageDir).also {
-                            Log.d("MainActivity", "Created file: ${it.absolutePath}")
-                        }
-                    }
-
-                    // --- UI Structure ---
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(innerPadding),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Text(text = uiStatusText, modifier = Modifier.padding(8.dp))
-
-                        // --- Conditional Content based on Permission ---
-                        if (hasRequiredPermissions) {
-                            // Camera Composable fills available space (weight 1f)
-                            Camera(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .weight(1f),
-                                controller = cameraController,
-                                onImageConfirmation = {
-                                    Log.i("MainActivity", "Image confirmation requested.")
-                                    uiStatusText = "Confirm Image?"
+                ) {
+                    Scaffold(
+                        modifier = Modifier.fillMaxSize(),
+                        containerColor = Color(0xFF121212),
+                        topBar = {
+                            CenterAlignedTopAppBar(
+                                title = { 
+                                    Text(
+                                        text = currentScreen.title,
+                                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold, color = Color.White)
+                                    ) 
                                 },
-                                onImageCaptured = { savedFile ->
-                                    Log.i("MainActivity", "Image captured: ${savedFile.absolutePath}")
-                                    uiStatusText = "Image Saved: ${savedFile.name}"
-                                    Toast.makeText(context, "Image Saved: ${savedFile.name}", Toast.LENGTH_SHORT).show()
-                                },
-                                onImageCaptureFailed = {
-                                    Log.e("MainActivity", "Image capture failed.")
-                                    uiStatusText = "Image Capture Failed"
-                                    Toast.makeText(context, "Image Capture Failed", Toast.LENGTH_SHORT).show()
-                                },
-                            )
-
-                            // Spacer between Camera and Button
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                            // Take Picture Button - Placed below the camera view
-                            Button(
-                                onClick = {
-                                    try {
-                                        val photoFile = createImageFile(context)
-                                        uiStatusText = "Taking picture..."
-                                        // Call takePicture via the controller
-                                        cameraController.value?.takePicture(photoFile)
-                                            ?: run { // Handle null controller case
-                                                Log.e("MainActivity", "CameraController is null, cannot take picture.")
-                                                uiStatusText = "Error: Camera not ready"
-                                            }
-                                    } catch (ex: IOException) {
-                                        Log.e("MainActivity", "Error creating image file", ex)
-                                        uiStatusText = "Error creating file"
+                                navigationIcon = {
+                                    IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                                        Icon(Icons.Default.Menu, contentDescription = "Menu", tint = Color.White)
                                     }
                                 },
-                                // Enable button only if the controller is available
-                                enabled = cameraController.value != null
-                            ) {
-                                Text("Take Picture")
+                                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                                    containerColor = Color(0xFF1E1E1E)
+                                )
+                            )
+                        }
+                    ) { innerPadding ->
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(innerPadding)
+                        ) {
+                            when (currentScreen) {
+                                DemoScreen.SIMPLE -> SimpleDemoScreen()
+                                DemoScreen.STREAM -> StreamDemoScreen()
+                                DemoScreen.RESIZING -> ResizingDemoScreen()
+                                DemoScreen.QR_CODE -> QrCodeDemoScreen()
                             }
-
-                            // Add Spacer at the bottom if needed
-                            Spacer(modifier = Modifier.height(16.dp))
-
-                        } else {
-                            // Show permission request button if permission not granted
-                            Spacer(modifier = Modifier.weight(1f)) // Push button down
-                            Button(onClick = {
-                                // Re-launch permission request
-                                permissionLauncher.launch(allPermissionsToRequest)
-                            }) {
-                                Text("Request Camera Permission")
-                            }
-                            Spacer(modifier = Modifier.weight(1f)) // Push button up
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+@Throws(IOException::class)
+private fun createImageFile(context: Context): File {
+    val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+    val storageDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
+    if (storageDir == null || (!storageDir.exists() && !storageDir.mkdirs())) {
+        throw IOException("Cannot create directory for image file.")
+    }
+    return File.createTempFile("JPEG_${timeStamp}_", ".jpg", storageDir)
+}
+
+@Composable
+fun SimpleDemoScreen() {
+    val context = LocalContext.current
+    val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    var hasRequiredPermissions by remember { mutableStateOf(false) }
+    var uiStatusText by remember { mutableStateOf("Camera Ready") }
+
+    val allPermissions = remember { (Permissions.REQUIRED_PERMISSIONS + Permissions.OPTIONAL_PERMISSIONS).distinct().toTypedArray() }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
+        hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }
+    }
+
+    LaunchedEffect(Unit) { permissionLauncher.launch(allPermissions) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = uiStatusText,
+                modifier = Modifier.padding(16.dp).align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = Color.White)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (hasRequiredPermissions) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(24.dp))
+            ) {
+                Camera(
+                    modifier = Modifier.fillMaxSize(),
+                    controller = cameraController,
+                    onImageConfirmation = { uiStatusText = "Confirm Image?" },
+                    onImageCaptured = { savedFile ->
+                        uiStatusText = "Saved: ${savedFile.name}"
+                        Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
+                    },
+                    onImageCaptureFailed = { uiStatusText = "Capture Failed" }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                Button(
+                    onClick = { cameraController.value?.toggleCamera() },
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF388E3C))
+                ) {
+                    Text("Toggle Camera")
+                }
+
+                Button(
+                    onClick = {
+                        try {
+                            val file = createImageFile(context)
+                            uiStatusText = "Capturing..."
+                            cameraController.value?.takePicture(file)
+                        } catch (e: Exception) {
+                            uiStatusText = "Error creating file"
+                        }
+                    },
+                    enabled = cameraController.value != null,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Text("Take Picture")
+                }
+            }
+        } else {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Button(onClick = { permissionLauncher.launch(allPermissions) }) {
+                    Text("Request Permission")
+                }
+            }
+        }
+    }
+}
+
+@SuppressLint("MissingPermission")
+@Composable
+fun StreamDemoScreen() {
+    val context = LocalContext.current
+    val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    val videoController = remember { mutableStateOf<VideoController?>(null) }
+    var videoStream by remember { mutableStateOf<com.xlythe.view.camera.VideoStream?>(null) }
+    var hasRequiredPermissions by remember { mutableStateOf(false) }
+
+    val allPermissions = remember { (Permissions.REQUIRED_PERMISSIONS + Permissions.OPTIONAL_PERMISSIONS).distinct().toTypedArray() }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
+        hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }
+    }
+
+    LaunchedEffect(Unit) { permissionLauncher.launch(allPermissions) }
+
+    LaunchedEffect(videoController.value, videoStream) {
+        if (videoStream != null && videoController.value != null) {
+            videoController.value?.play()
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        if (hasRequiredPermissions) {
+            Box(modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(24.dp))) {
+                Camera(
+                    modifier = Modifier.fillMaxSize(),
+                    controller = cameraController,
+                    onCameraOpened = {
+                        videoStream = cameraController.value?.stream()
+                    }
+                )
+            }
+
+            // PIP Secondary Live Stream
+            Card(
+                modifier = Modifier
+                    .size(width = 180.dp, height = 120.dp)
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp),
+                shape = RoundedCornerShape(12.dp),
+                elevation = CardDefaults.cardElevation(8.dp)
+            ) {
+                Video(
+                    modifier = Modifier.fillMaxSize(),
+                    stream = videoStream,
+                    controller = videoController
+                )
+            }
+        } else {
+            Button(
+                onClick = { permissionLauncher.launch(allPermissions) },
+                modifier = Modifier.align(Alignment.Center)
+            ) {
+                Text("Request Permission")
+            }
+        }
+    }
+}
+
+@Composable
+fun ResizingDemoScreen() {
+    val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    var isResized by remember { mutableStateOf(false) }
+    var hasRequiredPermissions by remember { mutableStateOf(false) }
+
+    val allPermissions = remember { (Permissions.REQUIRED_PERMISSIONS + Permissions.OPTIONAL_PERMISSIONS).distinct().toTypedArray() }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
+        hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }
+    }
+
+    LaunchedEffect(Unit) { permissionLauncher.launch(allPermissions) }
+
+    val boxWidth by animateDpAsState(targetValue = if (isResized) 200.dp else 360.dp, animationSpec = tween(400), label = "width")
+    val boxHeight by animateDpAsState(targetValue = if (isResized) 150.dp else 500.dp, animationSpec = tween(400), label = "height")
+
+    Box(modifier = Modifier.fillMaxSize().padding(16.dp)) {
+        if (hasRequiredPermissions) {
+            Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
+                Box(modifier = Modifier.size(width = boxWidth, height = boxHeight).clip(RoundedCornerShape(24.dp))) {
+                    Camera(
+                        modifier = Modifier.fillMaxSize(),
+                        controller = cameraController
+                    )
+                }
+            }
+
+            Button(
+                onClick = { isResized = !isResized },
+                shape = RoundedCornerShape(20.dp),
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF757575))
+            ) {
+                Text("Resize")
+            }
+        } else {
+            Button(
+                onClick = { permissionLauncher.launch(allPermissions) },
+                modifier = Modifier.align(Alignment.Center)
+            ) {
+                Text("Request Permission")
+            }
+        }
+    }
+}
+
+@Composable
+fun QrCodeDemoScreen() {
+    val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    var barcodeCount by remember { mutableStateOf(0) }
+    var hasRequiredPermissions by remember { mutableStateOf(false) }
+
+    val allPermissions = remember { (Permissions.REQUIRED_PERMISSIONS + Permissions.OPTIONAL_PERMISSIONS).distinct().toTypedArray() }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
+        hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }
+    }
+
+    LaunchedEffect(Unit) { permissionLauncher.launch(allPermissions) }
+
+    LaunchedEffect(cameraController.value) {
+        cameraController.value?.enterBarcodeScanner(
+            listener = { barcodes -> barcodeCount = barcodes.size },
+            com.xlythe.view.camera.Barcode.Format.QR_CODE
+        )
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { cameraController.value?.exitBarcodeScanner() }
+    }
+
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = "QR Codes detected: $barcodeCount",
+                modifier = Modifier.padding(16.dp).align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = Color.White)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (hasRequiredPermissions) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp))) {
+                Camera(
+                    modifier = Modifier.fillMaxSize(),
+                    controller = cameraController
+                )
+            }
+        } else {
+            Button(onClick = { permissionLauncher.launch(allPermissions) }) {
+                Text("Request Permission")
             }
         }
     }

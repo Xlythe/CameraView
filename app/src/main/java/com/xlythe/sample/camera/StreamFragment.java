@@ -10,7 +10,6 @@ import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.Handler;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -32,6 +31,10 @@ import java.io.IOException;
 import java.nio.channels.FileChannel;
 import java.util.Objects;
 
+/**
+ * StreamFragment demonstrates how to capture live video streams from CameraView.
+ * It pipes the live camera feed directly into a secondary VideoView for real-time rendering or processing.
+ */
 public class StreamFragment extends CameraFragment {
     private CameraView mCameraView;
     private VideoView mViewStreamView;
@@ -46,6 +49,10 @@ public class StreamFragment extends CameraFragment {
         return view;
     }
 
+    /**
+     * Triggered when the camera successfully opens and begins previewing.
+     * We access mCameraView.stream() to get an InputStream of the live frames and pass it to VideoView.
+     */
     @SuppressLint({"CheckResult", "MissingPermission"})
     @Override
     public void onCameraOpened() {
@@ -53,10 +60,15 @@ public class StreamFragment extends CameraFragment {
             return;
         }
 
+        // Connect the live camera stream to the picture-in-picture video view.
         mViewStreamView.setStream(mCameraView.stream());
         mViewStreamView.play();
     }
 
+    /**
+     * Triggered when toggling between front and rear cameras.
+     * We refresh the video stream to ensure seamless continuity of the live feed.
+     */
     @SuppressLint({"CheckResult", "MissingPermission"})
     @Override
     protected void onToggle() {
@@ -68,6 +80,10 @@ public class StreamFragment extends CameraFragment {
         mViewStreamView.play();
     }
 
+    /**
+     * Triggered when the camera closes.
+     * We ensure the active stream is properly closed to avoid resource leaks.
+     */
     @Override
     public void onCameraClosed() {
         if (Build.VERSION.SDK_INT < 18) {
@@ -87,7 +103,6 @@ public class StreamFragment extends CameraFragment {
             protected void onPostExecute(File file) {
                 report("Picture saved to " + file.getAbsolutePath());
 
-                // Print out metadata about the picture
                 try {
                     Log.d(TAG, new Exif(file).toString());
                 } catch (IOException e) {
@@ -142,6 +157,9 @@ public class StreamFragment extends CameraFragment {
         }
     }
 
+    /**
+     * Helper AsyncTask to move captured media from temporary cache to public external storage.
+     */
     private static class FileTransferAsyncTask extends AsyncTask<File, Void, File> {
         @Override
         protected File doInBackground(File... params) {

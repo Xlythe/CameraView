@@ -17,6 +17,10 @@ import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.CameraView;
 
+/**
+ * QrCodeFragment demonstrates integrated barcode and QR code scanning using CameraView.
+ * The library abstracts ML Kit barcode scanning directly into the camera lifecycle.
+ */
 public class QrCodeFragment extends CameraFragment {
     private CameraView mCameraView;
 
@@ -27,6 +31,10 @@ public class QrCodeFragment extends CameraFragment {
         return view;
     }
 
+    /**
+     * Triggered when the camera successfully opens.
+     * We activate the barcode scanner and pass a callback listener that receives detected Barcode lists.
+     */
     @SuppressLint("MissingPermission")
     @Override
     public void onCameraOpened() {
@@ -35,6 +43,10 @@ public class QrCodeFragment extends CameraFragment {
         }
     }
 
+    /**
+     * Triggered when the camera closes.
+     * We cleanly exit the barcode scanner mode to unregister analyzer callbacks and free resources.
+     */
     @Override
     public void onCameraClosed() {
         super.onCameraClosed();

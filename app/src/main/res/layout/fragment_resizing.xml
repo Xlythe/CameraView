@@ -1,22 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
-    android:orientation="vertical"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="#000000">
 
     <FrameLayout
         android:id="@id/layout_permissions"
         android:layout_width="match_parent"
-        android:layout_height="match_parent">
+        android:layout_height="match_parent"
+        android:background="#121212">
 
-        <Button
+        <com.google.android.material.button.MaterialButton
             android:id="@id/request_permissions"
-            android:text="@string/btn_request_permissions"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_gravity="center"
-            style="?android:buttonBarButtonStyle" />
+            android:paddingHorizontal="24dp"
+            android:paddingVertical="12dp"
+            android:text="@string/btn_request_permissions"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="24dp"
+            app:elevation="4dp" />
 
     </FrameLayout>
 
@@ -30,54 +35,74 @@
             android:id="@id/camera"
             android:layout_width="0dp"
             android:layout_height="0dp"
-            app:layout_constraintStart_toStartOf="parent"
-            app:layout_constraintEnd_toEndOf="parent"
-            app:layout_constraintTop_toTopOf="parent"
             app:layout_constraintBottom_toTopOf="@+id/controls"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toTopOf="parent"
             app:quality="high" />
 
         <LinearLayout
             android:id="@+id/controls"
             android:layout_width="match_parent"
-            android:layout_height="58dp"
+            android:layout_height="80dp"
+            android:background="#40000000"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingHorizontal="16dp"
             app:layout_constraintBottom_toBottomOf="parent">
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@id/cancel"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="4dp"
+                android:layout_weight="1"
                 android:text="@string/btn_cancel"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                style="?android:buttonBarButtonStyle" />
+                android:textColor="#FFFFFF"
+                app:backgroundTint="#D32F2F"
+                app:cornerRadius="20dp" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@id/confirm"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_weight="1"
                 android:text="@string/btn_confirm"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                style="?android:buttonBarButtonStyle" />
+                android:textColor="#FFFFFF"
+                app:backgroundTint="#388E3C"
+                app:cornerRadius="20dp" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/resize"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_weight="1"
                 android:text="@string/btn_resize"
-                android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                style="?android:buttonBarButtonStyle" />
+                android:textColor="#FFFFFF"
+                app:backgroundTint="#757575"
+                app:cornerRadius="20dp" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@id/capture"
-                android:text="@string/btn_capture"
                 android:layout_width="0dp"
-                android:layout_height="match_parent"
-                android:layout_weight="1"
-                style="?android:buttonBarButtonStyle" />
+                android:layout_height="wrap_content"
+                android:layout_marginStart="4dp"
+                android:layout_weight="1.5"
+                android:paddingVertical="12dp"
+                android:text="@string/btn_capture"
+                android:textColor="#FFFFFF"
+                app:backgroundTint="#1976D2"
+                app:cornerRadius="24dp"
+                app:elevation="4dp" />
 
             <CheckBox
                 android:id="@id/toggle"
                 android:layout_width="50dp"
-                android:layout_height="match_parent" />
+                android:layout_height="50dp"
+                android:layout_marginStart="8dp"
+                android:buttonTint="#FFFFFF" />
 
         </LinearLayout>
 

@@ -29,6 +29,11 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.channels.FileChannel;
 
+/**
+ * ResizingFragment demonstrates CameraView's robust support for dynamic layout animations.
+ * When resizing or animating layout constraints (here via MotionLayout), CameraView seamlessly
+ * adapts its rendering surface without interrupting the underlying camera session or preview feed.
+ */
 public class ResizingFragment extends CameraFragment {
     private boolean isTransitionedToEnd = false;
 
@@ -36,6 +41,8 @@ public class ResizingFragment extends CameraFragment {
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_resizing, container, false);
         MotionLayout motionLayout = view.findViewById(R.id.layout_camera);
+
+        // Clicking the resize button animates CameraView between full screen and thumbnail dimensions.
         view.findViewById(R.id.resize).setOnClickListener(v -> {
             if (isTransitionedToEnd) {
                 motionLayout.transitionToStart();
@@ -55,7 +62,6 @@ public class ResizingFragment extends CameraFragment {
             protected void onPostExecute(File file) {
                 report("Picture saved to " + file.getAbsolutePath());
 
-                // Print out metadata about the picture
                 try {
                     Log.d(TAG, new Exif(file).toString());
                 } catch (IOException ignored) {}
@@ -108,6 +114,9 @@ public class ResizingFragment extends CameraFragment {
         }
     }
 
+    /**
+     * Helper AsyncTask to move captured media from temporary cache to public external storage.
+     */
     private static class FileTransferAsyncTask extends AsyncTask<File, Void, File> {
         @Override
         protected File doInBackground(File... params) {

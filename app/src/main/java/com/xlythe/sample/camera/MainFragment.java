@@ -28,13 +28,24 @@ import java.nio.channels.FileChannel;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+/**
+ * MainFragment demonstrates the standard usage of the CameraView library.
+ * By extending CameraFragment, the library automatically manages camera lifecycle,
+ * background thread operations, permissions, and UI binding to layout controls.
+ */
 public class MainFragment extends CameraFragment {
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
+        // The layout contains a CameraView and control buttons (capture, confirm, cancel).
+        // CameraFragment automatically binds to these controls using their resource IDs.
         return inflater.inflate(R.layout.fragment_main, container, false);
     }
 
+    /**
+     * Callback triggered by the library when a picture has been successfully taken and saved.
+     * The picture is initially written to a temporary cache file.
+     */
     @SuppressLint("StaticFieldLeak")
     @Override
     public void onImageCaptured(final File file) {
@@ -43,7 +54,7 @@ public class MainFragment extends CameraFragment {
             protected void onPostExecute(File file) {
                 report("Picture saved to " + file.getAbsolutePath());
 
-                // Print out metadata about the picture
+                // Print out metadata (EXIF data) about the captured picture using the library's Exif helper.
                 try {
                     Log.d(TAG, new Exif(file).toString());
                 } catch (IOException e) {}
@@ -53,6 +64,9 @@ public class MainFragment extends CameraFragment {
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
     }
 
+    /**
+     * Callback triggered by the library when a video recording successfully completes.
+     */
     @SuppressLint("StaticFieldLeak")
     @Override
     public void onVideoCaptured(final File file) {
@@ -65,11 +79,17 @@ public class MainFragment extends CameraFragment {
         }.execute(file, Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES));
     }
 
+    /**
+     * Callback triggered when video recording starts.
+     */
     @Override
     protected void onRecordStart() {
         report("Recording");
     }
 
+    /**
+     * Callback triggered if camera initialization or capture fails.
+     */
     @Override
     public void onFailure() {
        report("Failure");
@@ -96,6 +116,9 @@ public class MainFragment extends CameraFragment {
         }
     }
 
+    /**
+     * Helper AsyncTask to move captured media from temporary cache to public external storage.
+     */
     private static class FileTransferAsyncTask extends AsyncTask<File, Void, File> {
         @Override
         protected File doInBackground(File... params) {
