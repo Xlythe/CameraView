@@ -314,6 +314,7 @@ public class Camera2Module extends ICameraModule {
         }
         mIsPaused = false;
         mIsOpen = false;
+        mIsRecording = false;
     }
 
     @Override

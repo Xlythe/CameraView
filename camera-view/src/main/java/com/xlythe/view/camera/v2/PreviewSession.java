@@ -151,7 +151,10 @@ class PreviewSession extends SessionImpl {
 
         @Override
         void close() {
-            mSurface.release();
+            if (mSurface != null) {
+                mSurface.release();
+                mSurface = null;
+            }
         }
     }
 }

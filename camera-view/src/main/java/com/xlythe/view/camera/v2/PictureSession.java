@@ -149,11 +149,22 @@ class PictureSession extends PreviewSession {
         protected Void doInBackground(Void... params) {
             // Finally, we save the file to disk
             byte[] bytes = getBytes();
-            FileOutputStream output = null;
-            try {
-                output = new FileOutputStream(mFile);
+            if (bytes == null) {
+                Log.e(TAG, "Failed to get bytes from image");
+                mImage.close();
+                return null;
+            }
+            try (FileOutputStream output = new FileOutputStream(mFile)) {
                 output.write(bytes);
+            } catch (IOException e) {
+                Log.e(TAG, "Failed to write the file", e);
+                mImage.close();
+                return null;
+            }
 
+            mImage.close();
+
+            try {
                 Exif exif = new Exif(mFile);
                 exif.attachTimestamp();
                 exif.rotate(mOrientation);
@@ -166,17 +177,9 @@ class PictureSession extends PreviewSession {
                 }
                 exif.save();
             } catch (IOException e) {
-                Log.e(TAG, "Failed to write the file", e);
-            } finally {
-                mImage.close();
-                if (output != null) {
-                    try {
-                        output.close();
-                    } catch (IOException e) {
-                        Log.e(TAG, "Failed to close the output stream", e);
-                    }
-                }
+                Log.e(TAG, "Failed to update EXIF", e);
             }
+
             return null;
         }
 
@@ -291,32 +294,36 @@ class PictureSession extends PreviewSession {
         private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(final ImageReader reader) {
-                mCameraView.getHandler().post(() -> {
-                    try {
-                        if (mFile != null) {
-                            final File file = mFile;
-                            new ImageSaver(
-                                    mCameraView.getContext(),
-                                    reader.acquireLatestImage(),
-                                    mCameraView.getRelativeCameraOrientation(),
-                                    isUsingFrontFacingCamera(),
-                                    mFile) {
-                                @UiThread
-                                @Override
-                                protected void onPostExecute(Void aVoid) {
-                                    showImageConfirmation(file);
-                                }
-                            }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
-                            mFile = null;
-                        } else {
-                            Log.w(TAG, "OnImageAvailable called but no file to write to");
+                try {
+                    if (mFile != null) {
+                        Image image = reader.acquireLatestImage();
+                        if (image == null) {
+                            Log.w(TAG, "OnImageAvailable called but no image available");
                             onImageFailed();
+                            return;
                         }
-                    } catch (IllegalStateException e) {
-                        Log.e(TAG, "Failed to save image", e);
+                        final File file = mFile;
+                        new ImageSaver(
+                                mCameraView.getContext(),
+                                image,
+                                mCameraView.getRelativeCameraOrientation(),
+                                isUsingFrontFacingCamera(),
+                                mFile) {
+                            @UiThread
+                            @Override
+                            protected void onPostExecute(Void aVoid) {
+                                showImageConfirmation(file);
+                            }
+                        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+                        mFile = null;
+                    } else {
+                        Log.w(TAG, "OnImageAvailable called but no file to write to");
                         onImageFailed();
                     }
-                });
+                } catch (IllegalStateException e) {
+                    Log.e(TAG, "Failed to save image", e);
+                    onImageFailed();
+                }
             }
         };
 

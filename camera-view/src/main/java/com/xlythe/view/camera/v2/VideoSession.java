@@ -125,6 +125,15 @@ class VideoSession extends PreviewSession {
     }
 
     private static final class VideoSurface extends CameraSurface {
+        private int getIntCameraId() {
+            try {
+                return Integer.parseInt(getCameraId());
+            } catch (NumberFormatException e) {
+                Log.w(TAG, "Camera ID is not an integer, defaulting to 0 for CamcorderProfile");
+                return 0;
+            }
+        }
+
         private List<Size> getSizes(StreamConfigurationMap map) {
             Size[] sizes = map.getOutputSizes(MediaRecorder.class);
 
@@ -132,25 +141,26 @@ class VideoSession extends PreviewSession {
             // camera supports these sizes. It does not tell us if MediaRecorder supports these
             // sizes, odd as that sounds. Therefore, we need to filter ourselves manually.
             List<Size> filtered;
-            if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_2160P)) {
+            int intCameraId = getIntCameraId();
+            if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_2160P)) {
                 filtered = filter(sizes, SIZE_4K);
                 if (!filtered.isEmpty()) {
                     return filtered;
                 }
             }
-            if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_1080P)) {
+            if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_1080P)) {
                 filtered = filter(sizes, SIZE_1080P);
                 if (!filtered.isEmpty()) {
                     return filtered;
                 }
             }
-            if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_720P)) {
+            if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_720P)) {
                 filtered = filter(sizes, SIZE_720P);
                 if (!filtered.isEmpty()) {
                     return filtered;
                 }
             }
-            if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_480P)) {
+            if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_480P)) {
                 filtered = filter(sizes, SIZE_480P);
                 if (!filtered.isEmpty()) {
                     return filtered;
@@ -184,33 +194,34 @@ class VideoSession extends PreviewSession {
                 mMediaRecorder = new MediaRecorder();
                 mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
                 mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
+                int intCameraId = getIntCameraId();
                 switch (getQuality()) {
                     case MAX:
-                        if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_2160P)) {
-                            mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_2160P));
+                        if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_2160P)) {
+                            mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_2160P));
                             break;
                         }
                         // Fall-through
                     case HIGH:
-                        if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_1080P)) {
-                            mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_1080P));
+                        if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_1080P)) {
+                            mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_1080P));
                             break;
                         }
                         // Fall-through
                     case MEDIUM:
-                        if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_720P)) {
-                            mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_720P));
+                        if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_720P)) {
+                            mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_720P));
                             break;
                         }
                         // Fall-through
                     case LOW:
-                        if (CamcorderProfile.hasProfile(getCameraId(), CamcorderProfile.QUALITY_480P)) {
-                            mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_480P));
+                        if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_480P)) {
+                            mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_480P));
                             break;
                         }
                         // Fall-through
                     default:
-                        mMediaRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_LOW));
+                        mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_LOW));
                         break;
                 }
                 mMediaRecorder.setOutputFile(mFile.getAbsolutePath());
@@ -270,6 +281,12 @@ class VideoSession extends PreviewSession {
         }
 
         void stopRecording() {
+            if (mAwaitingRecording) {
+                mAwaitingRecording = false;
+                if (DEBUG) Log.d(TAG, "Cancelled recording before it started");
+                onVideoFailed();
+                return;
+            }
             if (mIsRecordingVideo) {
                 mIsRecordingVideo = false;
                 try {

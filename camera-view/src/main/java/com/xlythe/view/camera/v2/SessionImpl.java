@@ -178,18 +178,14 @@ abstract class SessionImpl implements Camera2Module.Session {
             return mCameraView.isMatchPreviewAspectRatioEnabled();
         }
 
-        int getCameraId() {
+        String getCameraId() {
             try {
-                String cameraId = mCameraView.getActiveCamera();
-
-                // Usually an integer, but has the potential to be a random string. We convert to
-                // an integer because Camcorder requires it
-                return Integer.parseInt(cameraId);
-            } catch (Exception e) {
+                return mCameraView.getActiveCamera();
+            } catch (CameraAccessException e) {
                 Log.e(TAG, "Failed to get camera id", e);
 
                 // The default camera always has id 0
-                return 0;
+                return "0";
             }
         }
 
@@ -207,6 +203,10 @@ abstract class SessionImpl implements Camera2Module.Session {
         }
 
         Size chooseSize(List<Size> choices, Size recommendedSize) {
+            if (choices == null || choices.isEmpty()) {
+                Log.e(TAG, "No available sizes to choose from");
+                throw new IllegalStateException("No available sizes to choose from");
+            }
             if (DEBUG) {
                 Log.d(TAG, "Choosing from sizes " + choices);
             }
@@ -317,7 +317,7 @@ abstract class SessionImpl implements Camera2Module.Session {
         }
 
         static boolean sameAspectRatio(Size a, Size b) {
-            return 1000 * a.getWidth() / a.getHeight() == 1000 * b.getWidth() / b.getHeight();
+            return Math.abs((float) a.getWidth() / a.getHeight() - (float) b.getWidth() / b.getHeight()) < 0.01f;
         }
 
         static List<Size> filter(Size[] sizes) {
