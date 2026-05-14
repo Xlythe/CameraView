@@ -3,7 +3,8 @@ plugins {
     id 'maven-publish'
     id 'signing'
     id 'org.jetbrains.kotlin.android'
-    id 'org.jetbrains.kotlin.plugin.compose' version '2.2.10'
+    id 'org.jetbrains.kotlin.plugin.compose' version '2.3.21'
+    id 'com.gradleup.nmcp' version '1.5.0'
 }
 
 Properties projectProperties = new Properties()
@@ -84,17 +85,19 @@ afterEvaluate {
                 }
             }
         }
-        repositories {
-            maven {
-                name = "MavenCentral"
-                url = "https://s01.oss.sonatype.org/service/local/staging/deploy/maven2/"
-                credentials {
-                    username = localProperties.getProperty("bintray.username")
-                    password = localProperties.getProperty("bintray.password")
-                }
-            }
-        }
     }
+}
+
+nmcp {
+    publishAllPublicationsToCentralPortal {
+        username = localProperties.getProperty("bintray.username")
+        password = localProperties.getProperty("bintray.password")
+        publishingType = "AUTOMATIC"
+    }
+}
+
+tasks.named("publish") {
+    dependsOn("nmcpPublishAllPublicationsToCentralPortal")
 }
 
 signing {
