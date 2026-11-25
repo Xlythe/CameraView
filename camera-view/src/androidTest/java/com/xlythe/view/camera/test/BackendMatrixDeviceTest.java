@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.test;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -241,20 +242,30 @@ public final class BackendMatrixDeviceTest {
     public void theControlsAnswer() throws Exception {
         AtomicInteger maxZoom = new AtomicInteger();
         AtomicReference<CameraView.Flash> flash = new AtomicReference<>();
+        AtomicReference<CameraView.Flash> flashAfterOff = new AtomicReference<>();
         AtomicBoolean faces = new AtomicBoolean();
 
         withOpenCamera(camera -> {
             maxZoom.set(camera.getMaxZoomLevel());
             camera.setZoomLevel(maxZoom.get() / 2);
             sleep(500);
-            camera.setFlash(CameraView.Flash.OFF);
+            // Away from the OFF the harness set, so a setter that did nothing would be
+            // visible. Choosing a mode does not light anything; only a capture does, and this
+            // test takes no picture.
+            camera.setFlash(CameraView.Flash.ON);
             sleep(200);
             flash.set(camera.getFlash());
+            camera.setFlash(CameraView.Flash.OFF);
+            sleep(200);
+            flashAfterOff.set(camera.getFlash());
             faces.set(camera.isFaceDetectionSupported());
         });
 
         assertTrue("every backend scales zoom the same way on " + backend, maxZoom.get() > 0);
-        assertTrue(flash.get() == CameraView.Flash.OFF);
+        assertEquals("the flash mode has to be the one that was asked for on " + backend,
+                CameraView.Flash.ON, flash.get());
+        assertEquals("and it has to change back on " + backend,
+                CameraView.Flash.OFF, flashAfterOff.get());
     }
 
     /** What a test does with an open camera. */
@@ -300,6 +311,12 @@ public final class BackendMatrixDeviceTest {
                     opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             CameraView camera = held.get();
             assertNotNull(camera);
+            // The library's default is AUTO, so in a dim room every capture in this suite fires
+            // the flash - a dozen times over a full run, which is unpleasant for whoever is
+            // holding the phone and makes the captures depend on the light in the room. Nothing
+            // here asserts on exposure; the tests that mean to exercise the flash set the mode
+            // they want themselves.
+            DeviceState.turnTheFlashOff(camera);
             try {
                 action.run(camera);
             } finally {

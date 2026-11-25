@@ -290,6 +290,8 @@ public final class CameraSurfaceDeviceTest {
     public void theOptionalControlsAreOfferedToTheCamera() throws Exception {
         AtomicReference<String> reported = new AtomicReference<>();
 
+        DeviceState.assumeTheLampMayBeLit();
+
         withOpenCamera(camera -> {
             camera.setTorchEnabled(true);
             sleep(300);
@@ -404,6 +406,12 @@ public final class CameraSurfaceDeviceTest {
                     opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             CameraView camera = held.get();
             assertNotNull(camera);
+            // The library's default is AUTO, so in a dim room every capture in this suite fires
+            // the flash - a dozen times over a full run, which is unpleasant for whoever is
+            // holding the phone and makes the captures depend on the light in the room. Nothing
+            // here asserts on exposure; the tests that mean to exercise the flash set the mode
+            // they want themselves.
+            DeviceState.turnTheFlashOff(camera);
             try {
                 action.run(camera);
             } finally {

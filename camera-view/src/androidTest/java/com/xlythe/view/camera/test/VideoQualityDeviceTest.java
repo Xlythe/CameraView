@@ -306,6 +306,12 @@ public final class VideoQualityDeviceTest {
 
             CameraView camera = held.get();
             assertNotNull(camera);
+            // The library's default is AUTO, so in a dim room every capture in this suite fires
+            // the flash - a dozen times over a full run, which is unpleasant for whoever is
+            // holding the phone and makes the captures depend on the light in the room. Nothing
+            // here asserts on exposure; the tests that mean to exercise the flash set the mode
+            // they want themselves.
+            DeviceState.turnTheFlashOff(camera);
             try {
                 camera.setOnVideoCapturedListener(new CameraView.OnVideoCapturedListener() {
                     @Override public void onVideoConfirmation() {}
