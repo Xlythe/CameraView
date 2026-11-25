@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:camera="http://schemas.android.com/apk/res-auto"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <FrameLayout
+        android:id="@id/layout_permissions"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#121212">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@id/request_permissions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:paddingHorizontal="24dp"
+            android:paddingVertical="12dp"
+            android:text="@string/btn_request_permissions"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="24dp"
+            app:elevation="4dp" />
+
+    </FrameLayout>
+
+    <RelativeLayout
+        android:id="@id/layout_camera"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <com.xlythe.view.camera.CameraView
+            android:id="@id/camera"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            camera:quality="high" />
+
+        <!-- Turned to point at whichever gap the sweep wants filled next. -->
+        <TextView
+            android:id="@+id/panorama_arrow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_centerInParent="true"
+            android:text="@string/panorama_arrow"
+            android:textColor="#FFFFFF"
+            android:textSize="64sp"
+            android:visibility="gone" />
+
+        <!-- The sphere as it fills in, which is the clearest guidance there is. -->
+        <ImageView
+            android:id="@+id/panorama_preview"
+            android:layout_width="match_parent"
+            android:layout_height="72dp"
+            android:layout_alignParentTop="true"
+            android:background="#66000000"
+            android:contentDescription="@string/panorama_preview_description"
+            android:scaleType="fitCenter" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:background="#99000000"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/panorama_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="12dp"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/panorama_mode"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginEnd="8dp"
+                    android:layout_weight="1" />
+
+                <Button
+                    android:id="@+id/panorama_start_stop"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:enabled="false"
+                    android:text="@string/panorama_start" />
+
+            </LinearLayout>
+
+        </LinearLayout>
+
+    </RelativeLayout>
+
+</FrameLayout>

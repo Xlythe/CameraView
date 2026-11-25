@@ -27,4 +27,8 @@
         android:id="@+id/ar_fragment"
         android:icon="@drawable/ic_effect"
         android:title="@string/app_name_ar" />
+    <item
+        android:id="@+id/panorama_fragment"
+        android:icon="@drawable/ic_resizing"
+        android:title="@string/app_name_panorama" />
 </menu>
