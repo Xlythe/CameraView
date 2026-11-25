@@ -85,20 +85,24 @@ final class FrameEffect extends CameraEffect {
             @Nullable CameraTextureProvider textureProvider,
             @NonNull Executor executor,
             @NonNull Consumer<Throwable> errorListener) {
-        // One output shared by every target. Asking for one per target gives the still its own
-        // resolution instead of the preview's, which is the better picture and is why it was
-        // written that way first - but on a Pixel 7 Pro it aborts the process in the platform's
-        // own media code the moment the effect binds, with "RGBA override BLOB format buffer
-        // should have height == width": the per-target still output is allocated as a BLOB that
-        // the driver will only accept square. A photograph at the pipeline's resolution is worth
-        // having and a native crash is not.
+        // The only constructor CameraX leaves unrestricted: every overload naming an output
+        // option or a transformation is RestrictTo(LIBRARY_GROUP), as are the constants. Both of
+        // its defaults turn out to be the ones to want.
         //
-        // CAMERA_AND_SURFACE_ROTATION states what the processor actually does: it draws with the
-        // matrix CameraX supplies, so the camera's rotation and the surface's are both already
-        // applied and CameraX can go on computing downstream metadata as if it had done them
-        // itself.
-        super(targets, OUTPUT_OPTION_ONE_FOR_ALL_TARGETS,
-                TRANSFORMATION_CAMERA_AND_SURFACE_ROTATION, executor, processor, errorListener);
+        // One output shared by every target, rather than one each. One each would give the still
+        // its own resolution instead of the preview's, which is the better picture, but it
+        // aborts the process in the platform's media code the moment the effect binds on a
+        // Pixel 7 Pro: "RGBA override BLOB format buffer should have height == width", that
+        // still output being allocated as a BLOB the driver accepts only square.
+        //
+        // TRANSFORMATION_ARBITRARY rather than CAMERA_AND_SURFACE_ROTATION. The latter describes
+        // the processor more exactly - it draws with the matrix CameraX hands each output, so
+        // both rotations are already applied - but it changes nothing a caller can see here, and
+        // it is measured rather than assumed: a capture drawn through the effect is the same
+        // shape as one taken without it, once each file's own orientation is applied. The two
+        // paths record that orientation differently, one in the pixels and one in the Exif tag,
+        // which is the distinction FrameEffectDeviceTest holds.
+        super(targets, executor, processor, errorListener);
         mProcessor = processor;
         mTextureProvider = textureProvider;
     }
