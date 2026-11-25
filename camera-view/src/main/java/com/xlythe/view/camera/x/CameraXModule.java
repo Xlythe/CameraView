@@ -1955,6 +1955,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         switch (format) {
             case ULTRA_HDR:
                 return ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR;
+            case RAW:
+                return ImageCapture.OUTPUT_FORMAT_RAW;
+            case RAW_JPEG:
+                return ImageCapture.OUTPUT_FORMAT_RAW_JPEG;
             case JPEG:
                 return ImageCapture.OUTPUT_FORMAT_JPEG;
             default:

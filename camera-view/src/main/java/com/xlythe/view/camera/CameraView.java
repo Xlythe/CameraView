@@ -280,11 +280,18 @@ public class CameraView extends FrameLayout {
      * image can reach; anything that does not understand the gain map reads the base image and
      * shows an ordinary photo, so the file stays universally readable.</p>
      *
-     * <p>Ask {@link #isPictureFormatSupported} first - it needs the CameraX backend and a camera
-     * that offers it.</p>
+     * <p>{@link #RAW} is the sensor's own reading, before the camera's processing has made any
+     * of its decisions about it - far more information than a JPEG carries, and the right answer
+     * to wanting better stills than JPEG. It is also several times the size, needs an editor
+     * rather than a gallery to open, and {@link #RAW_JPEG} exists because of that: both files
+     * from one shutter press, so something is viewable immediately.</p>
+     *
+     * <p>Ask {@link #isPictureFormatSupported} first. All three of these need the CameraX backend
+     * and a camera that offers the format - the camera2 backend writes the JPEG the HAL produced
+     * and has no second reader to take a raw frame from.</p>
      */
     public enum PictureFormat {
-        JPEG(0), ULTRA_HDR(1);
+        JPEG(0), ULTRA_HDR(1), RAW(2), RAW_JPEG(3);
 
         /** Stable XML and saved-state identifier. */
         private final int id;
