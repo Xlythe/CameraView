@@ -42,7 +42,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * app actually subclasses, so a mistake here is a mistake in every app that uses it.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 @LooperMode(LooperMode.Mode.PAUSED)
 public class CameraFragmentFlowTest {
     /** A layout with every View CameraFragment knows how to bind. */
@@ -66,6 +66,13 @@ public class CameraFragmentFlowTest {
     @Before
     public void setUp() {
         FakeCamera2.addBackAndFrontCameras(RuntimeEnvironment.getApplication());
+        // androidx.core guards a not-exported receiver with a permission it declares in its
+        // own manifest, and a library's unit-test manifest does not merge that in - so on the
+        // API levels that check it, registering the fragment's receiver fails for a reason that
+        // belongs to the test environment rather than to the fragment.
+        Shadows.shadowOf((android.app.Application) RuntimeEnvironment.getApplication())
+                .grantPermissions(RuntimeEnvironment.getApplication().getPackageName()
+                        + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION");
         activity = Robolectric.buildActivity(FragmentActivity.class).create().start().resume().get();
     }
 

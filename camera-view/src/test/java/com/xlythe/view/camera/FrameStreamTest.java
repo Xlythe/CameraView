@@ -38,7 +38,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * its own, and the frames are then handed to the reader directly.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {ShadowInjectableImageReader.class})
+@Config(sdk = {29, 37}, shadows = {ShadowInjectableImageReader.class})
 public class FrameStreamTest {
     /** How long a test waits for the pump thread to get somewhere. */
     private static final long TIMEOUT_SECONDS = 5;

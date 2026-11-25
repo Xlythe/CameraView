@@ -42,7 +42,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * and the frame handed back as the driver would.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {ShadowListingCamcorderProfile.class})
+@Config(sdk = {29, 37}, shadows = {ShadowListingCamcorderProfile.class})
 public class LegacyCaptureTest {
     private Context context;
     private TestCameraView cameraView;

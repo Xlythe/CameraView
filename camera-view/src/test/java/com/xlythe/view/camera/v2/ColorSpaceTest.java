@@ -52,7 +52,7 @@ public class ColorSpaceTest {
     }
 
     @Test
-    @Config(sdk = 37)
+    @Config(sdk = {29, 37})
     public void everyCameraCanDoSrgb() {
         assertTrue(module.isColorSpaceSupported(CameraView.ColorSpace.SRGB));
         assertEquals("and it is what you get without asking",

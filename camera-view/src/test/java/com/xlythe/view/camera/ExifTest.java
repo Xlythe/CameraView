@@ -23,7 +23,7 @@ import static junit.framework.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
 @SuppressWarnings("JavaUtilDate")
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class ExifTest {
     Exif exif;
 

@@ -24,7 +24,7 @@ import org.robolectric.annotation.Config;
  * falls back rather than throwing out of a constructor.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {ShadowAnnouncingCameraManager.class})
+@Config(sdk = {29, 37}, shadows = {ShadowAnnouncingCameraManager.class})
 public class BackendSelectionTest {
     private Context context;
 

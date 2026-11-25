@@ -45,7 +45,7 @@ import java.io.InputStream;
  * reachable without it.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {ShadowAvailableTextureView.class})
+@Config(sdk = {29, 37}, shadows = {ShadowAvailableTextureView.class})
 public class VideoViewLifecycleTest {
     /** The one name every file descriptor is mapped onto, so the fakes can be told about it. */
     private static final String VIDEO = "video";

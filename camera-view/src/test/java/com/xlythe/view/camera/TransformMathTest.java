@@ -21,7 +21,7 @@ import org.robolectric.annotation.Config;
  * rotation goes the right way round.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class TransformMathTest {
     private static final float TOLERANCE = 0.01f;
 

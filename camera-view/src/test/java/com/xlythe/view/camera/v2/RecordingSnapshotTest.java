@@ -35,7 +35,7 @@ import java.util.List;
  * decision is made from what the camera reported rather than attempted and hoped for.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37,
+@Config(sdk = {29, 37},
         shadows = {ShadowInjectableImageReader.class, ShadowListingCamcorderProfile.class})
 public class RecordingSnapshotTest {
     private Context context;

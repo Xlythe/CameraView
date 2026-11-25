@@ -28,7 +28,7 @@ import org.robolectric.annotation.Config;
  * says it is on.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class CameraViewAttributesTest {
     private Context context;
 

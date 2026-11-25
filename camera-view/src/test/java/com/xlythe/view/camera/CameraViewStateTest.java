@@ -31,7 +31,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * with a capture, and which calls are rejected before the camera is open.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 @LooperMode(LooperMode.Mode.PAUSED)
 public class CameraViewStateTest {
     private Context context;

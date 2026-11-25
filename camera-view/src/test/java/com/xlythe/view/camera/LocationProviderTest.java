@@ -19,7 +19,7 @@ import static org.junit.Assert.assertNull;
 import static org.robolectric.Shadows.shadowOf;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class LocationProviderTest {
 
     private Context context;

@@ -25,7 +25,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * VideoSession arms the recorder and waits for the first completed capture before starting it.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {ShadowCallbackCameraCaptureSession.class},
+@Config(sdk = {29, 37}, shadows = {ShadowCallbackCameraCaptureSession.class},
         qualifiers = "w360dp-h800dp-xxxhdpi")
 public class VideoRecordingTest {
     private Context context;

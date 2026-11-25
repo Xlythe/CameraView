@@ -22,7 +22,7 @@ import java.util.List;
  * is how a caller that waits to be told rather than polling learns anything at all.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {com.xlythe.view.camera.shadow.ShadowAnnouncingCameraManager.class})
+@Config(sdk = {29, 37}, shadows = {com.xlythe.view.camera.shadow.ShadowAnnouncingCameraManager.class})
 public class AvailabilityCallbackTest {
     @Test
     public void registeringAnAvailabilityCallbackReportsTheCameras() {

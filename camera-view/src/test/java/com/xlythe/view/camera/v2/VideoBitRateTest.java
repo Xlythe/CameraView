@@ -13,7 +13,7 @@ import org.robolectric.annotation.Config;
  * chosen separately, so the rate has to be rescaled to the frame actually being written.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class VideoBitRateTest {
     /** A typical 1080p profile: 17 Mbps at 1920x1080. */
     private static final int PROFILE_BIT_RATE = 17_000_000;
