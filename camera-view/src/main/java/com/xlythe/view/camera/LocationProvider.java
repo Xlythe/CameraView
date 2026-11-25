@@ -19,6 +19,30 @@ import androidx.annotation.WorkerThread;
 
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LocationProvider {
+    /**
+     * The fix the system already has, without waiting for a new one.
+     *
+     * <p>For callers on the main thread, where even a short wait is not on. {@link
+     * #getGPSLocation} is for everyone else: it asks for an update as well, which is what leaves
+     * this with something to return.</p>
+     */
+    @Nullable
+    @RequiresPermission(Manifest.permission.ACCESS_FINE_LOCATION)
+    public static Location getLastKnownGPSLocation(Context context, long locationCacheAllowance) {
+        if (!context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_LOCATION_GPS)) {
+            return null;
+        }
+
+        LocationManager locationManager =
+                (LocationManager) context.getSystemService(Context.LOCATION_SERVICE);
+        Location location = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+        if (location == null
+                || location.getTime() < System.currentTimeMillis() - locationCacheAllowance) {
+            return null;
+        }
+        return location;
+    }
+
     @Nullable
     @WorkerThread
     @RequiresPermission(Manifest.permission.ACCESS_FINE_LOCATION)

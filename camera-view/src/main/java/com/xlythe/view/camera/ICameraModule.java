@@ -423,6 +423,18 @@ public abstract class ICameraModule {
         getView().onCameraReady();
     }
 
+    /**
+     * Whether this backend can deliver frames to an analyzer.
+     *
+     * <p>True for the backends that can hand out a camera output surface, which is every one
+     * built on camera2. The original Camera API cannot: it reports preview frames as bytes to a
+     * callback, and the only way this library has to forward them is to draw them onto a
+     * surface, which an ImageReader expecting YUV planes cannot accept.</p>
+     */
+    public boolean isFrameAnalysisSupported() {
+        return true;
+    }
+
     /** Whether this camera can report the faces it is already tracking. */
     public boolean isFaceDetectionSupported() {
         return false;

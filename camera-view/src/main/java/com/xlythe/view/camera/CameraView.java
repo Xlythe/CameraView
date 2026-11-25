@@ -1236,8 +1236,25 @@ public class CameraView extends FrameLayout {
         if (mFrameStream != null) {
             throw new IllegalStateException("Frame analysis cannot be started twice");
         }
+        if (!isFrameAnalysisSupported()) {
+            // Refused rather than accepted and never honoured. The old backend has no way to
+            // produce the frames an analyzer reads, and a caller waiting on frames that cannot
+            // come has no way to tell that from a camera that is merely slow.
+            throw new UnsupportedOperationException("The " + getBackend()
+                    + " backend cannot analyze frames; check isFrameAnalysisSupported() first");
+        }
         mFrameStream = new FrameStream(mCameraModule.getCanvas(), this, params, analyzer);
         mFrameStream.start();
+    }
+
+    /**
+     * Whether {@link #startFrameAnalysis} will work on the backend in use.
+     *
+     * <p>Every camera2-based backend can; {@link Backend#LEGACY} cannot, because the original
+     * Camera API hands out preview bytes rather than a surface an analyzer can read.</p>
+     */
+    public boolean isFrameAnalysisSupported() {
+        return mCameraModule.isFrameAnalysisSupported();
     }
 
     /** Stops the analyzer started by {@link #startFrameAnalysis}. */
