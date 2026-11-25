@@ -160,6 +160,8 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_EXTENSION = "extension";
     /** Saved-state key for front-video mirroring. */
     private static final String EXTRA_FRONT_VIDEO_MIRRORING = "front_video_mirroring";
+    /** Saved-state key for front-photo mirroring. */
+    private static final String EXTRA_FRONT_PHOTO_MIRRORING = "front_photo_mirroring";
     /** Saved-state key for stabilization. */
     private static final String EXTRA_STABILIZATION = "stabilization";
     /** Saved-state key for exposure compensation. */
@@ -523,6 +525,7 @@ public class CameraView extends FrameLayout {
             setDynamicRange(DynamicRange.fromId(a.getInteger(R.styleable.CameraView_dynamicRange, getDynamicRange().id)));
             setExtension(Extension.fromId(a.getInteger(R.styleable.CameraView_extension, getExtension().id)));
             setFrontVideoMirroringEnabled(a.getBoolean(R.styleable.CameraView_frontVideoMirroringEnabled, isFrontVideoMirroringEnabled()));
+            setFrontPhotoMirroringEnabled(a.getBoolean(R.styleable.CameraView_frontPhotoMirroringEnabled, isFrontPhotoMirroringEnabled()));
             setStabilizationEnabled(a.getBoolean(R.styleable.CameraView_stabilizationEnabled, isStabilizationEnabled()));
             setExposureCompensation(a.getInteger(R.styleable.CameraView_exposureCompensation, getExposureCompensation()));
             setTorchEnabled(a.getBoolean(R.styleable.CameraView_torchEnabled, isTorchEnabled()));
@@ -581,6 +584,7 @@ public class CameraView extends FrameLayout {
         state.putInt(EXTRA_DYNAMIC_RANGE, getDynamicRange().id);
         state.putInt(EXTRA_EXTENSION, getExtension().id);
         state.putBoolean(EXTRA_FRONT_VIDEO_MIRRORING, isFrontVideoMirroringEnabled());
+        state.putBoolean(EXTRA_FRONT_PHOTO_MIRRORING, isFrontPhotoMirroringEnabled());
         state.putBoolean(EXTRA_STABILIZATION, isStabilizationEnabled());
         state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
         state.putBoolean(EXTRA_TORCH, isTorchEnabled());
@@ -615,6 +619,7 @@ public class CameraView extends FrameLayout {
             setDynamicRange(DynamicRange.fromId(state.getInt(EXTRA_DYNAMIC_RANGE, DynamicRange.SDR.id)));
             setExtension(Extension.fromId(state.getInt(EXTRA_EXTENSION, Extension.NONE.id)));
             setFrontVideoMirroringEnabled(state.getBoolean(EXTRA_FRONT_VIDEO_MIRRORING, true));
+            setFrontPhotoMirroringEnabled(state.getBoolean(EXTRA_FRONT_PHOTO_MIRRORING, true));
             setStabilizationEnabled(state.getBoolean(EXTRA_STABILIZATION));
             setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
             setTorchEnabled(state.getBoolean(EXTRA_TORCH));
@@ -1621,6 +1626,38 @@ public class CameraView extends FrameLayout {
     /** Returns whether front-camera video files are mirrored. */
     public boolean isFrontVideoMirroringEnabled() {
         return mCameraModule.isFrontVideoMirroringEnabled();
+    }
+
+    /**
+     * Whether a picture taken with the user-facing lens is mirrored.
+     *
+     * <p>True by default, which is what every backend did before this could be asked: a selfie
+     * comes out the way round the preview showed it. Turn it off to save the scene the way the
+     * world actually is, as a rear lens would.</p>
+     *
+     * <p>Separate from {@link #setFrontVideoMirroringEnabled}, because a caller who wants a
+     * recording un-mirrored does not necessarily want the stills un-mirrored too - and before
+     * this existed, setting that one left the stills mirrored anyway with no way to say
+     * otherwise.</p>
+     */
+    public void setFrontPhotoMirroringEnabled(boolean enabled) {
+        mCameraModule.setFrontPhotoMirroringEnabled(enabled);
+    }
+
+    /** @see #setFrontPhotoMirroringEnabled */
+    public boolean isFrontPhotoMirroringEnabled() {
+        return mCameraModule.isFrontPhotoMirroringEnabled();
+    }
+
+    /**
+     * The backend currently driving this view.
+     *
+     * <p>Package-private: which implementation is in use is {@link #getBackend}'s answer, and the
+     * module itself is the library's business. This is how the library's own tests reach a
+     * decision a backend makes without a camera having to produce a file to prove it.</p>
+     */
+    ICameraModule getCameraModule() {
+        return mCameraModule;
     }
 
     /**

@@ -209,7 +209,7 @@ public class LegacyCameraModule extends ICameraModule {
             return;
         }
         mCamera.takePicture(null, null, new LegacyPictureListener(
-                file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(), this));
+                file, getRelativeCameraOrientation(false /* isPreview */), isMirroringThisPicture(), this));
     }
 
     @Override

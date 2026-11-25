@@ -45,6 +45,16 @@ public abstract class ICameraModule {
     private CameraView.Extension mExtension = CameraView.Extension.NONE;
     /** Whether front-camera video output should be mirrored. */
     private boolean mFrontVideoMirroringEnabled = true;
+
+    /**
+     * Whether a picture from a user-facing lens is mirrored, as the preview of it was.
+     *
+     * <p>True, which is what the three backends did unconditionally before there was anything to
+     * ask. It is separate from the video setting because the two are separate expectations: a
+     * selfie usually wants to look like the preview it was framed in, while a recording is often
+     * wanted the way round the world actually is.</p>
+     */
+    private boolean mFrontPhotoMirroringEnabled = true;
     /** Whether a steadied picture is requested, of the preview and of a recording alike. */
     private boolean mStabilizationEnabled;
     /** Requested exposure compensation index. */
@@ -319,6 +329,35 @@ public abstract class ICameraModule {
         return mFrontVideoMirroringEnabled;
     }
 
+    public synchronized void setFrontPhotoMirroringEnabled(boolean enabled) {
+        mFrontPhotoMirroringEnabled = enabled;
+    }
+
+    public synchronized boolean isFrontPhotoMirroringEnabled() {
+        return mFrontPhotoMirroringEnabled;
+    }
+
+    /**
+     * Whether the picture about to be taken should come out mirrored.
+     *
+     * <p>Only a user-facing lens produces a mirrored view in the first place, so this is the
+     * setting and the lens together - which is the question every backend actually has.</p>
+     */
+    public final boolean isMirroringThisPicture() {
+        return isUsingFrontFacingCamera() && isFrontPhotoMirroringEnabled();
+    }
+
+        mPreviewStabilizationEnabled = enabled;
+    }
+
+        return mPreviewStabilizationEnabled;
+    }
+
+    public synchronized boolean isPreviewStabilizationSupported() {
+        return false;
+    }
+
+        mVideoStabilizationEnabled = enabled;
     public synchronized void setStabilizationEnabled(boolean enabled) {
         mStabilizationEnabled = enabled;
     }
