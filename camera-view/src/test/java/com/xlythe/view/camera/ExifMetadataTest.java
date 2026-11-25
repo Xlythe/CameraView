@@ -230,6 +230,51 @@ public class ExifMetadataTest {
                 ExifThumbnail.roomForThumbnail(jpeg) <= 0);
     }
 
+    /** A spec tag androidx cannot name, written and read back through Exif itself. */
+    @Test
+    public void aSpecTagGoesThroughExif() throws IOException {
+        Exif exif = new Exif(file);
+        exif.save();
+
+        assertTrue("the tag should be written",
+                new Exif(file).setTags(new ExifTags.Builder()
+                        .set(ExifTags.Tag.IMAGE_TITLE, "A title")));
+
+        assertEquals("A title", new Exif(file).getTag(ExifTags.Tag.IMAGE_TITLE));
+    }
+
+    /** A tag nobody wrote reads as absent. */
+    @Test
+    public void anUnwrittenSpecTagIsNull() throws IOException {
+        new Exif(file).save();
+
+        assertNull(new Exif(file).getTag(ExifTags.Tag.PHOTOGRAPHER));
+    }
+
+    /** An Exif read from a stream has no file to write tags into, and says so. */
+    @Test
+    public void aStreamHasNoFileToWriteTagsInto() throws IOException {
+        try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
+            Exif exif = new Exif(in);
+            assertNull(exif.getTag(ExifTags.Tag.IMAGE_TITLE));
+            assertEquals(false, exif.setTags(new ExifTags.Builder()
+                    .set(ExifTags.Tag.IMAGE_TITLE, "nowhere to put this")));
+        }
+    }
+
+    /** A file with no Exif block has no directory to add a tag to. */
+    @Test
+    public void aFileWithNoExifTakesNoTags() throws IOException {
+        File bare = File.createTempFile("notexif", ".jpg");
+        bare.deleteOnExit();
+        try (FileOutputStream out = new FileOutputStream(bare)) {
+            out.write(new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9});
+        }
+
+        assertEquals(false, new Exif(bare).setTags(new ExifTags.Builder()
+                .set(ExifTags.Tag.IMAGE_TITLE, "nope")));
+    }
+
     private static Location locationAt(double altitude) {
         Location location = new Location("test");
         location.setLatitude(37.422);

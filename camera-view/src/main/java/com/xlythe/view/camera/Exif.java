@@ -577,6 +577,65 @@ public class Exif {
     }
 
     /**
+     * Reads a tag the standard defines but {@code ExifInterface} has no name for.
+     *
+     * <p>Twenty-three of the tags in CIPA DC-008 are in that position, all of them Exif 3.0
+     * additions - the environmental readings, the correction flags, the authorship fields, the
+     * composite-image trio, and the opt-out that says whether the photograph may train a model.
+     * Everything androidx does name goes through it instead, because it handles the formats and
+     * the directory routing and is far better tested than this is.</p>
+     *
+     * @return the value as text, or null when the tag is absent
+     */
+    @Nullable
+    public String getTag(@NonNull ExifTags.Tag tag) {
+        if (mFilePath == null) {
+            return null;
+        }
+        try {
+            byte[] jpeg = read(new File(mFilePath));
+            return jpeg == null ? null : ExifTags.read(jpeg, tag);
+        } catch (IOException | RuntimeException error) {
+            Log.w(TAG, "Unable to read " + tag, error);
+            return null;
+        }
+    }
+
+    /**
+     * Writes tags the standard defines but {@code ExifInterface} has no name for.
+     *
+     * <p>Applied immediately rather than at {@link #save()}, because saving goes through
+     * {@code ExifInterface}, which rewrites the block from the tags it knows and would drop
+     * these on the way past. Call it after saving, as with the thumbnail, for the same
+     * reason.</p>
+     *
+     * @return true if anything was written
+     */
+    public boolean setTags(@NonNull ExifTags.Builder tags) {
+        if (mFilePath == null) {
+            return false;
+        }
+        File file = new File(mFilePath);
+        try {
+            byte[] jpeg = read(file);
+            if (jpeg == null) {
+                return false;
+            }
+            byte[] updated = ExifTags.write(jpeg, tags);
+            if (updated == null) {
+                return false;
+            }
+            try (FileOutputStream out = new FileOutputStream(file)) {
+                out.write(updated);
+            }
+            return true;
+        } catch (IOException | RuntimeException | OutOfMemoryError error) {
+            Log.w(TAG, "Unable to write the requested tags", error);
+            return false;
+        }
+    }
+
+    /**
      * Returns the width of the photo in pixels.
      */
     public int getWidth() {
