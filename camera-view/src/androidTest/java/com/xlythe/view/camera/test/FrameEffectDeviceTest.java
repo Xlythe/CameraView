@@ -10,6 +10,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.media.MediaMetadataRetriever;
 import android.opengl.GLES20;
+import android.util.Log;
 import android.util.Size;
 
 import androidx.annotation.NonNull;
@@ -21,6 +22,8 @@ import androidx.exifinterface.media.ExifInterface;
 import androidx.test.rule.GrantPermissionRule;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.gl.ColorFilter;
+import com.xlythe.view.camera.gl.ColorMatrix;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.gl.GlFrame;
 
@@ -54,6 +57,13 @@ public final class FrameEffectDeviceTest {
     private static final long TIMEOUT_SECONDS = 30;
     /** How far a channel may stray, which is a JPEG quantising a flat field and nothing more. */
     private static final int TOLERANCE = 24;
+    /** How far the three channels of a grey pixel may differ after JPEG. */
+    private static final int GREY_TOLERANCE = 12;
+    /** How far apart they must be before a scene counts as having colour. */
+    private static final int COLOUR_SPREAD = 30;
+    /** How near to 255 a clamped channel has to land, allowing for JPEG. */
+    private static final int WHITE_FLOOR = 243;
+    private static final String FILTER_TAG = "FrameEffect";
 
     @Rule
     public final GrantPermissionRule permissions = GrantPermissionRule.grant(
@@ -193,6 +203,120 @@ public final class FrameEffectDeviceTest {
 
         assertEquals("an effect that draws the frame through should not reshape the capture",
                 withoutEffect, withEffect);
+    }
+
+    /**
+     * A colour filter reaches the photograph, and does to it what it claims.
+     *
+     * <p>Asserted with a matrix whose output does not depend on the scene. Grayscale would be
+     * the natural choice and is the wrong one here: proving it worked needs the scene to have
+     * had colour in it, and a phone face down on a desk photographs something already grey, so
+     * the test would pass by skipping and say nothing. Lifting every channel past one clamps to
+     * white whatever the camera is pointed at, which either happens or does not.</p>
+     *
+     * <p>The grayscale case is then checked as well, but only where the first capture shows
+     * there was colour to remove.</p>
+     */
+    @Test
+    public void aColourFilterReachesTheSavedPicture() throws Exception {
+        Bitmap white = captureThrough(
+                new ColorFilter(ColorMatrix.brightness(1f)), temporaryFile(".jpg"));
+        try {
+            for (int[] point : samplePoints(white)) {
+                int pixel = white.getPixel(point[0], point[1]);
+                assertTrue("a filter that lifts every channel past one should leave white, and"
+                                + " left " + String.format("#%06X", pixel & 0xFFFFFF),
+                        Color.red(pixel) >= WHITE_FLOOR && Color.green(pixel) >= WHITE_FLOOR
+                                && Color.blue(pixel) >= WHITE_FLOOR);
+            }
+        } finally {
+            white.recycle();
+        }
+
+        Bitmap unfiltered = captureThrough(null, temporaryFile(".jpg"));
+        Bitmap grey = captureThrough(
+                new ColorFilter(ColorMatrix.grayscale()), temporaryFile(".jpg"));
+        try {
+            if (isColourful(unfiltered)) {
+                assertTrue("every pixel should be grey once the colour is taken out",
+                        isGreyscale(grey));
+            } else {
+                Log.i(FILTER_TAG, "the scene had no colour to remove, so grayscale proves little");
+            }
+        } finally {
+            unfiltered.recycle();
+            grey.recycle();
+        }
+    }
+
+    /** Captures with the given renderer and decodes the result. */
+    @NonNull
+    private Bitmap captureThrough(@Nullable FrameRenderer renderer, @NonNull File file)
+            throws Exception {
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<File> captured = new AtomicReference<>();
+        withOpenCamera(renderer, camera -> {
+            camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+                @Override public void onImageConfirmation() {}
+
+                @Override public void onImageCaptured(File saved) {
+                    captured.set(saved);
+                    finished.countDown();
+                }
+
+                @Override public void onFailure() {
+                    finished.countDown();
+                }
+            });
+            camera.takePicture(file);
+            assertTrue("the capture never reported",
+                    finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        });
+        assertNotNull("the capture failed", captured.get());
+        Bitmap decoded = BitmapFactory.decodeFile(captured.get().getAbsolutePath());
+        assertNotNull("the capture wrote something that is not an image", decoded);
+        return decoded;
+    }
+
+    /** Whether a scene has enough colour in it for removing colour to be visible. */
+    private static boolean isColourful(@NonNull Bitmap bitmap) {
+        for (int[] point : samplePoints(bitmap)) {
+            if (channelSpread(bitmap.getPixel(point[0], point[1])) > COLOUR_SPREAD) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** Whether every sampled pixel has its three channels equal, within JPEG's rounding. */
+    private static boolean isGreyscale(@NonNull Bitmap bitmap) {
+        for (int[] point : samplePoints(bitmap)) {
+            int spread = channelSpread(bitmap.getPixel(point[0], point[1]));
+            if (spread > GREY_TOLERANCE) {
+                Log.i(FILTER_TAG, "not grey at " + point[0] + "," + point[1]
+                        + ", channels differ by " + spread);
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static int channelSpread(int pixel) {
+        int high = Math.max(Math.max(Color.red(pixel), Color.green(pixel)), Color.blue(pixel));
+        int low = Math.min(Math.min(Color.red(pixel), Color.green(pixel)), Color.blue(pixel));
+        return high - low;
+    }
+
+    /** A spread of points across the frame, so one flat corner cannot carry the verdict. */
+    private static int[][] samplePoints(@NonNull Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        return new int[][] {
+                {width / 4, height / 4}, {width / 2, height / 4}, {width * 3 / 4, height / 4},
+                {width / 4, height / 2}, {width / 2, height / 2}, {width * 3 / 4, height / 2},
+                {width / 4, height * 3 / 4}, {width / 2, height * 3 / 4},
+                {width * 3 / 4, height * 3 / 4},
+        };
     }
 
     /**
