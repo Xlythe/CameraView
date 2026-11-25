@@ -66,22 +66,28 @@ public class HighSpeedRecordingTest {
      */
     @Test
     public void theFileDeclaresThePlaybackRateRatherThanTheCaptureRate() {
-        assertEquals(30, VideoSession.VideoSurface.playbackFrameRate(240, 30));
-        assertEquals("a phone whose ordinary recordings are 60fps plays back at 60",
-                60, VideoSession.VideoSurface.playbackFrameRate(240, 60));
+        assertEquals(30, VideoSession.VideoSurface.playbackFrameRate(240));
+        assertEquals(30, VideoSession.VideoSurface.playbackFrameRate(120));
     }
 
-    /** A device that publishes no frame rate still gets the rate everything plays. */
+    /**
+     * And it is thirty whatever the device records at ordinarily.
+     *
+     * <p>Following the device's own profile sounds better and measures worse. A Pixel 7 Pro
+     * records ordinarily at 60, so a 240fps capture came back four times slower there and eight
+     * times slower through CameraX, which encodes slow motion at 30. The two backends have to
+     * agree about how slow slow motion is.</p>
+     */
     @Test
-    public void aDeviceWithNoProfileToCopyPlaysBackAtThirty() {
-        assertEquals(30, VideoSession.VideoSurface.playbackFrameRate(120, 0));
+    public void thePlaybackRateDoesNotFollowTheDevice() {
+        assertEquals(30, VideoSession.VideoSurface.playbackFrameRate(240));
     }
 
     /** Nothing is written as slower than life when it was not captured faster than life. */
     @Test
     public void aCaptureRateBelowPlaybackIsNotStretched() {
-        assertEquals(30, VideoSession.VideoSurface.playbackFrameRate(30, 30));
-        assertEquals(24, VideoSession.VideoSurface.playbackFrameRate(24, 30));
+        assertEquals(30, VideoSession.VideoSurface.playbackFrameRate(30));
+        assertEquals(24, VideoSession.VideoSurface.playbackFrameRate(24));
     }
 
     /**
