@@ -10,6 +10,7 @@ import android.graphics.SurfaceTexture;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.Looper;
 import android.os.Parcelable;
 import android.util.AttributeSet;
 import android.util.Log;
@@ -25,6 +26,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
@@ -32,7 +34,6 @@ import androidx.annotation.UiThread;
 
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
-import com.xlythe.view.camera.x.CameraXModule;
 
 import java.io.File;
 import java.util.List;
@@ -50,16 +51,65 @@ public class CameraView extends FrameLayout {
     static final String TAG = CameraView.class.getSimpleName();
     static final boolean DEBUG = false;
 
-    // When enabled, CameraX will be used. It's currently unstable.
-    // Notable bugs:
-    // * Pictures taken with CameraX may be rotated. CameraX does apply exif rotation itself, but
-    //   incorrectly (eg. Samsung Fold 3 front facing camera). Attempts to overwrite the exif
-    //   metadata manually to fix this failed (and I'm not sure why...).
-    // * Rotating the device breaks the ability to take pictures/images unless a new CameraView is
-    //   used.
-    // * The video preview doesn't match the same dimensions of the video that is being recorded.
-    // * Streaming videos isn't working.
-    static final boolean USE_CAMERA_X = false;
+    /**
+     * Which implementation of the camera a {@link CameraView} drives.
+     *
+     * <p>Camera2 is the default because it is what this library has been shipping and validating
+     * on devices. CameraX owns more behaviour - it carries a database of per-device quirks, and it
+     * is the only backend that can reach a manufacturer's own Extensions - but it is opt-in until
+     * it has had the same validation here.</p>
+     *
+     * @see #setDefaultBackend
+     */
+    public enum Backend {
+        /** The newest implementation the device supports. */
+        AUTO(0),
+        /** {@code android.hardware.camera2}, the default. */
+        CAMERA2(1),
+        /**
+         * {@code androidx.camera}.
+         *
+         * <p>Needs the androidx.camera dependencies on the classpath. An app that excluded them
+         * falls back to {@link #CAMERA2}.</p>
+         */
+        CAMERA_X(2),
+        /** {@code android.hardware.Camera}, for devices that predate camera2. */
+        LEGACY(3);
+
+        final int id;
+
+        Backend(int id) {
+            this.id = id;
+        }
+
+        static Backend fromId(int id) {
+            for (Backend backend : values()) {
+                if (backend.id == id) {
+                    return backend;
+                }
+            }
+            return AUTO;
+        }
+    }
+
+    /** The backend a CameraView uses when its layout does not name one. */
+    private static volatile Backend sDefaultBackend = Backend.AUTO;
+
+    /**
+     * Chooses the backend for every CameraView created from now on.
+     *
+     * <p>Set this before the view is inflated - in {@code Application.onCreate}, say - because a
+     * view picks its backend once, when it is created. A single view can be told directly with
+     * {@code app:backend} in its layout.</p>
+     */
+    public static void setDefaultBackend(@NonNull Backend backend) {
+        sDefaultBackend = backend;
+    }
+
+    @NonNull
+    public static Backend getDefaultBackend() {
+        return sDefaultBackend;
+    }
 
     // When enabled, CameraV2 will be used. It's currently stable.
     static final boolean USE_CAMERA_V2 = true;
@@ -84,9 +134,35 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_PENDING_IMAGE_FILE_PATH = "pending_image_file_path";
     private static final String EXTRA_PENDING_VIDEO_FILE_PATH = "pending_video_file_path";
     private static final String EXTRA_MATCH_PREVIEW_ASPECT_RATIO = "match_preview_aspect_ratio";
+    /** Saved-state key for dynamic range. */
+    private static final String EXTRA_DYNAMIC_RANGE = "dynamic_range";
+    /** Saved-state key for the CameraX photo extension. */
+    private static final String EXTRA_EXTENSION = "extension";
+    /** Saved-state key for front-video mirroring. */
+    private static final String EXTRA_FRONT_VIDEO_MIRRORING = "front_video_mirroring";
+    /** Saved-state key for preview stabilization. */
+    private static final String EXTRA_PREVIEW_STABILIZATION = "preview_stabilization";
+    /** Saved-state key for video stabilization. */
+    private static final String EXTRA_VIDEO_STABILIZATION = "video_stabilization";
+    /** Saved-state key for exposure compensation. */
+    private static final String EXTRA_EXPOSURE_COMPENSATION = "exposure_compensation";
+    /** Saved-state key for torch state. */
+    private static final String EXTRA_TORCH = "torch";
+    /** Saved-state key for low-light boost state. */
+    private static final String EXTRA_LOW_LIGHT_BOOST = "low_light_boost";
 
+    /**
+     * The lifecycle state of the camera and its preview surface.
+     *
+     * <p>Status changes are serialized on the main thread.</p>
+     */
     private enum Status {
-        OPEN, CLOSED, AWAITING_TEXTURE
+        CLOSED,
+        WAITING_FOR_SURFACE,
+        OPENING,
+        OPEN,
+        CLOSING,
+        ERROR
     }
 
     /**
@@ -156,6 +232,75 @@ public class CameraView extends FrameLayout {
         }
     }
 
+    /** Selects an optional CameraX vendor photo-processing extension. */
+    public enum Extension {
+        NONE(0), BOKEH(1), HDR(2), NIGHT(3), FACE_RETOUCH(4), AUTO(5);
+
+        /** Stable XML and saved-state identifier. */
+        private final int id;
+
+        Extension(int id) {
+            this.id = id;
+        }
+
+        static Extension fromId(int id) {
+            for (Extension extension : values()) {
+                if (extension.id == id) return extension;
+            }
+            throw new IllegalArgumentException();
+        }
+    }
+    /** Selects standard or high dynamic range video when supported by the active backend. */
+    public enum DynamicRange {
+        SDR(0), HDR(1);
+
+        /** Stable XML and saved-state identifier. */
+        private final int id;
+
+        DynamicRange(int id) {
+            this.id = id;
+        }
+
+        static DynamicRange fromId(int id) {
+            for (DynamicRange dynamicRange : values()) {
+                if (dynamicRange.id == id) return dynamicRange;
+            }
+            throw new IllegalArgumentException();
+        }
+    }
+
+    /**
+     * The range of colours a picture is recorded in.
+     *
+     * <p>sRGB is what every camera has always produced and what every viewer understands. A
+     * modern sensor can see more than sRGB can describe, and a modern screen can show more, which
+     * is why a manufacturer's own camera app saves wide-gamut stills - the difference is visible
+     * in saturated reds and greens, where sRGB clips.</p>
+     *
+     * <p>Wide gamut is not free: a viewer that ignores the colour profile shows the picture
+     * oversaturated, so it is opt-in rather than the default.</p>
+     */
+    public enum ColorSpace {
+        /** What every camera has always produced. */
+        SRGB(0),
+        /** Wider than sRGB, and what Android and Apple both use for wide-gamut images. */
+        DISPLAY_P3(1);
+
+        /** Stable XML and saved-state identifier. */
+        private final int id;
+
+        ColorSpace(int id) {
+            this.id = id;
+        }
+
+        static ColorSpace fromId(int id) {
+            for (ColorSpace colorSpace : values()) {
+                if (colorSpace.id == id) return colorSpace;
+            }
+            throw new IllegalArgumentException();
+        }
+    }
+
     /**
      * {@link TextureView.SurfaceTextureListener} handles several lifecycle events on a
      * {@link TextureView}.
@@ -164,10 +309,8 @@ public class CameraView extends FrameLayout {
         @Override
         public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
             if (DEBUG) Log.v(TAG, "Surface Texture now available.");
-            synchronized (CameraView.this) {
-                if (getStatus() == Status.AWAITING_TEXTURE) {
-                    setStatus(Status.OPEN);
-                }
+            if (getStatus() == Status.WAITING_FOR_SURFACE) {
+                openOnMainThread();
             }
         }
 
@@ -176,11 +319,11 @@ public class CameraView extends FrameLayout {
 
         @Override
         public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
-            synchronized (CameraView.this) {
-                if (getStatus() == Status.OPEN) {
-                    Log.w(TAG, "Surface destroyed but was not closed.");
-                    close();
-                }
+            Status state = getStatus();
+            if (state == Status.OPEN || state == Status.OPENING
+                    || state == Status.WAITING_FOR_SURFACE) {
+                Log.w(TAG, "Surface destroyed while camera was active.");
+                close();
             }
             return true;
         }
@@ -189,6 +332,7 @@ public class CameraView extends FrameLayout {
         public void onSurfaceTextureUpdated(SurfaceTexture texture) {}
     };
 
+    /** The current internal camera lifecycle status. Guarded by this CameraView monitor. */
     private Status mStatus = Status.CLOSED;
     private OnImageCapturedListener mOnImageCapturedListener;
     private OnVideoCapturedListener mOnVideoCapturedListener;
@@ -196,10 +340,19 @@ public class CameraView extends FrameLayout {
     // For overriding onTouch
     private final int mTouchSlop = ViewConfiguration.get(getContext()).getScaledTouchSlop();
     private final int mLongPressTimeout = ViewConfiguration.getLongPressTimeout();
-    private final Handler mHandler = new Handler();
+    private final Handler mHandler = new Handler(Looper.getMainLooper());
     private float mInitialMotionEventX;
     private float mInitialMotionEventY;
     private boolean mIsLongPressMotionEvent;
+    /** Dispatches the pending long-press gesture without clearing unrelated handler work. */
+    private final Runnable mLongPressRunnable = () -> {
+        if (Build.VERSION.SDK_INT >= 24) {
+            performLongClick(mInitialMotionEventX, mInitialMotionEventY);
+        } else {
+            performLongClick();
+        }
+        mIsLongPressMotionEvent = true;
+    };
 
     // For tap-to-focus
     private final Rect mFocusingRect = new Rect();
@@ -226,6 +379,16 @@ public class CameraView extends FrameLayout {
 
     @Nullable
     private BarcodeScanner mBarcodeScanner;
+    /** Whether the active backend owns a native barcode analysis use case. */
+    private boolean mUsingModuleBarcodeScanner;
+
+    /** The caller's own frame analyzer, if one is running. */
+    @Nullable
+    private FrameStream mFrameStream;
+
+    /** The caller's face listener, if the camera agreed to report faces. */
+    @Nullable
+    private FaceDetectionListener mFaceDetectionListener;
 
     // When true, avoid adding/removing views. While usually harmless (although it can cause state
     // loss), it's especially important since calling removeView(TextureView) after
@@ -251,14 +414,69 @@ public class CameraView extends FrameLayout {
         init(context, attrs);
     }
 
-    private void init(Context context, @Nullable AttributeSet attrs) {
-        if (USE_CAMERA_X && Build.VERSION.SDK_INT >= 21) {
-            mCameraModule = new CameraXModule(this);
-        } else if (USE_CAMERA_V2 && Build.VERSION.SDK_INT >= 21) {
-            mCameraModule = new Camera2Module(this);
-        } else {
-            mCameraModule = new LegacyCameraModule(this);
+    /**
+     * Builds the backend, falling back when the one asked for cannot run here.
+     *
+     * <p>CameraX is created reflectively so that androidx.camera is a dependency an app can
+     * exclude: a build that never selects CameraX never loads the class, and one that excluded
+     * the dependency and asks for it anyway gets Camera2 and a warning rather than a
+     * NoClassDefFoundError out of a constructor.</p>
+     */
+    @NonNull
+    private ICameraModule createModule(@NonNull Backend backend) {
+        if (Build.VERSION.SDK_INT < 21) {
+            return new LegacyCameraModule(this);
         }
+        switch (backend) {
+            case LEGACY:
+                return new LegacyCameraModule(this);
+            case CAMERA_X:
+                ICameraModule cameraX = createCameraXModule();
+                if (cameraX != null) {
+                    return cameraX;
+                }
+                Log.w(TAG, "androidx.camera is not on the classpath; using Camera2 instead");
+                return new Camera2Module(this);
+            case AUTO:
+            case CAMERA2:
+            default:
+                return USE_CAMERA_V2 ? new Camera2Module(this) : new LegacyCameraModule(this);
+        }
+    }
+
+    @Nullable
+    private ICameraModule createCameraXModule() {
+        try {
+            return (ICameraModule) Class.forName("com.xlythe.view.camera.x.CameraXModule")
+                    .getConstructor(CameraView.class)
+                    .newInstance(this);
+        } catch (ReflectiveOperationException | LinkageError | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "CameraX is unavailable", error);
+            return null;
+        }
+    }
+
+    /** Which implementation this view ended up driving. */
+    @NonNull
+    public Backend getBackend() {
+        if (mCameraModule instanceof LegacyCameraModule) {
+            return Backend.LEGACY;
+        }
+        if (mCameraModule instanceof Camera2Module) {
+            return Backend.CAMERA2;
+        }
+        return Backend.CAMERA_X;
+    }
+
+    private void init(Context context, @Nullable AttributeSet attrs) {
+        Backend backend = sDefaultBackend;
+        if (attrs != null) {
+            TypedArray chosen = context.obtainStyledAttributes(attrs, R.styleable.CameraView);
+            backend = Backend.fromId(
+                    chosen.getInteger(R.styleable.CameraView_backend, backend.id));
+            chosen.recycle();
+        }
+        mCameraModule = createModule(backend);
 
         if (attrs != null) {
             TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView);
@@ -275,6 +493,14 @@ public class CameraView extends FrameLayout {
             setImageConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmImages, isImageConfirmationEnabled()));
             setVideoConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmVideos, isVideoConfirmationEnabled()));
             setMatchPreviewAspectRatio(a.getBoolean(R.styleable.CameraView_matchPreviewAspectRatio, isMatchPreviewAspectRatioEnabled()));
+            setDynamicRange(DynamicRange.fromId(a.getInteger(R.styleable.CameraView_dynamicRange, getDynamicRange().id)));
+            setExtension(Extension.fromId(a.getInteger(R.styleable.CameraView_extension, getExtension().id)));
+            setFrontVideoMirroringEnabled(a.getBoolean(R.styleable.CameraView_frontVideoMirroringEnabled, isFrontVideoMirroringEnabled()));
+            setPreviewStabilizationEnabled(a.getBoolean(R.styleable.CameraView_previewStabilizationEnabled, isPreviewStabilizationEnabled()));
+            setVideoStabilizationEnabled(a.getBoolean(R.styleable.CameraView_videoStabilizationEnabled, isVideoStabilizationEnabled()));
+            setExposureCompensation(a.getInteger(R.styleable.CameraView_exposureCompensation, getExposureCompensation()));
+            setTorchEnabled(a.getBoolean(R.styleable.CameraView_torchEnabled, isTorchEnabled()));
+            setLowLightBoostEnabled(a.getBoolean(R.styleable.CameraView_lowLightBoostEnabled, isLowLightBoostEnabled()));
             a.recycle();
         }
 
@@ -283,18 +509,25 @@ public class CameraView extends FrameLayout {
         }
 
         mScaleDetector = new PinchToZoomGestureDetector(context);
+        ensurePreviewViews();
     }
 
     @Override
     public void onFinishInflate() {
         super.onFinishInflate();
+        ensurePreviewViews();
+    }
+
+    private void ensurePreviewViews() {
+        if (mCameraView != null) {
+            return;
+        }
         addView(mCameraView = new TextureView(getContext()));
         addView(mImagePreview = new ImageView(getContext()));
         addView(mVideoPreview = new VideoView(getContext()));
         mImagePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
         mImagePreview.setVisibility(View.GONE);
         mVideoPreview.setVisibility(View.GONE);
-
         mCameraView.setSurfaceTextureListener(mSurfaceTextureListener);
     }
 
@@ -319,6 +552,14 @@ public class CameraView extends FrameLayout {
         state.putBoolean(EXTRA_CONFIRM_IMAGE, isImageConfirmationEnabled());
         state.putBoolean(EXTRA_CONFIRM_VIDEO, isVideoConfirmationEnabled());
         state.putBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO, isMatchPreviewAspectRatioEnabled());
+        state.putInt(EXTRA_DYNAMIC_RANGE, getDynamicRange().id);
+        state.putInt(EXTRA_EXTENSION, getExtension().id);
+        state.putBoolean(EXTRA_FRONT_VIDEO_MIRRORING, isFrontVideoMirroringEnabled());
+        state.putBoolean(EXTRA_PREVIEW_STABILIZATION, isPreviewStabilizationEnabled());
+        state.putBoolean(EXTRA_VIDEO_STABILIZATION, isVideoStabilizationEnabled());
+        state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
+        state.putBoolean(EXTRA_TORCH, isTorchEnabled());
+        state.putBoolean(EXTRA_LOW_LIGHT_BOOST, isLowLightBoostEnabled());
         if (mImagePendingConfirmation != null) {
             state.putString(EXTRA_PENDING_IMAGE_FILE_PATH, mImagePendingConfirmation.getAbsolutePath());
         }
@@ -346,6 +587,14 @@ public class CameraView extends FrameLayout {
             setImageConfirmationEnabled(state.getBoolean(EXTRA_CONFIRM_IMAGE));
             setVideoConfirmationEnabled(state.getBoolean(EXTRA_CONFIRM_VIDEO));
             setMatchPreviewAspectRatio(state.getBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO));
+            setDynamicRange(DynamicRange.fromId(state.getInt(EXTRA_DYNAMIC_RANGE, DynamicRange.SDR.id)));
+            setExtension(Extension.fromId(state.getInt(EXTRA_EXTENSION, Extension.NONE.id)));
+            setFrontVideoMirroringEnabled(state.getBoolean(EXTRA_FRONT_VIDEO_MIRRORING, true));
+            setPreviewStabilizationEnabled(state.getBoolean(EXTRA_PREVIEW_STABILIZATION));
+            setVideoStabilizationEnabled(state.getBoolean(EXTRA_VIDEO_STABILIZATION));
+            setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
+            setTorchEnabled(state.getBoolean(EXTRA_TORCH));
+            setLowLightBoostEnabled(state.getBoolean(EXTRA_LOW_LIGHT_BOOST));
 
             if (state.containsKey(EXTRA_PENDING_IMAGE_FILE_PATH)) {
                 File file = new File(state.getString(EXTRA_PENDING_IMAGE_FILE_PATH));
@@ -369,44 +618,60 @@ public class CameraView extends FrameLayout {
         return mStatus;
     }
 
+    @UiThread
     private synchronized void setStatus(Status status) {
         if (mStatus == status) {
             return;
         }
-
         if (DEBUG) {
-            Log.v(TAG, "Camera state set to " + status.name());
+            Log.v(TAG, "Camera status set to " + status.name());
         }
         mStatus = status;
-
-        switch (mStatus) {
-            case OPEN:
-                onOpen();
-                break;
-            case CLOSED:
-                onClose();
-                break;
+    }
+    private void runOnMainThread(Runnable runnable) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            runnable.run();
+        } else {
+            mHandler.post(runnable);
         }
     }
 
     /*
      * Opens the camera and starts displaying a preview. You are in charge of checking if the
-     * phone has PackageManager.FEATURE_CAMERA_ANY and, if you are targeting Android M+, that
-     * the phone has the following permissions:
-     *       Manifest.permission.CAMERA
-     *       Manifest.permission.RECORD_AUDIO
-     *       Manifest.permission.WRITE_EXTERNAL_STORAGE
+     * phone has PackageManager.FEATURE_CAMERA_ANY and, if you are targeting Android M+, that the
+     * phone has granted Manifest.permission.CAMERA.
+     *
+     * Showing a preview and taking pictures need nothing else. The microphone is only required
+     * by the methods that record or stream audio, which ask for it themselves, and outputs are
+     * written to the File you pass in, so no storage permission is involved.
      */
-    @RequiresPermission(allOf = {
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
-    })
+    @RequiresPermission(Manifest.permission.CAMERA)
     public synchronized void open() {
-        if (mCameraView.isAvailable()) {
-            setStatus(Status.OPEN);
-        } else {
-            setStatus(Status.AWAITING_TEXTURE);
+        runOnMainThread(this::openOnMainThread);
+    }
+
+    @UiThread
+    private void openOnMainThread() {
+        Status state = getStatus();
+        if (state == Status.OPEN || state == Status.OPENING) {
+            return;
+        }
+        if (mCameraView == null || !mCameraView.isAvailable()) {
+            setStatus(Status.WAITING_FOR_SURFACE);
+            return;
+        }
+
+        setStatus(Status.OPENING);
+        try {
+            onOpen();
+            if (getStatus() == Status.OPENING) {
+                setStatus(Status.OPEN);
+                if (mOnCameraStateChangedListener != null) {
+                    mOnCameraStateChangedListener.onCameraOpened();
+                }
+            }
+        } catch (RuntimeException e) {
+            onCameraError(e);
         }
     }
 
@@ -414,7 +679,22 @@ public class CameraView extends FrameLayout {
      * Closes the camera.
      */
     public synchronized void close() {
-        setStatus(Status.CLOSED);
+        runOnMainThread(this::closeOnMainThread);
+    }
+
+    @UiThread
+    private void closeOnMainThread() {
+        Status state = getStatus();
+        if (state == Status.CLOSED || state == Status.CLOSING) {
+            return;
+        }
+
+        setStatus(Status.CLOSING);
+        try {
+            onClose();
+        } finally {
+            setStatus(Status.CLOSED);
+        }
     }
 
     /**
@@ -422,6 +702,14 @@ public class CameraView extends FrameLayout {
      */
     public synchronized boolean isOpen() {
         return getStatus() == Status.OPEN;
+    }
+
+    void onCameraError(Throwable error) {
+        runOnMainThread(() -> {
+            Log.e(TAG, "Camera operation failed", error);
+            setStatus(Status.ERROR);
+
+        });
     }
 
     /**
@@ -611,6 +899,20 @@ public class CameraView extends FrameLayout {
     /**
      * Gets the current quality for image and video outputs.
      */
+    /**
+     * How hard a still capture is compressed, from 1 to 100, 95 by default.
+     *
+     * <p>Without this every device picks its own number, which is not the same on any two phones.
+     * </p>
+     */
+    public void setPictureQuality(int percent) {
+        mCameraModule.setPictureQuality(percent);
+    }
+
+    public int getPictureQuality() {
+        return mCameraModule.getPictureQuality();
+    }
+
     public Quality getQuality() {
         return mCameraModule.getQuality();
     }
@@ -650,15 +952,12 @@ public class CameraView extends FrameLayout {
 
     protected void onOpen() {
         mCameraModule.open();
-
-        if (mOnCameraStateChangedListener != null) {
-            mOnCameraStateChangedListener.onCameraOpened();
-        }
     }
 
     protected void onClose() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             exitBarcodeScanner();
+            stopFrameAnalysis();
         }
         mCameraModule.close();
 
@@ -683,7 +982,9 @@ public class CameraView extends FrameLayout {
      */
     public void takePicture(File file) {
         Log.v(TAG, "Taking a picture");
-        if (isImageConfirmationEnabled()) {
+        // Freezing the preview to show the picture is right for a still, and wrong in the middle
+        // of a recording: the recording would freeze with it.
+        if (isImageConfirmationEnabled() && !isRecording()) {
             mCameraModule.pause();
         }
 
@@ -691,19 +992,38 @@ public class CameraView extends FrameLayout {
     }
 
     /**
+     * Whether a picture is waiting to be confirmed or rejected.
+     *
+     * <p>Worth asking before either: a confirmation can be cleared from under the UI showing it -
+     * by the camera closing, or by state being restored - and {@link #confirmPicture()} and
+     * {@link #rejectPicture()} both throw when there is nothing pending, which from a button's
+     * click handler is a crash.</p>
+     */
+    public boolean isImageConfirmationPending() {
+        return mImagePendingConfirmation != null;
+    }
+
+    /** Whether a video is waiting to be confirmed or rejected. */
+    public boolean isVideoConfirmationPending() {
+        return mVideoPendingConfirmation != null;
+    }
+
+    /**
      * Confirms a picture that is currently being displayed on the preview.
      */
     public void confirmPicture() {
+        if (mImagePendingConfirmation == null) {
+            throw new IllegalStateException("confirmPicture() called, but no picture was awaiting confirmation");
+        }
         if (isImageConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
-        if (mImagePendingConfirmation == null) {
-            throw new IllegalStateException("confirmPicture() called, but no picture was awaiting confirmation");
-        }
         Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
-        getOnImageCapturedListener().onImageCaptured(mImagePendingConfirmation);
+        if (getOnImageCapturedListener() != null) {
+            getOnImageCapturedListener().onImageCaptured(mImagePendingConfirmation);
+        }
         mImagePendingConfirmation = null;
     }
 
@@ -711,13 +1031,13 @@ public class CameraView extends FrameLayout {
      * Rejects a picture that is currently being displayed on the preview.
      */
     public void rejectPicture() {
+        if (mImagePendingConfirmation == null) {
+            throw new IllegalStateException("rejectPicture() called, but no picture was awaiting confirmation");
+        }
         if (isImageConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
-        if (mImagePendingConfirmation == null) {
-            throw new IllegalStateException("rejectPicture() called, but no picture was awaiting confirmation");
-        }
         Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
         if (!mImagePendingConfirmation.delete()) {
@@ -728,8 +1048,13 @@ public class CameraView extends FrameLayout {
 
     /**
      * Takes a video and calls {@link OnVideoCapturedListener#onVideoCaptured(File)} when done.
+     *
+     * <p>Records audio alongside the video, so this is where the microphone is needed rather
+     * than at {@link #open()}.</p>
+     *
      * @param file The destination.
      */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     public void startRecording(File file) {
         Log.v(TAG, "Recording a video");
         mCameraModule.startRecording(file);
@@ -758,16 +1083,18 @@ public class CameraView extends FrameLayout {
      * Confirms a video that is currently being displayed on the preview.
      */
     public void confirmVideo() {
+        if (mVideoPendingConfirmation == null) {
+            throw new IllegalStateException("confirmVideo() called, but no video was awaiting confirmation");
+        }
         if (isVideoConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
-        if (mVideoPendingConfirmation == null) {
-            throw new IllegalStateException("confirmVideo() called, but no video was awaiting confirmation");
-        }
         mVideoPreview.pause();
         mVideoPreview.setVisibility(View.GONE);
-        getOnVideoCapturedListener().onVideoCaptured(mVideoPendingConfirmation);
+        if (getOnVideoCapturedListener() != null) {
+            getOnVideoCapturedListener().onVideoCaptured(mVideoPendingConfirmation);
+        }
         mVideoPendingConfirmation = null;
     }
 
@@ -775,13 +1102,13 @@ public class CameraView extends FrameLayout {
      * Rejects a video that is currently being displayed on the preview.
      */
     public void rejectVideo() {
+        if (mVideoPendingConfirmation == null) {
+            throw new IllegalStateException("rejectVideo() called, but no video was awaiting confirmation");
+        }
         if (isVideoConfirmationEnabled()) {
             mCameraModule.resume();
         }
 
-        if (mVideoPendingConfirmation == null) {
-            throw new IllegalStateException("rejectVideo() called, but no video was awaiting confirmation");
-        }
         mVideoPreview.pause();
         mVideoPreview.setVisibility(View.GONE);
         if (!mVideoPendingConfirmation.delete()) {
@@ -833,12 +1160,16 @@ public class CameraView extends FrameLayout {
             throw new IllegalStateException("Camera must be open before scanning for barcodes");
         }
 
-        if (mBarcodeScanner != null) {
+        if (mBarcodeScanner != null || mUsingModuleBarcodeScanner) {
             throw new IllegalStateException("Barcode scanner cannot be started twice");
         }
 
-        mBarcodeScanner = new BarcodeScanner(mCameraModule.getCanvas(), listener, format, formats);
-        mBarcodeScanner.start();
+        mUsingModuleBarcodeScanner = mCameraModule.startBarcodeScanner(listener, format, formats);
+        if (!mUsingModuleBarcodeScanner) {
+            mBarcodeScanner = new BarcodeScanner(
+                    mCameraModule.getCanvas(), this, listener, format, formats);
+            mBarcodeScanner.start();
+        }
     }
 
     @RequiresApi(19)
@@ -846,6 +1177,151 @@ public class CameraView extends FrameLayout {
         if (mBarcodeScanner != null) {
             mBarcodeScanner.stop();
             mBarcodeScanner = null;
+        }
+        if (mUsingModuleBarcodeScanner) {
+            mCameraModule.stopBarcodeScanner();
+            mUsingModuleBarcodeScanner = false;
+        }
+    }
+
+    /**
+     * Hands every camera frame to an analyzer, for detection the library does not do itself.
+     *
+     * <p>The analyzer is called on a background thread with the most recent frame, so one that
+     * takes longer than a frame interval drops frames instead of falling behind. Each frame says
+     * how to turn it upright and where its pixels land on this view, which is what an overlay
+     * drawn over the preview needs.</p>
+     *
+     * <p>This runs alongside the preview and recording, and stays attached across a lens switch.
+     * Call {@link #stopFrameAnalysis()} to let the camera give the buffers back.</p>
+     *
+     * @throws IllegalStateException if the camera is not open, or analysis is already running
+     */
+    @RequiresApi(19)
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public void startFrameAnalysis(@NonNull FrameStream.Analyzer analyzer) {
+        startFrameAnalysis(analyzer, new FrameStream.Params());
+    }
+
+    /**
+     * {@link #startFrameAnalysis(FrameStream.Analyzer)} with a say over the frames themselves.
+     *
+     * @see FrameStream.Params#setMaxSize
+     */
+    @RequiresApi(19)
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public void startFrameAnalysis(
+            @NonNull FrameStream.Analyzer analyzer, @NonNull FrameStream.Params params) {
+        if (!isOpen()) {
+            throw new IllegalStateException("Camera must be open before analyzing frames");
+        }
+        if (mFrameStream != null) {
+            throw new IllegalStateException("Frame analysis cannot be started twice");
+        }
+        mFrameStream = new FrameStream(mCameraModule.getCanvas(), this, params, analyzer);
+        mFrameStream.start();
+    }
+
+    /** Stops the analyzer started by {@link #startFrameAnalysis}. */
+    @RequiresApi(19)
+    public void stopFrameAnalysis() {
+        if (mFrameStream != null) {
+            mFrameStream.close();
+            mFrameStream = null;
+        }
+    }
+
+    /** Whether an analyzer is receiving frames. */
+    @RequiresApi(19)
+    public boolean isAnalyzingFrames() {
+        return mFrameStream != null && mFrameStream.isAnalyzing();
+    }
+
+    /** Receives the faces the camera itself is tracking. */
+    public interface FaceDetectionListener {
+        /**
+         * Called on the main thread whenever the camera reports its faces, which is roughly once
+         * per preview frame. An empty list means it has stopped seeing any.
+         *
+         * @param faces the faces, in the camera's own coordinates
+         * @param faceToView maps a face's bounds onto this view, for drawing over the preview
+         */
+        void onFacesDetected(@NonNull List<Face> faces, @NonNull Matrix faceToView);
+    }
+
+    /**
+     * Whether this camera can record in a given colour range.
+     *
+     * <p>Worth asking before offering the choice: wide gamut needs API 34 and a camera that
+     * reports the profile, and a picture saved in a colour space the viewer ignores looks
+     * oversaturated rather than better.</p>
+     */
+    public boolean isColorSpaceSupported(ColorSpace colorSpace) {
+        return mCameraModule.isColorSpaceSupported(colorSpace);
+    }
+
+    /**
+     * The colour range pictures are recorded in, sRGB by default.
+     *
+     * <p>Takes effect the next time the camera configures its session, so set it before opening
+     * or expect a brief reconfiguration.</p>
+     */
+    public void setColorSpace(ColorSpace colorSpace) {
+        mCameraModule.setColorSpace(colorSpace);
+    }
+
+    public ColorSpace getColorSpace() {
+        return mCameraModule.getColorSpace();
+    }
+
+    /**
+     * Whether a picture can be taken while a recording is running.
+     *
+     * <p>The video-snapshot button every camera app has. Not every camera can hold a preview, a
+     * recording and a still at once, so this is worth asking before showing the control: where it
+     * is false, {@link #takePicture} during a recording reports a failure and the recording
+     * continues.</p>
+     */
+    public boolean isSnapshotWhileRecordingSupported() {
+        return mCameraModule.isSnapshotWhileRecordingSupported();
+    }
+
+    /**
+     * Whether this camera can report the faces it is tracking.
+     *
+     * <p>Almost every camera can: it needs faces to decide what to focus and expose for, so the
+     * work is already being done in hardware. A camera that cannot is usually an external or
+     * virtual one.</p>
+     */
+    public boolean isFaceDetectionSupported() {
+        return mCameraModule.isFaceDetectionSupported();
+    }
+
+    /**
+     * Reports the faces the camera is tracking, or stops when given null.
+     *
+     * <p>This is the camera's own detector, the one the manufacturer's app draws boxes from. It is
+     * free, it arrives with the preview, and it finds faces rather than describing them - for
+     * anything beyond where a face is, run a detector over
+     * {@link #startFrameAnalysis(FrameStream.Analyzer)} instead.</p>
+     *
+     * @return whether the camera took it on. False means this camera cannot report faces, and the
+     *     listener will never be called.
+     */
+    public boolean setFaceDetectionListener(@Nullable FaceDetectionListener listener) {
+        mFaceDetectionListener = listener;
+        boolean enabled = mCameraModule.setFaceDetectionEnabled(listener != null);
+        if (!enabled) {
+            mFaceDetectionListener = null;
+        }
+        return enabled;
+    }
+
+    /** Called by the active backend, on the main thread. */
+    void onFacesDetected(@NonNull List<Face> faces, @NonNull Matrix faceToView) {
+        FaceDetectionListener listener = mFaceDetectionListener;
+        if (listener != null) {
+            listener.onFacesDetected(faces, faceToView);
         }
     }
 
@@ -917,6 +1393,124 @@ public class CameraView extends FrameLayout {
         return mCameraModule.hasFlash();
     }
 
+    /** Sets the requested video dynamic range. */
+    public void setDynamicRange(DynamicRange dynamicRange) {
+        mCameraModule.setDynamicRange(dynamicRange);
+    }
+
+    /** Returns the requested video dynamic range. */
+    public DynamicRange getDynamicRange() {
+        return mCameraModule.getDynamicRange();
+    }
+
+    /** Returns whether the active backend and lens support the requested dynamic range. */
+    public boolean isDynamicRangeSupported(DynamicRange dynamicRange) {
+        return mCameraModule.isDynamicRangeSupported(dynamicRange);
+    }
+
+    /** Sets the optional CameraX photo-processing extension. */
+    public void setExtension(Extension extension) {
+        mCameraModule.setExtension(extension);
+    }
+
+    /** Returns the requested CameraX photo-processing extension. */
+    public Extension getExtension() {
+        return mCameraModule.getExtension();
+    }
+
+    /** Returns whether the active backend and lens support the extension. */
+    public boolean isExtensionSupported(Extension extension) {
+        return mCameraModule.isExtensionSupported(extension);
+    }
+    /** Controls whether front-camera video files are mirrored. */
+    public void setFrontVideoMirroringEnabled(boolean enabled) {
+        mCameraModule.setFrontVideoMirroringEnabled(enabled);
+    }
+
+    /** Returns whether front-camera video files are mirrored. */
+    public boolean isFrontVideoMirroringEnabled() {
+        return mCameraModule.isFrontVideoMirroringEnabled();
+    }
+
+    /** Enables stabilized preview output when the active camera supports it. */
+    public void setPreviewStabilizationEnabled(boolean enabled) {
+        mCameraModule.setPreviewStabilizationEnabled(enabled);
+    }
+
+    /** Returns whether preview stabilization is requested. */
+    public boolean isPreviewStabilizationEnabled() {
+        return mCameraModule.isPreviewStabilizationEnabled();
+    }
+
+    /** Returns whether preview stabilization is supported by the active camera. */
+    public boolean isPreviewStabilizationSupported() {
+        return mCameraModule.isPreviewStabilizationSupported();
+    }
+
+    /** Enables stabilized recorded video when the active camera supports it. */
+    public void setVideoStabilizationEnabled(boolean enabled) {
+        mCameraModule.setVideoStabilizationEnabled(enabled);
+    }
+
+    /** Returns whether video stabilization is requested. */
+    public boolean isVideoStabilizationEnabled() {
+        return mCameraModule.isVideoStabilizationEnabled();
+    }
+
+    /** Returns whether video stabilization is supported by the active camera. */
+    public boolean isVideoStabilizationSupported() {
+        return mCameraModule.isVideoStabilizationSupported();
+    }
+
+    /** Sets the exposure compensation index, clamped to the active camera's range. */
+    public void setExposureCompensation(int exposureCompensation) {
+        mCameraModule.setExposureCompensation(exposureCompensation);
+    }
+
+    /** Returns the last accepted exposure compensation index. */
+    public int getExposureCompensation() {
+        return mCameraModule.getExposureCompensation();
+    }
+
+    /** Returns the active camera's minimum exposure compensation index. */
+    public int getMinExposureCompensation() {
+        return mCameraModule.getMinExposureCompensation();
+    }
+
+    /** Returns the active camera's maximum exposure compensation index. */
+    public int getMaxExposureCompensation() {
+        return mCameraModule.getMaxExposureCompensation();
+    }
+
+    /** Returns whether the active camera supports exposure compensation. */
+    public boolean isExposureCompensationSupported() {
+        return mCameraModule.isExposureCompensationSupported();
+    }
+
+    /** Enables continuous torch illumination when supported. */
+    public void setTorchEnabled(boolean enabled) {
+        mCameraModule.setTorchEnabled(enabled);
+    }
+
+    /** Returns whether torch illumination is requested. */
+    public boolean isTorchEnabled() {
+        return mCameraModule.isTorchEnabled();
+    }
+
+    /** Enables CameraX low-light boost when supported. */
+    public void setLowLightBoostEnabled(boolean enabled) {
+        mCameraModule.setLowLightBoostEnabled(enabled);
+    }
+
+    /** Returns whether low-light boost is requested. */
+    public boolean isLowLightBoostEnabled() {
+        return mCameraModule.isLowLightBoostEnabled();
+    }
+
+    /** Returns whether the active camera supports low-light boost. */
+    public boolean isLowLightBoostSupported() {
+        return mCameraModule.isLowLightBoostSupported();
+    }
     protected int getRelativeCameraOrientation() {
         return mCameraModule.getRelativeCameraOrientation();
     }
@@ -949,23 +1543,20 @@ public class CameraView extends FrameLayout {
                 mInitialMotionEventX = event.getX();
                 mInitialMotionEventY = event.getY();
                 mIsLongPressMotionEvent = false;
-                mHandler.postDelayed(() -> {
-                    if (Build.VERSION.SDK_INT >= 24) {
-                        performLongClick(mInitialMotionEventX, mInitialMotionEventY);
-                    } else {
-                        performLongClick();
-                    }
-                    mIsLongPressMotionEvent = true;
-                }, mLongPressTimeout);
+                mHandler.removeCallbacks(mLongPressRunnable);
+                mHandler.postDelayed(mLongPressRunnable, mLongPressTimeout);
+                break;
+            case MotionEvent.ACTION_MOVE:
+                if (movedBeyondTouchSlop(event)) {
+                    mHandler.removeCallbacks(mLongPressRunnable);
+                }
                 break;
             case MotionEvent.ACTION_CANCEL:
-                mHandler.removeCallbacksAndMessages(null);
+                mHandler.removeCallbacks(mLongPressRunnable);
                 break;
             case MotionEvent.ACTION_UP:
-                float distanceX = event.getX() - mInitialMotionEventX;
-                float distanceY = event.getY() - mInitialMotionEventY;
-                float distanceMoved = (float) Math.sqrt(distanceX * distanceX + distanceY * distanceY);
-                if (distanceMoved > mTouchSlop && !mIsLongPressMotionEvent) {
+                mHandler.removeCallbacks(mLongPressRunnable);
+                if (!movedBeyondTouchSlop(event) && !mIsLongPressMotionEvent) {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1
                             && hasOnClickListeners()) {
                         performClick();
@@ -976,11 +1567,16 @@ public class CameraView extends FrameLayout {
                             focus(mFocusingRect, mMeteringRect);
                         }
                     }
-                    mHandler.removeCallbacksAndMessages(null);
                 }
                 break;
         }
         return true;
+    }
+
+    private boolean movedBeyondTouchSlop(MotionEvent event) {
+        float distanceX = event.getX() - mInitialMotionEventX;
+        float distanceY = event.getY() - mInitialMotionEventY;
+        return Math.hypot(distanceX, distanceY) > mTouchSlop;
     }
 
     /**
@@ -1051,6 +1647,26 @@ public class CameraView extends FrameLayout {
 
     private int rangeLimit(int val, int max, int min) {
         return Math.min(Math.max(val, min), max);
+    }
+
+    /**
+     * Maps a cumulative pinch scale onto a zoom level.
+     *
+     * <p>The scale starts at 1 rather than 0, so the usable range of a pinch is maxScale - 1. A
+     * fully spread pinch has to land on the camera's maximum zoom; dividing by maxScale instead
+     * stopped at four fifths of it and left the last of the range unreachable.</p>
+     *
+     * @param scaleFactor the cumulative scale, between 1 and maxScale
+     * @param maxScale the scale a fully spread pinch reaches
+     * @param maxZoomLevel the zoom level that scale maps to
+     */
+    static int zoomLevelForScale(float scaleFactor, float maxScale, int maxZoomLevel) {
+        if (maxScale <= 1f || maxZoomLevel <= 0) {
+            return 0;
+        }
+        float clamped = Math.max(1f, Math.min(scaleFactor, maxScale));
+        int zoomLevel = (int) ((clamped - 1f) * maxZoomLevel / (maxScale - 1f));
+        return Math.min(Math.max(zoomLevel, 0), maxZoomLevel);
     }
 
     private int distance(int a, int b) {
@@ -1179,8 +1795,7 @@ public class CameraView extends FrameLayout {
             // Don't let the object get too small or too large.
             mScaleFactor = Math.max(1f, Math.min(mScaleFactor, MAX_SCALE));
 
-            // y = (x-1) * (maxZoom/maxScale)
-            setZoomLevel(rangeLimit((int) ((mScaleFactor-1) * getMaxZoomLevel() / MAX_SCALE), getMaxZoomLevel(), 0));
+            setZoomLevel(zoomLevelForScale(mScaleFactor, MAX_SCALE, getMaxZoomLevel()));
             return true;
         }
 
