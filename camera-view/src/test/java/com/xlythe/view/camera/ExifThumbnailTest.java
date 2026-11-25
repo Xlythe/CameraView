@@ -96,7 +96,7 @@ public class ExifThumbnailTest {
     /** A segment with no room left refuses rather than overflowing its own length field. */
     @Test
     public void aFullSegmentRefusesAThumbnail() {
-        byte[] jpeg = exifJpeg(0, 0, false, ExifThumbnail.MAX_APP1_PAYLOAD - 64);
+        byte[] jpeg = exifJpeg(0, 0, false, ExifSegment.MAX_APP1_PAYLOAD - 64);
 
         assertEquals("almost nothing should be on offer", -1,
                 ExifThumbnail.roomForThumbnail(jpeg));
