@@ -40,6 +40,7 @@ import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import androidx.annotation.UiThread;
 import androidx.annotation.WorkerThread;
 import androidx.exifinterface.media.ExifInterface;
@@ -572,9 +573,17 @@ class PictureSession extends PreviewSession {
                 Log.w(TAG, "Camera claims the RAW capability but offers no RAW_SENSOR size");
                 return;
             }
-            // Nothing to choose between: RAW is the sensor's own grid of readings, so the largest
-            // size is the whole sensor and anything smaller is a crop of it.
-            super.initialize(Collections.max(Arrays.asList(sizes), new CompareSizesByArea()));
+            // Not simply the largest, which is what this did and which no device accepted.
+            // DngCreator writes the sensor's own grid and refuses anything else, with "Height
+            // and width of image buffer did not match height and width of either the
+            // preCorrectionActiveArraySize or the pixelArraySize" - measured on a Pixel 7 Pro
+            // and on two Samsungs, where the largest RAW output is not either of those.
+            Size sensorSize = rawSizeFor(sizes, mCameraView.getCameraCharacteristics());
+            if (sensorSize == null) {
+                Log.w(TAG, "Camera offers no RAW size DngCreator will accept");
+                return;
+            }
+            super.initialize(sensorSize);
             // Frames first, then the reader they came from: closing a reader invalidates the
             // frames it handed out, and a frame is only given back by being closed.
             mPairer.clear();
@@ -592,6 +601,48 @@ class PictureSession extends PreviewSession {
 
         boolean isInitialized() {
             return mImageReader != null;
+        }
+
+        /**
+         * The RAW size a DNG can actually be written from.
+         *
+         * <p>DngCreator checks the buffer against the sensor's own geometry and throws on
+         * anything else, so the choice is not "biggest" but "the one the sensor describes".
+         * The pre-correction active array is preferred because that is what the metadata in the
+         * DNG is expressed in; the full pixel array is accepted as well, since the check allows
+         * either.</p>
+         *
+         * @return the size to configure, or null if the camera offers neither
+         */
+        @Nullable
+        @VisibleForTesting
+        static Size rawSizeFor(@Nullable Size[] offered,
+                @Nullable CameraCharacteristics characteristics) {
+            if (offered == null || characteristics == null) {
+                return null;
+            }
+            // The pre-correction array arrived in API 23. Below that the pixel array is the
+            // only geometry on offer, which the same check accepts.
+            Rect preCorrection = Build.VERSION.SDK_INT >= Build.VERSION_CODES.M
+                    ? characteristics.get(
+                            CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE)
+                    : null;
+            Size pixelArray =
+                    characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE);
+            Size wanted = preCorrection != null
+                    ? new Size(preCorrection.width(), preCorrection.height())
+                    : null;
+            for (Size candidate : offered) {
+                if (candidate.equals(wanted)) {
+                    return candidate;
+                }
+            }
+            for (Size candidate : offered) {
+                if (candidate.equals(pixelArray)) {
+                    return candidate;
+                }
+            }
+            return null;
         }
 
         void initializePicture(@NonNull File file, boolean announces) {
