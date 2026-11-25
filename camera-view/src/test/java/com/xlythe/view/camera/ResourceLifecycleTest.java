@@ -55,8 +55,18 @@ public class ResourceLifecycleTest {
     private Context context;
     private FakeCamera2.TestCameraView cameraView;
 
+    /**
+      * How many readers were already open when this test started.
+      *
+      * <p>Robolectric reuses a sandbox across test classes with the same configuration, so the
+      * registry of open readers is not necessarily empty on the way in. What a leak looks like is
+      * growth across the work under test, not a count of zero.</p>
+      */
+    private int readersBefore;
+
     @Before
     public void setUp() {
+        readersBefore = ShadowInjectableImageReader.openReaderCount();
         context = RuntimeEnvironment.getApplication();
         ShadowApplication application = Shadows.shadowOf(
                 (android.app.Application) context);
@@ -90,8 +100,9 @@ public class ResourceLifecycleTest {
             idle();
         }
 
-        assertEquals("every reader a session opened should have been closed",
-                0, ShadowInjectableImageReader.openReaderCount());
+        assertEquals("a reader held per open is a reader held forever, leaked: "
+                        + ShadowInjectableImageReader.describeOpenReaders(),
+                readersBefore, ShadowInjectableImageReader.openReaderCount());
     }
 
     /** A frame stream gives its reader back when it is closed. */
@@ -102,11 +113,12 @@ public class ResourceLifecycleTest {
                 canvas, null, new FrameStream.Params(), frame -> {});
         stream.start();
         assertTrue(canvas.attached.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
-        awaitReaders(1);
+        awaitReaders(readersBefore + 1);
 
         stream.close();
 
-        assertTrue("the reader has to be closed, not just dropped", awaitReaders(0));
+        assertTrue("the reader has to be closed, not just dropped",
+                awaitReaders(readersBefore));
         assertTrue("and the backend told it can have the surface back",
                 canvas.detached.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
     }

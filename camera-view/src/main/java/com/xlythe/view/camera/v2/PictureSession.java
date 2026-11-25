@@ -378,6 +378,12 @@ class PictureSession extends PreviewSession {
         void initialize(StreamConfigurationMap map, @Nullable Size maxSize) {
             if (DEBUG) Log.d(TAG, "Initializing PictureSession");
             super.initialize(chooseSize(within(getSizes(map), maxSize), mPreviewSurface.mSize));
+            if (mImageReader != null) {
+                // Initialized again - a session can be, when the camera is reconfigured - and an
+                // ImageReader holds native buffers the collector cannot reclaim, so the one being
+                // replaced has to be handed back rather than dropped.
+                mImageReader.close();
+            }
             mImageReader = ImageReader.newInstance(getWidth(), getHeight(), getImageFormat(getQuality()), 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getHandler());
         }
