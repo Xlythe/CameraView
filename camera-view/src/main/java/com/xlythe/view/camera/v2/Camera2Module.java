@@ -1182,6 +1182,83 @@ public class Camera2Module extends ICameraModule {
     }
 
     /**
+     * Which picture formats this camera can be asked for.
+     *
+     * <p>JPEG always, because the HAL produces it. RAW when the camera says it can - both halves
+     * of saying so: the RAW capability, which is the camera promising it can expose its sensor's
+     * own readings and publish the metadata needed to interpret them, and RAW_SENSOR among the
+     * configuration map's output formats, which is this configuration being able to carry one.
+     * A camera can report the capability and still not offer the format, so both are asked.</p>
+     *
+     * <p>ULTRA_HDR is not offered at all. A gain map is composed by CameraX from two exposures of
+     * its own; camera2 has no equivalent, so producing one here would mean building the gain map
+     * by hand, and claiming the format while writing an ordinary JPEG would be worse than saying
+     * no.</p>
+     */
+    @Override
+    public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        switch (format) {
+            case JPEG:
+                return true;
+            case RAW:
+                // Fall-through: both write a DNG, and RAW_JPEG writes a JPEG beside it from the
+                // reader the session already has.
+            case RAW_JPEG:
+                return isRawCaptureSupported();
+            case ULTRA_HDR:
+                // Fall-through
+            default:
+                return false;
+        }
+    }
+
+    /** Whether the active camera offers a RAW_SENSOR stream a DNG could be written from. */
+    private boolean isRawCaptureSupported() {
+        CameraCharacteristics characteristics = getCameraCharacteristics();
+        if (characteristics == null) {
+            return false;
+        }
+        try {
+            int[] capabilities =
+                    characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+            if (!contains(capabilities,
+                    CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW)) {
+                return false;
+            }
+            StreamConfigurationMap map =
+                    characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            return map != null && contains(map.getOutputFormats(), ImageFormat.RAW_SENSOR);
+        } catch (RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report whether it writes RAW", error);
+            return false;
+        }
+    }
+
+    /** Whether an array the camera published holds a value, treating a missing array as empty. */
+    private static boolean contains(@Nullable int[] values, int value) {
+        if (values == null) {
+            return false;
+        }
+        for (int candidate : values) {
+            if (candidate == value) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public synchronized void setPictureFormat(CameraView.PictureFormat format) {
+        CameraView.PictureFormat before = getPictureFormat();
+        super.setPictureFormat(format);
+        if (getPictureFormat() != before) {
+            // The RAW output is a surface of the session's, so a format that needs one only takes
+            // hold when the session is built again.
+            restartActiveSession();
+        }
+    }
+
+    /**
      * The active camera's characteristics, or null when they cannot be read.
      *
      * <p>Needed whole rather than a field at a time by DngCreator, which reads the sensor's

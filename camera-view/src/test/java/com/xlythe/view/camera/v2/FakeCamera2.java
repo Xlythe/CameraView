@@ -39,6 +39,33 @@ public final class FakeCamera2 {
     static final Size SIZE_720P = new Size(1280, 720);
     static final Size SIZE_480P = new Size(640, 480);
 
+    /** The sensor's own grid, which is the size a RAW frame comes out at. */
+    public static final Size SIZE_RAW = new Size(4000, 3000);
+
+    /** A second RAW size, so that taking the largest is a choice rather than the only option. */
+    static final Size SIZE_RAW_SMALL = new Size(2000, 1500);
+
+    /**
+     * What a camera says about RAW.
+     *
+     * <p>Two separate claims, and a camera can make one without the other: the RAW capability is
+     * the camera promising it can expose the sensor's own readings and describe them well enough
+     * to interpret, and RAW_SENSOR among the configuration map's output formats is a stream being
+     * able to carry one. Both are needed, so each half on its own is a case worth registering.
+     * </p>
+     */
+    public enum RawSupport {
+        NONE, CAPABILITY_ONLY, FORMAT_ONLY, FULL;
+
+        boolean hasCapability() {
+            return this == CAPABILITY_ONLY || this == FULL;
+        }
+
+        boolean hasFormat() {
+            return this == FORMAT_ONLY || this == FULL;
+        }
+    }
+
     /**
      * JPEG's internal HAL format.
      *
@@ -100,10 +127,23 @@ public final class FakeCamera2 {
      */
     public static void addBackAndFrontCameras(
             Context context, boolean faceDetection, Integer hardwareLevel) {
+        addBackAndFrontCameras(context, faceDetection, hardwareLevel, RawSupport.NONE);
+    }
+
+    /** Registers a back and a front camera that make this claim about RAW. */
+    public static void addBackAndFrontCameras(Context context, RawSupport rawSupport) {
+        addBackAndFrontCameras(context, true /* faceDetection */,
+                CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL, rawSupport);
+    }
+
+    public static void addBackAndFrontCameras(Context context, boolean faceDetection,
+            Integer hardwareLevel, RawSupport rawSupport) {
         addCamera(context, BACK_ID, CameraMetadata.LENS_FACING_BACK, 90,
-                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel);
+                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel,
+                rawSupport);
         addCamera(context, FRONT_ID, CameraMetadata.LENS_FACING_FRONT, 270,
-                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel);
+                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel,
+                rawSupport);
         addCamcorderProfiles();
     }
 
@@ -174,6 +214,13 @@ public final class FakeCamera2 {
 
     static void addCamera(Context context, String id, int lensFacing, int sensorOrientation,
             int deviceType, boolean faceDetection, Integer hardwareLevel) {
+        addCamera(context, id, lensFacing, sensorOrientation, deviceType, faceDetection,
+                hardwareLevel, RawSupport.NONE);
+    }
+
+    static void addCamera(Context context, String id, int lensFacing, int sensorOrientation,
+            int deviceType, boolean faceDetection, Integer hardwareLevel,
+            RawSupport rawSupport) {
         CameraCharacteristics characteristics = ShadowCameraCharacteristics.newCameraCharacteristics();
         ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
 
@@ -204,7 +251,16 @@ public final class FakeCamera2 {
         if (hardwareLevel != null) {
             shadow.set(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL, hardwareLevel);
         }
-        shadow.set(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP, streamConfigurationMap());
+        shadow.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES,
+                rawSupport.hasCapability()
+                        ? new int[] {
+                                CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
+                                CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW}
+                        : new int[] {
+                                CameraMetadata
+                                        .REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
+        shadow.set(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP,
+                streamConfigurationMap(rawSupport));
         if (android.os.Build.VERSION.SDK_INT >= 37) {
             // Only exists from API 37, and a test configured for an older platform must not see
             // a characteristic that platform could not report.
@@ -221,12 +277,19 @@ public final class FakeCamera2 {
      * implementation-defined sizes that back SurfaceTexture, MediaRecorder and MediaCodec, and
      * the picture surface reads the JPEG sizes.
      */
-    private static android.hardware.camera2.params.StreamConfigurationMap streamConfigurationMap() {
+    private static android.hardware.camera2.params.StreamConfigurationMap streamConfigurationMap(
+            RawSupport rawSupport) {
         StreamConfigurationMapBuilder builder = StreamConfigurationMapBuilder.newBuilder();
         for (Size size : new Size[] {SIZE_1080P, SIZE_720P, SIZE_480P}) {
             builder.addOutputSize(size);
             builder.addOutputSize(HAL_PIXEL_FORMAT_BLOB, size);
             builder.addOutputSize(ImageFormat.YUV_420_888, size);
+        }
+        if (rawSupport.hasFormat()) {
+            // Full sensor sizes, unlike everything above: a RAW stream is the sensor's own grid,
+            // so it is not held to the 1080p the other outputs are.
+            builder.addOutputSize(ImageFormat.RAW_SENSOR, SIZE_RAW_SMALL);
+            builder.addOutputSize(ImageFormat.RAW_SENSOR, SIZE_RAW);
         }
         return builder.build();
     }

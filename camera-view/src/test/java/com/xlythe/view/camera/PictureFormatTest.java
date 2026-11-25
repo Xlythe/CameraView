@@ -30,8 +30,9 @@ import org.robolectric.shadows.ShadowLooper;
  *
  * <p>The behaviour worth pinning is the refusal. A format a camera cannot write is declined and
  * the previous one kept, because a backend that accepted the request and then wrote something
- * else would be worse than one that said no. On the camera2 backend, which has no Ultra HDR path
- * at all, that refusal is the whole story.</p>
+ * else would be worse than one that said no. The cameras registered here report no RAW
+ * capability, so the camera2 backend declines everything but JPEG; what it does with a camera
+ * that reports one is pinned by {@code RawCaptureTest} beside the backend itself.</p>
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {29, 37},
@@ -60,13 +61,13 @@ public class PictureFormatTest {
     }
 
     /**
-     * The camera2 backend offers nothing but JPEG, and says so rather than pretending.
+     * A camera with no RAW capability offers nothing but JPEG, and says so rather than pretending.
      *
-     * <p>It writes the JPEG bytes the HAL produced straight to disk, so it composes no gain map
-     * and has no second reader to take a raw frame from. Every other format needs CameraX.</p>
+     * <p>Ultra HDR needs a gain map, which only CameraX composes, and RAW needs a camera that
+     * publishes both the capability and a RAW_SENSOR output. This one publishes neither.</p>
      */
     @Test
-    public void camera2OffersOnlyJpeg() {
+    public void camera2OffersOnlyJpegWithoutTheRawCapability() {
         cameraView.open();
         idle();
 
