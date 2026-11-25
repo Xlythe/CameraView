@@ -2,10 +2,12 @@ package com.xlythe.view.camera;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.location.Location;
 
+import androidx.annotation.Nullable;
 import androidx.exifinterface.media.ExifInterface;
 
 import org.junit.Before;
@@ -291,6 +293,46 @@ public class ExifOrientationTest {
         exif.save();
 
         assertEquals(-1, new Exif(file).getTimestamp());
+    }
+
+    /**
+     * A speed is read back in metres per second whatever unit it was written in.
+     *
+     * <p>EXIF stores a speed next to a one-letter unit - K, M or N - and a reader that ignores it
+     * is wrong by a factor of 1.6 or 1.9. The library always writes K, so the other two only ever
+     * arrive from someone else's camera, which is exactly why they are worth reading correctly.
+     * </p>
+     */
+    @Test
+    public void everySpeedUnitIsConvertedOnTheWayOut() throws IOException {
+        // 100 km/h, and the same speed expressed the two other ways EXIF allows. Written as
+        // rationals, because that is the type the tag has - a plain decimal reads back as zero,
+        // which is the bug this library had writing them.
+        assertSpeed("K", "100/1", 27.78f);
+        assertSpeed("M", "62137/1000", 27.78f);
+        assertSpeed("N", "53996/1000", 27.78f);
+    }
+
+    /** No unit at all reads as kilometres per hour, which is what the tag's default means. */
+    @Test
+    public void aSpeedWithNoUnitIsKilometresPerHour() throws IOException {
+        assertSpeed(null, "100/1", 27.78f);
+    }
+
+    private void assertSpeed(@Nullable String unit, String value, float expectedMetresPerSecond)
+            throws IOException {
+        ExifInterface exifInterface = new ExifInterface(file.getAbsolutePath());
+        exifInterface.setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, "N");
+        exifInterface.setAttribute(ExifInterface.TAG_GPS_LATITUDE, "1/1,0/1,0/1");
+        exifInterface.setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, "E");
+        exifInterface.setAttribute(ExifInterface.TAG_GPS_LONGITUDE, "2/1,0/1,0/1");
+        exifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, unit);
+        exifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, value);
+        exifInterface.saveAttributes();
+
+        Location location = new Exif(file).getLocation();
+        assertNotNull("a location with a speed should be readable", location);
+        assertEquals("speed in " + unit, expectedMetresPerSecond, location.getSpeed(), 0.05f);
     }
 
     private Exif given(int orientation) throws IOException {

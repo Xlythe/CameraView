@@ -484,6 +484,9 @@ public class Camera2Module extends ICameraModule {
                         if (!mIsPaused) {
                             session.onAvailable(mCameraDevice, mCaptureSession);
                         }
+                        // The session is configured and targeted, which is the first moment a
+                        // capture can succeed.
+                        onCameraReady();
                         if (mZoomLevel != 0) {
                             setZoomLevel(mZoomLevel);
                         }
@@ -1037,6 +1040,11 @@ public class Camera2Module extends ICameraModule {
      * guarantees nothing of the sort, and a session it cannot configure costs the recording as
      * well as the picture, so there it records without one.</p>
      */
+    @Override
+    public boolean isCameraReady() {
+        return mCaptureSession != null && mActiveSession != null && mCameraDevice != null;
+    }
+
     @Override
     public boolean isColorSpaceSupported(CameraView.ColorSpace colorSpace) {
         if (colorSpace == CameraView.ColorSpace.SRGB) {

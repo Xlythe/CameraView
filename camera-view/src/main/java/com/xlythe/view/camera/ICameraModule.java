@@ -418,6 +418,23 @@ public abstract class ICameraModule {
         return false;
     }
 
+    /**
+     * Whether the camera is configured and can be used right now.
+     *
+     * <p>A backend that opens synchronously is ready as soon as open() returns and says so here.
+     * One that opens a device and configures a session - which is both of the modern ones - is
+     * not, and reports through {@link #onCameraReady()} when it is. The difference matters
+     * because it is what CameraView tells an app to enable its shutter button on.</p>
+     */
+    public boolean isCameraReady() {
+        return true;
+    }
+
+    /** Tells the view the camera can be used, which promotes it to open. */
+    protected final void onCameraReady() {
+        getView().onCameraReady();
+    }
+
     /** Whether this camera can report the faces it is already tracking. */
     public boolean isFaceDetectionSupported() {
         return false;

@@ -1599,6 +1599,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             observeCameraState(camera);
             mState = mVideoCapture == null ? State.OPEN : State.BINDING;
             publishSnapshot();
+            // Bound, which is the first moment a capture can succeed.
+            onCameraReady();
             if (mZoomLevel > 0) setZoomOnMainThread(mZoomLevel);
             if (getExposureCompensation() != 0) {
                 setExposureCompensationOnMainThread(getExposureCompensation());
@@ -1658,6 +1660,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         Preview preview = builder.build();
         preview.setSurfaceProvider(mMainExecutor, request -> provideDisplaySurface(generation, request));
         return preview;
+    }
+
+    @Override public boolean isCameraReady() {
+        return mActiveCamera != null;
     }
 
     @Override public boolean isSnapshotWhileRecordingSupported() {
