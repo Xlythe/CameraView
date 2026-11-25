@@ -188,7 +188,12 @@ public class LegacyCameraModule extends ICameraModule {
         mCamera.unlock();
         mVideoRecorder.setCamera(mCamera);
 
-        mVideoRecorder.setAudioSource(MediaRecorder.AudioSource.DEFAULT);
+        // CAMCORDER rather than MIC: on a phone with several microphones it selects the
+        // one facing the same way as the camera, and it applies the camcorder tuning
+        // instead of the voice-call tuning. The voice tuning is automatic gain control and
+        // noise suppression built for speech, which audibly pumps on music and on room
+        // ambience - exactly the material a camera records.
+        mVideoRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
         mVideoRecorder.setVideoSource(MediaRecorder.VideoSource.DEFAULT);
         // Every profile below is fetched for the camera actually in use. The single-argument
         // overload returns the first back-facing camera's profile whatever camera is open, so on

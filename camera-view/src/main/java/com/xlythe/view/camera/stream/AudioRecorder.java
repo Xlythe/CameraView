@@ -81,7 +81,10 @@ public class AudioRecorder {
                 Buffer buffer = new Buffer();
                 AudioRecord record =
                         new AudioRecord(
-                                MediaRecorder.AudioSource.DEFAULT,
+                                // The same reasoning as the recording paths: the microphone
+                                // facing the camera, with camcorder tuning rather than the
+                                // speech processing that pumps on anything but a voice.
+                                MediaRecorder.AudioSource.CAMCORDER,
                                 buffer.getSampleRate(),
                                 AudioFormat.CHANNEL_IN_MONO,
                                 AudioFormat.ENCODING_PCM_16BIT,
