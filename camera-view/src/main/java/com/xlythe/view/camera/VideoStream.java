@@ -10,6 +10,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 
+import com.xlythe.view.camera.stream.AudioBuffer;
 import com.xlythe.view.camera.stream.AudioRecorder;
 import com.xlythe.view.camera.stream.LossyPipedOutputStream;
 import com.xlythe.view.camera.stream.VideoRecorder;
@@ -71,9 +72,12 @@ public class VideoStream implements Closeable {
     try {
       if (params.isAudioEnabled()) {
         audioInputStream = new PipedInputStream(AUDIO_PIPE_BYTES);
-        audioRecorder = new AudioRecorder(params.isLossy()
-                ? new LossyPipedOutputStream(audioInputStream, AUDIO_MAX_BUFFERED_BYTES)
-                : new PipedOutputStream(audioInputStream));
+        audioRecorder = new AudioRecorder(
+                params.isLossy()
+                        ? new LossyPipedOutputStream(audioInputStream, AUDIO_MAX_BUFFERED_BYTES)
+                        : new PipedOutputStream(audioInputStream),
+                params.getAudioSampleRate(),
+                params.getAudioChannelCount());
         audioRecorder.start();
       }
 
@@ -260,6 +264,8 @@ public class VideoStream implements Closeable {
     private final int mIFrameInterval;
     private final boolean mIsLossy;
     @Nullable private final Size mMaxSize;
+    private final int mAudioSampleRate;
+    private final int mAudioChannelCount;
 
     private Params(boolean audioEnabled,
                    boolean videoEnabled,
@@ -267,7 +273,11 @@ public class VideoStream implements Closeable {
                    int frameRate,
                    int iframeInterval,
                    boolean isLossy,
-                   @Nullable Size maxSize) {
+                   @Nullable Size maxSize,
+                   int audioSampleRate,
+                   int audioChannelCount) {
+      this.mAudioSampleRate = audioSampleRate;
+      this.mAudioChannelCount = audioChannelCount;
       this.mAudioEnabled = audioEnabled;
       this.mVideoEnabled = videoEnabled;
       this.mBitRate = bitRate;
@@ -289,6 +299,16 @@ public class VideoStream implements Closeable {
       return mBitRate;
     }
 
+    /** The sample rate audio should be recorded at, in hertz. */
+    public int getAudioSampleRate() {
+      return mAudioSampleRate;
+    }
+
+    /** How many audio channels to record, 1 or 2. */
+    public int getAudioChannelCount() {
+      return mAudioChannelCount;
+    }
+
     public int getFrameRate() {
       return mFrameRate;
     }
@@ -308,6 +328,8 @@ public class VideoStream implements Closeable {
     }
 
     public static class Builder {
+      private int mAudioSampleRate = AudioBuffer.DEFAULT_SAMPLE_RATE;
+      private int mAudioChannelCount = AudioBuffer.DEFAULT_CHANNEL_COUNT;
       private boolean mAudioEnabled = true;
       private boolean mVideoEnabled = true;
       private int mBitRate;
@@ -359,6 +381,32 @@ public class VideoStream implements Closeable {
         return this;
       }
 
+      /**
+       * The sample rate to record audio at, in hertz.
+       *
+       * <p>Defaults to {@link AudioBuffer#DEFAULT_SAMPLE_RATE}, which is wideband speech. Ask for
+       * more when the stream carries something worth more - 44100 or 48000 for music - and less
+       * when it has to fit down a narrow link. A rate the device cannot record at falls back to
+       * the highest it can, and the stream says which it settled on in its header, so the other
+       * end does not have to be told separately.</p>
+       */
+      public Builder setAudioSampleRate(int audioSampleRate) {
+        mAudioSampleRate = audioSampleRate;
+        return this;
+      }
+
+      /**
+       * How many audio channels to record, 1 or 2.
+       *
+       * <p>Defaults to one. Two needs a device with two microphones and roughly doubles the
+       * bandwidth; a device that cannot manage it records one and says so in the header. The
+       * second channel is given up before the sample rate is.</p>
+       */
+      public Builder setAudioChannelCount(int audioChannelCount) {
+        mAudioChannelCount = audioChannelCount;
+        return this;
+      }
+
       public Params build() {
         if (!mAudioEnabled && !mVideoEnabled) {
           throw new IllegalStateException("Cannot create a stream with both audio and video disabled");
@@ -366,12 +414,20 @@ public class VideoStream implements Closeable {
         if (mBitRate < 0 || mFrameRate < 0 || mIFrameInterval < 0) {
           throw new IllegalArgumentException("Stream encoding values cannot be negative");
         }
+        if (mAudioSampleRate <= 0) {
+          throw new IllegalArgumentException(
+                  "Audio sample rate must be positive: " + mAudioSampleRate);
+        }
+        if (mAudioChannelCount < 1 || mAudioChannelCount > 2) {
+          throw new IllegalArgumentException(
+                  "Audio is mono or stereo, not " + mAudioChannelCount + " channels");
+        }
         if (mMaxSize != null && (mMaxSize.getWidth() <= 0 || mMaxSize.getHeight() <= 0)) {
           throw new IllegalArgumentException("Stream dimensions must be positive: " + mMaxSize);
         }
 
         return new Params(mAudioEnabled, mVideoEnabled, mBitRate, mFrameRate, mIFrameInterval,
-                mIsLossy, mMaxSize);
+                mIsLossy, mMaxSize, mAudioSampleRate, mAudioChannelCount);
       }
     }
   }
