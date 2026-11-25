@@ -24,6 +24,7 @@ import android.util.Log;
 import android.util.Range;
 import android.util.Rational;
 import android.util.Size;
+import android.util.SizeF;
 import android.view.Surface;
 import android.view.View;
 
@@ -1689,6 +1690,55 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @Override public boolean isSnapshotWhileRecordingSupported() {
         return mSnapshotWhileRecording;
+    }
+
+    @Override
+    public float getHorizontalFieldOfView() {
+        return fieldOfView(true /* horizontal */);
+    }
+
+    @Override
+    public float getVerticalFieldOfView() {
+        return fieldOfView(false /* horizontal */);
+    }
+
+    /**
+     * The angle of view, read from the camera2 characteristics underneath CameraX.
+     *
+     * <p>CameraX does not publish the optics itself, so this goes through Camera2CameraInfo to
+     * the same two values the camera2 backend reads. The zoom comes from CameraX's own zoom
+     * state rather than from a request, since CameraX owns the requests here.</p>
+     */
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    private float fieldOfView(boolean horizontal) {
+        Camera camera = mActiveCamera;
+        if (camera == null) {
+            return 0f;
+        }
+        try {
+            Camera2CameraInfo info = Camera2CameraInfo.from(camera.getCameraInfo());
+            SizeF sensor = info.getCameraCharacteristic(
+                    CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
+            float[] focalLengths = info.getCameraCharacteristic(
+                    CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+            if (sensor == null || focalLengths == null || focalLengths.length == 0) {
+                return 0f;
+            }
+            // The first focal length, for the reason the camera2 backend records: a zoom ratio
+            // of one is the lens the camera uses by default, which is the one this array leads
+            // with, and the shortest is the ultra-wide the ratio reaches by going below one.
+            float full = TransformMath.fieldOfViewDegrees(
+                    horizontal ? sensor.getWidth() : sensor.getHeight(), focalLengths[0]);
+
+            ZoomState zoom = camera.getCameraInfo().getZoomState().getValue();
+            if (zoom == null) {
+                return full;
+            }
+            return TransformMath.zoomedFieldOfViewDegrees(full, zoom.getZoomRatio());
+        } catch (IllegalArgumentException | IllegalStateException | LinkageError error) {
+            Log.w(TAG, "Could not work out the field of view", error);
+            return 0f;
+        }
     }
 
     @Override public boolean isFaceDetectionSupported() {

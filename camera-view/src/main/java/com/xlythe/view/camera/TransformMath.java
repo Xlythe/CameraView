@@ -25,6 +25,43 @@ import androidx.annotation.RestrictTo;
 public final class TransformMath {
     private TransformMath() {}
 
+    /**
+     * The angle of view a lens of this focal length sees across a sensor of this size.
+     *
+     * <p>Both arguments are in the same unit - millimetres, as a camera reports them - and which
+     * dimension of the sensor is passed in decides whether the answer is the horizontal or the
+     * vertical angle.</p>
+     *
+     * @return the angle in degrees, or 0 when either measurement is missing
+     */
+    public static float fieldOfViewDegrees(float sensorSizeMm, float focalLengthMm) {
+        if (sensorSizeMm <= 0f || focalLengthMm <= 0f) {
+            return 0f;
+        }
+        return (float) Math.toDegrees(2 * Math.atan(sensorSizeMm / (2 * focalLengthMm)));
+    }
+
+    /**
+     * The angle of view that is left after zooming in.
+     *
+     * <p>Zoom is a crop, so it narrows what the camera sees. It does not narrow it in proportion
+     * to the zoom ratio, though - halving the visible width halves the tangent of the half-angle,
+     * not the angle - which is why anything drawn over the preview by bearing has to go through
+     * this rather than dividing.</p>
+     *
+     * @return the angle in degrees, or 0 when either argument is missing
+     */
+    public static float zoomedFieldOfViewDegrees(float fieldOfViewDegrees, float zoomRatio) {
+        if (fieldOfViewDegrees <= 0f || zoomRatio <= 0f) {
+            return 0f;
+        }
+        if (zoomRatio == 1f) {
+            return fieldOfViewDegrees;
+        }
+        double halfAngle = Math.toRadians(fieldOfViewDegrees) / 2;
+        return (float) Math.toDegrees(2 * Math.atan(Math.tan(halfAngle) / zoomRatio));
+    }
+
     /** Normalizes any rotation, including negative ones, into [0, 360). */
     public static int within360(int rotationDegrees) {
         return ((rotationDegrees % 360) + 360) % 360;
