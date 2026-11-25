@@ -271,6 +271,33 @@ public final class FrameRenderThread {
 
     /** Runs on the render thread, because that is the handler the SurfaceTexture was given. */
     private void onFrameAvailable(@NonNull SurfaceTexture texture) {
+        draw(texture, NO_TIMESTAMP);
+    }
+
+    /**
+     * Draws again although no frame landed on this thread's texture.
+     *
+     * <p>For a camera this thread is not the consumer of. The AR backend is the case: ARCore
+     * owns the texture the camera is read into and consumes it itself, so nothing ever arrives
+     * on the {@link SurfaceTexture} here and there is no frame-available event to draw from -
+     * what there is instead is the capture callback, which is where this is called from.</p>
+     *
+     * @param timestampNanos when the frame was captured, for the presentation time. The texture
+     *     cannot be asked, because nothing was written to it.
+     */
+    public void requestDraw(long timestampNanos) {
+        post(() -> {
+            SurfaceTexture texture = mSurfaceTexture;
+            if (texture != null) {
+                draw(texture, timestampNanos);
+            }
+        });
+    }
+
+    /** Timestamp sentinel meaning "ask the texture", which only a real frame can answer. */
+    private static final long NO_TIMESTAMP = Long.MIN_VALUE;
+
+    private void draw(@NonNull SurfaceTexture texture, long timestampNanos) {
         EglCore egl = mEgl;
         if (!mRunning || egl == null) {
             return;
@@ -285,9 +312,10 @@ public final class FrameRenderThread {
                 texture.updateTexImage();
             }
             texture.getTransformMatrix(mSurfaceTextureMatrix);
-            long timestampNanos = texture.getTimestamp();
+            long presentationTime =
+                    timestampNanos == NO_TIMESTAMP ? texture.getTimestamp() : timestampNanos;
             for (Output output : mOutputs.values()) {
-                drawInto(output, timestampNanos);
+                drawInto(output, presentationTime);
             }
         } catch (RuntimeException | LinkageError error) {
             // One bad frame is not worth tearing the camera down for: the next one usually works,

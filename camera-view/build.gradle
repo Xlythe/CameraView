@@ -50,8 +50,14 @@ android {
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXSegmentationAnalyzer.java'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXFrameAnalyzer.java'
+        // Only the classes that reach for ARCore. The rest of the ar package - the frame
+        // interface, the listener, the depth reader - is plain arithmetic and stays, so
+        // CameraView can offer the AR API in a build that cannot run it.
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/ar/ArSession.java'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/ar/ArAvailability.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/ar/ArCoreFrame.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/v2/ArCameraModule.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/v2/ArCaptureSession.java'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/x/**'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
     }

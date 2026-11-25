@@ -1,7 +1,6 @@
 package com.xlythe.view.camera.ar;
 
 import android.content.Context;
-import android.media.Image;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -14,7 +13,6 @@ import com.google.ar.core.Session;
 import com.google.ar.core.SharedCamera;
 import com.google.ar.core.TrackingState;
 import com.google.ar.core.exceptions.CameraNotAvailableException;
-import com.google.ar.core.exceptions.NotYetAvailableException;
 import com.google.ar.core.exceptions.UnavailableException;
 
 import java.util.EnumSet;
@@ -157,47 +155,69 @@ public final class ArSession implements AutoCloseable {
     }
 
     /**
-     * The newest frame, or null if there is not one yet.
+     * Takes the newest camera frame and advances tracking with it.
      *
-     * <p>A session that has just resumed has nothing to give for the first few frames, and one
-     * that is not tracking has nothing worth having, so both answer null rather than making the
-     * caller check two things.</p>
+     * <p>This is what consumes the texture from {@link #setCameraTextureName}, so it stands in
+     * for {@link android.graphics.SurfaceTexture#updateTexImage} rather than being called
+     * alongside it - calling both skips a frame. It has to run on the thread that owns the GL
+     * context, with that context current.</p>
+     *
+     * <p>Whether the frame is being tracked is a separate question, and the caller has to ask
+     * it: a frame arrives throughout, and the first ones after a resume have a pose that is not
+     * yet worth drawing from. Null means no frame at all, which is a session that is not
+     * resumed or a camera that has gone away.</p>
      */
     @Nullable
     public Frame update() {
         try {
-            Frame frame = mSession.update();
-            return frame.getCamera().getTrackingState() == TrackingState.TRACKING ? frame : null;
+            return mSession.update();
         } catch (CameraNotAvailableException | RuntimeException error) {
             Log.w(TAG, "Unable to read an AR frame", error);
             return null;
         }
     }
 
+    /** Whether a frame is tracked, and so whether its pose means anything. */
+    public static boolean isTracking(@NonNull Frame frame) {
+        return frame.getCamera().getTrackingState() == TrackingState.TRACKING;
+    }
+
     /**
-     * How far away the scene is, for the frame given, in the coordinates of a view.
+     * Names the texture the camera image is to be read from, which tracking cannot start without.
      *
-     * <p>The smoothed depth rather than the raw: it fills the gaps a sparse reading leaves and
-     * is reused from an earlier frame when a new one is not ready, both of which suit deciding
-     * what is in front of what better than a reading that is absent half the time.</p>
+     * <p>ARCore does not make this texture: it reads the camera out of one the caller created,
+     * in the caller's own context, which is why it has to be told the name. Until it has one,
+     * {@link #update()} never returns a frame - a session that configures and then tracks
+     * nothing is usually this call missing.</p>
      *
-     * @return a lookup, or null when this frame has no depth to give
+     * <p>Must be called on the thread that owns the GL context, with that context current.</p>
      */
-    @Nullable
-    public DepthLookup depthFor(@NonNull Frame frame, int viewWidth, int viewHeight) {
-        if (!mDepthSupported) {
-            return null;
-        }
-        try (Image depth = frame.acquireDepthImage16Bits()) {
-            Image.Plane plane = depth.getPlanes()[0];
-            return new DepthLookup(plane.getBuffer(), depth.getWidth(), depth.getHeight(),
-                    plane.getRowStride(), viewWidth, viewHeight);
-        } catch (NotYetAvailableException notYet) {
-            // Ordinary for the first frames after a resume, and not worth logging every time.
-            return null;
+    public void setCameraTextureName(int textureName) {
+        try {
+            mSession.setCameraTextureName(textureName);
         } catch (RuntimeException error) {
-            Log.w(TAG, "Unable to read depth from this frame", error);
-            return null;
+            Log.w(TAG, "Unable to give the AR session a camera texture", error);
+        }
+    }
+
+    /**
+     * Tells the session what it is being drawn into, which is what makes the pose line up.
+     *
+     * <p>The projection matrix is built for a particular rotation and shape of viewport, so a
+     * session that has not been told about a rotation reports poses for the wrong one and
+     * everything drawn from them sits at an angle. Call it when the view is laid out and again
+     * whenever the display rotates.</p>
+     *
+     * @param rotation the display rotation, as {@link android.view.Display#getRotation} gives it
+     */
+    public void setDisplayGeometry(int rotation, int width, int height) {
+        if (width <= 0 || height <= 0) {
+            return;
+        }
+        try {
+            mSession.setDisplayGeometry(rotation, width, height);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to tell the AR session about the display", error);
         }
     }
 
