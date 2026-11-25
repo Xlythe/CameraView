@@ -32,6 +32,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
 import androidx.annotation.WorkerThread;
 
@@ -68,14 +69,46 @@ class PictureSession extends PreviewSession {
     @Override
     public void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException {
         super.initialize(map);
-        mPictureSurface.initialize(map);
+        // Both the still size and anything a subclass adds are chosen from the preview's, so the
+        // hook goes between the two: a recording session sizes its video here and the still is
+        // then capped to it.
+        onPreviewInitialized(map);
+        if (hasStillCapture()) {
+            mPictureSurface.initialize(map, maxPictureSize());
+        }
+    }
+
+    /** Lets a subclass add its own outputs once the preview has a size and before the still does. */
+    protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
+            throws CameraAccessException {}
+
+    /**
+     * Whether this session carries a still-capture output at all.
+     *
+     * <p>A session that cannot take a picture does not pay for the reader or the stream slot.</p>
+     */
+    protected boolean hasStillCapture() {
+        return true;
+    }
+
+    /**
+     * The largest still this session may ask for, or null for the largest the camera offers.
+     *
+     * <p>Only a recording session needs this: the combination of a preview, a recording and a
+     * still is guaranteed by Camera2 at the recording size, not at the sensor's maximum.</p>
+     */
+    @Nullable
+    protected Size maxPictureSize() {
+        return null;
     }
 
     @NonNull
     @Override
     public List<Surface> getSurfaces() {
         List<Surface> surfaces = super.getSurfaces();
-        surfaces.add(mPictureSurface.getSurface());
+        if (hasStillCapture()) {
+            surfaces.add(mPictureSurface.getSurface());
+        }
         return surfaces;
     }
 
@@ -86,32 +119,23 @@ class PictureSession extends PreviewSession {
     }
 
     void takePicture(@NonNull File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
+        if (!hasStillCapture()) {
+            Log.w(TAG, "This camera cannot take a picture in its current configuration");
+            onImageFailed();
+            return;
+        }
         mPictureSurface.initializePicture(file);
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            if (hasFlash()) {
-                switch (getFlash()) {
-                    case AUTO:
-                        // TODO: This doesn't work :(
-                        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
-                        break;
-                    case ON:
-                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_SINGLE);
-                        break;
-                    case OFF:
-                        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
-                        break;
-                }
-            }
+            applyFlash(builder);
             builder.addTarget(mPictureSurface.getSurface());
             if (mMeteringRectangle != null) {
                 builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
                 builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             }
-            if (mCropRegion != null) {
-                builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
-            }
+            applyZoom(builder);
+            builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
             session.capture(builder.build(), null /* callback */, getHandler());
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
             // Crashes if the Camera is interacted with while still loading
@@ -120,7 +144,7 @@ class PictureSession extends PreviewSession {
         }
     }
 
-    private static class ImageSaver extends AsyncTask<Void, Void, Void> {
+    private static class ImageSaver extends AsyncTask<Void, Void, Boolean> {
         private final Context mContext;
 
         // The image that was captured
@@ -144,25 +168,31 @@ class PictureSession extends PreviewSession {
             mFile = file;
         }
 
+        /** @return true only when the picture reached disk, so a failure is never reported as one. */
         @WorkerThread
         @Override
-        protected Void doInBackground(Void... params) {
+        protected Boolean doInBackground(Void... params) {
             // Finally, we save the file to disk
-            byte[] bytes = getBytes();
+            byte[] bytes;
+            try {
+                bytes = getBytes();
+            } finally {
+                mImage.close();
+            }
             if (bytes == null) {
                 Log.e(TAG, "Failed to get bytes from image");
-                mImage.close();
-                return null;
+                return false;
             }
             try (FileOutputStream output = new FileOutputStream(mFile)) {
                 output.write(bytes);
-            } catch (IOException e) {
+            } catch (IOException | RuntimeException e) {
                 Log.e(TAG, "Failed to write the file", e);
-                mImage.close();
-                return null;
+                // Leave no truncated file behind for a caller that is told the capture failed.
+                if (mFile.exists() && !mFile.delete()) {
+                    Log.w(TAG, "Failed to clean up a partially written picture");
+                }
+                return false;
             }
-
-            mImage.close();
 
             try {
                 Exif exif = new Exif(mFile);
@@ -180,7 +210,7 @@ class PictureSession extends PreviewSession {
                 Log.e(TAG, "Failed to update EXIF", e);
             }
 
-            return null;
+            return true;
         }
 
         private byte[] getBytes() {
@@ -311,8 +341,12 @@ class PictureSession extends PreviewSession {
                                 mFile) {
                             @UiThread
                             @Override
-                            protected void onPostExecute(Void aVoid) {
-                                showImageConfirmation(file);
+                            protected void onPostExecute(Boolean saved) {
+                                if (Boolean.TRUE.equals(saved)) {
+                                    showImageConfirmation(file);
+                                } else {
+                                    onImageFailed();
+                                }
                             }
                         }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
                         mFile = null;
@@ -330,7 +364,6 @@ class PictureSession extends PreviewSession {
         private final CameraSurface mPreviewSurface;
         private ImageReader mImageReader;
         private File mFile;
-        private boolean mIsTakingPhoto = false;
 
         PictureSurface(Camera2Module camera2Module, CameraSurface previewSurface) {
             super(camera2Module);
@@ -339,8 +372,12 @@ class PictureSession extends PreviewSession {
 
         @Override
         void initialize(StreamConfigurationMap map) {
+            initialize(map, null /* maxSize */);
+        }
+
+        void initialize(StreamConfigurationMap map, @Nullable Size maxSize) {
             if (DEBUG) Log.d(TAG, "Initializing PictureSession");
-            super.initialize(chooseSize(getSizes(map), mPreviewSurface.mSize));
+            super.initialize(chooseSize(within(getSizes(map), maxSize), mPreviewSurface.mSize));
             mImageReader = ImageReader.newInstance(getWidth(), getHeight(), getImageFormat(getQuality()), 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getHandler());
         }
@@ -385,15 +422,6 @@ class PictureSession extends PreviewSession {
                 return IMAGE_FORMAT_MAX;
             default:
                 return IMAGE_FORMAT_DEFAULT;
-        }
-    }
-
-    private static boolean isRaw(int imageFormat) {
-        switch (imageFormat) {
-            case ImageFormat.YUV_420_888:
-                return true;
-            default:
-                return false;
         }
     }
 }
