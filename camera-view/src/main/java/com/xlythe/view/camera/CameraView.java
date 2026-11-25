@@ -272,6 +272,35 @@ public class CameraView extends FrameLayout {
     }
 
     /** Selects standard or high dynamic range video when supported by the active backend. */
+    /**
+     * The file a picture is written as.
+     *
+     * <p>{@link #JPEG} everywhere. {@link #ULTRA_HDR} is a JPEG carrying a gain map beside the
+     * image, which a display capable of it uses to light the bright parts beyond what the base
+     * image can reach; anything that does not understand the gain map reads the base image and
+     * shows an ordinary photo, so the file stays universally readable.</p>
+     *
+     * <p>Ask {@link #isPictureFormatSupported} first - it needs the CameraX backend and a camera
+     * that offers it.</p>
+     */
+    public enum PictureFormat {
+        JPEG(0), ULTRA_HDR(1);
+
+        /** Stable XML and saved-state identifier. */
+        private final int id;
+
+        PictureFormat(int id) {
+            this.id = id;
+        }
+
+        static PictureFormat fromId(int id) {
+            for (PictureFormat format : values()) {
+                if (format.id == id) return format;
+            }
+            throw new IllegalArgumentException();
+        }
+    }
+
     public enum DynamicRange {
         SDR(0), HDR(1);
 
@@ -1642,6 +1671,27 @@ public class CameraView extends FrameLayout {
      */
     public void setFrontPhotoMirroringEnabled(boolean enabled) {
         mCameraModule.setFrontPhotoMirroringEnabled(enabled);
+    }
+
+    /**
+     * Writes pictures in this format, where the camera can.
+     *
+     * <p>Takes effect on the next capture. An unsupported format is declined and the previous one
+     * kept, so check {@link #isPictureFormatSupported} rather than assuming - a request that
+     * cannot be honoured would otherwise look like it had been.</p>
+     */
+    public void setPictureFormat(PictureFormat format) {
+        mCameraModule.setPictureFormat(format);
+    }
+
+    /** @see #setPictureFormat */
+    public PictureFormat getPictureFormat() {
+        return mCameraModule.getPictureFormat();
+    }
+
+    /** Whether the camera in use can write this format. */
+    public boolean isPictureFormatSupported(PictureFormat format) {
+        return mCameraModule.isPictureFormatSupported(format);
     }
 
     /** @see #setFrontPhotoMirroringEnabled */

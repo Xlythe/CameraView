@@ -1935,13 +1935,62 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @NonNull private ImageCapture createImageCapture(@NonNull CameraInfo cameraInfo) {
-        return new ImageCapture.Builder()
+        ImageCapture.Builder builder = new ImageCapture.Builder()
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
                 .setCaptureMode(getCaptureMode())
-                .setJpegQuality(getPictureQuality())
-                .build();
+                .setJpegQuality(getPictureQuality());
+        // The format belongs to the use case rather than to a request, so asking for a different
+        // one is a rebind - which is why setPictureFormat goes through reconcileUseCases.
+        Integer outputFormat = outputFormatFor(getPictureFormat());
+        if (outputFormat != null && isPictureFormatSupported(getPictureFormat())) {
+            builder.setOutputFormat(outputFormat);
+        }
+        return builder.build();
+    }
+
+    /** The CameraX constant for a format, or null for one it has no constant for. */
+    @Nullable
+    private static Integer outputFormatFor(@NonNull CameraView.PictureFormat format) {
+        switch (format) {
+            case ULTRA_HDR:
+                return ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR;
+            case JPEG:
+                return ImageCapture.OUTPUT_FORMAT_JPEG;
+            default:
+                return null;
+        }
+    }
+
+    @Override
+    public boolean isPictureFormatSupported(@NonNull CameraView.PictureFormat format) {
+        if (format == CameraView.PictureFormat.JPEG) {
+            return true;
+        }
+        Camera camera = mActiveCamera;
+        Integer outputFormat = outputFormatFor(format);
+        if (camera == null || outputFormat == null) {
+            return false;
+        }
+        try {
+            // Asked of the camera that is bound, because a gain map needs the sensor and the
+            // pipeline behind it, not just a version of CameraX that knows the constant.
+            return ImageCapture.getImageCaptureCapabilities(camera.getCameraInfo())
+                    .getSupportedOutputFormats().contains(outputFormat);
+        } catch (RuntimeException | LinkageError error) {
+            Log.w(TAG, "Could not ask which picture formats this camera writes", error);
+            return false;
+        }
+    }
+
+    @Override
+    public synchronized void setPictureFormat(@NonNull CameraView.PictureFormat format) {
+        CameraView.PictureFormat before = getPictureFormat();
+        super.setPictureFormat(format);
+        if (getPictureFormat() != before) {
+            runOnMainThread(() -> reconcileUseCases(false));
+        }
     }
 
     @NonNull private ImageAnalysis createImageAnalysis() {
