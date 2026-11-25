@@ -8,6 +8,7 @@ import static org.junit.Assert.assertTrue;
 import android.Manifest;
 import android.content.Context;
 import android.graphics.Rect;
+import android.graphics.RectF;
 
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader;
@@ -24,6 +25,9 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 
 import java.io.File;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -177,6 +181,74 @@ public class CameraViewLifecycleTest {
         assertTrue(cameraView.isOpen());
     }
 
+    /**
+     * A focus is reported from the moment the camera takes it, and answered exactly once.
+     *
+     * <p>Which is what an app drawing its own reticle is driven by. The fake camera has no
+     * pipeline to converge, so this is the request and the timeout; what the camera says when it
+     * does answer is covered against the backend in {@code FocusFeedbackTest}.</p>
+     */
+    @Test
+    public void aFocusRequestIsReportedAndThenAnswered() {
+        cameraView.open();
+        idle();
+        List<RectF> requested = new ArrayList<>();
+        List<Boolean> completed = new ArrayList<>();
+        cameraView.setFocusListener(new CameraView.FocusListener() {
+            @Override public void onFocusRequested(RectF area) { requested.add(area); }
+            @Override public void onFocusCompleted(RectF area, boolean locked) {
+                completed.add(locked);
+            }
+        });
+
+        cameraView.focus(new Rect(-100, -100, 100, 100), new Rect(-200, -200, 200, 200));
+        idle();
+
+        assertEquals(1, requested.size());
+        assertTrue("the area has to be somewhere on the view: " + requested.get(0),
+                requested.get(0).centerX() > 0 && requested.get(0).centerX() < 1080);
+        assertTrue("nothing is claimed before the camera answers", completed.isEmpty());
+
+        // A camera that never answers still has to let the reticle go.
+        ShadowLooper.shadowMainLooper().idleFor(Duration.ofSeconds(5));
+        assertEquals("one answer for one request", 1, completed.size());
+        assertFalse("and never a lock the camera did not report", completed.get(0));
+
+        ShadowLooper.shadowMainLooper().idleFor(Duration.ofSeconds(5));
+        assertEquals("the timeout fires once, not forever", 1, completed.size());
+    }
+
+    /** Closing the camera answers the focus it was in the middle of, rather than stranding it. */
+    @Test
+    public void closingTheCameraAnswersAnOutstandingFocus() {
+        cameraView.open();
+        idle();
+        List<Boolean> completed = new ArrayList<>();
+        cameraView.setFocusListener(new CameraView.FocusListener() {
+            @Override public void onFocusRequested(RectF area) {}
+            @Override public void onFocusCompleted(RectF area, boolean locked) {
+                completed.add(locked);
+            }
+        });
+        cameraView.focus(new Rect(-100, -100, 100, 100), new Rect(-200, -200, 200, 200));
+        idle();
+
+        cameraView.close();
+        idle();
+
+        assertEquals(1, completed.size());
+        assertFalse(completed.get(0));
+    }
+
+    /** A camera that cannot be told where to look says so, so an app can leave out the gesture. */
+    @Test
+    public void theViewReportsWhetherTheCameraCanFocus() {
+        cameraView.open();
+        idle();
+
+        assertTrue("the fake camera publishes a focus region", cameraView.isFocusSupported());
+    }
+
     /** A layout change re-transforms the preview rather than leaving it stretched. */
     @Test
     public void aLayoutChangeIsAbsorbed() {
@@ -187,6 +259,81 @@ public class CameraViewLifecycleTest {
         idle();
 
         assertTrue(cameraView.isOpen());
+    }
+
+    /**
+     * A resize re-aims the preview on every pass, and reconfigures the camera once at the end.
+     *
+     * <p>A rotation, a window being dragged, a foldable opening and a Compose layout settling all
+     * arrive as a run of layout passes at different sizes. Reconfiguring for each of them means a
+     * camera session torn down and rebuilt per frame of an animation, which is the most expensive
+     * thing this library can do; the transform is cheap and keeps the preview the right shape
+     * while the window is still moving.</p>
+     */
+    @Test
+    public void aBurstOfLayoutPassesReconfiguresTheCameraOnce() {
+        CountingCameraView view = new CountingCameraView(context);
+        view.onFinishInflate();
+        view.layout(0, 0, 1080, 1920);
+        idle();
+        view.open();
+        idle();
+        int passesBefore = view.layoutChanges;
+
+        // Each pass a different width, the way an animating window arrives: a pass that lands on
+        // the size the view already had is not a change and never reaches the backend.
+        for (int pass = 1; pass <= 8; pass++) {
+            view.layout(0, 0, 1080 - 20 * pass, 1920);
+            idle();
+        }
+
+        assertEquals("every pass re-aims the preview", passesBefore + 8, view.layoutChanges);
+        assertEquals("and none of them reconfigures the camera", 0, view.layoutsSettled);
+
+        ShadowLooper.shadowMainLooper().idleFor(Duration.ofMillis(500));
+
+        assertEquals("one reconfiguration, for the size it stopped at", 1, view.layoutsSettled);
+        assertEquals("and no more passes were invented", passesBefore + 8, view.layoutChanges);
+
+        view.close();
+        idle();
+    }
+
+    /** Nothing is reconfigured for a view that has left the window. */
+    @Test
+    public void aDetachedViewIsNotReconfigured() {
+        CountingCameraView view = new CountingCameraView(context);
+        view.onFinishInflate();
+        view.layout(0, 0, 1080, 1920);
+        idle();
+
+        view.layout(0, 0, 540, 1920);
+        view.onDetachedFromWindow();
+        ShadowLooper.shadowMainLooper().idleFor(Duration.ofMillis(500));
+
+        assertEquals(0, view.layoutsSettled);
+    }
+
+    /** Counts what the view asks of its backend when it is laid out. */
+    private static class CountingCameraView extends CameraView {
+        int layoutChanges;
+        int layoutsSettled;
+
+        CountingCameraView(Context context) {
+            super(context);
+        }
+
+        @Override
+        protected void onLayoutChanged() {
+            layoutChanges++;
+            super.onLayoutChanged();
+        }
+
+        @Override
+        protected void onLayoutSettled() {
+            layoutsSettled++;
+            super.onLayoutSettled();
+        }
     }
 
     /** Taking a picture reports through the listener, success or failure. */

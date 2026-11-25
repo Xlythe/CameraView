@@ -6,6 +6,7 @@ import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 
@@ -19,6 +20,9 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowCamera;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * The legacy android.hardware.Camera backend, which the library keeps for releases below the
@@ -175,11 +179,34 @@ public class LegacyCameraModuleTest {
         module.setZoomLevel(50);
     }
 
+    /**
+     * A focus the camera took is reported on the view, where an app can draw it.
+     *
+     * <p>Only the request: the shadowed camera records the autofocus callback rather than
+     * answering it, which is the same shape as a camera that has not finished moving its lens.
+     * </p>
+     */
     @Test
-    public void focusingOnAnAreaDoesNotThrow() {
+    public void focusingReportsTheRequestOnTheView() {
         module.open();
+        assertTrue("the shadowed camera supports auto focus", module.isFocusSupported());
+        List<RectF> requested = new ArrayList<>();
+        cameraView.setFocusListener(new CameraView.FocusListener() {
+            @Override public void onFocusRequested(RectF area) { requested.add(area); }
+            @Override public void onFocusCompleted(RectF area, boolean locked) {}
+        });
 
         module.focus(new Rect(-100, -100, 100, 100), new Rect(-200, -200, 200, 200));
+
+        assertEquals(1, requested.size());
+        assertTrue("somewhere on the view: " + requested.get(0),
+                requested.get(0).centerX() > 0 && requested.get(0).centerX() < 1080);
+    }
+
+    /** A camera that was never opened cannot focus, and says so rather than guessing. */
+    @Test
+    public void aClosedCameraCannotFocus() {
+        assertFalse(module.isFocusSupported());
     }
 
     @Test

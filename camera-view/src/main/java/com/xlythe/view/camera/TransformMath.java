@@ -1,6 +1,7 @@
 package com.xlythe.view.camera;
 
 import android.graphics.Matrix;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.Size;
 
@@ -23,7 +24,118 @@ import androidx.annotation.RestrictTo;
  */
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class TransformMath {
+    /** How far a focus or metering area reaches either side of center, in both axes. */
+    private static final int METERING_RANGE = 1000;
+
+    /** The side of a metering area at a coefficient of one: a sixth of the frame. */
+    private static final int DEFAULT_METERING_SIZE = 300;
+
     private TransformMath() {}
+
+    /**
+     * Maps a point on a view onto the area a camera should focus or meter on.
+     *
+     * <p>Every backend here takes those areas in the same space - -1000 to 1000 across the
+     * sensor, in the sensor's own orientation - so the point has to be turned to match the sensor
+     * before it is normalized, which is what {@code relativeCameraOrientation} is for. The result
+     * is an area rather than a point because a camera meters over a region, and the region is
+     * clamped into range, so a tap near an edge produces a smaller area rather than one the
+     * camera will reject.</p>
+     *
+     * @param relativeCameraOrientation degrees the camera's frame is turned relative to the view
+     * @param coefficient scales the area; a metering area is conventionally larger than the focus
+     *     area inside it
+     * @return the area, or an empty one when the view has no size
+     */
+    @NonNull
+    public static Rect meteringArea(float x, float y, int viewWidth, int viewHeight,
+            int relativeCameraOrientation, float coefficient) {
+        if (viewWidth <= 0 || viewHeight <= 0) {
+            return new Rect();
+        }
+
+        int rotation = within360(relativeCameraOrientation);
+        float width = viewWidth;
+        float height = viewHeight;
+        if (rotation == 90 || rotation == 270) {
+            // Sideways relative to the view, so the sensor's axes are the view's transposed.
+            float swapped = width;
+            width = height;
+            height = swapped;
+            swapped = x;
+            x = y;
+            y = swapped;
+        }
+        if (rotation == 180 || rotation == 270) {
+            x = width - x;
+            y = height - y;
+        }
+
+        float centerX = -METERING_RANGE + 2 * METERING_RANGE * (x / width);
+        float centerY = -METERING_RANGE + 2 * METERING_RANGE * (y / height);
+        int size = (int) (DEFAULT_METERING_SIZE * coefficient);
+
+        Rect area = new Rect();
+        area.left = (int) centerX - size / 2;
+        area.top = (int) centerY - size / 2;
+        area.right = area.left + size;
+        area.bottom = area.top + size;
+
+        area.left = clampToMeteringRange(area.left);
+        area.top = clampToMeteringRange(area.top);
+        area.right = clampToMeteringRange(area.right);
+        area.bottom = clampToMeteringRange(area.bottom);
+        return area;
+    }
+
+    /**
+     * The region of a view a focus or metering area covers: the inverse of {@link #meteringArea}.
+     *
+     * <p>This is what an app drawing over the preview needs, and it is a truer answer than the
+     * point that was touched: an area near an edge has been clamped into the camera's range, and
+     * this reports where the camera is actually looking rather than where the finger was.</p>
+     *
+     * @return the region in view coordinates, or an empty one when the view has no size
+     */
+    @NonNull
+    public static RectF viewArea(@NonNull Rect meteringArea, int viewWidth, int viewHeight,
+            int relativeCameraOrientation) {
+        if (viewWidth <= 0 || viewHeight <= 0) {
+            return new RectF();
+        }
+
+        int rotation = within360(relativeCameraOrientation);
+        boolean transposed = rotation == 90 || rotation == 270;
+        float width = transposed ? viewHeight : viewWidth;
+        float height = transposed ? viewWidth : viewHeight;
+
+        float left = denormalize(meteringArea.left, width);
+        float right = denormalize(meteringArea.right, width);
+        float top = denormalize(meteringArea.top, height);
+        float bottom = denormalize(meteringArea.bottom, height);
+        if (rotation == 180 || rotation == 270) {
+            left = width - left;
+            right = width - right;
+            top = height - top;
+            bottom = height - bottom;
+        }
+
+        // Undoing the transposition swaps which axis each pair belongs to, and either flip above
+        // reverses a pair's order, so the corners are sorted back into a rectangle at the end.
+        RectF area = transposed
+                ? new RectF(top, left, bottom, right)
+                : new RectF(left, top, right, bottom);
+        area.sort();
+        return area;
+    }
+
+    private static float denormalize(int metering, float viewSize) {
+        return viewSize * (metering + METERING_RANGE) / (2 * METERING_RANGE);
+    }
+
+    private static int clampToMeteringRange(int value) {
+        return Math.min(Math.max(value, -METERING_RANGE), METERING_RANGE);
+    }
 
     /**
      * The angle of view a lens of this focal length sees across a sensor of this size.

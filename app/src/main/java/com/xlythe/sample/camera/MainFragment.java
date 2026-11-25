@@ -2,7 +2,7 @@ package com.xlythe.sample.camera;
 
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
-import android.os.Build;
+import android.graphics.RectF;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -11,6 +11,7 @@ import android.view.ViewGroup;
 import android.widget.Toast;
 
 import com.xlythe.fragment.camera.CameraFragment;
+import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 
 import java.io.File;
@@ -31,6 +32,33 @@ public class MainFragment extends CameraFragment {
         // The layout contains a CameraView and control buttons (capture, confirm, cancel).
         // CameraFragment automatically binds to these controls using their resource IDs.
         return inflater.inflate(R.layout.fragment_main, container, false);
+    }
+
+    /**
+     * Shows the focus reticle, which is the app's to draw.
+     *
+     * <p>CameraView reports when the camera took a focus request, where it was aimed, and what
+     * came of it; everything the user sees of that is here. Driving the reticle from the camera
+     * rather than from the touch is the point: the confirmation means the camera said it
+     * converged, and a tap on a camera that declines to focus shows nothing at all.</p>
+     */
+    @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+
+        CameraView camera = view.findViewById(com.xlythe.view.camera.R.id.camera);
+        FocusReticleView reticle = view.findViewById(R.id.focus_reticle);
+        camera.setFocusListener(new CameraView.FocusListener() {
+            @Override
+            public void onFocusRequested(@NonNull RectF area) {
+                reticle.showAt(area);
+            }
+
+            @Override
+            public void onFocusCompleted(@NonNull RectF area, boolean locked) {
+                reticle.settle(locked);
+            }
+        });
     }
 
     /**
