@@ -379,6 +379,9 @@ mCameraView.stream(new VideoStream.Params.Builder()
     .setIsLossy(true)
     .build());
 ```
+A stream runs until you close it, and closing the camera does not close it. When the app goes to
+the background the video stops, since another app may want the camera, but the audio keeps
+running, so a call carries on.
 
 
 Exif
