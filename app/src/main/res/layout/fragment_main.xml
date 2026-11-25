@@ -48,6 +48,23 @@
             android:clickable="false"
             android:focusable="false" />
 
+        <!-- Slow motion is the app's control to design, not the library's. CameraView publishes
+             the frame sizes and rates this camera will run fast at and records at whichever one
+             it is handed; what to call them and how to offer them is a product decision. Starts
+             hidden and stays hidden on a camera that publishes none. -->
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/slow_motion"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentTop="true"
+            android:layout_alignParentEnd="true"
+            android:layout_margin="16dp"
+            android:text="@string/btn_slow_motion_off"
+            android:textColor="#FFFFFF"
+            android:visibility="gone"
+            app:backgroundTint="#60000000"
+            app:cornerRadius="20dp" />
+
         <!-- Bottom Control Bar -->
         <LinearLayout
             android:layout_width="match_parent"
