@@ -282,7 +282,12 @@ class VideoSession extends PictureSession {
 
             try {
                 mMediaRecorder = new MediaRecorder();
-                mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+                // CAMCORDER rather than MIC: on a phone with several microphones it selects the
+                // one facing the same way as the camera, and it applies the camcorder tuning
+                // instead of the voice-call tuning. The voice tuning is automatic gain control and
+                // noise suppression built for speech, which audibly pumps on music and on room
+                // ambience - exactly the material a camera records.
+                mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
                 mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
                 int intCameraId = getIntCameraId();
                 CamcorderProfile profile = chooseProfile(intCameraId, getQuality());
