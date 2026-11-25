@@ -85,6 +85,7 @@ import androidx.lifecycle.ViewTreeLifecycleOwner;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Captions;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
@@ -1207,7 +1208,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         metadata.setReversedHorizontal(isMirroringThisPicture());
         ImageCapture.OutputFileOptions options = new ImageCapture.OutputFileOptions.Builder(file)
                 .setMetadata(metadata).build();
-        imageCapture.takePicture(options, mMainExecutor, new ImageCapture.OnImageSavedCallback() {
+        ImageCapture.OnImageSavedCallback callback = new ImageCapture.OnImageSavedCallback() {
             @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
                 if (!completePendingImage(operationId)) return;
                 showImageConfirmation(file);
@@ -1217,7 +1218,20 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 Log.w(TAG, "Image capture failed", error);
                 onImageFailed();
             }
-        });
+        };
+        if (getPictureFormat() == CameraView.PictureFormat.RAW_JPEG) {
+            // One destination is not enough for this format, and CameraX says so rather than
+            // guessing: "Simultaneous capture RAW and JPEG needs two output file options". The
+            // first is the RAW one - for this output format the use case's primary input format
+            // is RAW_SENSOR and its secondary is JPEG - so the DNG goes beside the caller's file
+            // and the JPEG into it, which is where the camera2 backend puts them too.
+            ImageCapture.OutputFileOptions rawOptions =
+                    new ImageCapture.OutputFileOptions.Builder(Captions.sidecarFor(file, "dng"))
+                            .setMetadata(metadata).build();
+            imageCapture.takePicture(rawOptions, options, mMainExecutor, callback);
+            return;
+        }
+        imageCapture.takePicture(options, mMainExecutor, callback);
     }
 
     private void scheduleImageTimeout(long operationId) {
