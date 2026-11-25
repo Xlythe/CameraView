@@ -52,6 +52,20 @@
                 android:clickable="false"
                 android:focusable="false" />
 
+            <!-- Slow motion is the app's control to design, not the library's. See the portrait
+                 layout for why it lives here rather than in the library. -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/slow_motion"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|end"
+                android:layout_margin="16dp"
+                android:text="@string/btn_slow_motion_off"
+                android:textColor="#FFFFFF"
+                android:visibility="gone"
+                app:backgroundTint="#60000000"
+                app:cornerRadius="20dp" />
+
         </FrameLayout>
 
         <!-- Side Control Bar -->

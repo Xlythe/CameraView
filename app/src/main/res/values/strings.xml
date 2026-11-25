@@ -23,4 +23,11 @@
     <string name="btn_cancel">Cancel</string>
     <string name="btn_resize">Resize</string>
 
+    <string name="btn_slow_motion_off">Slow-mo: off</string>
+    <string name="btn_slow_motion_on">Slow-mo: %1$dx</string>
+    <string name="toast_slow_motion_off">Recording at ordinary speed</string>
+    <string name="toast_slow_motion_on">Recording %1$d×%2$d at %3$dfps, playing back %4$dx slower</string>
+    <string name="toast_slow_motion_unavailable">This camera does not record slow motion</string>
+    <string name="toast_slow_motion_refused">This camera no longer offers that frame rate</string>
+
 </resources>
