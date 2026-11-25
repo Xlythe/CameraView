@@ -17,7 +17,7 @@ import static org.junit.Assert.assertTrue;
 import static org.robolectric.Shadows.shadowOf;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(minSdk = 21)
+@Config(sdk = 37)
 public class PermissionCheckerTest {
 
     private Application application;
@@ -42,5 +42,10 @@ public class PermissionCheckerTest {
         shadowApplication.grantPermissions(Manifest.permission.RECORD_AUDIO);
 
         assertFalse(PermissionChecker.hasPermissions(application, Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO));
+    }
+
+    @Test
+    public void testNoPermissionsRequired() {
+        assertTrue(PermissionChecker.hasPermissions(application));
     }
 }

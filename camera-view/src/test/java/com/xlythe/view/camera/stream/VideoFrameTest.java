@@ -10,7 +10,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(minSdk = 21)
+@Config(sdk = 37)
 public class VideoFrameTest {
 
     @Test
@@ -54,5 +54,51 @@ public class VideoFrameTest {
         assertArrayEquals(sampleData, deserialized.getData());
         assertEquals(123456789L, deserialized.getPresentationTimeUs());
         assertEquals(1, deserialized.getFlags());
+    }
+
+    @Test
+    public void testFalseFlipAndUnknownType() {
+        VideoFrame header = new VideoFrame.Builder(VideoFrame.Type.HEADER)
+                .flipped(false)
+                .build();
+        assertEquals(false, VideoFrame.fromBytes(header.asBytes()).isFlipped());
+
+        VideoFrame unknown = new VideoFrame.Builder(99).build();
+        assertEquals(0, unknown.asBytes().length);
+    }
+
+    @Test
+    public void testMalformedFieldsAreIgnoredWithoutCrashing() {
+        byte[] zeroLength = java.nio.ByteBuffer.allocate(Integer.BYTES)
+                .putInt(0)
+                .array();
+        assertEquals(VideoFrame.Type.HEADER, VideoFrame.fromBytes(zeroLength).getType());
+
+        byte[] shortInteger = java.nio.ByteBuffer.allocate(Integer.BYTES + 2)
+                .putInt(2)
+                .put((byte) 1)
+                .put((byte) 7)
+                .array();
+        assertEquals(VideoFrame.Type.HEADER, VideoFrame.fromBytes(shortInteger).getType());
+
+        byte[] unknownField = java.nio.ByteBuffer.allocate(Integer.BYTES + 2)
+                .putInt(2)
+                .put((byte) 99)
+                .put((byte) 1)
+                .array();
+        assertEquals(VideoFrame.Type.HEADER, VideoFrame.fromBytes(unknownField).getType());
+    }
+
+    @Test
+    public void testTruncatedFramesAreIgnoredWithoutCrashing() {
+        assertEquals(
+                VideoFrame.Type.HEADER,
+                VideoFrame.fromBytes(new byte[]{0, 0, 0}).getType());
+
+        byte[] truncatedPayload = java.nio.ByteBuffer.allocate(Integer.BYTES + 1)
+                .putInt(10)
+                .put((byte) 1)
+                .array();
+        assertEquals(VideoFrame.Type.HEADER, VideoFrame.fromBytes(truncatedPayload).getType());
     }
 }

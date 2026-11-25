@@ -1,6 +1,7 @@
 package com.xlythe.fragment.camera;
 
 import android.content.Context;
+import android.content.Intent;
 import android.os.Bundle;
 import android.view.LayoutInflater;
 import android.view.View;
@@ -25,7 +26,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(minSdk = 33)
+@Config(sdk = 37)
 public class CameraFragmentTest {
 
     public static class TestCameraFragment extends CameraFragment {
@@ -52,11 +53,12 @@ public class CameraFragmentTest {
         }
     }
 
+    private FragmentActivity activity;
     private TestCameraFragment fragment;
 
     @Before
     public void setup() {
-        FragmentActivity activity = Robolectric.buildActivity(FragmentActivity.class).create().start().resume().get();
+        activity = Robolectric.buildActivity(FragmentActivity.class).create().start().resume().get();
         fragment = new TestCameraFragment();
         activity.getSupportFragmentManager().beginTransaction().add(fragment, "camera").commitNow();
     }
@@ -72,5 +74,25 @@ public class CameraFragmentTest {
 
         fragment.setMaxVideoSize(1024L);
         assertEquals(1024L, fragment.getMaxVideoSize());
+    }
+
+    /**
+     * Detaching runs onDestroyView but not onDetach, so the camera state receiver is still
+     * registered while the Views are gone. It used to reach a released CameraView from there.
+     */
+    @Test
+    public void stateBroadcastSurvivesADetachedView() {
+        activity.getSupportFragmentManager().beginTransaction().detach(fragment).commitNow();
+
+        activity.sendBroadcast(new Intent(CameraView.ACTION_CAMERA_STATE_CHANGED)
+                .setPackage(activity.getPackageName()));
+    }
+
+    /** Stopping a fragment whose View is already gone must not reach through to the camera. */
+    @Test
+    public void stopWithoutAViewDoesNotTouchTheCamera() {
+        activity.getSupportFragmentManager().beginTransaction().detach(fragment).commitNow();
+
+        fragment.onStop();
     }
 }

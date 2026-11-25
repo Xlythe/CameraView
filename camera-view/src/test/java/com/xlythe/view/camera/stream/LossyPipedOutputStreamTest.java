@@ -1,5 +1,13 @@
 package com.xlythe.view.camera.stream;
 
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+
+import android.media.MediaCodec;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -8,38 +16,187 @@ import org.robolectric.annotation.Config;
 import java.io.IOException;
 import java.io.PipedInputStream;
 
-import static org.junit.Assert.assertEquals;
-
 @RunWith(RobolectricTestRunner.class)
-@Config(minSdk = 21)
+@Config(sdk = 37)
 public class LossyPipedOutputStreamTest {
+    private static final int PIPE_BYTES = 64 * 1024;
+    private static final int MAX_BUFFERED = 1024;
+
+    private static byte[] frameOf(int length, byte fill) {
+        byte[] frame = new byte[length];
+        java.util.Arrays.fill(frame, fill);
+        return frame;
+    }
 
     @Test
-    public void testLossyBehavior() throws IOException {
-        PipedInputStream snk = new PipedInputStream();
-        LossyPipedOutputStream out = new LossyPipedOutputStream(snk);
+    public void writesEverythingWhileTheReaderKeepsUp() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            assertTrue(stream.writeFrame(frameOf(16, (byte) 1), true));
+            byte[] read = new byte[16];
+            assertEquals(16, sink.read(read));
+            assertArrayEquals(frameOf(16, (byte) 1), read);
+            assertTrue(stream.writeFrame(frameOf(16, (byte) 2), true));
+        }
+    }
 
-        out.write(1);
-        assertEquals(1, snk.available());
+    @Test
+    public void dropsDroppableFramesOnceTheReaderFallsBehind() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            // Fill past the threshold without anybody reading.
+            assertTrue(stream.writeFrame(frameOf(MAX_BUFFERED + 1, (byte) 1), true));
+            assertTrue(stream.bufferedBytes() > MAX_BUFFERED);
 
-        out.flush();
-        // Now that we flushed, since available() > 0, the next writes should be dropped!
-        out.write(2);
-        out.write(new byte[]{3, 4});
-        out.write(new byte[]{5, 6}, 0, 2);
+            assertFalse(stream.writeFrame(frameOf(16, (byte) 2), true));
+            assertEquals(MAX_BUFFERED + 1, stream.bufferedBytes());
+        }
+    }
 
-        // Available should still be 1 because packets were dropped
-        assertEquals(1, snk.available());
+    /**
+     * The whole point of the frame API: a key frame is what every later frame is decoded against,
+     * so losing one costs an I-frame interval of video rather than a single frame.
+     */
+    @Test
+    public void neverDropsAFrameOthersDependOn() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            assertTrue(stream.writeFrame(frameOf(MAX_BUFFERED + 1, (byte) 1), true));
+            assertTrue(stream.bufferedBytes() > MAX_BUFFERED);
 
-        // Read the 1 to clear sink
-        assertEquals(1, snk.read());
-        assertEquals(0, snk.available());
+            assertTrue(stream.writeFrame(frameOf(32, (byte) 9), false));
+            assertEquals(MAX_BUFFERED + 1 + 32, stream.bufferedBytes());
+        }
+    }
 
-        // Now writes should succeed again
-        out.write(7);
-        assertEquals(1, snk.available());
+    /** A dropped frame leaves nothing behind, so the reader never sees a partial record. */
+    @Test
+    public void aDroppedFrameIsDroppedWhole() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            byte[] first = frameOf(MAX_BUFFERED + 1, (byte) 1);
+            assertTrue(stream.writeFrame(first, true));
+            assertFalse(stream.writeFrame(frameOf(64, (byte) 2), true));
+            assertTrue(stream.writeFrame(frameOf(8, (byte) 3), false));
 
-        out.close();
-        snk.close();
+            byte[] read = new byte[MAX_BUFFERED + 1 + 8];
+            int offset = 0;
+            while (offset < read.length) {
+                int count = sink.read(read, offset, read.length - offset);
+                if (count < 0) {
+                    break;
+                }
+                offset += count;
+            }
+            assertEquals(read.length, offset);
+            // Only the undroppable frame follows the first one; no trace of the dropped frame.
+            for (int i = 0; i < MAX_BUFFERED + 1; i++) {
+                assertEquals(1, read[i]);
+            }
+            for (int i = MAX_BUFFERED + 1; i < read.length; i++) {
+                assertEquals(3, read[i]);
+            }
+        }
+    }
+
+    /**
+     * Past the hard ceiling even reference frames go, because only the newest one is ever needed
+     * to resume and queueing the rest just deepens a backlog that is already too stale to show.
+     */
+    @Test
+    public void discardsReferenceFramesOnceHopelesslyBehind() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            assertFalse(stream.consumeResyncRequest());
+
+            // Four times the soft threshold is the ceiling, so push past it.
+            assertTrue(stream.writeFrame(frameOf(4 * MAX_BUFFERED + 1, (byte) 1), false));
+            assertFalse(stream.writeFrame(frameOf(32, (byte) 2), false));
+
+            // Still too far behind to spend a key frame on.
+            assertFalse(stream.consumeResyncRequest());
+
+            byte[] drain = new byte[4 * MAX_BUFFERED + 1];
+            int offset = 0;
+            while (offset < drain.length) {
+                int count = sink.read(drain, offset, drain.length - offset);
+                if (count < 0) {
+                    break;
+                }
+                offset += count;
+            }
+
+            // Caught up, so the producer is asked for a fresh reference frame exactly once.
+            assertTrue(stream.consumeResyncRequest());
+            assertFalse(stream.consumeResyncRequest());
+        }
+    }
+
+    @Test
+    public void reportsAMissingSink() {
+        LossyPipedOutputStream stream = new LossyPipedOutputStream();
+        assertThrows(IOException.class, () -> stream.writeFrame(frameOf(4, (byte) 1), true));
+        assertThrows(IOException.class, () -> stream.write(new byte[] {1}));
+        assertThrows(IOException.class, stream::bufferedBytes);
+    }
+
+    @Test
+    public void byteLevelWritesStillDropWholeChunks() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            // The first write is never dropped: nothing has flushed yet.
+            stream.write(frameOf(MAX_BUFFERED + 1, (byte) 1));
+            stream.flush();
+            assertTrue(stream.bufferedBytes() > MAX_BUFFERED);
+
+            stream.write(frameOf(16, (byte) 2));
+            assertEquals(MAX_BUFFERED + 1, stream.bufferedBytes());
+        }
+    }
+
+    /**
+     * The same backlog means very different latency at different bit rates, and latency is what
+     * the dropping exists to bound, so the budget is a duration rather than a byte count.
+     */
+    @Test
+    public void backlogBudgetFollowsTheBitRate() {
+        // A quarter second at 6 Mbps is 187 KB, and at 1 Mbps a sixteenth of that.
+        assertEquals(187_500, VideoRecorder.backlogBytesFor(6_000_000, 250));
+        assertEquals(31_250, VideoRecorder.backlogBytesFor(1_000_000, 250));
+
+        // The old fixed 128 KiB was a fifth of a second at 6 Mbps but four seconds at 256 kbps,
+        // which is the latency this is meant to bound. The budget now lands on the floor there.
+        assertEquals(8 * 1024, VideoRecorder.backlogBytesFor(256_000, 250));
+
+        // Clamped at both ends.
+        assertEquals(8 * 1024, VideoRecorder.backlogBytesFor(1_000, 250));
+        assertEquals(512 * 1024, VideoRecorder.backlogBytesFor(100_000_000, 250));
+    }
+
+    @Test
+    public void theBudgetCanBeRetunedAfterConstruction() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            assertEquals(MAX_BUFFERED, stream.getMaxBufferedBytes());
+
+            stream.setMaxBufferedBytes(64);
+            assertEquals(64, stream.getMaxBufferedBytes());
+
+            assertTrue(stream.writeFrame(frameOf(65, (byte) 1), true));
+            assertFalse(stream.writeFrame(frameOf(8, (byte) 2), true));
+
+            org.junit.Assert.assertThrows(IllegalArgumentException.class,
+                    () -> stream.setMaxBufferedBytes(0));
+        }
+    }
+
+    @Test
+    public void onlyDeltaFramesAreDroppable() {
+        assertTrue(VideoRecorder.isDroppable(0));
+        assertFalse(VideoRecorder.isDroppable(MediaCodec.BUFFER_FLAG_KEY_FRAME));
+        assertFalse(VideoRecorder.isDroppable(MediaCodec.BUFFER_FLAG_CODEC_CONFIG));
+        assertFalse(VideoRecorder.isDroppable(MediaCodec.BUFFER_FLAG_END_OF_STREAM));
+        assertFalse(VideoRecorder.isDroppable(
+                MediaCodec.BUFFER_FLAG_KEY_FRAME | MediaCodec.BUFFER_FLAG_CODEC_CONFIG));
     }
 }

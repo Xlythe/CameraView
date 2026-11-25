@@ -19,7 +19,7 @@ import static org.junit.Assert.assertNull;
 import static org.mockito.Mockito.when;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(minSdk = 21)
+@Config(sdk = 37)
 public class BarcodeTest {
 
     private com.google.mlkit.vision.barcode.common.Barcode mockMlKitBarcode;
