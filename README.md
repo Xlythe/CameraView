@@ -2,7 +2,7 @@ Camera View
 ====================
 
 CameraView provides a simple wrapper around the Android camera APIs, with backwards compatibility
-to API 14. Rather than directly manipulating the camera, here you have an Android View that can be
+to API 21. Rather than directly manipulating the camera, here you have an Android View that can be
 placed within your app. This View displays a preview and has the methods takePicture(File),
 startRecording(File) and stopRecording(). For simple use cases, CameraFragment exists as well.
 If you inflate a CameraFragment with Views that have the correct ids (eg. @id/capture),
@@ -38,7 +38,7 @@ Camera
 Camera is a Composable that simplifies the Android Camera APIs.
 
 Camera includes the optional attributes quality [max, high, medium, low],
-maxVideoDuration [milliseconds], and maxVideoSize [bytes].
+lensFacing [back, front], maxVideoDuration [milliseconds], and maxVideoSize [bytes].
 ```kotlin
 val cameraController = remember { mutableStateOf<CameraController?>(null) }
 Camera(
@@ -47,7 +47,6 @@ Camera(
     lensFacing = Camera.LensFacing.BACK,
     maxVideoDuration = 10000,
     maxVideoSize = 10000000,
-    controller = cameraController,
     controller = cameraController
 )
 ```
@@ -168,7 +167,9 @@ CameraFragment, then this will happen for free.
 
 
 CameraView includes the optional attributes quality [max, high, medium, low],
-maxVideoDuration [milliseconds], and maxVideoSize [bytes].
+flash [auto, on, off], lensFacing [back, front], maxVideoDuration [milliseconds],
+maxVideoSize [bytes], confirmImages [boolean], confirmVideos [boolean],
+pinchToZoomEnabled [boolean] and matchPreviewAspectRatio [boolean].
 ```xml
 <com.xlythe.view.camera.CameraView
     xmlns:camera="http://schemas.android.com/apk/res-auto"
@@ -180,6 +181,16 @@ maxVideoDuration [milliseconds], and maxVideoSize [bytes].
     camera:maxVideoDuration="10000"
     camera:maxVideoSize="10000000" />
 ```
+
+The following attributes are also accepted, but the Camera2 backend that ships enabled today
+ignores all of them. They are read by the CameraX backend, which is still opt-in:
+dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
+frontVideoMirroringEnabled [boolean], previewStabilizationEnabled [boolean],
+videoStabilizationEnabled [boolean], exposureCompensation [integer], torchEnabled [boolean]
+and lowLightBoostEnabled [boolean]. Each has a matching setter, and a companion that reports
+whether the active camera supports it, for example isDynamicRangeSupported(DynamicRange) or
+isLowLightBoostSupported(). Query support before relying on one; an unsupported request is
+logged and dropped rather than applied.
 
 CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
 handle binding the Views to the appropriate methods on CameraView.
@@ -204,6 +215,117 @@ Toggles between the various cameras on the device (typically the front and back 
 ```java
 mCameraView.toggleCamera();
 ```
+Reports when the camera opens and closes. CameraFragment already implements this.
+```java
+mCameraView.setOnCameraStateChangedListener(listener);
+```
+With confirmation enabled, a capture is shown in CameraView's own preview and onImageConfirmation()
+or onVideoConfirmation() fires instead of onImageCaptured(File) or onVideoCaptured(File). Accept or
+discard it to continue; rejecting also deletes the file. Enable matchPreviewAspectRatio alongside
+this so the capture and the preview are framed the same.
+```java
+mCameraView.setImageConfirmationEnabled(true);
+mCameraView.confirmPicture(); // or rejectPicture()
+mCameraView.confirmVideo();   // or rejectVideo()
+```
+Scans the preview for barcodes while the camera is open, reporting each batch of results to the
+listener. Formats come from Barcode.Format, and the camera must already be open.
+```java
+mCameraView.enterBarcodeScanner(listener, Barcode.Format.QR_CODE);
+mCameraView.exitBarcodeScanner();
+```
+
+Wide gamut
+-----------------
+Pictures are sRGB unless you ask otherwise. A modern sensor sees more than sRGB can describe,
+which is why manufacturers' camera apps save wide-gamut stills, but a viewer that ignores the
+colour profile shows them oversaturated - so it is opt-in, and refused on a camera or a platform
+that cannot honour it rather than quietly producing sRGB.
+```java
+if (mCameraView.isColorSpaceSupported(CameraView.ColorSpace.DISPLAY_P3)) {
+  mCameraView.setColorSpace(CameraView.ColorSpace.DISPLAY_P3);
+}
+```
+
+Video snapshot
+-----------------
+takePicture works during a recording, where the camera can hold a preview, a recording and a still
+at once - which is most of them, but not a LEGACY camera2 device. Ask before showing the button;
+where it is false the picture is refused and the recording carries on.
+```java
+if (mCameraView.isSnapshotWhileRecordingSupported()) {
+  mCameraView.takePicture(file);
+}
+```
+
+Faces
+-----------------
+The camera finds faces on its own, to decide what to focus and expose for. setFaceDetectionListener
+reports them, with a matrix that maps a face's bounds onto the view so you can draw over the
+preview. It returns false on a camera that cannot report faces.
+```java
+mCameraView.setFaceDetectionListener((faces, faceToView) -> {
+  for (Face face : faces) {
+    RectF onScreen = new RectF(face.getBounds());
+    faceToView.mapRect(onScreen);
+  }
+});
+mCameraView.setFaceDetectionListener(null);
+```
+
+Frames
+-----------------
+startFrameAnalysis hands every frame to your own analyzer, on a background thread, for detection
+CameraView does not do itself. Only the newest frame is kept, so a slow analyzer drops frames
+rather than falling behind, and the image is recycled when onFrame returns. Params.setMaxSize asks
+for smaller frames than the preview, which most detectors are no worse at.
+```java
+mCameraView.startFrameAnalysis(frame -> {
+  InputImage image = InputImage.fromMediaImage(frame.getImage(), frame.getRotationDegrees());
+  // ... and frame.getFrameToViewTransform() maps a result onto the view
+}, new FrameStream.Params().setMaxSize(new Size(640, 480)));
+mCameraView.stopFrameAnalysis();
+```
+
+Wear companion
+-----------------
+The sample has a watch half, in `app-wear`: the phone streams its camera to the watch and the
+watch's button asks the phone for a picture. Both halves share one application id, which is how
+the Data Layer pairs them, so they have to be built and signed together.
+
+Nothing in the library is Wear-specific. The watch reads the phone's stream with the same
+VideoView.setStream the phone sample uses locally; what the sample adds is the transport, and the
+numbers that make it work over a watch link - 480p, a megabit, and a key frame every second,
+since a stream can only be joined at a key frame.
+```java
+mCameraView.stream(new VideoStream.Params.Builder()
+    .setAudioEnabled(false)
+    .setMaxSize(new Size(640, 480))
+    .setBitRate(1_000_000)
+    .setIFrameInterval(1)
+    .setIsLossy(true)
+    .build());
+```
+
+Backends
+-----------------
+CameraView drives camera2 by default. CameraX is opt-in: it carries a database of per-device
+quirks and is the only backend that can reach a manufacturer's Extensions, but it has had less
+validation here. The legacy android.hardware.Camera backend is there for devices that predate
+camera2.
+```java
+CameraView.setDefaultBackend(CameraView.Backend.CAMERA_X);
+```
+```xml
+<com.xlythe.view.camera.CameraView
+    app:backend="cameraX" />
+```
+If your minSdk is older than androidx.camera supports, build with `-Pcameraview.core=true` to
+leave the CameraX backend, the Compose wrapper and their dependencies out. What is left covers
+API 21 and up. This is not hypothetical: `camera-camera2` pulls in `camera-camera2-pipe`, which
+declares a minSdk of 24, and a dependency's floor becomes your app's floor whatever this library
+declares. The sample reads the same flag, so `-Pcameraview.core=true :app:assembleDebug` builds
+it at 23.
 
 Exif
 -----------------
