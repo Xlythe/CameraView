@@ -6,8 +6,8 @@ import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Matrix;
 import android.graphics.SurfaceTexture;
-import android.media.AudioManager;
 import android.media.MediaMetadataRetriever;
+import android.media.AudioAttributes;
 import android.media.MediaPlayer;
 import android.os.Build;
 import android.os.Handler;
@@ -22,12 +22,14 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 
 import java.io.File;
-import java.io.FileDescriptor;
 import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.Objects;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import androidx.annotation.Nullable;
+import androidx.annotation.UiThread;
 import androidx.annotation.RequiresApi;
 
 import com.xlythe.view.camera.stream.AudioPlayer;
@@ -39,12 +41,17 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     // ---------- General ----------
 
+    /** Delivers player callbacks and view mutations on the UI thread. */
+    private final Handler mMainHandler = new Handler(Looper.getMainLooper());
+
     // The view we draw the video on to
     private TextureView mTextureView;
     // Whether to play a file or a stream
     private InputType mInputType = InputType.UNKNOWN;
     // If true, the texture view is ready to be drawn on
     private boolean mIsAvailable;
+    /** True while an already-cleaned texture is being replaced with a fresh preview surface. */
+    private boolean mIsReplacingTextureView;
     // If true, we should be playing
     private boolean mIsPlaying;
     // An optional listener for when videos are paused/played
@@ -70,6 +77,20 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     @Nullable private MediaPlayer.OnCompletionListener mOnCompletionListener;
     // If true, the video should loop
     private boolean mIsLooping = false;
+    /**
+     * Reads container metadata off the main thread.
+     *
+     * <p>Parsing a container blocks for as long as it takes to read its headers, which is long
+     * enough to drop frames and, on a large or damaged file, long enough to be an ANR.</p>
+     */
+    @Nullable private ExecutorService mPrepareExecutor;
+    /**
+     * Invalidates work from an earlier prepare, so metadata for a file that has since been
+     * replaced cannot configure the player.
+     */
+    private int mPrepareGeneration;
+    /** Held open until the player is prepared, because MediaPlayer reads from it until then. */
+    @Nullable private FileInputStream mPreparingInputStream;
 
     // ---------- Stream ----------
 
@@ -81,6 +102,10 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     @Nullable private AudioPlayer mAudioPlayer;
     // Plays the video half of the VideoStream
     @Nullable private VideoPlayer mVideoPlayer;
+    /** True after the prepared stream audio channel reaches end-of-stream. */
+    private boolean mAudioStreamEnded;
+    /** True after the prepared stream video channel reaches end-of-stream. */
+    private boolean mVideoStreamEnded;
 
     public VideoView(Context context) {
         this(context, null);
@@ -145,22 +170,19 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     }
 
     public void setFile(@Nullable File file) {
-        if (Objects.equals(file, mFile) && mInputType.equals(InputType.FILE)) {
+        if (Objects.equals(file, mFile) && mInputType == InputType.FILE) {
             return;
         }
 
         if (DEBUG) Log.d(TAG, "File set to " + file);
-        this.mFile = file;
-        if (mVideoStream != null) {
-            if (Build.VERSION.SDK_INT <= 18) {
-                throw new RuntimeException("API not available");
-            }
-            if (DEBUG) Log.d(TAG, "Stream replaced with file");
-            mVideoStream.close();
-            mVideoStream = null;
-            mPreparedVideoStream = null;
+        if (mInputType == InputType.STREAM) {
+            releaseStreamPlayback(true);
+        } else {
+            releaseMediaPlayer();
         }
-        this.mInputType = InputType.FILE;
+        mFile = file;
+        mVideoStream = null;
+        mInputType = InputType.FILE;
         createTextureView();
         if (file != null && mIsAvailable) {
             prepare();
@@ -180,21 +202,22 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     @RequiresApi(18)
     public void setStream(VideoStream videoStream) {
-        if (videoStream == null) {
-            throw new NullPointerException("VideoStream cannot be null");
-        }
-        if (Objects.equals(videoStream, mVideoStream) && mInputType.equals(InputType.STREAM)) {
+        Objects.requireNonNull(videoStream, "VideoStream cannot be null");
+        if (videoStream == mVideoStream && mInputType == InputType.STREAM) {
             return;
         }
 
         if (DEBUG) Log.d(TAG, "Stream set");
-        this.mVideoStream = videoStream;
-        this.mFile = null;
-        this.mInputType = InputType.STREAM;
-        if (DEBUG) Log.d(TAG, "Preparing TextureView");
+        if (mInputType == InputType.STREAM) {
+            releaseStreamPlayback(true);
+        } else {
+            releaseMediaPlayer();
+        }
+        mVideoStream = videoStream;
+        mFile = null;
+        mInputType = InputType.STREAM;
         createTextureView();
-        if (videoStream != null && mIsAvailable) {
-            if (DEBUG) Log.d(TAG, "Preparing stream");
+        if (mIsAvailable) {
             prepare();
         }
         if (DEBUG) Log.d(TAG, "Stream ready");
@@ -222,26 +245,19 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     public boolean onSurfaceTextureDestroyed(SurfaceTexture texture) {
         if (DEBUG) Log.d(TAG, "Texture destroyed");
         mIsAvailable = false;
+        if (mIsReplacingTextureView) {
+            return true;
+        }
         setPlayingState(false);
 
         switch (mInputType) {
             case FILE:
-                ensureMediaPlayer();
-                if (mMediaPlayer != null) {
-                    mMediaPlayer.release();
-                    mMediaPlayer = null;
-                }
+                releaseMediaPlayer();
                 break;
             case STREAM:
-                if (mVideoStream != null && mPreparedVideoStream == mVideoStream) {
-                    if (Build.VERSION.SDK_INT < 18) {
-                        throw new RuntimeException("API not available");
-                    }
-                    if (DEBUG) Log.d(TAG, "Stream destroyed");
-                    mVideoStream.close();
-                    mVideoStream = null;
-                    mPreparedVideoStream = null;
-                }
+                releaseStreamPlayback(true);
+                break;
+            case UNKNOWN:
                 break;
         }
 
@@ -291,49 +307,146 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     protected void prepareFile() {
         if (DEBUG) Log.d(TAG, "Preparing video");
-        ensureMediaPlayer();
-
-        try {
-            FileDescriptor fileDescriptor = new FileInputStream(mFile).getFD();
-
-            MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-            retriever.setDataSource(fileDescriptor);
-            int width = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
-            int height = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
-            int rotation = Build.VERSION.SDK_INT < 17 ? 0 : extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
-            retriever.release();
-            if (DEBUG) Log.d(TAG, String.format("Video metadata: width=%d, height=%d, rotation=%d", width, height, rotation));
-
-            if (rotation == 90 || rotation == 270) {
-                int temp = width;
-                width = height;
-                height = temp;
-            }
-            transformPreview(width, height);
-
-            Surface surface = new Surface(mTextureView.getSurfaceTexture());
-
-            try {
-                Objects.requireNonNull(mMediaPlayer).stop();
-            } catch (IllegalStateException e) {
-                if (DEBUG) e.printStackTrace();
-            }
-
-            try {
-                mMediaPlayer.reset();
-            } catch (IllegalStateException e) {
-                if (DEBUG) e.printStackTrace();
-            }
-
-            mMediaPlayer.setDataSource(fileDescriptor);
-            mMediaPlayer.setSurface(surface);
-            mMediaPlayer.prepare();
-            mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
-        } catch (IllegalStateException | IOException e) {
-            e.printStackTrace();
+        File file = mFile;
+        SurfaceTexture surfaceTexture = mTextureView == null ? null : mTextureView.getSurfaceTexture();
+        if (file == null || surfaceTexture == null) {
+            Log.w(TAG, "Cannot prepare video without a file and surface");
+            return;
         }
 
-        seekToFirstFrame();
+        // Reading the container and preparing the decoder both block for as long as the file
+        // takes to parse, so neither belongs on the thread drawing the UI. Read the metadata on a
+        // worker, then configure the player and let it prepare asynchronously.
+        int generation = ++mPrepareGeneration;
+        prepareExecutor().execute(() -> {
+            VideoMetadata metadata = readMetadata(file);
+            mMainHandler.post(() -> {
+                if (generation != mPrepareGeneration) {
+                    if (DEBUG) Log.d(TAG, "Discarding metadata for a replaced video");
+                    return;
+                }
+                if (metadata == null) {
+                    setPlayingState(false);
+                    return;
+                }
+                startPreparing(file, surfaceTexture, metadata, generation);
+            });
+        });
+    }
+
+    /** Container dimensions, already corrected for the rotation recorded in the file. */
+    private static final class VideoMetadata {
+        final int width;
+        final int height;
+
+        VideoMetadata(int width, int height) {
+            this.width = width;
+            this.height = height;
+        }
+    }
+
+    @Nullable
+    private VideoMetadata readMetadata(File file) {
+        MediaMetadataRetriever retriever = new MediaMetadataRetriever();
+        try (FileInputStream inputStream = new FileInputStream(file)) {
+            retriever.setDataSource(inputStream.getFD());
+            int width = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
+            int height = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+            int rotation = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
+            if (DEBUG) Log.d(TAG, String.format(
+                    "Video metadata: width=%d, height=%d, rotation=%d", width, height, rotation));
+            return rotation == 90 || rotation == 270
+                    ? new VideoMetadata(height, width)
+                    : new VideoMetadata(width, height);
+        } catch (IOException | RuntimeException e) {
+            Log.e(TAG, "Failed to read video metadata from " + file, e);
+            return null;
+        } finally {
+            try {
+                retriever.release();
+            } catch (IOException e) {
+                Log.w(TAG, "Failed to release video metadata retriever", e);
+            }
+        }
+    }
+
+    @UiThread
+    private void startPreparing(File file, SurfaceTexture surfaceTexture,
+            VideoMetadata metadata, int generation) {
+        ensureMediaPlayer();
+        transformPreview(metadata.width, metadata.height);
+
+        closePreparingInputStream();
+        Surface surface = new Surface(surfaceTexture);
+        try {
+            try {
+                Objects.requireNonNull(mMediaPlayer).stop();
+            } catch (IllegalStateException ignored) {
+                // The newly created player has not entered the started state yet.
+            }
+            mMediaPlayer.reset();
+
+            // MediaPlayer reads from the descriptor until it finishes preparing, so unlike the
+            // synchronous path this stream cannot be closed when the call returns.
+            FileInputStream inputStream = new FileInputStream(file);
+            mPreparingInputStream = inputStream;
+
+            mMediaPlayer.setDataSource(inputStream.getFD());
+            mMediaPlayer.setSurface(surface);
+            mMediaPlayer.setAudioAttributes(new AudioAttributes.Builder()
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .build());
+            mMediaPlayer.setOnPreparedListener(mediaPlayer -> {
+                mediaPlayer.setOnPreparedListener(null);
+                closePreparingInputStream();
+                if (generation != mPrepareGeneration) {
+                    return;
+                }
+                seekToFirstFrame();
+                if (mIsPlaying) {
+                    playFile();
+                }
+            });
+            mMediaPlayer.setOnErrorListener((mediaPlayer, what, extra) -> {
+                Log.e(TAG, "Failed to prepare video file " + file
+                        + " (what=" + what + ", extra=" + extra + ")");
+                closePreparingInputStream();
+                setPlayingState(false);
+                return true;
+            });
+            mMediaPlayer.prepareAsync();
+        } catch (IllegalStateException | IOException e) {
+            Log.e(TAG, "Failed to prepare video file " + file, e);
+            closePreparingInputStream();
+            setPlayingState(false);
+        } finally {
+            surface.release();
+        }
+    }
+
+    private void closePreparingInputStream() {
+        FileInputStream inputStream = mPreparingInputStream;
+        mPreparingInputStream = null;
+        if (inputStream == null) {
+            return;
+        }
+        try {
+            inputStream.close();
+        } catch (IOException e) {
+            Log.w(TAG, "Failed to close the video input stream", e);
+        }
+    }
+
+    private ExecutorService prepareExecutor() {
+        if (mPrepareExecutor == null) {
+            mPrepareExecutor = Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable, "VideoView-Prepare");
+                thread.setDaemon(true);
+                return thread;
+            });
+        }
+        return mPrepareExecutor;
     }
 
     protected void prepareStream() {
@@ -346,22 +459,25 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             throw new RuntimeException("API not available");
         }
 
+        mAudioStreamEnded = !videoStream.hasAudio();
+        mVideoStreamEnded = !videoStream.hasVideo();
         if (videoStream.hasAudio()) {
             mAudioPlayer = new AudioPlayer(videoStream.getAudioInputStream());
-            mAudioPlayer.setStreamEndListener(() -> new Handler(Looper.getMainLooper()).post(() -> {
-                setPlayingState(false);
-                videoStream.close();
-            }));
+            mAudioPlayer.setStreamEndListener(() -> mMainHandler.post(() ->
+                    onStreamEnded(videoStream, true)));
         }
 
         if (videoStream.hasVideo()) {
             @SuppressLint("Recycle") Surface surface = new Surface(mTextureView.getSurfaceTexture());
             mVideoPlayer = new VideoPlayer(surface, videoStream.getVideoInputStream());
-            mVideoPlayer.setStreamEndListener(() -> new Handler(Looper.getMainLooper()).post(() -> {
-                setPlayingState(false);
-                videoStream.close();
-            }));
-            mVideoPlayer.setOnMetadataAvailableListener((width, height, orientation, flipped) -> new Handler(Looper.getMainLooper()).post(() -> transformPreview(width, height, orientation, flipped)));
+            mVideoPlayer.setStreamEndListener(() -> mMainHandler.post(() ->
+                    onStreamEnded(videoStream, false)));
+            mVideoPlayer.setOnMetadataAvailableListener((width, height, orientation, flipped) ->
+                    mMainHandler.post(() -> {
+                        if (mPreparedVideoStream == videoStream) {
+                            transformPreview(width, height, orientation, flipped);
+                        }
+                    }));
         }
 
         mPreparedVideoStream = videoStream;
@@ -370,12 +486,101 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
     }
 
+    private void onStreamEnded(VideoStream videoStream, boolean audio) {
+        if (mPreparedVideoStream != videoStream) {
+            videoStream.close();
+            return;
+        }
+        if (audio) {
+            mAudioStreamEnded = true;
+        } else {
+            mVideoStreamEnded = true;
+        }
+        if (mAudioStreamEnded && mVideoStreamEnded) {
+            setPlayingState(false);
+            releaseStreamPlayback(true);
+        }
+    }
+
+    private void releaseMediaPlayer() {
+        // Invalidate any prepare still in flight, so its metadata cannot configure a player that
+        // has gone away, and drop the descriptor it was holding open.
+        mPrepareGeneration++;
+        closePreparingInputStream();
+
+        MediaPlayer mediaPlayer = mMediaPlayer;
+        mMediaPlayer = null;
+        if (mediaPlayer != null) {
+            mediaPlayer.release();
+        }
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        ExecutorService executor = mPrepareExecutor;
+        mPrepareExecutor = null;
+        if (executor != null) {
+            executor.shutdownNow();
+        }
+
+        // A view that is gone must not still be decoding. On a device the SurfaceTexture is
+        // destroyed on the way out and that callback releases everything, but it is a callback
+        // from the platform about a texture, not a statement about this view: a detach that does
+        // not destroy the texture would leave a decoder running and audio playing from a view
+        // nobody can see. Releasing here says it directly. The file is kept, so reattaching
+        // prepares again.
+        setPlayingState(false);
+        switch (mInputType) {
+            case FILE:
+                releaseMediaPlayer();
+                break;
+            case STREAM:
+                releaseStreamPlayback(true);
+                break;
+            case UNKNOWN:
+                break;
+        }
+        super.onDetachedFromWindow();
+    }
+
+    @RequiresApi(18)
+    private void releaseStreamPlayback(boolean closeStream) {
+        AudioPlayer audioPlayer = mAudioPlayer;
+        VideoPlayer videoPlayer = mVideoPlayer;
+        VideoStream preparedStream = mPreparedVideoStream;
+        VideoStream currentStream = mVideoStream;
+        mAudioPlayer = null;
+        mVideoPlayer = null;
+        mPreparedVideoStream = null;
+        if (audioPlayer != null) {
+            audioPlayer.stop();
+        }
+        if (videoPlayer != null) {
+            videoPlayer.stop();
+        }
+        if (closeStream) {
+            if (preparedStream != null) {
+                preparedStream.close();
+            }
+            if (currentStream != null && currentStream != preparedStream) {
+                currentStream.close();
+            }
+            mVideoStream = null;
+        }
+        setPlayingState(false);
+    }
+
     private int extractAsInt(MediaMetadataRetriever retriever, int key) {
         String metadata = retriever.extractMetadata(key);
         if (metadata == null) {
             return 0;
         }
-        return Integer.parseInt(metadata);
+        try {
+            return Integer.parseInt(metadata);
+        } catch (NumberFormatException e) {
+            Log.w(TAG, "Invalid numeric video metadata: " + metadata, e);
+            return 0;
+        }
     }
 
     public void seekToFirstFrame() {
@@ -518,7 +723,8 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     public void setVolume(float volume) {
         ensureMediaPlayer();
-        Objects.requireNonNull(mMediaPlayer).setVolume(volume, volume);
+        float clampedVolume = Math.max(0f, Math.min(volume, 1f));
+        Objects.requireNonNull(mMediaPlayer).setVolume(clampedVolume, clampedVolume);
     }
 
     void transformPreview(int videoWidth, int videoHeight) {
@@ -529,6 +735,10 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
         int viewWidth = getWidth();
         int viewHeight = getHeight();
+        if (videoWidth <= 0 || videoHeight <= 0 || viewWidth <= 0 || viewHeight <= 0
+                || mTextureView == null) {
+            return;
+        }
 
         Matrix matrix = new Matrix();
 
@@ -574,7 +784,12 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         // is able to draw to it again. We'd rather clear the TextureView, but since there's no such
         // way, we destroy it instead.
         if (mTextureView != null) {
-            removeView(mTextureView);
+            mIsReplacingTextureView = true;
+            try {
+                removeView(mTextureView);
+            } finally {
+                mIsReplacingTextureView = false;
+            }
         }
         mIsAvailable = false;
         addView(mTextureView = new TextureView(getContext()), 0);
@@ -621,6 +836,10 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
         int viewWidth = getWidth();
         int viewHeight = getHeight();
+        if (previewWidth <= 0 || previewHeight <= 0 || viewWidth <= 0 || viewHeight <= 0
+                || mTextureView == null) {
+            return;
+        }
         int displayOrientation = getDisplayRotation();
         if (isMirrored()) {
             flipped = !flipped;
