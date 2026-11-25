@@ -1,0 +1,117 @@
+package com.xlythe.sample.camera;
+
+import static com.xlythe.sample.camera.MainActivity.TAG;
+
+import android.opengl.GLES20;
+import android.os.Bundle;
+import android.util.Log;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.Toast;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+
+import com.xlythe.fragment.camera.CameraFragment;
+import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.gl.GlFrame;
+
+import java.io.File;
+import java.util.concurrent.TimeUnit;
+
+/**
+ * EffectFragment demonstrates drawing on camera frames as they pass through GL.
+ *
+ * <p>The effect itself is the dullest one that proves anything: a band swept down the frame. What
+ * is worth looking at is where the band ends up. It is drawn into the same output the camera frame
+ * was drawn into, so it is in the picture and the recording this fragment saves as well as on the
+ * screen - which is what a View laid over the preview could never do, and the reason the frames go
+ * through GL at all.</p>
+ *
+ * <p>Everything about how it looks is here rather than in the library. CameraView hands over the
+ * texture, the transform and the timestamp and has no opinion on what is drawn with them.</p>
+ */
+public class EffectFragment extends CameraFragment {
+    private CameraView mCameraView;
+
+    @Override
+    public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
+            @Nullable Bundle savedInstanceState) {
+        View view = inflater.inflate(R.layout.fragment_effect, container, false);
+        mCameraView = view.findViewById(com.xlythe.view.camera.R.id.camera);
+        // Set before the camera opens, so the first configuration already carries the effect
+        // rather than the camera being configured and then configured again.
+        mCameraView.setFrameRenderer(new BandRenderer());
+        return view;
+    }
+
+    /**
+     * Says whether the frames are actually going through GL.
+     *
+     * <p>Worth saying out loud, because setting a renderer on a backend without effects is
+     * accepted and ignored: the camera works and the band simply is not there. Only the probe
+     * tells the two apart, which is why this layout names the backend that can.</p>
+     */
+    @Override
+    public void onCameraOpened() {
+        report(mCameraView.isFrameEffectSupported()
+                ? "Frames are going through GL - the band is in the saved file too"
+                : "The " + mCameraView.getBackend() + " backend has nowhere to draw a frame");
+    }
+
+    @Override
+    public void onImageCaptured(final File file) {
+        CaptureSaver.save(requireContext(), file, false /* isVideo */, uri ->
+                report(uri == null ? "Could not save the picture" : "Picture saved to " + uri));
+    }
+
+    @Override
+    public void onVideoCaptured(final File file) {
+        CaptureSaver.save(requireContext(), file, true /* isVideo */, uri ->
+                report(uri == null ? "Could not save the video" : "Video saved to " + uri));
+    }
+
+    @Override
+    public void onFailure() {
+        report("Failure");
+    }
+
+    private void report(String message) {
+        Log.d(TAG, message);
+        Toast.makeText(getContext(), message, Toast.LENGTH_SHORT).show();
+    }
+
+    /** Paints a band across every frame, under the app's own colours. */
+    private static final class BandRenderer implements FrameRenderer {
+        /** How long the band takes to travel the frame. */
+        private static final long SWEEP_NANOS = TimeUnit.SECONDS.toNanos(3);
+
+        /** The band's height, as a fraction of the frame's. */
+        private static final int BAND_FRACTION = 12;
+
+        @Override
+        public boolean onDrawFrame(@NonNull GlFrame frame) {
+            frame.drawCameraFrame();
+
+            int bandHeight = Math.max(frame.getHeight() / BAND_FRACTION, 1);
+            // Driven by the camera's own timestamp rather than by a frame counter, so the band
+            // moves at the same rate in the recording as it did on the screen however many frames
+            // the renderer managed. Timestamps are monotonic, so this stays positive.
+            long phase = frame.getTimestampNanos() % SWEEP_NANOS;
+            int bottom = (int) ((frame.getHeight() - bandHeight) * phase / SWEEP_NANOS);
+
+            // Scissor and clear rather than a shader of this app's own. The thing being shown is
+            // that a frame passes through GL on its way out, not how to write a fragment shader,
+            // and this needs nothing created or released.
+            GLES20.glEnable(GLES20.GL_SCISSOR_TEST);
+            GLES20.glScissor(0, bottom, frame.getWidth(), bandHeight);
+            GLES20.glClearColor(1f, 0.42f, 0f, 1f);
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+            GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
+
+            return true;
+        }
+    }
+}

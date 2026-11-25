@@ -6,6 +6,7 @@
     <string name="app_name_resizing">Resizing Demo</string>
     <string name="app_name_qr_code">QR Code Demo</string>
     <string name="app_name_wear">Wear Companion</string>
+    <string name="app_name_effect">Effect Demo</string>
     <string name="wear_status_idle">Open the companion app on your watch</string>
     <string name="wear_status_opening">Connecting to the watch…</string>
     <string name="wear_status_streaming">Streaming to the watch</string>
