@@ -262,6 +262,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private int mLastWidth;
     /** Last non-zero CameraView layout height used to choose resolutions and ViewPort. */
     private int mLastHeight;
+    /** Set when a layout settles during a capture, so the rebind it asks for is owed, not lost. */
+    private boolean mSizeRebindPending;
     /** Monotonic token invalidating stale provider, surface, and binding callbacks. */
     private long mGeneration;
     /** Monotonic token ensuring an image request reports at most one terminal result. */
@@ -1215,6 +1217,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mImageOperationId++;
         mPendingImageFile = null;
         cancelImageTimeout();
+        // Posted rather than called: this runs inside a CameraX callback, and a rebind from in
+        // there would tear down the pipeline that is still reporting.
+        mMainHandler.post(this::rebindForSettledSize);
         return true;
     }
 
@@ -1225,6 +1230,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mPendingImageFile = null;
         cancelImageTimeout();
         onImageFailed();
+        mMainHandler.post(this::rebindForSettledSize);
     }
 
     private void cancelImageTimeout() {
@@ -2257,8 +2263,26 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             if (width <= 0 || height <= 0 || (width == mLastWidth && height == mLastHeight)) return;
             mLastWidth = width;
             mLastHeight = height;
-            if (mOpenRequested && !mPaused && mVideoRecording == null) reconcileUseCases(true);
+            if (!mOpenRequested || mPaused || mVideoRecording != null) return;
+            // Rebinding unbinds the use cases, and unbinding an ImageCapture aborts what it has in
+            // flight with "Camera is closed" - so a view that settles a moment after the shutter
+            // would lose the picture. The size is worth a session rebuild and a photo is worth
+            // more, so the rebind waits for the capture rather than being dropped.
+            if (mPendingImageFile != null) {
+                mSizeRebindPending = true;
+                return;
+            }
+            reconcileUseCases(true);
         });
+    }
+
+    /** Rebinds for a size that settled while a capture was in flight, if one did. */
+    private void rebindForSettledSize() {
+        if (!mSizeRebindPending) return;
+        mSizeRebindPending = false;
+        if (mOpenRequested && !mPaused && mVideoRecording == null && mPendingImageFile == null) {
+            reconcileUseCases(true);
+        }
     }
 
     private void applyPreviewTransform() {

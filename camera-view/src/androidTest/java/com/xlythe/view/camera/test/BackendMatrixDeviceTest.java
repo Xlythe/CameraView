@@ -8,10 +8,12 @@ import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.util.Size;
+import android.view.ViewGroup;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.test.rule.GrantPermissionRule;
 
 import com.xlythe.view.camera.CameraView;
@@ -120,6 +122,53 @@ public final class BackendMatrixDeviceTest {
         });
 
         assertNotNull("the capture failed on " + backend, captured.get());
+        assertTrue(captured.get().length() > 0);
+    }
+
+    /**
+     * And it still produces one when the view settles underneath it.
+     *
+     * <p>A resolution is resolved when a use case is bound, so a new size is only honoured by
+     * binding again - and unbinding an ImageCapture aborts whatever it has in flight. A layout
+     * that settled a moment after the shutter used to fail the photo with "Camera is closed",
+     * which is a thing people do constantly: open the camera and immediately take a picture while
+     * the view is still arriving at its size. Found by running this suite under gradle, where the
+     * layout happened to settle later than it does under a bare instrumentation run.</p>
+     */
+    @Test
+    public void aCaptureSurvivesTheViewSettling() throws Exception {
+        File file = temporaryFile(".jpg");
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<File> captured = new AtomicReference<>();
+
+        withOpenCamera(camera -> {
+            camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+                @Override public void onImageConfirmation() {}
+
+                @Override public void onImageCaptured(File saved) {
+                    captured.set(saved);
+                    finished.countDown();
+                }
+
+                @Override public void onFailure() {
+                    finished.countDown();
+                }
+            });
+            camera.takePicture(file);
+            // Resized while the capture is in flight, so the settle debounce expires in the
+            // middle of it. A capture takes several hundred milliseconds and the debounce is
+            // shorter than that, which is the whole reason the two ever met.
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                ViewGroup.LayoutParams params = camera.getLayoutParams();
+                params.width = Math.max(1, camera.getWidth() - 40);
+                params.height = Math.max(1, camera.getHeight() - 40);
+                camera.setLayoutParams(params);
+            });
+            assertTrue("the capture never reported on " + backend,
+                    finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        });
+
+        assertNotNull("a resize cost the capture on " + backend, captured.get());
         assertTrue(captured.get().length() > 0);
     }
 
