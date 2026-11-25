@@ -156,13 +156,21 @@ public class FrameStreamTest {
         }, new FrameStream.Params());
 
         ImageReader reader = awaitReader(canvas);
-        // One frame at a time: the pump keeps only the newest, so two offered together are one
-        // delivery and one drop.
         ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv(320, 240));
         assertTrue(first.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
-        ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv(320, 240));
 
-        assertTrue("the second frame still arrives",
+        // Offered until one lands, rather than once. The stream keeps only the newest frame, so
+        // an offer made while the analyzer is still inside onFrame - which is where it is when
+        // the latch above opens - is dropped by design. What is under test is that the stream
+        // goes on delivering after a throw, not that any particular frame survives; asserting
+        // the latter is how this test used to fail about one run in twenty.
+        long deadline = System.currentTimeMillis() + TIMEOUT_SECONDS * 1_000;
+        while (second.getCount() > 0 && System.currentTimeMillis() < deadline) {
+            ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv(320, 240));
+            second.await(50, TimeUnit.MILLISECONDS);
+        }
+
+        assertTrue("the stream stopped delivering after an analyzer threw",
                 second.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertTrue(stream.isAnalyzing());
     }

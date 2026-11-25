@@ -55,6 +55,9 @@ public abstract class ICameraModule {
      * wanted the way round the world actually is.</p>
      */
     private boolean mFrontPhotoMirroringEnabled = true;
+
+    /** JPEG, which every backend and every camera can write. */
+    private CameraView.PictureFormat mPictureFormat = CameraView.PictureFormat.JPEG;
     /** Whether preview stabilization is requested. */
     private boolean mPreviewStabilizationEnabled;
     /** Whether video stabilization is requested. */
@@ -327,6 +330,30 @@ public abstract class ICameraModule {
 
     public synchronized boolean isFrontVideoMirroringEnabled() {
         return mFrontVideoMirroringEnabled;
+    }
+
+    /**
+     * Asks for pictures in this format.
+     *
+     * <p>Declined, leaving the previous format, when the camera cannot write it - a backend that
+     * accepted the request and then wrote something else would be worse than one that said no.
+     * </p>
+     */
+    public synchronized void setPictureFormat(CameraView.PictureFormat format) {
+        if (!isPictureFormatSupported(format)) {
+            Log.w(TAG, "This camera cannot write " + format + "; keeping " + mPictureFormat);
+            return;
+        }
+        mPictureFormat = format;
+    }
+
+    public synchronized CameraView.PictureFormat getPictureFormat() {
+        return mPictureFormat;
+    }
+
+    /** Only JPEG, unless a backend can do better. */
+    public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        return format == CameraView.PictureFormat.JPEG;
     }
 
     public synchronized void setFrontPhotoMirroringEnabled(boolean enabled) {
