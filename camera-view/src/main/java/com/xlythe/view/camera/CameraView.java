@@ -33,6 +33,8 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
 
+import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
@@ -1389,6 +1391,85 @@ public class CameraView extends FrameLayout {
         return mFrameStream != null && mFrameStream.isAnalyzing();
     }
 
+    /**
+     * Draws every camera frame through a caller's renderer on its way to the preview, the
+     * recording and the stills.
+     *
+     * <p>Unopinionated on purpose: the library puts the frames through GL and says nothing at all
+     * about what comes out. A tint, a watermark burnt into the recording, a replaced background, a
+     * face drawn over a face, something registered to a point in the world - they are all this one
+     * hook, and which of them a camera does is the app's decision rather than this library's.</p>
+     *
+     * <p>What makes it worth going through GL instead of drawing a View over the preview is that
+     * the frame is drawn into every output: the still and the recording come out the way the
+     * screen looked, not the way the camera looked.</p>
+     *
+     * <p>Ask {@link #isFrameEffectSupported()} first. A renderer set on a backend with no effects
+     * is accepted and ignored rather than refused, because an effect is usually decoration and a
+     * camera that keeps working beats one that throws - but a caller whose renderer is the whole
+     * feature needs to know, and the probe is how.</p>
+     *
+     * <p>The renderer is called on the GL thread, never this one. See {@link FrameRenderer}.</p>
+     *
+     * @param renderer what draws each frame, or null to go back to the camera's own frame
+     * @see #startFrameAnalysis for reading frames rather than drawing them
+     */
+    public void setFrameRenderer(@Nullable FrameRenderer renderer) {
+        mCameraModule.setFrameRenderer(renderer);
+    }
+
+    /** @see #setFrameRenderer */
+    @Nullable
+    public FrameRenderer getFrameRenderer() {
+        return mCameraModule.getFrameRenderer();
+    }
+
+    /**
+     * Hands the camera a texture the caller created, and tells the caller when a frame lands on
+     * it.
+     *
+     * <p>The other half of the seam, and the half that cannot be worked around. A renderer draws
+     * a texture this library made; a consumer that has to be given the texture name rather than
+     * handed one - because it owns the context the texture must live in, or because its own API
+     * takes a name - cannot use that at all. So this exists: set a provider and the camera renders
+     * into its texture instead of ours.</p>
+     *
+     * <p>ARCore's non-shared session is the example to hand:
+     * {@code Session.setCameraTextureName(int)} takes a texture the caller made, and until it has
+     * one {@code Session.update()} never returns a frame.</p>
+     *
+     * <p>The texture is created once, when the camera starts rendering, so changing the provider
+     * reconfigures the camera where changing the renderer does not.</p>
+     *
+     * @param provider who creates the texture and consumes its frames, or null for the library's
+     *     own texture
+     */
+    public void setCameraTextureProvider(@Nullable CameraTextureProvider provider) {
+        mCameraModule.setCameraTextureProvider(provider);
+    }
+
+    /** @see #setCameraTextureProvider */
+    @Nullable
+    public CameraTextureProvider getCameraTextureProvider() {
+        return mCameraModule.getCameraTextureProvider();
+    }
+
+    /**
+     * Whether {@link #setFrameRenderer} and {@link #setCameraTextureProvider} do anything on the
+     * backend in use.
+     *
+     * <p>{@link Backend#CAMERA_X} can, because androidx.camera has a seam for putting a processor
+     * between the camera and its outputs. The other two deliver camera buffers straight to the
+     * surfaces that consume them, so there is nowhere for a frame to be drawn on the way, and they
+     * report false rather than accepting a renderer that would never be called.</p>
+     *
+     * <p>False also once GL has failed on this device, which is reported here rather than thrown
+     * so that the camera carries on working without the effect.</p>
+     */
+    public boolean isFrameEffectSupported() {
+        return mCameraModule.isFrameEffectSupported();
+    }
+
     /** Receives the faces the camera itself is tracking. */
     public interface FaceDetectionListener {
         /**
@@ -1663,8 +1744,8 @@ public class CameraView extends FrameLayout {
     /** Returns whether front-camera video files are mirrored. */
     public boolean isFrontVideoMirroringEnabled() {
         return mCameraModule.isFrontVideoMirroringEnabled();
-    }
-
+    }
+
     /**
      * Whether a picture taken with the user-facing lens is mirrored.
      *
