@@ -273,6 +273,11 @@ public class CameraXHarnessTest {
         // than throw: an app asks them to decide whether to show a button.
         module.isSnapshotWhileRecordingSupported();
 
+        // This backend has somewhere to put a processor between the camera and its outputs, which
+        // is what the probe answers. Whether one can actually be bound here is a different
+        // question, and the answer is no for the reason recorded on this class.
+        assertTrue("the CameraX backend offers frame effects", module.isFrameEffectSupported());
+
         // The contract is that the return value says whether the camera is now in the state that
         // was asked for, so it has to agree with what the camera says it can do - and turning it
         // off has to succeed either way, since a camera that cannot track faces is already not
