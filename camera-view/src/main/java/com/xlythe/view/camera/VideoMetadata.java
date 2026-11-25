@@ -279,59 +279,6 @@ public final class VideoMetadata {
                 + (char) (header[6] & 0xFF) + (char) (header[7] & 0xFF);
     }
 
-    @Nullable
-    @VisibleForTesting
-    static byte[] writeForTesting(@NonNull byte[] mp4, @NonNull Builder builder) {
-        List<Field> fields = builder.fields();
-        if (fields.isEmpty()) {
-            return null;
-        }
-        int moovAt = findTopLevelBox(mp4, BOX_MOOV);
-        if (moovAt < 0) {
-            return null;
-        }
-        int moovSize = boxSize(mp4, moovAt);
-        if (moovSize <= 0 || moovAt + moovSize > mp4.length) {
-            return null;
-        }
-        // A udta already there would have to be merged rather than added beside, and two of
-        // them is not a file anyone should have to read. A moov that cannot be walked counts as
-        // one: the honest answer about a container this does not understand is to leave it.
-        if (!canAppendTo(mp4, moovAt, moovSize)) {
-            return null;
-        }
-        int freeAt = moovAt + moovSize;
-        if (freeAt + HEADER > mp4.length) {
-            return null;
-        }
-        String freeType = boxType(mp4, freeAt);
-        if (!BOX_FREE.equals(freeType) && !BOX_SKIP.equals(freeType)) {
-            return null;
-        }
-        int freeSize = boxSize(mp4, freeAt);
-        byte[] udta = buildUdta(fields);
-        // The free box has to survive as a box: it cannot shrink below its own header.
-        if (freeSize - udta.length < HEADER) {
-            return null;
-        }
-
-        byte[] out = new byte[mp4.length];
-        System.arraycopy(mp4, 0, out, 0, freeAt);
-        System.arraycopy(udta, 0, out, freeAt, udta.length);
-        int newFreeAt = freeAt + udta.length;
-        int newFreeSize = freeSize - udta.length;
-        writeInt(out, newFreeAt, newFreeSize);
-        writeType(out, newFreeAt + 4, BOX_FREE);
-        System.arraycopy(mp4, freeAt + HEADER, out, newFreeAt + HEADER,
-                newFreeSize - HEADER);
-        // Everything from mdat onwards is untouched and, crucially, unmoved.
-        System.arraycopy(mp4, freeAt + freeSize, out, newFreeAt + newFreeSize,
-                mp4.length - (freeAt + freeSize));
-        // moov now owns the bytes the free box gave up.
-        writeInt(out, moovAt, moovSize + udta.length);
-        return out;
-    }
-
     /** A udta box holding one box per field. */
     @VisibleForTesting
     @NonNull
@@ -359,60 +306,6 @@ public final class VideoMetadata {
         writeType(udta, 4, BOX_UDTA);
         System.arraycopy(inner, 0, udta, HEADER, inner.length);
         return udta;
-    }
-
-    /** The offset of a top-level box of the given type, or -1. */
-    @VisibleForTesting
-    static int findTopLevelBox(@NonNull byte[] mp4, @NonNull String type) {
-        int at = 0;
-        while (at + HEADER <= mp4.length) {
-            int size = boxSize(mp4, at);
-            if (size < HEADER || at + size > mp4.length) {
-                return -1;
-            }
-            if (type.equals(boxType(mp4, at))) {
-                return at;
-            }
-            at += size;
-        }
-        return -1;
-    }
-
-    /** Whether a container's children can be walked and none of them is already user data. */
-    private static boolean canAppendTo(@NonNull byte[] mp4, int parentAt, int parentSize) {
-        int at = parentAt + HEADER;
-        int end = parentAt + parentSize;
-        while (at + HEADER <= end) {
-            int size = boxSize(mp4, at);
-            if (size < HEADER || at + size > end) {
-                return false;
-            }
-            if (BOX_UDTA.equals(boxType(mp4, at))) {
-                return false;
-            }
-            at += size;
-        }
-        return true;
-    }
-
-    /**
-     * A box's size.
-     *
-     * <p>Returns 0 for the two extended forms - a size of 1 means a 64-bit length follows, and a
-     * size of 0 means "to the end of the file". Neither appears around {@code moov} in anything
-     * a phone records, and guessing at them is how a writer corrupts a file it did not
-     * understand.</p>
-     */
-    private static int boxSize(@NonNull byte[] mp4, int at) {
-        int size = ((mp4[at] & 0xFF) << 24) | ((mp4[at + 1] & 0xFF) << 16)
-                | ((mp4[at + 2] & 0xFF) << 8) | (mp4[at + 3] & 0xFF);
-        return size <= 1 ? 0 : size;
-    }
-
-    @NonNull
-    private static String boxType(@NonNull byte[] mp4, int at) {
-        return "" + (char) (mp4[at + 4] & 0xFF) + (char) (mp4[at + 5] & 0xFF)
-                + (char) (mp4[at + 6] & 0xFF) + (char) (mp4[at + 7] & 0xFF);
     }
 
     private static void writeInt(@NonNull byte[] out, int at, int value) {

@@ -10,7 +10,13 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
+import androidx.annotation.Nullable;
+
 import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 
 /**
  * Writing user data into an MP4 without moving a single byte of the media.
@@ -28,12 +34,11 @@ public class VideoMetadataTest {
 
     /** The invariant: same length, same mdat position, metadata nonetheless present. */
     @Test
-    public void theMediaDoesNotMove() {
+    public void theMediaDoesNotMove() throws IOException {
         byte[] mp4 = mp4WithFreeBox(512);
         int mdatBefore = indexOf(mp4, "mdat");
 
-        byte[] out = VideoMetadata.writeForTesting(mp4, new VideoMetadata.Builder()
-                .setMake("Acme").setModel("Phone 1"));
+        byte[] out = write(mp4, new VideoMetadata.Builder().setMake("Acme").setModel("Phone 1"));
 
         assertNotNull("a file with room should accept metadata", out);
         assertEquals("the file must not change length", mp4.length, out.length);
@@ -43,13 +48,12 @@ public class VideoMetadataTest {
 
     /** moov grows by exactly what the free box gives up, so the two still meet. */
     @Test
-    public void moovGrowsByWhatFreeGivesUp() {
+    public void moovGrowsByWhatFreeGivesUp() throws IOException {
         byte[] mp4 = mp4WithFreeBox(512);
         int moovBefore = boxSizeAt(mp4, indexOf(mp4, "moov") - 4);
         int freeBefore = boxSizeAt(mp4, indexOf(mp4, "free") - 4);
 
-        byte[] out = VideoMetadata.writeForTesting(mp4, new VideoMetadata.Builder()
-                .setMake("Acme"));
+        byte[] out = write(mp4, new VideoMetadata.Builder().setMake("Acme"));
 
         assertNotNull(out);
         int moovAfter = boxSizeAt(out, indexOf(out, "moov") - 4);
@@ -60,44 +64,36 @@ public class VideoMetadataTest {
 
     /** With no padding to grow into, nothing is written rather than everything being moved. */
     @Test
-    public void aFileWithNoFreeBoxIsLeftAlone() {
-        byte[] mp4 = mp4WithoutFreeBox();
-
+    public void aFileWithNoFreeBoxIsLeftAlone() throws IOException {
         assertNull("moving mdat is never worth a manufacturer name",
-                VideoMetadata.writeForTesting(mp4, new VideoMetadata.Builder().setMake("Acme")));
+                write(mp4WithoutFreeBox(), new VideoMetadata.Builder().setMake("Acme")));
     }
 
     /** Nor is a free box too small to give up what is being asked of it. */
     @Test
-    public void aFreeBoxTooSmallIsLeftAlone() {
-        byte[] mp4 = mp4WithFreeBox(16);
-
-        assertNull(VideoMetadata.writeForTesting(mp4, new VideoMetadata.Builder()
+    public void aFreeBoxTooSmallIsLeftAlone() throws IOException {
+        assertNull(write(mp4WithFreeBox(16), new VideoMetadata.Builder()
                 .setMake("A rather long manufacturer name indeed")
                 .setModel("And a long model name to go with it")));
     }
 
     /** A file that already carries user data is not given a second helping. */
     @Test
-    public void anExistingUdtaIsNotDuplicated() {
-        byte[] mp4 = mp4WithFreeBox(512);
-        byte[] once = VideoMetadata.writeForTesting(mp4, new VideoMetadata.Builder()
-                .setMake("Acme"));
+    public void anExistingUdtaIsNotDuplicated() throws IOException {
+        byte[] once = write(mp4WithFreeBox(512), new VideoMetadata.Builder().setMake("Acme"));
         assertNotNull(once);
 
         assertNull("twice would be two udta boxes in one moov",
-                VideoMetadata.writeForTesting(once, new VideoMetadata.Builder()
-                        .setModel("Phone 1")));
+                write(once, new VideoMetadata.Builder().setModel("Phone 1")));
     }
 
     /** Nothing to say means nothing written, rather than an empty box. */
     @Test
-    public void noFieldsWritesNothing() {
-        assertNull(VideoMetadata.writeForTesting(mp4WithFreeBox(512),
-                new VideoMetadata.Builder()));
+    public void noFieldsWritesNothing() throws IOException {
+        assertNull(write(mp4WithFreeBox(512), new VideoMetadata.Builder()));
         assertNull("and a blank value is not a value",
-                VideoMetadata.writeForTesting(mp4WithFreeBox(512),
-                        new VideoMetadata.Builder().setMake("").setModel(null)));
+                write(mp4WithFreeBox(512), new VideoMetadata.Builder()
+                        .setMake("").setModel(null)));
     }
 
     /** ISO 6709, signed and zero-padded, which is what a reader expects to parse. */
@@ -140,6 +136,43 @@ public class VideoMetadataTest {
 
         String written = new String(udta, java.nio.charset.StandardCharsets.UTF_8);
         assertTrue("the text should survive as itself", written.contains("Ünïcôde"));
+    }
+
+    /**
+     * Runs the real writer over a file, which is the only version there is.
+     *
+     * <p>These tests used to drive a second, byte-array implementation of the same algorithm
+     * that existed only for them. Two implementations means the tested one and the shipped one
+     * can drift, and the shipped one was the untested one - so the array version is gone and
+     * this writes the bytes to a file, calls what the library calls, and reads them back.</p>
+     *
+     * @return the file's contents afterwards, or null if nothing was written
+     */
+    @Nullable
+    private byte[] write(byte[] mp4, VideoMetadata.Builder builder) throws IOException {
+        File file = temporaryFile();
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            out.write(mp4);
+        }
+        if (!VideoMetadata.write(file, builder)) {
+            return null;
+        }
+        byte[] back = new byte[(int) file.length()];
+        try (FileInputStream in = new FileInputStream(file)) {
+            int read = 0;
+            while (read < back.length) {
+                int count = in.read(back, read, back.length - read);
+                if (count < 0) break;
+                read += count;
+            }
+        }
+        return back;
+    }
+
+    private File temporaryFile() throws IOException {
+        File file = File.createTempFile("videometadata", ".mp4");
+        file.deleteOnExit();
+        return file;
     }
 
     private static int boxSizeAt(byte[] data, int at) {
