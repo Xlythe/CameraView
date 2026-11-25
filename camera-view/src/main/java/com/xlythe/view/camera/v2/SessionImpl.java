@@ -5,9 +5,13 @@ import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
+import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.location.Location;
+import android.os.Build;
 import android.os.Handler;
 import android.util.Log;
 import android.util.Size;
@@ -48,6 +52,10 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Nullable
     Rect mCropRegion;
 
+    /** Zoom as a ratio across the camera's whole range, which can switch physical lenses. */
+    @Nullable
+    Float mZoomRatio;
+
     SessionImpl(Camera2Module camera2Module) {
         mCamera2Module = camera2Module;
     }
@@ -67,6 +75,92 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     CameraView.Flash getFlash() {
         return mCamera2Module.getFlash();
+    }
+
+    /**
+     * Applies the requested flash strategy to a capture request.
+     *
+     * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
+     * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
+     * on the repeating preview request, because that is the only stream auto-exposure can converge
+     * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
+     * reason.</p>
+     */
+    /**
+     * Asks the camera for the faces it is tracking, when something wants them.
+     *
+     * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
+     * the repeating preview request; the results then arrive with each completed frame.</p>
+     */
+    /**
+     * The sizes that fit inside a bound, or all of them when none do.
+     *
+     * <p>Falling back to all of them rather than to nothing matters: a bound no size fits is a
+     * reason to pick badly, not a reason to have no output at all.</p>
+     */
+    @NonNull
+    static List<Size> within(@NonNull List<Size> sizes, @Nullable Size maxSize) {
+        if (maxSize == null) {
+            return sizes;
+        }
+        List<Size> fitting = new ArrayList<>(sizes.size());
+        for (Size size : sizes) {
+            if (size.getWidth() <= maxSize.getWidth() && size.getHeight() <= maxSize.getHeight()) {
+                fitting.add(size);
+            }
+        }
+        return fitting.isEmpty() ? sizes : fitting;
+    }
+
+    void applyFaceDetection(@NonNull CaptureRequest.Builder builder) {
+        Integer mode = mCamera2Module.getFaceDetectMode();
+        if (mode != null) {
+            builder.set(CaptureRequest.STATISTICS_FACE_DETECT_MODE, mode);
+        }
+    }
+
+    /**
+     * The callback the repeating request needs, or null when nothing is listening.
+     *
+     * <p>A null callback is what the session passes by default: the camera then does not have to
+     * deliver results at all, which is one fewer thing happening per frame.</p>
+     */
+    @Nullable
+    CameraCaptureSession.CaptureCallback repeatingCallback() {
+        if (mCamera2Module.getFaceDetectMode() == null) {
+            return null;
+        }
+        return new CameraCaptureSession.CaptureCallback() {
+            @Override
+            public void onCaptureCompleted(@NonNull CameraCaptureSession session,
+                    @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
+                mCamera2Module.onFacesCaptured(result);
+            }
+        };
+    }
+
+    int getPictureQuality() {
+        return mCamera2Module.getPictureQuality();
+    }
+
+    void applyFlash(@NonNull CaptureRequest.Builder builder) {
+        if (!hasFlash()) {
+            return;
+        }
+        switch (getFlash()) {
+            case AUTO:
+                builder.set(CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH);
+                break;
+            case ON:
+                builder.set(CaptureRequest.CONTROL_AE_MODE,
+                        CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH);
+                break;
+            case OFF:
+                builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+                builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+                break;
+        }
     }
 
     int getRelativeCameraOrientation() {
@@ -90,6 +184,33 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Override
     public MeteringRectangle getMeteringRectangle() {
         return mMeteringRectangle;
+    }
+
+    /**
+     * Applies zoom to a capture request.
+     *
+     * <p>Prefers CONTROL_ZOOM_RATIO, which is the only control that lets the camera switch
+     * between the physical lenses behind a logical camera, so a ratio below one reaches an
+     * ultra-wide and a high ratio reaches a telephoto. SCALER_CROP_REGION only ever crops the
+     * sensor of the lens already in use, so it is the fallback for older devices.</p>
+     */
+    void applyZoom(@NonNull CaptureRequest.Builder builder) {
+        if (Build.VERSION.SDK_INT >= 30 && mZoomRatio != null) {
+            builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, mZoomRatio);
+        } else if (mCropRegion != null) {
+            builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
+        }
+    }
+
+    @Override
+    public void setZoomRatio(@Nullable Float zoomRatio) {
+        mZoomRatio = zoomRatio;
+    }
+
+    @Nullable
+    @Override
+    public Float getZoomRatio() {
+        return mZoomRatio;
     }
 
     @Override
