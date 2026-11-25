@@ -59,14 +59,25 @@ public class PictureFormatTest {
         assertTrue(cameraView.isPictureFormatSupported(CameraView.PictureFormat.JPEG));
     }
 
-    /** The camera2 backend has no gain-map path, so it says so rather than pretending. */
+    /**
+     * The camera2 backend offers nothing but JPEG, and says so rather than pretending.
+     *
+     * <p>It writes the JPEG bytes the HAL produced straight to disk, so it composes no gain map
+     * and has no second reader to take a raw frame from. Every other format needs CameraX.</p>
+     */
     @Test
-    public void camera2DoesNotOfferUltraHdr() {
+    public void camera2OffersOnlyJpeg() {
         cameraView.open();
         idle();
 
-        assertFalse("camera2 writes the HAL's JPEG bytes and composes no gain map",
-                cameraView.isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR));
+        for (CameraView.PictureFormat format : CameraView.PictureFormat.values()) {
+            boolean supported = cameraView.isPictureFormatSupported(format);
+            if (format == CameraView.PictureFormat.JPEG) {
+                assertTrue("JPEG is the one every backend writes", supported);
+            } else {
+                assertFalse(format + " needs the CameraX backend", supported);
+            }
+        }
     }
 
     /** And asking for it anyway leaves the format it can write. */
@@ -75,11 +86,15 @@ public class PictureFormatTest {
         cameraView.open();
         idle();
 
-        cameraView.setPictureFormat(CameraView.PictureFormat.ULTRA_HDR);
-        idle();
-
-        assertEquals("the request should be refused, not recorded",
-                CameraView.PictureFormat.JPEG, cameraView.getPictureFormat());
+        for (CameraView.PictureFormat format : CameraView.PictureFormat.values()) {
+            if (format == CameraView.PictureFormat.JPEG) {
+                continue;
+            }
+            cameraView.setPictureFormat(format);
+            idle();
+            assertEquals("asking for " + format + " should be refused, not recorded",
+                    CameraView.PictureFormat.JPEG, cameraView.getPictureFormat());
+        }
     }
 
     /** Asking for the format already in use is accepted and changes nothing. */
@@ -108,7 +123,7 @@ public class PictureFormatTest {
         for (CameraView.PictureFormat format : CameraView.PictureFormat.values()) {
             assertEquals(format, CameraView.PictureFormat.valueOf(format.name()));
         }
-        assertEquals(2, CameraView.PictureFormat.values().length);
+        assertEquals(4, CameraView.PictureFormat.values().length);
     }
 
     private static void idle() {

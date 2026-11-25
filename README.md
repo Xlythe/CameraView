@@ -389,6 +389,20 @@ if (!WorldOverlay.isOccluded(away, depthMetersAt(at.x, at.y), 0.1f)) {
 }
 ```
 
+Picture format
+-----------------
+Pictures are JPEG everywhere. setPictureFormat asks for something else where the camera can write
+it, and declines rather than silently writing a JPEG, so check first.
+```java
+if (mCameraView.isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR)) {
+  mCameraView.setPictureFormat(CameraView.PictureFormat.ULTRA_HDR);
+}
+```
+ULTRA_HDR is a JPEG carrying a gain map, so a capable display shows the bright parts brighter while
+anything else reads an ordinary photo. RAW is the sensor's own reading, much larger and needing an
+editor rather than a gallery; RAW_JPEG writes both from one shutter press. All three need the
+CameraX backend - the camera2 backend writes the JPEG the HAL produced and takes no second frame.
+
 Captions
 -----------------
 Captions go beside a recording rather than inside it. The platform cannot put them inside:
