@@ -283,6 +283,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private int mLastWidth;
     /** Last non-zero CameraView layout height used to choose resolutions and ViewPort. */
     private int mLastHeight;
+    /** The high-speed session config currently bound, which unbinds separately from use cases. */
+    @Nullable private SessionConfig mBoundSessionConfig;
+
     /** Set when a layout settles during a capture, so the rebind it asks for is owed, not lost. */
     private boolean mSizeRebindPending;
     /** Monotonic token invalidating stale provider, surface, and binding callbacks. */
@@ -1193,7 +1196,14 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     private void takePictureOnMainThread(@NonNull File file) {
         ImageCapture imageCapture = mImageCapture;
-        if (!mOpenRequested || imageCapture == null || isRecording() || mPendingImageFile != null) {
+        // mVideoRecording rather than isRecording(), which answers from the snapshot published
+        // for callers on other threads and is only as fresh as the last publish. This runs on
+        // the main thread, where the field itself is the truth. Reading the stale copy let a
+        // picture through during a slow-motion recording on a Galaxy S25 Ultra, and the capture
+        // took the recording down with it - a picture that could not be taken cost a recording
+        // that was going perfectly well.
+        if (!mOpenRequested || imageCapture == null || mVideoRecording != null
+                || mPendingImageFile != null) {
             Log.w(TAG, "Cannot take a picture in the current CameraX state: " + mState);
             onImageFailed();
             return;
@@ -1759,8 +1769,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // rate and the slow-motion decision live on the config. No view port either: the
             // config resolves the resolution itself and refuses to be told - and no effect, for
             // the same reason, since the config validates what it is given and takes neither.
-            return mCameraProvider.bindToLifecycle(this, selector,
-                    CameraXHighSpeed.sessionConfig(videoCapture, preview, highSpeed));
+            // Remembered, because a SessionConfig is not unbound by unbinding use cases and
+            // CameraX will not let the two kinds of bind share a LifecycleOwner.
+            SessionConfig sessionConfig =
+                    CameraXHighSpeed.sessionConfig(videoCapture, preview, highSpeed);
+            mBoundSessionConfig = sessionConfig;
+            return mCameraProvider.bindToLifecycle(this, selector, sessionConfig);
         }
         int width = getWidth();
         int height = getHeight();
@@ -2325,6 +2339,19 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 Log.w(TAG, "Unable to unbind CameraX use cases", error);
             }
         }
+        // A session config is bound separately and has to be released separately. Unbinding the
+        // use cases leaves it in place, and the next ordinary bind then fails with "Cannot bind
+        // use cases when a SessionConfig is already bound to this LifecycleOwner" - which on a
+        // Galaxy S25 Ultra, the one device here that publishes high-speed configurations for
+        // CameraX, lost the recording after a slow-motion one had been made.
+        if (mCameraProvider != null && mBoundSessionConfig != null) {
+            try {
+                mCameraProvider.unbind(mBoundSessionConfig);
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to unbind the CameraX session config", error);
+            }
+        }
+        mBoundSessionConfig = null;
         mBoundUseCases.clear();
         mBoundStreamPreviews.clear();
         if (mObservedCameraState != null && mCameraStateObserver != null) {
