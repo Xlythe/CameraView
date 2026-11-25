@@ -1,0 +1,32 @@
+apply plugin: 'com.android.application'
+
+android {
+    compileSdkVersion 37
+    enableKotlin = false
+
+    defaultConfig {
+        // The Data Layer pairs a watch app with a phone app by application id and signature, so
+        // this has to be the id of the phone sample rather than one of its own.
+        applicationId "com.xlythe.sample.camera"
+        minSdkVersion 30
+        targetSdkVersion 37
+        versionCode 1
+        versionName "1.0.0"
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
+    }
+    namespace = 'com.xlythe.sample.camera.wear'
+}
+
+dependencies {
+    // Only the pieces that read a stream and show a picture; the watch never opens a camera.
+    implementation project(':camera-view')
+    implementation 'com.google.android.gms:play-services-wearable:19.0.0'
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+}

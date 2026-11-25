@@ -200,6 +200,7 @@ private fun createImageFile(context: Context): File {
     return File.createTempFile("JPEG_${timeStamp}_", ".jpg", storageDir)
 }
 
+@SuppressLint("MissingPermission")
 @Composable
 fun SimpleDemoScreen() {
     val context = LocalContext.current
@@ -363,6 +364,7 @@ fun StreamDemoScreen() {
     }
 }
 
+@SuppressLint("MissingPermission")
 @Composable
 fun ResizingDemoScreen() {
     val cameraController = remember { mutableStateOf<CameraController?>(null) }
@@ -417,6 +419,7 @@ fun ResizingDemoScreen() {
     }
 }
 
+@SuppressLint("MissingPermission")
 @Composable
 fun QrCodeDemoScreen() {
     val context = LocalContext.current

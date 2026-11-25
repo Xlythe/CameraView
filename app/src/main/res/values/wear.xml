@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      How the watch finds this app. The watch looks for a node advertising this capability rather
+      than picking whichever node is connected, because a watch can be paired with more than one
+      thing and only this app can answer it.
+    -->
+    <string-array name="android_wear_capabilities">
+        <item>camera_view_sample</item>
+    </string-array>
+</resources>

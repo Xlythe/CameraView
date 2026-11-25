@@ -1,23 +1,36 @@
 apply plugin: 'com.android.application'
 
+// Matches the library's own flag, so one command builds the whole old-API configuration. With it
+// the sample drops to 23 and leaves out the CameraX half of itself; without it it stays at 24,
+// because androidx.camera's pipe backend declares a minSdk of 24 and a dependency's floor is the
+// app's floor whatever the library says.
+boolean coreOnly = project.hasProperty('cameraview.core')
+        && project.property('cameraview.core').toString().toBoolean()
+
 android {
     compileSdkVersion 37
+    enableKotlin = false
 
     defaultConfig {
         applicationId "com.xlythe.sample.camera"
-        minSdkVersion 24
+        // 23 for the core build, so the pre-24 branches in CaptureSaver are live code rather
+        // than a claim - at 24 the broadcast path older Android needs is never compiled against
+        // anything, and dead code demonstrates nothing. Not 21: the Material components this
+        // sample's UI uses do not go lower, though the library itself does.
+        minSdkVersion coreOnly ? 23 : 24
         targetSdkVersion 37
         versionCode 1
         versionName "1.0.0"
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_1_8
-        targetCompatibility JavaVersion.VERSION_1_8
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
     lint {
-        abortOnError false
+        abortOnError = true
+        checkReleaseBuilds = true
     }
-    namespace 'com.xlythe.sample.camera'
+    namespace = 'com.xlythe.sample.camera'
     testOptions {
         unitTests.includeAndroidResources = true
         unitTests.all {
@@ -29,12 +42,13 @@ android {
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation project(':camera-view')
-    implementation 'androidx.constraintlayout:constraintlayout:+'
-    implementation 'androidx.appcompat:appcompat:+'
-    implementation 'androidx.legacy:legacy-support-v4:+'
-    implementation 'androidx.navigation:navigation-fragment:+'
-    implementation 'androidx.navigation:navigation-ui:+'
-    implementation 'com.google.android.material:material:+'
-    testImplementation 'junit:junit:+'
-    testImplementation 'org.robolectric:robolectric:+'
+    implementation 'androidx.constraintlayout:constraintlayout:2.2.2'
+    implementation 'androidx.appcompat:appcompat:1.7.1'
+    implementation 'androidx.legacy:legacy-support-v4:1.0.0'
+    implementation 'androidx.navigation:navigation-fragment:2.9.8'
+    implementation 'androidx.navigation:navigation-ui:2.9.8'
+    implementation 'com.google.android.material:material:1.14.0'
+    implementation 'com.google.android.gms:play-services-wearable:19.0.0'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.18.1'
 }

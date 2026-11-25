@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Camera View</string>
+    <string name="btn_shutter">Capture</string>
+    <string name="picture_description">The picture the phone just took</string>
+    <string name="status_looking_for_phone">Looking for the phone…</string>
+    <string name="status_no_phone">Open the Camera View sample on your phone</string>
+    <string name="status_asking_for_preview">Asking for the camera…</string>
+    <string name="status_streaming">Streaming from the phone</string>
+    <string name="status_preview_ended">The phone stopped streaming</string>
+    <string name="status_preview_failed">Could not read the preview</string>
+    <string name="status_capturing">Taking a picture…</string>
+    <string name="status_capture_failed">Could not get the picture</string>
+</resources>
