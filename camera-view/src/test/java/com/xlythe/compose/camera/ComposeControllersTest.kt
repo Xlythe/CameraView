@@ -1,9 +1,13 @@
 package com.xlythe.compose.camera
 
 import android.content.Context
+import android.graphics.Matrix
+import android.graphics.Rect
 import androidx.compose.runtime.mutableStateOf
 import com.xlythe.view.camera.Barcode
 import com.xlythe.view.camera.CameraView
+import com.xlythe.view.camera.Face
+import com.xlythe.view.camera.FrameStream
 import com.xlythe.view.camera.VideoStream
 import com.xlythe.view.camera.VideoView
 import org.junit.Assert.assertNotNull
@@ -94,6 +98,21 @@ class ComposeControllersTest {
             override fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, vararg formats: Int) {}
 
             override fun exitBarcodeScanner() {}
+
+            override fun focus(focusArea: Rect, meteringArea: Rect) {
+                cameraView.focus(focusArea, meteringArea)
+            }
+
+            override fun startFrameAnalysis(
+                analyzer: (frame: FrameStream.Frame) -> Unit,
+                params: FrameStream.Params
+            ) {}
+
+            override fun stopFrameAnalysis() {}
+
+            override fun setFaceDetectionListener(
+                listener: ((faces: List<Face>, faceToView: Matrix) -> Unit)?
+            ): Boolean = false
         }
 
         controllerState.value = controller
