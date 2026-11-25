@@ -580,6 +580,19 @@ public class LegacyCameraModule extends ICameraModule {
         return false;
     }
 
+    /**
+     * No: there is no such thing on this API.
+     *
+     * <p>android.hardware.Camera has no concept of a session, let alone a constrained high-speed
+     * one, and no way to ask a camera which sizes it would run fast at. Said out loud rather than
+     * inherited, because a backend silently taking the conservative answer and a backend that
+     * genuinely cannot do it read the same way from here.</p>
+     */
+    @Override
+    public boolean isHighSpeedRecordingSupported() {
+        return false;
+    }
+
     @RequiresApi(18)
     @Override
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {

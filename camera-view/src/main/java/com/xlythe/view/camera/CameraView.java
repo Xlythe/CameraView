@@ -1525,6 +1525,56 @@ public class CameraView extends FrameLayout {
     }
 
     /**
+     * Whether this camera will record above its normal frame rate, for slow-motion playback.
+     *
+     * <p>Far from universal: it needs a camera that publishes the configurations, and the session
+     * that runs them arrived in API 23.</p>
+     */
+    public boolean isHighSpeedRecordingSupported() {
+        return mCameraModule.isHighSpeedRecordingSupported();
+    }
+
+    /**
+     * Every frame size and frame rate this camera records high-speed video at.
+     *
+     * <p>The pairs are the camera's own: a phone that records 240fps at 720p often manages only
+     * 120fps at 1080p, so a frame rate on its own is not a choice this library can offer. Empty
+     * where {@link #isHighSpeedRecordingSupported()} is false.</p>
+     *
+     * <p>Worth asking once the camera is open. The CameraX backend has no camera to ask until it
+     * has bound one, so it answers with nothing before then.</p>
+     */
+    @NonNull
+    public List<HighSpeedProfile> getSupportedHighSpeedProfiles() {
+        return mCameraModule.getSupportedHighSpeedProfiles();
+    }
+
+    /**
+     * Records at one of the published high-speed choices, or at ordinary speed when given null.
+     *
+     * <p>Takes effect on the next {@link #startRecording}; the preview keeps running at its
+     * ordinary rate until then. A high-speed session carries only the preview and the recording,
+     * so {@link #takePicture} reports a failure while one is running and the recording continues.
+     * </p>
+     *
+     * <p>{@link #setMaxVideoDuration} is measured against the file rather than the clock, since
+     * that is what the recorder counts: a ten second limit stops a 240fps recording after about
+     * a second and a quarter of filming.</p>
+     *
+     * @return whether the camera is now set to record at the requested choice. False means the
+     *     camera does not publish it, and the previous choice stands.
+     */
+    public boolean setHighSpeedProfile(@Nullable HighSpeedProfile profile) {
+        return mCameraModule.setHighSpeedProfile(profile);
+    }
+
+    /** The high-speed choice recordings are made at, or null for ordinary speed. */
+    @Nullable
+    public HighSpeedProfile getHighSpeedProfile() {
+        return mCameraModule.getHighSpeedProfile();
+    }
+
+    /**
      * Whether this camera can report the faces it is tracking.
      *
      * <p>Almost every camera can: it needs faces to decide what to focus and expose for, so the
