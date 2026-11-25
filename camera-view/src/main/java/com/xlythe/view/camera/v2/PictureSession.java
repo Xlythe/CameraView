@@ -342,7 +342,7 @@ class PictureSession extends PreviewSession {
                                 mCameraView.getContext(),
                                 image,
                                 mCameraView.getRelativeCameraOrientation(),
-                                isUsingFrontFacingCamera(),
+                                isMirroringThisPicture(),
                                 mFile) {
                             @UiThread
                             @Override

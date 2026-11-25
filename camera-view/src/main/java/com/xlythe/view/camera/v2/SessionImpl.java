@@ -294,6 +294,11 @@ abstract class SessionImpl implements Camera2Module.Session {
             return mSize.getHeight();
         }
 
+        /** Whether the picture this session is about to take should come out mirrored. */
+        boolean isMirroringThisPicture() {
+            return mCameraView.isMirroringThisPicture();
+        }
+
         boolean isUsingFrontFacingCamera() {
             return mCameraView.isUsingFrontFacingCamera();
         }

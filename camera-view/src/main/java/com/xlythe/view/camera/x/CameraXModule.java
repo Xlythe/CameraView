@@ -1182,7 +1182,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         scheduleImageTimeout(operationId);
         ImageCapture.Metadata metadata = new ImageCapture.Metadata();
         metadata.setLocation(getLocation());
-        metadata.setReversedHorizontal(mFrontFacing);
+        // The setting as well as the lens. This used to be mFrontFacing alone, so a caller who
+        // turned video mirroring off got un-mirrored video and still-mirrored photos out of the
+        // same session, with nothing to say so.
+        metadata.setReversedHorizontal(isMirroringThisPicture());
         ImageCapture.OutputFileOptions options = new ImageCapture.OutputFileOptions.Builder(file)
                 .setMetadata(metadata).build();
         imageCapture.takePicture(options, mMainExecutor, new ImageCapture.OnImageSavedCallback() {
