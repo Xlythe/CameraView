@@ -78,7 +78,7 @@ jobs:
           if [ -e /dev/kvm ]; then
             sudo chmod 666 /dev/kvm
           fi
-      - name: Run API 30 and API 37 managed-device tests
+      - name: Run API 28 and API 37 managed-device tests
         run: >-
           ./gradlew --no-daemon --stacktrace
           :camera-view:cameraMatrixGroupDebugAndroidTest

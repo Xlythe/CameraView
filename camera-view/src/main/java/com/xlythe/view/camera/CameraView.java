@@ -1272,6 +1272,28 @@ public class CameraView extends FrameLayout {
     }
 
     /**
+     * The horizontal angle of view, in degrees, that the camera can currently see.
+     *
+     * <p>This is what turns a direction in the world into a position on screen, so anything drawn
+     * over the preview to point at something - a marker on a landmark, an arrow towards a place -
+     * needs it. A bearing that is half the angle of view away from where the camera is pointed sits
+     * at the edge of the preview; one at a quarter sits halfway out.</p>
+     *
+     * <p>It narrows as the camera zooms in, so read it again after changing the zoom. Use it with
+     * {@link #getRelativeCameraOrientation} to know which way the frame is turned.</p>
+     *
+     * @return the angle in degrees, or 0 if the camera is closed or does not publish its optics
+     */
+    public float getHorizontalFieldOfView() {
+        return mCameraModule.getHorizontalFieldOfView();
+    }
+
+    /** The vertical angle of view, on the same terms as {@link #getHorizontalFieldOfView}. */
+    public float getVerticalFieldOfView() {
+        return mCameraModule.getVerticalFieldOfView();
+    }
+
+    /**
      * Whether {@link #startFrameAnalysis} will work on the backend in use.
      *
      * <p>Every camera2-based backend can; {@link Backend#LEGACY} cannot, because the original

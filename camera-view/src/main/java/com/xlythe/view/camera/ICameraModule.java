@@ -436,6 +436,21 @@ public abstract class ICameraModule {
     }
 
     /**
+     * The horizontal angle of view, in degrees, of the camera as it is currently configured.
+     *
+     * <p>Zero when the camera does not publish enough to work it out. Includes the effect of
+     * zoom, because a zoomed camera sees less.</p>
+     */
+    public float getHorizontalFieldOfView() {
+        return 0f;
+    }
+
+    /** The vertical angle of view, on the same terms as {@link #getHorizontalFieldOfView}. */
+    public float getVerticalFieldOfView() {
+        return 0f;
+    }
+
+    /**
      * Whether this backend can deliver frames to an analyzer.
      *
      * <p>True for the backends that can hand out a camera output surface, which is every one

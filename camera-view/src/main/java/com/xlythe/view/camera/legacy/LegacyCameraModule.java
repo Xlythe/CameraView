@@ -506,6 +506,48 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     /**
+     * The angle of view, which this API reports itself.
+     *
+     * <p>Camera.Parameters gives the angle for the lens wide open, with no account of zoom, so
+     * the zoom this module has applied is taken off here to match what the preview is showing.
+     * </p>
+     */
+    @Override
+    public float getHorizontalFieldOfView() {
+        return fieldOfView(true /* horizontal */);
+    }
+
+    @Override
+    public float getVerticalFieldOfView() {
+        return fieldOfView(false /* horizontal */);
+    }
+
+    private float fieldOfView(boolean horizontal) {
+        Camera camera = mCamera;
+        if (camera == null) {
+            return 0f;
+        }
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            float full = horizontal
+                    ? parameters.getHorizontalViewAngle() : parameters.getVerticalViewAngle();
+            if (!parameters.isZoomSupported()) {
+                return full;
+            }
+            List<Integer> ratios = parameters.getZoomRatios();
+            int index = parameters.getZoom();
+            if (ratios == null || index < 0 || index >= ratios.size()) {
+                return full;
+            }
+            // getZoomRatios is in hundredths, so 100 is no zoom at all.
+            return TransformMath.zoomedFieldOfViewDegrees(full, ratios.get(index) / 100f);
+        } catch (RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Could not work out the field of view", error);
+            return 0f;
+        }
+    }
+
+    /**
      * No: this backend draws frames rather than producing them.
      *
      * <p>{@link #attachSurface} turns each preview callback into a bitmap and paints it onto the

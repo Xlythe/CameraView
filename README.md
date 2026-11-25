@@ -273,6 +273,23 @@ mCameraView.setFaceDetectionListener((faces, faceToView) -> {
 mCameraView.setFaceDetectionListener(null);
 ```
 
+Field of view
+-----------------
+getHorizontalFieldOfView and getVerticalFieldOfView report the angle, in degrees, that the camera
+can currently see. That is what turns a direction in the world into a position on the preview, so
+anything drawn over the camera to point at something needs it: a bearing half the angle of view
+away from where the camera points sits at the edge of the preview, a quarter sits halfway out.
+
+Both narrow as the camera zooms in, so read them again after changing the zoom, and both return 0
+when the camera is closed or does not publish its optics. Pair them with
+getRelativeCameraOrientation to know which way round the frame is.
+```java
+float fov = mCameraView.getHorizontalFieldOfView();
+// bearing is degrees clockwise from where the camera points, negative to the left
+float x = getWidth() * (0.5f + (float) Math.tan(Math.toRadians(bearing))
+        / (2f * (float) Math.tan(Math.toRadians(fov / 2))));
+```
+
 Frames
 -----------------
 startFrameAnalysis hands every frame to your own analyzer, on a background thread, for detection
