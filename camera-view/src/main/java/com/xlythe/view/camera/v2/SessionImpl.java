@@ -331,6 +331,47 @@ abstract class SessionImpl implements Camera2Module.Session {
             }
         }
 
+        /**
+         * How much resolution matching the preview's shape may cost.
+         *
+         * <p>Some, not most. A legitimate aspect-ratio match gives up at most about a third of the
+         * pixels - 4:3 against 16:9 on one sensor is a factor of 1.33 - so anything beyond half
+         * is not a shape difference, it is a view that was laid out unusually: small, square, or
+         * measured before it had settled. A Galaxy S25 Ultra recorded 1088x1088 where the device
+         * offers 3840x2160, a sevenfold loss of resolution decided by a layout pass, which is how
+         * this number came to exist.</p>
+         */
+        private static final double MIN_MATCHED_PIXEL_FRACTION = 0.5;
+
+        /**
+         * The best size of the shape the preview is, unless that costs too much resolution.
+         *
+         * <p>Matching the preview is what makes a recording look like what the user framed, so it
+         * wins where the cost is reasonable. Where it is not, resolution wins: a caller who asked
+         * for MAX and got a seventh of the pixels was served by neither.</p>
+         *
+         * @param matched the sizes of the preview's shape, which may be empty
+         * @param all every size on offer, which is not
+         * @return the size to record at
+         */
+        static Size chooseLargestMatching(
+                @NonNull List<Size> matched, @NonNull List<Size> all,
+                @NonNull Comparator<Size> comparator) {
+            Size best = Collections.max(all, comparator);
+            if (matched.isEmpty()) {
+                return best;
+            }
+            Size bestMatching = Collections.max(matched, comparator);
+            long matchedPixels = (long) bestMatching.getWidth() * bestMatching.getHeight();
+            long bestPixels = (long) best.getWidth() * best.getHeight();
+            if (matchedPixels < bestPixels * MIN_MATCHED_PIXEL_FRACTION) {
+                Log.w(TAG, "Ignoring the preview's aspect ratio: it would record "
+                        + bestMatching + " where " + best + " is available");
+                return best;
+            }
+            return bestMatching;
+        }
+
         Size chooseSize(List<Size> choices, Size recommendedSize) {
             if (choices == null || choices.isEmpty()) {
                 Log.e(TAG, "No available sizes to choose from");
@@ -346,7 +387,8 @@ abstract class SessionImpl implements Camera2Module.Session {
                     if (isMatchPreviewAspectRatioEnabled()) {
                         availableSizes = getSizes(choices, CameraView.Quality.LOW, recommendedSize);
                         if (!availableSizes.isEmpty()) {
-                            return Collections.max(availableSizes, comparator);
+                            return chooseLargestMatching(availableSizes,
+                                    getSizes(choices, CameraView.Quality.LOW), comparator);
                         }
                         if (DEBUG)
                             Log.e(TAG, "Couldn't find a low quality size with the same aspect ratio as the preview");
@@ -361,7 +403,8 @@ abstract class SessionImpl implements Camera2Module.Session {
                     if (isMatchPreviewAspectRatioEnabled()) {
                         availableSizes = getSizes(choices, CameraView.Quality.MEDIUM, recommendedSize);
                         if (!availableSizes.isEmpty()) {
-                            return Collections.max(availableSizes, comparator);
+                            return chooseLargestMatching(availableSizes,
+                                    getSizes(choices, CameraView.Quality.MEDIUM), comparator);
                         }
                         if (DEBUG)
                             Log.e(TAG, "Couldn't find a medium quality size with the same aspect ratio as the preview");
@@ -376,7 +419,8 @@ abstract class SessionImpl implements Camera2Module.Session {
                     if (isMatchPreviewAspectRatioEnabled()) {
                         availableSizes = getSizes(choices, CameraView.Quality.HIGH, recommendedSize);
                         if (!availableSizes.isEmpty()) {
-                            return Collections.max(availableSizes, comparator);
+                            return chooseLargestMatching(availableSizes,
+                                    getSizes(choices, CameraView.Quality.HIGH), comparator);
                         }
                         if (DEBUG)
                             Log.e(TAG, "Couldn't find a high quality size with the same aspect ratio as the preview");
@@ -391,7 +435,8 @@ abstract class SessionImpl implements Camera2Module.Session {
                     if (isMatchPreviewAspectRatioEnabled()) {
                         availableSizes = getSizes(choices, CameraView.Quality.MAX, recommendedSize);
                         if (!availableSizes.isEmpty()) {
-                            return Collections.max(availableSizes, comparator);
+                            return chooseLargestMatching(availableSizes,
+                                    getSizes(choices, CameraView.Quality.MAX), comparator);
                         }
                         if (DEBUG)
                             Log.e(TAG, "Couldn't find a max quality size with the same aspect ratio as the preview");
