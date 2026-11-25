@@ -127,14 +127,17 @@ abstract class SessionImpl implements Camera2Module.Session {
      */
     @Nullable
     CameraCaptureSession.CaptureCallback repeatingCallback() {
-        if (mCamera2Module.getFaceDetectMode() == null) {
+        if (mCamera2Module.getFaceDetectMode() == null && !mCamera2Module.isFocusPending()) {
             return null;
         }
         return new CameraCaptureSession.CaptureCallback() {
             @Override
             public void onCaptureCompleted(@NonNull CameraCaptureSession session,
                     @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
-                mCamera2Module.onFacesCaptured(result);
+                if (mCamera2Module.getFaceDetectMode() != null) {
+                    mCamera2Module.onFacesCaptured(result);
+                }
+                mCamera2Module.onFocusCaptured(result);
             }
         };
     }

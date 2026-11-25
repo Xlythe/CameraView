@@ -753,16 +753,34 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         ListenableFuture<FocusMeteringResult> result = camera.getCameraControl().startFocusAndMetering(action);
+        onFocusRequested(focus);
         result.addListener(() -> {
+            boolean locked = false;
             try {
-                Log.d(TAG, result.get().isFocusSuccessful() ? "Successfully focused" : "Focus completed without a lock");
+                locked = result.get().isFocusSuccessful();
+                Log.d(TAG, locked ? "Successfully focused" : "Focus completed without a lock");
             } catch (ExecutionException e) {
                 Log.w(TAG, "Focus/metering failed", e.getCause());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 Log.w(TAG, "Focus/metering interrupted", e);
             }
+            onFocusCompleted(locked);
         }, mMainExecutor);
+    }
+
+    @Override public boolean isFocusSupported() {
+        Camera camera = mActiveCamera;
+        Preview preview = mPreview;
+        int width = getWidth();
+        int height = getHeight();
+        if (camera == null || preview == null || width <= 0 || height <= 0) return false;
+        // Asked with a point rather than in the abstract, because that is the only question
+        // CameraX answers: support depends on the lens the point would land on.
+        MeteringPoint center = new SurfaceOrientedMeteringPointFactory(width, height, preview)
+                .createPoint(0.5f, 0.5f);
+        return camera.getCameraInfo().isFocusMeteringSupported(
+                new FocusMeteringAction.Builder(center, FocusMeteringAction.FLAG_AF).build());
     }
 
     @Override public void setZoomLevel(int zoomLevel) {
@@ -2165,6 +2183,21 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             if (mImageCapture != null) mImageCapture.setTargetRotation(getTargetRotation());
             if (mImageAnalysis != null) mImageAnalysis.setTargetRotation(getTargetRotation());
             if (mVideoCapture != null) mVideoCapture.setTargetRotation(getTargetRotation());
+        });
+    }
+
+    /**
+     * Rebinds the use cases for the size the view settled at.
+     *
+     * <p>CameraX resolves the resolution of every use case when they are bound, so a new size is
+     * only honoured by binding them again - which tears down and reconfigures the capture
+     * session. That is the one thing here that cannot happen per layout pass, and the reason this
+     * is separate from {@link #onLayoutChanged}: a rotation or a foldable opening delivers a run
+     * of sizes, and the transform applied on each of them keeps the preview honest until the last
+     * one arrives.</p>
+     */
+    @Override public void onLayoutSettled() {
+        runOnMainThread(() -> {
             int width = getWidth();
             int height = getHeight();
             if (width <= 0 || height <= 0 || (width == mLastWidth && height == mLastHeight)) return;

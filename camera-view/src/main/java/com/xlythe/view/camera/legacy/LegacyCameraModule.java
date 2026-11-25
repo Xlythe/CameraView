@@ -357,10 +357,21 @@ public class LegacyCameraModule extends ICameraModule {
                 if (DEBUG) {
                     Log.d(TAG, "AutoFocus: " + success);
                 }
+                onFocusCompleted(success);
             });
+            onFocusRequested(focus);
         } else {
             Log.w(TAG, "Attempted to set focus but no camera found");
         }
+    }
+
+    @Override
+    public boolean isFocusSupported() {
+        if (mCamera == null) {
+            return false;
+        }
+        List<String> modes = mCamera.getParameters().getSupportedFocusModes();
+        return modes != null && modes.contains(Camera.Parameters.FOCUS_MODE_AUTO);
     }
 
     @Override

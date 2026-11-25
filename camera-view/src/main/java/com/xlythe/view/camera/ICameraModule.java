@@ -3,6 +3,7 @@ package com.xlythe.view.camera;
 import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.os.Handler;
 import android.os.Looper;
@@ -474,16 +475,52 @@ public abstract class ICameraModule {
      */
     protected final void onFacesDetected(
             @NonNull List<Face> faces, @NonNull Matrix faceToView) {
-        // Backends read faces on whichever thread the camera delivers results on, and the
-        // listener is documented as arriving on the main one. Posting through a Handler rather
-        // than View.post matters: a detached View queues its runnables until it is attached
-        // again, which for a camera that is closing means never.
+        onMainThread(() -> getView().onFacesDetected(faces, faceToView));
+    }
+
+    /** Whether this camera can be told what to focus on. */
+    public boolean isFocusSupported() {
+        return false;
+    }
+
+    /**
+     * Reports a focus request the camera accepted.
+     *
+     * <p>Called by a backend once it has handed the request to the camera, rather than when one
+     * arrives, so that a request a camera refused is never reported as made.</p>
+     *
+     * @param focusArea the area asked for, in the space {@link #focus} takes it in
+     */
+    protected final void onFocusRequested(@NonNull Rect focusArea) {
+        // Translated here rather than in the view, because the orientation that relates the two
+        // coordinate spaces is the backend's to answer and can change with the lens.
+        RectF onView = TransformMath.viewArea(
+                focusArea, getWidth(), getHeight(), getRelativeCameraOrientation());
+        onMainThread(() -> getView().onFocusRequested(onView));
+    }
+
+    /**
+     * Reports what the camera made of the request last announced by {@link #onFocusRequested}.
+     *
+     * @param locked whether the camera reported that it converged
+     */
+    protected final void onFocusCompleted(boolean locked) {
+        onMainThread(() -> getView().onFocusCompleted(locked));
+    }
+
+    /**
+     * Runs something on the main thread, where every listener is documented to arrive.
+     *
+     * <p>Backends read results on whichever thread the camera delivers them on. Posting through a
+     * Handler rather than View.post matters: a detached View queues its runnables until it is
+     * attached again, which for a camera that is closing means never.</p>
+     */
+    private void onMainThread(@NonNull Runnable action) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            getView().onFacesDetected(faces, faceToView);
+            action.run();
             return;
         }
-        new Handler(Looper.getMainLooper()).post(
-                () -> getView().onFacesDetected(faces, faceToView));
+        new Handler(Looper.getMainLooper()).post(action);
     }
 
     public boolean hasFlash() {
@@ -512,7 +549,22 @@ public abstract class ICameraModule {
 
     public void onRestoreInstanceState(Parcelable savedState) {}
 
+    /**
+     * Re-aims the preview at the view's new bounds.
+     *
+     * <p>Called for every layout pass that changed the size, so it has to be cheap: adjusting a
+     * transform, not reconfiguring a camera. Anything that costs a session belongs in
+     * {@link #onLayoutSettled}.</p>
+     */
     public void onLayoutChanged() {}
+
+    /**
+     * Called once the view's size has stopped changing, when reconfiguring is worth its cost.
+     *
+     * <p>A rotation, a window being dragged to a new size, a foldable opening and a Compose
+     * layout arriving at its answer all produce a run of layout passes at different sizes.</p>
+     */
+    public void onLayoutSettled() {}
 
     public void setOnImageCapturedListener(CameraView.OnImageCapturedListener l) {
         mOnImageCapturedListener = l;
