@@ -12,7 +12,10 @@ import android.util.Log;
 
 import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
+import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
@@ -516,6 +519,48 @@ public abstract class ICameraModule {
      */
     public boolean isFrameAnalysisSupported() {
         return true;
+    }
+
+    /** What draws each camera frame on its way out, or null to leave the frames alone. */
+    @Nullable private FrameRenderer mFrameRenderer;
+
+    /** Who owns the texture the camera renders into, or null for the library's own. */
+    @Nullable private CameraTextureProvider mCameraTextureProvider;
+
+    /**
+     * Whether this backend can put camera frames through GL on their way to the preview, the
+     * recording and the stills.
+     *
+     * <p>False here, because being able to is a property of how a backend gets its frames rather
+     * than something every backend has. A backend that reports false ignores the renderer and the
+     * texture provider entirely and keeps showing the camera, which is the behaviour a caller
+     * whose effect is decoration wants; one whose effect is the feature asks this first.</p>
+     */
+    public boolean isFrameEffectSupported() {
+        return false;
+    }
+
+    /**
+     * Sets what draws each frame. A backend that supports effects should start putting frames
+     * through GL, which usually means reconfiguring the camera.
+     */
+    public void setFrameRenderer(@Nullable FrameRenderer renderer) {
+        mFrameRenderer = renderer;
+    }
+
+    @Nullable
+    public final FrameRenderer getFrameRenderer() {
+        return mFrameRenderer;
+    }
+
+    /** Sets who creates the texture the camera renders into. See {@link CameraTextureProvider}. */
+    public void setCameraTextureProvider(@Nullable CameraTextureProvider provider) {
+        mCameraTextureProvider = provider;
+    }
+
+    @Nullable
+    public final CameraTextureProvider getCameraTextureProvider() {
+        return mCameraTextureProvider;
     }
 
     /** Whether this camera can report the faces it is already tracking. */

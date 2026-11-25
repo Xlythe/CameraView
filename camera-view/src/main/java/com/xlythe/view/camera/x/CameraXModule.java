@@ -37,6 +37,7 @@ import androidx.camera.core.Camera;
 import androidx.camera.camera2.interop.Camera2CameraInfo;
 import androidx.camera.camera2.interop.Camera2Interop;
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop;
+import androidx.camera.core.CameraEffect;
 import androidx.camera.core.CameraInfo;
 import androidx.camera.core.DynamicRange;
 import androidx.camera.core.ExposureState;
@@ -87,6 +88,8 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
+import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.LocationProvider;
 import com.xlythe.view.camera.PermissionChecker;
@@ -220,6 +223,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Nullable private File mVideoFile;
     /** Latest CameraX preview transformation metadata. */
     @Nullable private SurfaceRequest.TransformationInfo mTransformationInfo;
+    /** The GL effect every frame passes through, while a caller has asked for one. */
+    @Nullable private FrameEffect mFrameEffect;
 
     /** Whether the bound configuration can take a still while it records. */
     private boolean mSnapshotWhileRecording;
@@ -485,6 +490,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mHostLifecycleOwner = null;
         }
         getView().removeOnAttachStateChangeListener(mAttachStateListener);
+        releaseFrameEffect();
         mLifecycleRegistry.setCurrentState(Lifecycle.State.DESTROYED);
         mState = State.CLOSED;
     }
@@ -1630,8 +1636,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                     Log.w(TAG, "CameraX could not preflight the requested streaming combination");
                 }
             }
+            ensureFrameEffect();
+            // CameraX matches an effect to the use cases its targets name, and it cannot tell two
+            // Previews apart, so an effect and a custom stream cannot be bound together. The
+            // stream wins: it has a caller waiting on bytes, where an effect's caller is drawing.
+            CameraEffect effect = streamPreviews.isEmpty() ? mFrameEffect : null;
+            if (effect == null && mFrameEffect != null) {
+                Log.w(TAG, "Camera frames bypass GL while a custom stream is attached");
+            }
             unbindCurrentUseCases();
-            Camera camera = bindAtomically(selector, requested);
+            Camera camera = bindAtomically(selector, requested, effect);
             if (generation != mGeneration || !mOpenRequested || mPaused) {
                 provider.unbind(requested.toArray(new UseCase[0]));
                 return false;
@@ -1665,15 +1679,89 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
     }
 
-    @NonNull private Camera bindAtomically(@NonNull CameraSelector selector, @NonNull List<UseCase> useCases) {
+    @NonNull private Camera bindAtomically(@NonNull CameraSelector selector,
+            @NonNull List<UseCase> useCases, @Nullable CameraEffect effect) {
         int width = getWidth();
         int height = getHeight();
-        if (isMatchPreviewAspectRatioEnabled() && width > 0 && height > 0) {
-            UseCaseGroup.Builder group = new UseCaseGroup.Builder().setViewPort(createViewPort(width, height));
-            for (UseCase useCase : useCases) group.addUseCase(useCase);
-            return mCameraProvider.bindToLifecycle(this, selector, group.build());
+        boolean hasViewPort = isMatchPreviewAspectRatioEnabled() && width > 0 && height > 0;
+        if (!hasViewPort && effect == null) {
+            return mCameraProvider.bindToLifecycle(this, selector, useCases.toArray(new UseCase[0]));
         }
-        return mCameraProvider.bindToLifecycle(this, selector, useCases.toArray(new UseCase[0]));
+        // An effect only reaches the camera through a UseCaseGroup, so a bind that carries one
+        // goes this way whether or not there is a view port to set.
+        UseCaseGroup.Builder group = new UseCaseGroup.Builder();
+        if (hasViewPort) group.setViewPort(createViewPort(width, height));
+        for (UseCase useCase : useCases) group.addUseCase(useCase);
+        if (effect != null) group.addEffect(effect);
+        return mCameraProvider.bindToLifecycle(this, selector, group.build());
+    }
+
+    @Override public boolean isFrameEffectSupported() {
+        return true;
+    }
+
+    @Override public void setFrameRenderer(@Nullable FrameRenderer renderer) {
+        super.setFrameRenderer(renderer);
+        runOnMainThread(this::applyFrameEffect);
+    }
+
+    @Override public void setCameraTextureProvider(@Nullable CameraTextureProvider provider) {
+        super.setCameraTextureProvider(provider);
+        runOnMainThread(this::applyFrameEffect);
+    }
+
+    /**
+     * Brings the effect into line with what the caller has asked for.
+     *
+     * <p>Rebinds only when it has to. Changing what draws is a field on a renderer that is already
+     * running, and rebinding for it would drop frames and restart the context for nothing;
+     * changing whether frames go through GL at all, or whose texture they go through, is a
+     * different pipeline and does need one.</p>
+     */
+    private void applyFrameEffect() {
+        if (mDestroyed) return;
+        FrameRenderer renderer = getFrameRenderer();
+        CameraTextureProvider textureProvider = getCameraTextureProvider();
+        FrameEffect effect = mFrameEffect;
+        boolean wanted = renderer != null || textureProvider != null;
+        if (effect != null && wanted && effect.usesTextureFrom(textureProvider)) {
+            effect.setFrameRenderer(renderer);
+            return;
+        }
+        if (effect == null && !wanted) {
+            return;
+        }
+        releaseFrameEffect();
+        reconcileUseCases(false);
+    }
+
+    /**
+     * Creates the effect, once, for as long as a caller wants frames drawn.
+     *
+     * <p>Nothing goes through GL until somebody asks. An effect across the preview, the recording
+     * and the still makes CameraX share one camera stream between all three, which costs the still
+     * the resolution it would otherwise have had, so a library that did it unasked would be
+     * charging every app for a feature most of them never use.</p>
+     */
+    private void ensureFrameEffect() {
+        if (mFrameEffect != null) return;
+        FrameRenderer renderer = getFrameRenderer();
+        CameraTextureProvider textureProvider = getCameraTextureProvider();
+        if (renderer == null && textureProvider == null) return;
+        mFrameEffect = FrameEffect.create(FrameEffect.ALL_TARGETS, mMainExecutor, renderer,
+                textureProvider, this::onFrameEffectFailed);
+    }
+
+    private void releaseFrameEffect() {
+        FrameEffect effect = mFrameEffect;
+        if (effect == null) return;
+        mFrameEffect = null;
+        effect.release();
+    }
+
+    /** What CameraX reports through the effect's own error listener, which is off the main thread. */
+    private void onFrameEffectFailed(@NonNull Throwable error) {
+        Log.e(TAG, "CameraX could not run the frame effect", error);
     }
 
     @NonNull private SessionConfig createSessionConfig(@NonNull List<UseCase> useCases) {
@@ -2079,6 +2167,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mVideoRecording = null;
         mVideoFile = null;
         releaseBarcodeAnalysisResources();
+        // After unbinding, because the renderer is drawing into surfaces those use cases own. The
+        // GL context does not survive the camera being let go: a renderer kept running against no
+        // camera holds a thread and a context for as long as the view exists.
+        releaseFrameEffect();
         setTransform(new Matrix());
     }
 
