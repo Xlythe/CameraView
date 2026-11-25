@@ -79,10 +79,19 @@ android {
         }
         managedDevices {
             localDevices {
-                pixel2Api30 {
+                // The oldest level worth running, chosen from the code rather than by habit: the
+                // library branches on the platform version at ten different thresholds, and an
+                // API 28 device is the one that takes the "older" side of the most of them - the
+                // pre-29 storage path, the pre-30 and pre-31 codec keys, the pre-33 permissions,
+                // the pre-34 colour space. An API 30 device takes none of the first two, so a
+                // matrix of 30 and 37 leaves that code never executed.
+                pixel2Api28 {
                     device = 'Pixel 2'
-                    apiLevel = 30
-                    systemImageSource = 'aosp'
+                    apiLevel = 28
+                    systemImageSource = 'google_apis'
+                    // As above: named rather than left to AGP, whose default becomes
+                    // arm64-v8a in 10.0 and is x86 for an image this old.
+                    testedAbi = 'x86'
                 }
                 pixel6Api37 {
                     device = 'Pixel 6'
@@ -101,7 +110,7 @@ android {
             }
             groups {
                 cameraMatrix {
-                    targetDevices.addAll(localDevices.pixel2Api30, localDevices.pixel6Api37)
+                    targetDevices.addAll(localDevices.pixel2Api28, localDevices.pixel6Api37)
                 }
             }
         }

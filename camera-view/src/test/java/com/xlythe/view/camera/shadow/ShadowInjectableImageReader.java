@@ -62,6 +62,18 @@ public class ShadowInjectableImageReader extends ShadowImageReader {
         }
     }
 
+    /** Describes the open readers, for a test that has to say which one leaked. */
+    public static String describeOpenReaders() {
+        StringBuilder description = new StringBuilder();
+        synchronized (sReaders) {
+            for (ImageReader reader : sReaders) {
+                description.append(reader.getWidth()).append('x').append(reader.getHeight())
+                        .append(" format=").append(reader.getImageFormat()).append("; ");
+            }
+        }
+        return description.toString();
+    }
+
     /** Queues a frame on a reader and tells its listener, as the framework would. */
     public static void offerImage(ImageReader reader, Image image) {
         ShadowInjectableImageReader shadow = org.robolectric.shadow.api.Shadow.extract(reader);

@@ -59,8 +59,18 @@ public class ApiSurfaceResourceTest {
     private Context context;
     private CameraView cameraView;
 
+    /**
+      * How many readers were already open when this test started.
+      *
+      * <p>Robolectric reuses a sandbox across test classes with the same configuration, so the
+      * registry is not necessarily empty on the way in - and what a leak looks like is growth,
+      * not a count of zero.</p>
+      */
+    private int readersBefore;
+
     @Before
     public void setUp() {
+        readersBefore = ShadowInjectableImageReader.openReaderCount();
         context = RuntimeEnvironment.getApplication();
         Shadows.shadowOf((android.app.Application) context).grantPermissions(
                 Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO);
@@ -87,7 +97,7 @@ public class ApiSurfaceResourceTest {
         }
 
         assertEquals("a reader held per open is a reader held forever",
-                0, ShadowInjectableImageReader.openReaderCount());
+                readersBefore, ShadowInjectableImageReader.openReaderCount());
         assertFalse(cameraView.isOpen());
     }
 
@@ -181,7 +191,8 @@ public class ApiSurfaceResourceTest {
         assertFalse(cameraView.isAnalyzingFrames());
         assertTrue("ten analyzers should leave no threads behind",
                 awaitThreads("CameraView-FrameAnalysis", threadsBefore));
-        assertTrue("and no readers either, however the sessions ended up",
+        assertTrue("ten analyzers left readers behind: "
+                        + ShadowInjectableImageReader.describeOpenReaders(),
                 ShadowInjectableImageReader.openReaderCount() <= readersWhileOpen);
     }
 
@@ -258,7 +269,7 @@ public class ApiSurfaceResourceTest {
         }
 
         assertEquals("every rotation's session has to be given back",
-                0, ShadowInjectableImageReader.openReaderCount());
+                readersBefore, ShadowInjectableImageReader.openReaderCount());
     }
 
     private static int threadsNamed(String name) {
