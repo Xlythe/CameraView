@@ -282,6 +282,41 @@ float x = getWidth() * (0.5f + (float) Math.tan(Math.toRadians(bearing))
         / (2f * (float) Math.tan(Math.toRadians(fov / 2))));
 ```
 
+Pointing at something
+-----------------
+WorldOverlay turns a place in the world into a position in the view, so an app can draw a marker
+over the preview. It draws nothing itself - what the marker looks like is yours.
+
+If all you know is a direction, which is all a compass and a location give, use the bearing with
+the angle of view. Position goes as the tangent of the angle, not in proportion to it, so half the
+angle of view away is the edge of the view and a quarter is not halfway out.
+```java
+float x = WorldOverlay.screenXForBearing(bearing, mCameraView.getHorizontalFieldOfView(), getWidth());
+float y = WorldOverlay.screenYForElevation(elevation, mCameraView.getVerticalFieldOfView(), getHeight());
+// NaN when there is no angle of view to work from, or the bearing is at a right angle
+```
+
+If you have a session that tracks the device through the world and can say where things are in
+metres, project a point through its matrices instead. A point behind the camera has no position in
+the view and is refused rather than drawn in front of you.
+```java
+PointF at = new PointF();
+if (WorldOverlay.project(viewProjectionMatrix, x, y, z, getWidth(), getHeight(), at)) {
+  // draw at `at`
+}
+```
+
+For a marker that should sit in the room rather than on the glass, compare how far away it is
+against how far away the scene is at that point, and hide it when something is in front. A tall
+marker is handled by visiblePillar, which returns the stretch that is not hidden - so a pillar
+whose base is behind the sofa still shows its top, which is the point of it being tall.
+```java
+float away = WorldOverlay.distanceFromCamera(viewMatrix, x, y, z);
+if (!WorldOverlay.isOccluded(away, depthMetersAt(at.x, at.y), 0.1f)) {
+  // draw at `at`
+}
+```
+
 Frames
 -----------------
 startFrameAnalysis hands every frame to your own analyzer, on a background thread, for detection
