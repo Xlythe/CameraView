@@ -3,7 +3,9 @@ package com.xlythe.compose.camera
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Matrix
 import android.graphics.Point
+import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.hardware.display.DisplayManager.DisplayListener
 import android.os.Handler
@@ -16,6 +18,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
@@ -26,6 +29,9 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.xlythe.view.camera.Barcode
 import com.xlythe.view.camera.CameraView
+import com.xlythe.view.camera.Face
+import com.xlythe.view.camera.FrameStream
+import com.xlythe.view.camera.ICameraModule
 import com.xlythe.view.camera.VideoStream
 import java.io.File
 
@@ -48,6 +54,76 @@ enum class LensFacing {
     BACK,
     FRONT
 }
+
+/** The range of colours a picture is recorded in. See [CameraState.supportedColorSpaces]. */
+enum class ColorSpace {
+    SRGB,
+    DISPLAY_P3
+}
+
+/** Standard or high dynamic range video. See [CameraState.supportedDynamicRanges]. */
+enum class DynamicRange {
+    SDR,
+    HDR
+}
+
+/** An optional vendor photo-processing extension. See [CameraState.supportedExtensions]. */
+enum class Extension {
+    NONE,
+    BOKEH,
+    HDR,
+    NIGHT,
+    FACE_RETOUCH,
+    AUTO
+}
+
+/**
+ * What the camera can do, and what it is doing.
+ *
+ * Everything else [Camera] takes is a request the caller makes; these are the camera's answers,
+ * which is why they are published rather than passed in. Ask before offering a control: a request
+ * the active camera cannot honour is logged and dropped rather than applied, so a button for one
+ * does nothing at all.
+ *
+ * A closed camera has no answers to give, so the published state is null until one opens. It is a
+ * snapshot rather than a stream, taken when the camera opens, when [Camera] recomposes, and after
+ * a [CameraController] action that changes it; one that finds nothing new publishes an equal value
+ * and so does not recompose the caller.
+ *
+ * The defaults describe a camera that can do nothing, for a preview or a test that needs to stand
+ * one in.
+ */
+data class CameraState(
+    val hasFlash: Boolean = false,
+    val hasFrontFacingCamera: Boolean = false,
+    val isUsingFrontFacingCamera: Boolean = false,
+    val isZoomSupported: Boolean = false,
+    /** The far end of the range [Camera]'s zoomLevel accepts; 0 is the widest lens there is. */
+    val maxZoomLevel: Int = 0,
+    val isExposureCompensationSupported: Boolean = false,
+    val minExposureCompensation: Int = 0,
+    val maxExposureCompensation: Int = 0,
+    /** Always holds at least [ColorSpace.SRGB], which every camera can produce. */
+    val supportedColorSpaces: Set<ColorSpace> = emptySet(),
+    val supportedDynamicRanges: Set<DynamicRange> = emptySet(),
+    val supportedExtensions: Set<Extension> = emptySet(),
+    val isPreviewStabilizationSupported: Boolean = false,
+    val isVideoStabilizationSupported: Boolean = false,
+    val isLowLightBoostSupported: Boolean = false,
+    /** Whether [CameraController.takePicture] works while a recording is running. */
+    val isSnapshotWhileRecordingSupported: Boolean = false,
+    val isFaceDetectionSupported: Boolean = false,
+    val isFrameAnalysisSupported: Boolean = false,
+    /**
+     * The angle of view in degrees, which turns a bearing in the world into a position on the
+     * preview. It narrows as the camera zooms in, so the snapshot taken after a zoom is the one to
+     * read.
+     */
+    val horizontalFieldOfView: Float = 0f,
+    val verticalFieldOfView: Float = 0f,
+    val isRecording: Boolean = false,
+    val isAnalyzingFrames: Boolean = false
+)
 
 interface CameraController {
     fun takePicture(file: File)
@@ -75,10 +151,54 @@ interface CameraController {
     fun rejectVideo()
     fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, @Barcode.Format vararg formats: Int)
     fun exitBarcodeScanner()
+
+    /**
+     * Focuses and exposes for an area of the preview, in coordinates from -1000 to 1000.
+     *
+     * The camera already focuses where the preview is tapped; this is for a caller driving focus
+     * from something else, such as a face it is tracking.
+     */
+    fun focus(focusArea: Rect, meteringArea: Rect)
+
+    /**
+     * Hands every camera frame to [analyzer], on a background thread, until [stopFrameAnalysis].
+     *
+     * The frame's image belongs to the camera and is recycled as soon as the call returns, so
+     * anything that outlives it has to be copied out.
+     *
+     * @throws IllegalStateException if the camera is not open, or analysis is already running
+     * @throws UnsupportedOperationException if [CameraState.isFrameAnalysisSupported] is false
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    fun startFrameAnalysis(
+        analyzer: (frame: FrameStream.Frame) -> Unit,
+        params: FrameStream.Params = FrameStream.Params()
+    )
+
+    fun stopFrameAnalysis()
+
+    /**
+     * Reports the faces the camera is tracking, or stops when given null.
+     *
+     * This is the camera's own detector, the one a manufacturer's app draws boxes from: it costs
+     * nothing, it arrives with the preview, and it finds faces rather than describing them.
+     *
+     * @return whether the camera took it on. False means the listener will never be called, which
+     *     is what [CameraState.isFaceDetectionSupported] says in advance.
+     */
+    fun setFaceDetectionListener(
+        listener: ((faces: List<Face>, faceToView: Matrix) -> Unit)?
+    ): Boolean
 }
 
 private class CameraControllerImpl(
-    private val viewProvider: () -> CameraView?
+    private val viewProvider: () -> CameraView?,
+    /**
+     * Called after anything that changes what [CameraState] reports. The queries are pulled from
+     * the camera rather than announced by it, so nothing else would notice that a recording has
+     * started, or that a lens switch has left another camera's capabilities published.
+     */
+    private val onCameraStateChanged: () -> Unit
 ) : CameraController {
     private fun getView(): CameraView? {
         return viewProvider()
@@ -91,13 +211,23 @@ private class CameraControllerImpl(
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     override fun startRecording(file: File) {
-        getView()?.startRecording(file)
-            ?: Log.e(TAG, "View not available for startRecording")
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for startRecording")
+            return
+        }
+        view.startRecording(file)
+        onCameraStateChanged()
     }
 
     override fun stopRecording() {
-        getView()?.stopRecording()
-            ?: Log.e(TAG, "View not available for stopRecording")
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for stopRecording")
+            return
+        }
+        view.stopRecording()
+        onCameraStateChanged()
     }
 
     @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
@@ -106,8 +236,13 @@ private class CameraControllerImpl(
     }
 
     override fun toggleCamera() {
-        getView()?.toggleCamera()
-            ?: Log.e(TAG, "View not available for toggleCamera")
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for toggleCamera")
+            return
+        }
+        view.toggleCamera()
+        onCameraStateChanged()
     }
 
     override fun confirmPicture() {
@@ -160,6 +295,127 @@ private class CameraControllerImpl(
         getView()?.exitBarcodeScanner()
             ?: Log.e(TAG, "View not available for exitBarcodeScanner")
     }
+
+    override fun focus(focusArea: Rect, meteringArea: Rect) {
+        getView()?.focus(focusArea, meteringArea)
+            ?: Log.e(TAG, "View not available for focus")
+    }
+
+    @RequiresPermission(Manifest.permission.CAMERA)
+    override fun startFrameAnalysis(
+        analyzer: (frame: FrameStream.Frame) -> Unit,
+        params: FrameStream.Params
+    ) {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for startFrameAnalysis")
+            return
+        }
+        view.startFrameAnalysis(FrameStream.Analyzer { frame -> analyzer(frame) }, params)
+        onCameraStateChanged()
+    }
+
+    override fun stopFrameAnalysis() {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for stopFrameAnalysis")
+            return
+        }
+        view.stopFrameAnalysis()
+        onCameraStateChanged()
+    }
+
+    override fun setFaceDetectionListener(
+        listener: ((faces: List<Face>, faceToView: Matrix) -> Unit)?
+    ): Boolean {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for setFaceDetectionListener")
+            return false
+        }
+        if (listener == null) {
+            return view.setFaceDetectionListener(null)
+        }
+        return view.setFaceDetectionListener { faces, faceToView -> listener(faces, faceToView) }
+    }
+}
+
+/**
+ * The members of an enum this camera accepts. CameraView answers for one value at a time, so the
+ * set a caller needs in order to offer a choice is built by asking for each of them.
+ */
+private fun <T : Enum<T>> supported(values: List<T>, isSupported: (T) -> Boolean): Set<T> {
+    return values.filterTo(mutableSetOf(), isSupported)
+}
+
+/** Reads everything [CameraState] reports off an open camera. */
+private fun CameraView.readCameraState(): CameraState {
+    return CameraState(
+        hasFlash = hasFlash(),
+        hasFrontFacingCamera = hasFrontFacingCamera(),
+        isUsingFrontFacingCamera = isUsingFrontFacingCamera,
+        isZoomSupported = isZoomSupported,
+        maxZoomLevel = maxZoomLevel,
+        isExposureCompensationSupported = isExposureCompensationSupported,
+        minExposureCompensation = minExposureCompensation,
+        maxExposureCompensation = maxExposureCompensation,
+        supportedColorSpaces = supported(ColorSpace.entries) {
+            isColorSpaceSupported(it.toCameraView())
+        },
+        supportedDynamicRanges = supported(DynamicRange.entries) {
+            isDynamicRangeSupported(it.toCameraView())
+        },
+        supportedExtensions = supported(Extension.entries) {
+            isExtensionSupported(it.toCameraView())
+        },
+        isPreviewStabilizationSupported = isPreviewStabilizationSupported,
+        isVideoStabilizationSupported = isVideoStabilizationSupported,
+        isLowLightBoostSupported = isLowLightBoostSupported,
+        isSnapshotWhileRecordingSupported = isSnapshotWhileRecordingSupported,
+        isFaceDetectionSupported = isFaceDetectionSupported,
+        isFrameAnalysisSupported = isFrameAnalysisSupported,
+        horizontalFieldOfView = horizontalFieldOfView,
+        verticalFieldOfView = verticalFieldOfView,
+        isRecording = isRecording,
+        isAnalyzingFrames = isAnalyzingFrames
+    )
+}
+
+private fun Quality.toCameraView() = when (this) {
+    Quality.LOW -> CameraView.Quality.LOW
+    Quality.MEDIUM -> CameraView.Quality.MEDIUM
+    Quality.HIGH -> CameraView.Quality.HIGH
+    Quality.MAX -> CameraView.Quality.MAX
+}
+
+private fun Flash.toCameraView() = when (this) {
+    Flash.AUTO -> CameraView.Flash.AUTO
+    Flash.ON -> CameraView.Flash.ON
+    Flash.OFF -> CameraView.Flash.OFF
+}
+
+private fun LensFacing.toCameraView() = when (this) {
+    LensFacing.BACK -> CameraView.LensFacing.BACK
+    LensFacing.FRONT -> CameraView.LensFacing.FRONT
+}
+
+private fun ColorSpace.toCameraView() = when (this) {
+    ColorSpace.SRGB -> CameraView.ColorSpace.SRGB
+    ColorSpace.DISPLAY_P3 -> CameraView.ColorSpace.DISPLAY_P3
+}
+
+private fun DynamicRange.toCameraView() = when (this) {
+    DynamicRange.SDR -> CameraView.DynamicRange.SDR
+    DynamicRange.HDR -> CameraView.DynamicRange.HDR
+}
+
+private fun Extension.toCameraView() = when (this) {
+    Extension.NONE -> CameraView.Extension.NONE
+    Extension.BOKEH -> CameraView.Extension.BOKEH
+    Extension.HDR -> CameraView.Extension.HDR
+    Extension.NIGHT -> CameraView.Extension.NIGHT
+    Extension.FACE_RETOUCH -> CameraView.Extension.FACE_RETOUCH
+    Extension.AUTO -> CameraView.Extension.AUTO
 }
 
 /**
@@ -173,6 +429,10 @@ private class CameraControllerImpl(
  * [CameraController.startRecording] and [CameraController.stream], which ask for it themselves,
  * and outputs are written to the [File] you pass in, so no storage permission is involved.
  *
+ * Several of the settings below are read only by the CameraX backend, which is still opt-in; the
+ * Camera2 backend that ships enabled logs and drops them. [CameraState] says which ones the
+ * active camera will accept.
+ *
  * @param modifier Modifier for layout.
  * @param quality The quality for image and video outputs.
  * @param flash The active flash strategy.
@@ -183,8 +443,24 @@ private class CameraControllerImpl(
  * @param imageConfirmationEnabled Requires images to be confirmed via {@link CameraController#confirmPicture()} before saved. A preview of the image will be displayed.
  * @param videoConfirmationEnabled Requires videos to be confirmed via {@link CameraController#confirmVideo()} before saved. A preview of the video will be displayed.
  * @param matchPreviewAspectRatioEnabled Attempts to match image and video outputs to the preview aspect ratio.
+ * @param zoomLevel A position in the camera's zoom range, from 0 to [CameraState.maxZoomLevel].
+ *  Null leaves the zoom to the camera, which is what [pinchToZoom] drives: a caller that both
+ *  states a level and allows the gesture would have the next recomposition undo the pinch.
+ * @param exposureCompensation An index within the range [CameraState] reports, where 0 is the
+ *  exposure the camera metered for itself.
+ * @param torchEnabled Lights the flash continuously, rather than for a capture.
+ * @param colorSpace The range of colours pictures are recorded in.
+ * @param dynamicRange The dynamic range videos are recorded in.
+ * @param extension An optional vendor photo-processing extension.
+ * @param pictureQuality How hard a still capture is compressed, from 1 to 100.
+ * @param previewStabilizationEnabled Stabilizes the preview.
+ * @param videoStabilizationEnabled Stabilizes recorded video.
+ * @param lowLightBoostEnabled Brightens the preview in the dark.
+ * @param frontVideoMirroringEnabled Mirrors front-camera video files, so a recording matches the
+ *  preview it was framed in.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  * {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
+ * @param state Receives what the camera can do and what it is doing, or null while it is closed.
  */
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
@@ -199,7 +475,19 @@ fun Camera(
     imageConfirmationEnabled: Boolean = false,
     videoConfirmationEnabled: Boolean = false,
     matchPreviewAspectRatioEnabled: Boolean = true,
+    zoomLevel: Int? = null,
+    exposureCompensation: Int = 0,
+    torchEnabled: Boolean = false,
+    colorSpace: ColorSpace = ColorSpace.SRGB,
+    dynamicRange: DynamicRange = DynamicRange.SDR,
+    extension: Extension = Extension.NONE,
+    pictureQuality: Int = ICameraModule.DEFAULT_PICTURE_QUALITY,
+    previewStabilizationEnabled: Boolean = false,
+    videoStabilizationEnabled: Boolean = false,
+    lowLightBoostEnabled: Boolean = false,
+    frontVideoMirroringEnabled: Boolean = true,
     controller: MutableState<CameraController?>,
+    state: MutableState<CameraState?> = remember { mutableStateOf(null) },
     onImageConfirmation: () -> Unit = {},
     onImageCaptured: (file: File) -> Unit = {},
     onImageCaptureFailed: () -> Unit = {},
@@ -225,6 +513,13 @@ fun Camera(
     val currentOnVideoCaptureFailed by rememberUpdatedState(onVideoCaptureFailed)
     val currentOnCameraOpened by rememberUpdatedState(onCameraOpened)
     val currentOnCameraClosed by rememberUpdatedState(onCameraClosed)
+    val currentState by rememberUpdatedState(state)
+
+    // Takes the camera as an argument rather than closing over it, because it is declared ahead of
+    // the view so that the listeners installed on the view can publish through it.
+    val publishState = { camera: CameraView ->
+        currentState.value = if (camera.isOpen) camera.readCameraState() else null
+    }
 
     // Initialize and then cache our CameraView.
     val cameraView = remember {
@@ -256,20 +551,27 @@ fun Camera(
                 }
 
                 override fun onVideoCaptured(file: File) {
+                    // A recording also ends on its own, at the duration or size cap or in
+                    // failure, so the state is republished on every way out rather than only
+                    // where stopRecording was asked for.
+                    publishState(this@apply)
                     currentOnVideoCaptured(file)
                 }
 
                 override fun onFailure() {
+                    publishState(this@apply)
                     currentOnVideoCaptureFailed()
                 }
             })
 
             this.setOnCameraStateChangedListener(object : CameraView.OnCameraStateChangedListener {
                 override fun onCameraOpened() {
+                    publishState(this@apply)
                     currentOnCameraOpened()
                 }
 
                 override fun onCameraClosed() {
+                    publishState(this@apply)
                     currentOnCameraClosed()
                 }
             })
@@ -278,7 +580,7 @@ fun Camera(
 
     // Cache our camera controller.
     val cameraController = remember(cameraView) {
-        CameraControllerImpl { cameraView }
+        CameraControllerImpl({ cameraView }, { publishState(cameraView) })
     }
     DisposableEffect(cameraController) {
         controller.value = cameraController
@@ -353,6 +655,7 @@ fun Camera(
             if (controller.value === cameraController) {
                 controller.value = null
             }
+            currentState.value = null
             cameraView.setOnImageCapturedListener(null)
             cameraView.setOnVideoCapturedListener(null)
             cameraView.setOnCameraStateChangedListener(null)
@@ -361,21 +664,9 @@ fun Camera(
 
     // Wrap our View in a Composable, and then keep it up to date on updates.
     AndroidView(factory = { _ -> cameraView }, update = { view ->
-        view.quality = when (quality) {
-            Quality.LOW -> CameraView.Quality.LOW
-            Quality.MEDIUM -> CameraView.Quality.MEDIUM
-            Quality.HIGH -> CameraView.Quality.HIGH
-            Quality.MAX -> CameraView.Quality.MAX
-        }
-        view.flash = when (flash) {
-            Flash.AUTO -> CameraView.Flash.AUTO
-            Flash.ON -> CameraView.Flash.ON
-            Flash.OFF -> CameraView.Flash.OFF
-        }
-        view.lensFacing =  when (lensFacing) {
-            LensFacing.BACK -> CameraView.LensFacing.BACK
-            LensFacing.FRONT -> CameraView.LensFacing.FRONT
-        }
+        view.quality = quality.toCameraView()
+        view.flash = flash.toCameraView()
+        view.lensFacing = lensFacing.toCameraView()
         view.isPinchToZoomEnabled = pinchToZoom
         if (maxVideoDuration != null) {
             view.maxVideoDuration = maxVideoDuration
@@ -390,5 +681,21 @@ fun Camera(
         view.isImageConfirmationEnabled = imageConfirmationEnabled
         view.isVideoConfirmationEnabled = videoConfirmationEnabled
         view.setMatchPreviewAspectRatio(matchPreviewAspectRatioEnabled)
+        if (zoomLevel != null) {
+            view.zoomLevel = zoomLevel
+        }
+        view.exposureCompensation = exposureCompensation
+        view.isTorchEnabled = torchEnabled
+        view.colorSpace = colorSpace.toCameraView()
+        view.dynamicRange = dynamicRange.toCameraView()
+        view.extension = extension.toCameraView()
+        view.pictureQuality = pictureQuality
+        view.isPreviewStabilizationEnabled = previewStabilizationEnabled
+        view.isVideoStabilizationEnabled = videoStabilizationEnabled
+        view.isLowLightBoostEnabled = lowLightBoostEnabled
+        view.isFrontVideoMirroringEnabled = frontVideoMirroringEnabled
+        // What the camera can do depends on what it has just been asked for - a lens, an extension
+        // and a zoom each change the answers - so the snapshot is taken after the settings land.
+        publishState(view)
     }, modifier = modifier)
 }
