@@ -43,9 +43,9 @@ import java.util.concurrent.atomic.AtomicReference;
  * detector running in the image signal processor. Those need a camera, so they are here, and this
  * is where the behaviour that only shows up on hardware shows up.</p>
  *
- * <p>Run with {@code ./gradlew :camera-view:cameraMatrixGroupDebugAndroidTest}, which covers an
- * API 30 and an API 37 image. Every test skips rather than fails on a device with no camera, so
- * the suite is honest about what it did not get to.</p>
+ * <p>Run with {@code gradle :camera-view:cameraMatrixGroupDebugAndroidTest}, which covers an API
+ * 28 and an API 37 image. Every test skips rather than fails on a device with no camera, so the
+ * suite is honest about what it did not get to.</p>
  */
 @RunWith(AndroidJUnit4.class)
 public final class CameraDeviceCaptureTest {
