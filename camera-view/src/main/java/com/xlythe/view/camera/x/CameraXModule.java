@@ -226,6 +226,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** The GL effect every frame passes through, while a caller has asked for one. */
     @Nullable private FrameEffect mFrameEffect;
 
+    /**
+     * Set once GL has failed here, after which this backend reports no effects and stops trying.
+     *
+     * <p>Latched rather than retried because the two ways it fails are both properties of the
+     * device: a driver that will not give us a context, and a shader the driver will not compile.
+     * Neither changes between one bind and the next, and retrying would pay the start-up timeout
+     * on the main thread again on every rotation.</p>
+     */
+    private boolean mGlUnavailable;
+
     /** Whether the bound configuration can take a still while it records. */
     private boolean mSnapshotWhileRecording;
 
@@ -1636,15 +1646,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                     Log.w(TAG, "CameraX could not preflight the requested streaming combination");
                 }
             }
-            ensureFrameEffect();
-            // CameraX matches an effect to the use cases its targets name, and it cannot tell two
-            // Previews apart, so an effect and a custom stream cannot be bound together. The
-            // stream wins: it has a caller waiting on bytes, where an effect's caller is drawing.
-            CameraEffect effect = streamPreviews.isEmpty() ? mFrameEffect : null;
-            if (effect == null && mFrameEffect != null) {
-                Log.w(TAG, "Camera frames bypass GL while a custom stream is attached");
-            }
             unbindCurrentUseCases();
+            // After unbinding, so that an effect being let go is not closing outputs CameraX is
+            // still drawing into, and before binding, because the group carries the effect.
+            CameraEffect effect = reconcileFrameEffect(!streamPreviews.isEmpty());
             Camera camera = bindAtomically(selector, requested, effect);
             if (generation != mGeneration || !mOpenRequested || mPaused) {
                 provider.unbind(requested.toArray(new UseCase[0]));
@@ -1697,7 +1702,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @Override public boolean isFrameEffectSupported() {
-        return true;
+        return !mGlUnavailable;
     }
 
     @Override public void setFrameRenderer(@Nullable FrameRenderer renderer) {
@@ -1744,12 +1749,54 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * charging every app for a feature most of them never use.</p>
      */
     private void ensureFrameEffect() {
-        if (mFrameEffect != null) return;
+        if (mFrameEffect != null || mGlUnavailable) return;
         FrameRenderer renderer = getFrameRenderer();
         CameraTextureProvider textureProvider = getCameraTextureProvider();
         if (renderer == null && textureProvider == null) return;
         mFrameEffect = FrameEffect.create(FrameEffect.ALL_TARGETS, mMainExecutor, renderer,
                 textureProvider, this::onFrameEffectFailed);
+        if (mFrameEffect == null) {
+            // The renderer logged why. The camera goes on being bound without an effect, which is
+            // a camera that works and an effect that does not, rather than no camera at all.
+            Log.w(TAG, "Showing the camera without effects; this device will not give us GL");
+            mGlUnavailable = true;
+        }
+    }
+
+    /**
+     * Whether an effect can be part of a bind that also carries these.
+     *
+     * <p>Two configurations rule one out, and the effect gives way to both because both were
+     * asked for on purpose where an effect may only be decorating.</p>
+     *
+     * <p>A custom stream needs a second Preview, and CameraX picks the use cases an effect applies
+     * to by target type - it cannot tell two Previews apart. A raw or Ultra HDR still cannot come
+     * out of a GL pipeline at all, and CameraX says so by throwing out of the bind rather than by
+     * dropping the effect, so asking would cost the whole camera.</p>
+     */
+    static boolean canBindFrameEffect(
+            boolean hasCustomStream, @NonNull CameraView.PictureFormat pictureFormat) {
+        return !hasCustomStream && pictureFormat == CameraView.PictureFormat.JPEG;
+    }
+
+    /**
+     * The effect to bind with, bringing it up or letting it go so that it matches.
+     *
+     * <p>Returns null when {@link #canBindFrameEffect} says no, having released the renderer, so
+     * that the bind is the one that would have happened had nobody asked for an effect.</p>
+     */
+    @Nullable private CameraEffect reconcileFrameEffect(boolean hasCustomStream) {
+        if (canBindFrameEffect(hasCustomStream, getPictureFormat())) {
+            ensureFrameEffect();
+            return mFrameEffect;
+        }
+        if (mFrameEffect != null || getFrameRenderer() != null
+                || getCameraTextureProvider() != null) {
+            Log.w(TAG, "Camera frames bypass GL: " + (hasCustomStream
+                    ? "a custom stream is attached" : "stills are " + getPictureFormat()));
+        }
+        releaseFrameEffect();
+        return null;
     }
 
     private void releaseFrameEffect() {
@@ -1759,9 +1806,21 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         effect.release();
     }
 
-    /** What CameraX reports through the effect's own error listener, which is off the main thread. */
+    /**
+     * What CameraX reports through the effect's own error listener, from its own thread.
+     *
+     * <p>Reaching here means CameraX accepted the effect and then could not run it, which leaves a
+     * camera that is bound but showing nothing. Letting the effect go and binding again without
+     * one puts the preview back; latching stops the next bind walking into the same wall.</p>
+     */
     private void onFrameEffectFailed(@NonNull Throwable error) {
-        Log.e(TAG, "CameraX could not run the frame effect", error);
+        Log.e(TAG, "Showing the camera without effects; CameraX could not run one", error);
+        runOnMainThread(() -> {
+            if (mDestroyed) return;
+            mGlUnavailable = true;
+            releaseFrameEffect();
+            reconcileUseCases(false);
+        });
     }
 
     @NonNull private SessionConfig createSessionConfig(@NonNull List<UseCase> useCases) {

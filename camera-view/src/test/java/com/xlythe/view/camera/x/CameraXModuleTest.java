@@ -179,6 +179,29 @@ public final class CameraXModuleTest {
         assertEquals(new Size(720, 480), CameraXModule.imageTargetSize(CameraView.Quality.LOW));
     }
 
+    /**
+     * The two configurations an effect cannot be bound alongside, and the one it can.
+     *
+     * <p>Both refusals are CameraX's rather than this library's, and the second of them refuses by
+     * throwing out of the bind - so getting this wrong costs the camera, not the effect.</p>
+     */
+    @Test
+    public void anEffectGivesWayToAStreamAndToAnUnprocessedStill() {
+        assertTrue("the ordinary case is an effect over a JPEG still",
+                CameraXModule.canBindFrameEffect(false, CameraView.PictureFormat.JPEG));
+
+        assertFalse("a custom stream needs a second Preview CameraX cannot tell apart",
+                CameraXModule.canBindFrameEffect(true, CameraView.PictureFormat.JPEG));
+
+        for (CameraView.PictureFormat format : CameraView.PictureFormat.values()) {
+            if (format == CameraView.PictureFormat.JPEG) {
+                continue;
+            }
+            assertFalse(format + " cannot come out of a GL pipeline",
+                    CameraXModule.canBindFrameEffect(false, format));
+        }
+    }
+
     @Test
     public void durationLimitWaitsForUsableMedia() {
         assertEquals(-1, CameraXModule.remainingDurationMillis(1_500, 0));
