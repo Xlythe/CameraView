@@ -5,7 +5,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -74,18 +76,26 @@ fun Video(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    // The VideoView below is remembered for the life of the composition, so the listeners
+    // installed on it capture whichever lambdas the first composition happened to pass. A caller
+    // whose callbacks close over state would then keep being called with the stale ones. Track
+    // the latest instead, so the listeners read them at the moment they fire.
+    val currentOnCompletion by rememberUpdatedState(onCompletion)
+    val currentOnPlay by rememberUpdatedState(onPlay)
+    val currentOnPause by rememberUpdatedState(onPause)
+
     // Initialize and then cache our VideoView.
     val videoView = remember {
         VideoView(context).apply {
-            this.setOnCompletionListener { onCompletion() }
+            this.setOnCompletionListener { currentOnCompletion() }
 
             this.setEventListener(object : VideoView.EventListener {
                 override fun onPlay() {
-                    onPlay()
+                    currentOnPlay()
                 }
 
                 override fun onPause() {
-                    onPause()
+                    currentOnPause()
                 }
             })
         }

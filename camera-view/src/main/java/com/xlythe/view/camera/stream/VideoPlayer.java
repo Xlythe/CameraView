@@ -16,6 +16,7 @@ import com.xlythe.view.camera.CameraView;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED;
 import static android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED;
@@ -59,9 +60,13 @@ public class VideoPlayer {
    * will shut down.
    */
   private volatile boolean mIsAlive;
+  /** Ensures the input stream is closed exactly once. */
+  private final AtomicBoolean mStopped = new AtomicBoolean();
+  /** Ensures the decoder output surface is released only once. */
+  private final AtomicBoolean mSurfaceReleased = new AtomicBoolean();
 
   /** The background thread playing video for us. */
-  private Thread mThread;
+  private volatile Thread mThread;
 
   /**
    * A simple audio player.
@@ -87,8 +92,8 @@ public class VideoPlayer {
   }
 
   /** Starts playing the stream. */
-  public void start() {
-    if (mThread != null) {
+  public synchronized void start() {
+    if (mThread != null || mStopped.get()) {
       Log.w(TAG, "VideoPlayer cannot be started more than once");
       return;
     }
@@ -179,15 +184,20 @@ public class VideoPlayer {
     mThread.start();
   }
 
-  private void closeDecoder() {
+  private synchronized void closeDecoder() {
     MediaCodec decoder = mDecoder;
+    mDecoder = null;
     if (decoder != null) {
       try {
         decoder.stop();
       } catch (IllegalStateException e) {
         Log.e(TAG, "Exception with playing video stream", e);
       }
-      decoder.release();
+      try {
+        decoder.release();
+      } catch (IllegalStateException e) {
+        Log.e(TAG, "Failed to release video decoder", e);
+      }
     }
   }
 
@@ -269,26 +279,29 @@ public class VideoPlayer {
 
   private void stopInternal() {
     mIsAlive = false;
-    try {
-      mInputStream.close();
-    } catch (IOException e) {
-      Log.e(TAG, "Failed to close video input stream", e);
+    if (mStopped.compareAndSet(false, true)) {
+      try {
+        mInputStream.close();
+      } catch (IOException e) {
+        Log.e(TAG, "Failed to close video input stream", e);
+      }
+      Log.d(TAG, "Stopped playing video");
     }
-    mSurface.release();
+    if (mSurfaceReleased.compareAndSet(false, true)) {
+      mSurface.release();
+    }
     closeDecoder();
-    Log.d(TAG, "Stopped playing video");
   }
 
   /** Stops playing the stream. */
   public void stop() {
-    if (mThread == null) {
-      Log.w(TAG, "VideoPlayer not started");
+    stopInternal();
+    Thread thread = mThread;
+    if (thread == null || thread == Thread.currentThread()) {
       return;
     }
-
-    stopInternal();
     try {
-      mThread.join(300);
+      thread.join(300);
     } catch (InterruptedException e) {
       Log.e(TAG, "Interrupted while joining VideoPlayer thread", e);
       Thread.currentThread().interrupt();

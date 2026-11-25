@@ -92,8 +92,11 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         }
     }
 
-    private static final int REQUEST_CODE_PERMISSIONS = 10;
-    private static final String DESTINATION = "yyyy-MM-dd HH:mm:ss";
+    /** Package-private so a test can deliver a result under the same code the prompt asks with. */
+    static final int REQUEST_CODE_PERMISSIONS = 10;
+    // Colons are not legal in a file name on every filesystem Android mounts, and MediaStore
+    // rejects them in a display name, so the default avoids them.
+    private static final String DESTINATION = "yyyy-MM-dd-HH-mm-ss";
     private static final String PHOTO_EXT = ".jpg";
     private static final String VIDEO_EXT = ".mp4";
 
@@ -124,6 +127,12 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     private View mCancel;
 
     private final ProgressBarAnimator mAnimator = new ProgressBarAnimator();
+
+    /** Held so invalidate() can set the toggle's state without the listener reading it as a tap. */
+    private final CompoundButton.OnCheckedChangeListener mToggleListener = (button, checked) -> {
+        mCamera.toggleCamera();
+        onToggle();
+    };
 
     private DisplayManager.DisplayListener mDisplayListener;
 
@@ -212,7 +221,8 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @Override
     public void onDetach() {
         requireContext().unregisterReceiver(mStateChangedReceiver);
-        if (Build.VERSION.SDK_INT > 17) {
+        // Must match the version gate onAttach registers under, or the listener outlives us.
+        if (Build.VERSION.SDK_INT >= 17) {
             DisplayManager displayManager = (DisplayManager) requireContext().getSystemService(Context.DISPLAY_SERVICE);
             displayManager.unregisterDisplayListener(mDisplayListener);
         }
@@ -232,8 +242,10 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     @Override
     public void onStop() {
-        mCamera.close();
-        onCameraClosed();
+        // CameraView dispatches onCameraClosed() itself, and only when it really was open.
+        if (mCamera != null) {
+            mCamera.close();
+        }
         super.onStop();
     }
 
@@ -299,35 +311,38 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @Override
     public void onCameraClosed() {}
 
-    @RequiresPermission(allOf = {
-            Manifest.permission.CAMERA,
-            Manifest.permission.RECORD_AUDIO,
-            Manifest.permission.WRITE_EXTERNAL_STORAGE
-    })
+    @RequiresPermission(Manifest.permission.CAMERA)
     private void showCamera() {
+        // A permission result can land after onDestroyView, once the Views are gone.
+        if (mCamera == null) {
+            return;
+        }
         mCameraHolder.setVisibility(View.VISIBLE);
         mPermissionPrompt.setVisibility(View.GONE);
         mCamera.open();
     }
 
     private void showPermissionPrompt() {
+        if (mCameraHolder == null) {
+            return;
+        }
         mCameraHolder.setVisibility(View.GONE);
         mPermissionPrompt.setVisibility(View.VISIBLE);
     }
 
-    private static String stringForTime(int timeMs) {
-        int totalSeconds = timeMs / 1000;
+    private static String stringForTime(long timeMs) {
+        long totalSeconds = Math.max(0, timeMs) / 1000;
 
-        int seconds = totalSeconds % 60;
-        int minutes = (totalSeconds / 60) % 60;
-        int hours = totalSeconds / 3600;
+        long seconds = totalSeconds % 60;
+        long minutes = (totalSeconds / 60) % 60;
+        long hours = totalSeconds / 3600;
 
-        Formatter formatter = new Formatter(Locale.getDefault());
-
-        if (hours > 0) {
-            return formatter.format("%d:%02d:%02d", hours, minutes, seconds).toString();
-        } else {
-            return formatter.format("%02d:%02d", minutes, seconds).toString();
+        try (Formatter formatter = new Formatter(Locale.getDefault())) {
+            if (hours > 0) {
+                return formatter.format("%d:%02d:%02d", hours, minutes, seconds).toString();
+            } else {
+                return formatter.format("%02d:%02d", minutes, seconds).toString();
+            }
         }
     }
 
@@ -337,13 +352,9 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         mPermissionPrompt = view.findViewById(R.id.layout_permissions);
         mPermissionRequest = view.findViewById(R.id.request_permissions);
         mCamera = view.findViewById(R.id.camera);
-        mToggle = view.findViewById(R.id.toggle);
-        mCapture = mCameraHolder.findViewById(R.id.capture);
-        mProgress = view.findViewById(R.id.progress);
-        mDuration = view.findViewById(R.id.duration);
-        mCancel = view.findViewById(R.id.cancel);
-        mConfirm = view.findViewById(R.id.confirm);
 
+        // Check the required Views before anything reads through them, so a layout that is
+        // missing one reports which id it needs instead of throwing from findViewById.
         if (mCameraHolder == null) {
             throw new IllegalStateException("No View found with id R.id.layout_camera");
         }
@@ -360,10 +371,24 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             throw new IllegalStateException("No View found with id R.id.request_permissions");
         }
 
+        mToggle = view.findViewById(R.id.toggle);
+        mCapture = mCameraHolder.findViewById(R.id.capture);
+        mProgress = view.findViewById(R.id.progress);
+        mDuration = view.findViewById(R.id.duration);
+        mCancel = view.findViewById(R.id.cancel);
+        mConfirm = view.findViewById(R.id.confirm);
+
         invalidate();
     }
 
     private void invalidate() {
+        // The state receiver is registered from onAttach and unregistered in onDetach, so it can
+        // fire before onViewCreated has resolved the Views and after onDestroyView has released
+        // them. Both windows used to dereference a null CameraView.
+        if (mCamera == null) {
+            return;
+        }
+
         mCamera.setOnImageCapturedListener(this);
         mCamera.setOnVideoCapturedListener(this);
         mCamera.setOnCameraStateChangedListener(this);
@@ -385,7 +410,12 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
         if (mToggle != null) {
             mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
+            // Detach the listener first: invalidate() also runs after the camera reports itself
+            // ready, by which point the listener is attached and setChecked would read as a tap
+            // and toggle the lens the user never asked to change.
+            mToggle.setOnCheckedChangeListener(null);
             mToggle.setChecked(mCamera.isUsingFrontFacingCamera());
+            mToggle.setOnCheckedChangeListener(mToggleListener);
         }
 
         if (mProgress != null) {
@@ -406,15 +436,29 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     }
 
     @Override
+    public void onDestroyView() {
+        // Drop the Views with the hierarchy that owned them, so anything still arriving, such as
+        // the camera state broadcast, does not reach a destroyed CameraView.
+        mCameraHolder = null;
+        mPermissionPrompt = null;
+        mPermissionRequest = null;
+        mCamera = null;
+        mToggle = null;
+        mCapture = null;
+        mProgress = null;
+        mDuration = null;
+        mCancel = null;
+        mConfirm = null;
+        super.onDestroyView();
+    }
+
+    @Override
     public void onViewStateRestored(@Nullable Bundle savedInstanceState) {
         super.onViewStateRestored(savedInstanceState);
 
         // Set listeners here, or else restoring state will trigger them.
         if (mToggle != null) {
-            mToggle.setOnCheckedChangeListener((b, checked) -> {
-                mCamera.toggleCamera();
-                onToggle();
-            });
+            mToggle.setOnCheckedChangeListener(mToggleListener);
         }
     }
 
@@ -425,28 +469,45 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @Override
     public void onFailure() {}
 
+    /**
+     * Puts the capture button back and takes the confirmation buttons away.
+     *
+     * <p>The same thing happens after confirming a picture and after confirming a video, and it
+     * has to happen whether or not the thing being confirmed was still there - so it is one
+     * method rather than two copies and a third for the case that goes wrong.</p>
+     */
+    private void restoreCaptureButtons() {
+        if (mConfirm != null) {
+            mConfirm.setVisibility(View.GONE);
+        }
+        if (mCapture != null) {
+            mCapture.setVisibility(View.VISIBLE);
+        }
+        if (mCancel != null) {
+            mCancel.setVisibility(View.GONE);
+        }
+        if (mToggle != null) {
+            mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
+        }
+    }
+
     @Override
     public void onImageConfirmation() {
         View.OnClickListener listener = view -> {
-            if (view == mCancel) {
-                mCamera.rejectPicture();
-            } else {
-                mCamera.confirmPicture();
+            // The buttons outlive what they are confirming: a camera that closes, or state being
+            // restored, clears the pending picture while they are still on screen, and both of
+            // these throw when there is nothing pending. From a click handler that is a crash,
+            // so the buttons are put back either way and the picture is only acted on if it is
+            // still there.
+            if (mCamera.isImageConfirmationPending()) {
+                if (view == mCancel) {
+                    mCamera.rejectPicture();
+                } else {
+                    mCamera.confirmPicture();
+                }
             }
 
-            // After confirming/rejecting, show our buttons again
-            if (mConfirm != null) {
-                mConfirm.setVisibility(View.GONE);
-            }
-            if (mCapture != null) {
-                mCapture.setVisibility(View.VISIBLE);
-            }
-            if (mCancel != null) {
-                mCancel.setVisibility(View.GONE);
-            }
-            if (mToggle != null) {
-                mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
-            }
+            restoreCaptureButtons();
         };
         if (mCancel != null) {
             mCancel.setVisibility(View.VISIBLE);
@@ -467,25 +528,18 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
     @Override
     public void onVideoConfirmation() {
         View.OnClickListener listener = v -> {
+            if (!mCamera.isVideoConfirmationPending()) {
+                // As above: the buttons outlive what they are confirming.
+                restoreCaptureButtons();
+                return;
+            }
             if (v == mCancel) {
                 mCamera.rejectVideo();
             } else {
                 mCamera.confirmVideo();
             }
 
-            // After confirming/rejecting, show our buttons again
-            if (mConfirm != null) {
-                mConfirm.setVisibility(View.GONE);
-            }
-            if (mCapture != null) {
-                mCapture.setVisibility(View.VISIBLE);
-            }
-            if (mCancel != null) {
-                mCancel.setVisibility(View.GONE);
-            }
-            if (mToggle != null) {
-                mToggle.setVisibility(mCamera.hasFrontFacingCamera() ? View.VISIBLE : View.GONE);
-            }
+            restoreCaptureButtons();
         };
         if (mCancel != null) {
             mCancel.setVisibility(View.VISIBLE);
@@ -518,7 +572,10 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
                 mProgress.setProgress((int) (percent * 10000));
             }
             if (mDuration != null) {
-                mDuration.setText(stringForTime((int) (percent * 10000)));
+                // The animator runs for the whole maximum duration, so the fraction elapsed is
+                // what turns into a wall-clock time. Scaling by the progress bar's own range
+                // instead counted a fixed ten seconds for every recording.
+                mDuration.setText(stringForTime((long) (percent * mCamera.getMaxVideoDuration())));
             }
         }
     }
@@ -536,6 +593,9 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         private Rect mViewBoundsRect;
         @SuppressLint("HandlerLeak")
         private final Handler mHandler = new Handler() {
+            // Reached only from the capture button, which showCamera gates on the fragment's
+            // REQUIRED_PERMISSIONS, so the microphone has been granted by the time a hold starts.
+            @SuppressWarnings("MissingPermission")
             @Override
             public void handleMessage(Message msg) {
                 switch (msg.what) {
@@ -568,14 +628,21 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             onTakePicture();
         }
 
+        // CameraFragment records on long press, so the microphone really is required here, and
+        // it stays in REQUIRED_PERMISSIONS for that reason.
+        @RequiresPermission(Manifest.permission.RECORD_AUDIO)
         void onHold() {
             vibrate();
             mCamera.startRecording(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + VIDEO_EXT));
             if (mCamera.isRecording()) {
+                boolean hasDurationLimit = mCamera.getMaxVideoDuration() > 0;
                 if (mDuration != null) {
-                    mDuration.setVisibility(View.VISIBLE);
+                    // Without a limit there is no animator to drive the label, so showing it
+                    // would only leave the previous recording's time on screen.
+                    mDuration.setVisibility(hasDurationLimit ? View.VISIBLE : View.GONE);
+                    mDuration.setText(stringForTime(0));
                 }
-                if (mCamera.getMaxVideoDuration() > 0) {
+                if (hasDurationLimit) {
                     mAnimator.setDuration(mCamera.getMaxVideoDuration()).start();
                 }
                 onRecordStart();

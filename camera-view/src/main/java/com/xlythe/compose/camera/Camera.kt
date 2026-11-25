@@ -3,9 +3,11 @@ package com.xlythe.compose.camera
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Point
 import android.hardware.display.DisplayManager
 import android.hardware.display.DisplayManager.DisplayListener
 import android.os.Handler
+import android.os.Looper
 import android.os.Parcelable
 import android.util.Log
 import android.util.SparseArray
@@ -13,7 +15,9 @@ import androidx.annotation.RequiresPermission
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.MutableState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
@@ -47,13 +51,22 @@ enum class LensFacing {
 
 interface CameraController {
     fun takePicture(file: File)
+
+    /** Records audio alongside the video, so the microphone is needed here and not at Camera. */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     fun startRecording(file: File)
     fun stopRecording()
     fun stream(): VideoStream?
     fun toggleCamera()
     fun confirmPicture()
     fun confirmVideo()
-    fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, vararg formats: Int)
+
+    /** Discards a picture awaiting confirmation, deleting its file. */
+    fun rejectPicture()
+
+    /** Discards a video awaiting confirmation, deleting its file. */
+    fun rejectVideo()
+    fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, @Barcode.Format vararg formats: Int)
     fun exitBarcodeScanner()
 }
 
@@ -69,6 +82,7 @@ private class CameraControllerImpl(
             ?: Log.e(TAG, "View not available for takePicture")
     }
 
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     override fun startRecording(file: File) {
         getView()?.startRecording(file)
             ?: Log.e(TAG, "View not available for startRecording")
@@ -99,8 +113,18 @@ private class CameraControllerImpl(
             ?: Log.e(TAG, "View not available for confirmVideo")
     }
 
-    @SuppressLint("MissingPermission")
-    override fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, vararg formats: Int) {
+    override fun rejectPicture() {
+        getView()?.rejectPicture()
+            ?: Log.e(TAG, "View not available for rejectPicture")
+    }
+
+    override fun rejectVideo() {
+        getView()?.rejectVideo()
+            ?: Log.e(TAG, "View not available for rejectVideo")
+    }
+
+    @SuppressLint("MissingPermission", "WrongConstant")
+    override fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, @Barcode.Format vararg formats: Int) {
         if (formats.isNotEmpty()) {
             val first = formats[0]
             val rest = if (formats.size > 1) formats.sliceArray(1 until formats.size) else IntArray(0)
@@ -121,11 +145,13 @@ private class CameraControllerImpl(
 /**
  * A Composable that displays a preview of the camera.
  *
- * **Important:** This composable requires the [Manifest.permission.CAMERA],
- * [Manifest.permission.RECORD_AUDIO] , and [Manifest.permission.WRITE_EXTERNAL_STORAGE] permissions
- * to be granted *before* it is included in the composition. The underlying view
- * will not be opened or functional otherwise. Use conditional rendering based on
- * permission status at the call site.
+ * **Important:** This composable requires [Manifest.permission.CAMERA] to be granted *before* it
+ * is included in the composition. The underlying view will not be opened or functional otherwise.
+ * Use conditional rendering based on permission status at the call site.
+ *
+ * Showing a preview and taking pictures need nothing else. The microphone is only required by
+ * [CameraController.startRecording] and [CameraController.stream], which ask for it themselves,
+ * and outputs are written to the [File] you pass in, so no storage permission is involved.
  *
  * @param modifier Modifier for layout.
  * @param quality The quality for image and video outputs.
@@ -140,9 +166,7 @@ private class CameraControllerImpl(
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  * {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
  */
-@RequiresPermission(
-    allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO, Manifest.permission.WRITE_EXTERNAL_STORAGE]
-)
+@RequiresPermission(Manifest.permission.CAMERA)
 @Composable
 fun Camera(
     modifier: Modifier = Modifier,
@@ -169,6 +193,19 @@ fun Camera(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
+    // The CameraView below is remembered for the life of the composition, so the listeners
+    // installed on it capture whichever lambdas the first composition happened to pass. A caller
+    // whose callbacks close over state would then keep being called with the stale ones. Track
+    // the latest instead, so the listeners read them at the moment they fire.
+    val currentOnImageConfirmation by rememberUpdatedState(onImageConfirmation)
+    val currentOnImageCaptured by rememberUpdatedState(onImageCaptured)
+    val currentOnImageCaptureFailed by rememberUpdatedState(onImageCaptureFailed)
+    val currentOnVideoConfirmation by rememberUpdatedState(onVideoConfirmation)
+    val currentOnVideoCaptured by rememberUpdatedState(onVideoCaptured)
+    val currentOnVideoCaptureFailed by rememberUpdatedState(onVideoCaptureFailed)
+    val currentOnCameraOpened by rememberUpdatedState(onCameraOpened)
+    val currentOnCameraClosed by rememberUpdatedState(onCameraClosed)
+
     // Initialize and then cache our CameraView.
     val cameraView = remember {
         object : CameraView(context) {
@@ -181,39 +218,39 @@ fun Camera(
 
             this.setOnImageCapturedListener(object : CameraView.OnImageCapturedListener {
                 override fun onImageConfirmation() {
-                    onImageConfirmation()
+                    currentOnImageConfirmation()
                 }
 
                 override fun onImageCaptured(file: File) {
-                    onImageCaptured(file)
+                    currentOnImageCaptured(file)
                 }
 
                 override fun onFailure() {
-                    onImageCaptureFailed()
+                    currentOnImageCaptureFailed()
                 }
             })
 
             this.setOnVideoCapturedListener(object : CameraView.OnVideoCapturedListener {
                 override fun onVideoConfirmation() {
-                    onVideoConfirmation()
+                    currentOnVideoConfirmation()
                 }
 
                 override fun onVideoCaptured(file: File) {
-                    onVideoCaptured(file)
+                    currentOnVideoCaptured(file)
                 }
 
                 override fun onFailure() {
-                    onVideoCaptureFailed()
+                    currentOnVideoCaptureFailed()
                 }
             })
 
             this.setOnCameraStateChangedListener(object : CameraView.OnCameraStateChangedListener {
                 override fun onCameraOpened() {
-                    onCameraOpened()
+                    currentOnCameraOpened()
                 }
 
                 override fun onCameraClosed() {
-                    onCameraClosed()
+                    currentOnCameraClosed()
                 }
             })
         }
@@ -264,13 +301,18 @@ fun Camera(
                     return
                 }
 
-                val display = displayManager.getDisplay(displayId)
-                if (lastKnownWidth == display.width && lastKnownHeight == display.height && lastKnownRotation == display.rotation) {
+                val display = cameraView.display ?: return
+                val displaySize = Point()
+                @Suppress("DEPRECATION")
+                display.getRealSize(displaySize)
+                val width = displaySize.x
+                val height = displaySize.y
+                if (lastKnownWidth == width && lastKnownHeight == height && lastKnownRotation == display.rotation) {
                     return
                 }
 
-                lastKnownWidth = display.width
-                lastKnownHeight = display.height
+                lastKnownWidth = width
+                lastKnownHeight = height
                 lastKnownRotation = display.rotation
 
                 if (cameraView.isOpen) {
@@ -279,7 +321,7 @@ fun Camera(
                 }
             }
         }
-        displayManager.registerDisplayListener(displayListener, Handler())
+        displayManager.registerDisplayListener(displayListener, Handler(Looper.getMainLooper()))
 
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
@@ -293,6 +335,7 @@ fun Camera(
             }
             cameraView.setOnImageCapturedListener(null)
             cameraView.setOnVideoCapturedListener(null)
+            cameraView.setOnCameraStateChangedListener(null)
         }
     }
 
