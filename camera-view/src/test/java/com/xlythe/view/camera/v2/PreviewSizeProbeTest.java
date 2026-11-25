@@ -25,7 +25,7 @@ import java.util.List;
  * whether a configuration it does not guarantee would work.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {ShadowConfigurableCameraDevice.class},
+@Config(sdk = {29, 37}, shadows = {ShadowConfigurableCameraDevice.class},
         // Robolectric's default display is 470x320, which every camera output exceeds, so the
         // cap would always take its smallest-size fallback and the probe would never be reached.
         // A 1080x2400 panel is the shape this logic exists for.

@@ -47,7 +47,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * app that fails either one dies of heap or of latency after a few minutes, not in a test.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {ShadowInjectableImageReader.class, ShadowAvailableTextureView.class})
+@Config(sdk = {29, 37}, shadows = {ShadowInjectableImageReader.class, ShadowAvailableTextureView.class})
 public class ResourceLifecycleTest {
     /** How long to wait on a background thread to notice something. */
     private static final long TIMEOUT_SECONDS = 5;

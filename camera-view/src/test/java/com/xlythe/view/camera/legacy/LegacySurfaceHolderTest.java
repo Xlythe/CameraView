@@ -38,7 +38,7 @@ import java.util.List;
  * SurfaceHolder handed to the platform gets called in ways its author did not choose.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class LegacySurfaceHolderTest {
     private static final int WIDTH = 640;
     private static final int HEIGHT = 480;

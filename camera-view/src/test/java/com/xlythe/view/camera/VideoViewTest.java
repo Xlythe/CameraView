@@ -20,7 +20,7 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class VideoViewTest {
 
     private Context context;

@@ -34,6 +34,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.LooperMode;
@@ -48,7 +49,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * switch on, and what the capture button's tap and hold gestures drive.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 @LooperMode(LooperMode.Mode.PAUSED)
 public class CameraFragmentBindingTest {
     /** A layout with every View CameraFragment knows how to bind. */
@@ -124,6 +125,13 @@ public class CameraFragmentBindingTest {
         ShadowApplication application = Shadows.shadowOf(
                 (android.app.Application) org.robolectric.RuntimeEnvironment.getApplication());
         application.grantPermissions(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO);
+        // androidx.core guards a not-exported receiver with a permission it declares in its
+        // own manifest, and a library's unit-test manifest does not merge that in - so on the
+        // API levels that check it, registering the fragment's receiver fails for a reason that
+        // belongs to the test environment rather than to the fragment.
+        Shadows.shadowOf((android.app.Application) RuntimeEnvironment.getApplication())
+                .grantPermissions(RuntimeEnvironment.getApplication().getPackageName()
+                        + ".DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION");
         activity = Robolectric.buildActivity(FragmentActivity.class).create().start().resume().get();
     }
 

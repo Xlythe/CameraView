@@ -16,7 +16,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class LegacyModuleTest {
 
     private Context context;

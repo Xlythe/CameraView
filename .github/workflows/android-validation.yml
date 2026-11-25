@@ -46,6 +46,7 @@ jobs:
           :app:testDebugUnitTest
           :app-compose:testDebugUnitTest
           :camera-view:jacocoCoreCoverageVerification
+          :camera-view:jacocoLibraryCoverageVerification
           :camera-view:assembleRelease
           :app:assembleDebug
           :app-compose:assembleDebug

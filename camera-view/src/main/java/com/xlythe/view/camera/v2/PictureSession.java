@@ -144,7 +144,12 @@ class PictureSession extends PreviewSession {
         }
     }
 
-    private static class ImageSaver extends AsyncTask<Void, Void, Boolean> {
+    /**
+     * Package-private, and so is the conversion below it, so that the planes-to-NV21 arithmetic
+     * can be asserted directly. It is the kind of code that fails by tinting or striping an
+     * image rather than by throwing, which no end-to-end assertion notices.
+     */
+    static class ImageSaver extends AsyncTask<Void, Void, Boolean> {
         private final Context mContext;
 
         // The image that was captured
@@ -235,7 +240,7 @@ class PictureSession extends PreviewSession {
             return data;
         }
 
-        private static byte[] YUV_420_888toNV21(Image image) {
+        static byte[] YUV_420_888toNV21(Image image) {
             Image.Plane yPlane = image.getPlanes()[0];
             Image.Plane uPlane = image.getPlanes()[1];
             Image.Plane vPlane = image.getPlanes()[2];

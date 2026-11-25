@@ -23,7 +23,7 @@ import org.robolectric.annotation.Config;
  * rather than being mocked out at the edges.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class Camera2SessionTest {
     private Context context;
     private FakeCamera2.TestCameraView cameraView;

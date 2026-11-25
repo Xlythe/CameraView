@@ -10,7 +10,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class AudioBufferTest {
 
     private static class TestAudioBuffer extends AudioBuffer {

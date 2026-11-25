@@ -22,7 +22,7 @@ import java.util.Arrays;
  * on a loaded CI machine as well as a quiet one.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class StreamBackpressureTest {
     /** Comfortably larger than any backlog the stream should allow, so the pipe never blocks. */
     private static final int PIPE_BYTES = 4 * 1024 * 1024;

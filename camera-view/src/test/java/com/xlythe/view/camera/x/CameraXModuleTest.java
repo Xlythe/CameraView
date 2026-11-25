@@ -21,7 +21,7 @@ import org.robolectric.annotation.Config;
 import java.util.Arrays;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public final class CameraXModuleTest {
     /** A sensor-oriented 16:9 buffer, the shape CameraX hands back for a 16:9 preview. */
     private static final Size LANDSCAPE_BUFFER = new Size(1920, 1080);

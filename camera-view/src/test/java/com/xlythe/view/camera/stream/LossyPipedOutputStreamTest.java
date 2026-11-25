@@ -17,7 +17,7 @@ import java.io.IOException;
 import java.io.PipedInputStream;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class LossyPipedOutputStreamTest {
     private static final int PIPE_BYTES = 64 * 1024;
     private static final int MAX_BUFFERED = 1024;

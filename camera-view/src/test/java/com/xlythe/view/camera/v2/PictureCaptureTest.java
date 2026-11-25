@@ -33,7 +33,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link ShadowInjectableImageReader} provides.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, qualifiers = "w360dp-h800dp-xxxhdpi", shadows = {
+@Config(sdk = {29, 37}, qualifiers = "w360dp-h800dp-xxxhdpi", shadows = {
         ShadowCallbackCameraCaptureSession.class,
         ShadowInjectableImageReader.class})
 public class PictureCaptureTest {

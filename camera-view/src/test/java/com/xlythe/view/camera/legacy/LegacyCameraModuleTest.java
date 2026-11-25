@@ -26,7 +26,7 @@ import org.robolectric.shadows.ShadowCamera;
  * open/close lifecycle can be driven without a device.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class LegacyCameraModuleTest {
     private Context context;
     private TestCameraView cameraView;

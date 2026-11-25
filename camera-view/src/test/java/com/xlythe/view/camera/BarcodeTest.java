@@ -19,7 +19,7 @@ import static org.junit.Assert.assertNull;
 import static org.mockito.Mockito.when;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class BarcodeTest {
 
     private com.google.mlkit.vision.barcode.common.Barcode mockMlKitBarcode;
@@ -107,9 +107,23 @@ public class BarcodeTest {
         when(mockContact.getName()).thenReturn(mockName);
         when(mockContact.getOrganization()).thenReturn("Google");
         when(mockContact.getTitle()).thenReturn("Engineer");
-        when(mockContact.getAddresses()).thenReturn(Collections.emptyList());
-        when(mockContact.getEmails()).thenReturn(Collections.emptyList());
-        when(mockContact.getPhones()).thenReturn(Collections.emptyList());
+        com.google.mlkit.vision.barcode.common.Barcode.Address mockAddress =
+                Mockito.mock(com.google.mlkit.vision.barcode.common.Barcode.Address.class);
+        com.google.mlkit.vision.barcode.common.Barcode.Email mockContactEmail =
+                Mockito.mock(com.google.mlkit.vision.barcode.common.Barcode.Email.class);
+        com.google.mlkit.vision.barcode.common.Barcode.Phone mockContactPhone =
+                Mockito.mock(com.google.mlkit.vision.barcode.common.Barcode.Phone.class);
+        when(mockAddress.getAddressLines()).thenReturn(new String[] {"1600 Amphitheatre Pkwy"});
+        when(mockContactEmail.getAddress()).thenReturn("john@google.com");
+        when(mockContactPhone.getNumber()).thenReturn("+16502530000");
+
+        // Deliberately different lengths. A wrapper that walked or sized the wrong collection
+        // would still pass if every list here were the same length, or empty.
+        when(mockContact.getAddresses()).thenReturn(Collections.singletonList(mockAddress));
+        when(mockContact.getEmails()).thenReturn(
+                Arrays.asList(mockContactEmail, mockContactEmail));
+        when(mockContact.getPhones()).thenReturn(
+                Arrays.asList(mockContactPhone, mockContactPhone, mockContactPhone));
         when(mockContact.getUrls()).thenReturn(Arrays.asList("https://google.com"));
 
         when(mockMlKitBarcode.getContactInfo()).thenReturn(mockContact);
@@ -124,6 +138,14 @@ public class BarcodeTest {
         assertEquals("John", contact.getName().getFirst());
         assertEquals("Doe", contact.getName().getLast());
         assertEquals("John Doe", contact.getName().getFormattedName());
+
+        assertEquals(1, contact.getAddresses().size());
+        assertEquals("1600 Amphitheatre Pkwy",
+                contact.getAddresses().get(0).getAddressLines()[0]);
+        assertEquals(2, contact.getEmails().size());
+        assertEquals("john@google.com", contact.getEmails().get(0).getAddress());
+        assertEquals(3, contact.getPhones().size());
+        assertEquals("+16502530000", contact.getPhones().get(0).getNumber());
     }
 
     @Test
@@ -132,16 +154,62 @@ public class BarcodeTest {
                 Mockito.mock(com.google.mlkit.vision.barcode.common.Barcode.DriverLicense.class);
 
         when(mockLicense.getFirstName()).thenReturn("Jane");
+        when(mockLicense.getMiddleName()).thenReturn("Q");
         when(mockLicense.getLastName()).thenReturn("Smith");
+        when(mockLicense.getAddressStreet()).thenReturn("1 Main Street");
+        when(mockLicense.getAddressCity()).thenReturn("Mountain View");
+        when(mockLicense.getAddressState()).thenReturn("CA");
+        when(mockLicense.getAddressZip()).thenReturn("94043");
+        when(mockLicense.getBirthDate()).thenReturn("19800101");
+        when(mockLicense.getGender()).thenReturn("2");
+        when(mockLicense.getDocumentType()).thenReturn("DL");
         when(mockLicense.getLicenseNumber()).thenReturn("DL123456");
+        when(mockLicense.getIssueDate()).thenReturn("20200101");
+        when(mockLicense.getExpiryDate()).thenReturn("20300101");
+        when(mockLicense.getIssuingCountry()).thenReturn("US");
 
         when(mockMlKitBarcode.getDriverLicense()).thenReturn(mockLicense);
 
         Barcode.DriverLicense license = barcode.getDriverLicense();
         assertNotNull(license);
         assertEquals("Jane", license.getFirstName());
+        assertEquals("Q", license.getMiddleName());
         assertEquals("Smith", license.getLastName());
+        assertEquals("1 Main Street", license.getAddressStreet());
+        assertEquals("Mountain View", license.getAddressCity());
+        assertEquals("CA", license.getAddressState());
+        assertEquals("94043", license.getAddressZip());
+        assertEquals("19800101", license.getBirthDate());
+        assertEquals("2", license.getGender());
+        assertEquals("DL", license.getDocumentType());
         assertEquals("DL123456", license.getLicenseNumber());
+        assertEquals("20200101", license.getIssueDate());
+        assertEquals("20300101", license.getExpiryDate());
+        assertEquals("US", license.getIssuingCountry());
+    }
+
+    /** Nothing scanned means nothing wrapped, rather than a wrapper around null. */
+    @Test
+    public void absentStructuredValuesAreNull() {
+        when(mockMlKitBarcode.getContactInfo()).thenReturn(null);
+        when(mockMlKitBarcode.getDriverLicense()).thenReturn(null);
+        when(mockMlKitBarcode.getCalendarEvent()).thenReturn(null);
+        when(mockMlKitBarcode.getEmail()).thenReturn(null);
+        when(mockMlKitBarcode.getPhone()).thenReturn(null);
+        when(mockMlKitBarcode.getSms()).thenReturn(null);
+        when(mockMlKitBarcode.getUrl()).thenReturn(null);
+        when(mockMlKitBarcode.getWifi()).thenReturn(null);
+        when(mockMlKitBarcode.getGeoPoint()).thenReturn(null);
+
+        assertNull(barcode.getContactInfo());
+        assertNull(barcode.getDriverLicense());
+        assertNull(barcode.getCalendarEvent());
+        assertNull(barcode.getEmail());
+        assertNull(barcode.getPhone());
+        assertNull(barcode.getSms());
+        assertNull(barcode.getUrl());
+        assertNull(barcode.getWifi());
+        assertNull(barcode.getGeoPoint());
     }
 
     @Test
