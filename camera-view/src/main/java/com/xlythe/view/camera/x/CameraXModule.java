@@ -1222,11 +1222,15 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             }
         };
         if (getPictureFormat() == CameraView.PictureFormat.RAW_JPEG) {
-            // One destination is not enough for this format, and CameraX says so rather than
-            // guessing: "Simultaneous capture RAW and JPEG needs two output file options". The
-            // first is the RAW one - for this output format the use case's primary input format
-            // is RAW_SENSOR and its secondary is JPEG - so the DNG goes beside the caller's file
-            // and the JPEG into it, which is where the camera2 backend puts them too.
+            // Unreachable while isPictureFormatSupported refuses RAW on this backend, which it
+            // does because asking CameraX for it crashes the process. Kept rather than deleted
+            // because the refusal is a workaround for a fault upstream and this is the correct
+            // call for when that is fixed: one destination is not enough for this format, and
+            // CameraX says so rather than guessing - "Simultaneous capture RAW and JPEG needs
+            // two output file options". The first is the RAW one, since for this output format
+            // the use case's primary input format is RAW_SENSOR and its secondary is JPEG, so
+            // the DNG goes beside the caller's file and the JPEG into it, which is where the
+            // camera2 backend puts them too.
             ImageCapture.OutputFileOptions rawOptions =
                     new ImageCapture.OutputFileOptions.Builder(Captions.sidecarFor(file, "dng"))
                             .setMetadata(metadata).build();
