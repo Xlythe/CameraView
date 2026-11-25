@@ -24,6 +24,12 @@
         tools:layout="@layout/fragment_resizing" />
 
     <fragment
+        android:id="@+id/wear_fragment"
+        android:name="com.xlythe.sample.camera.WearFragment"
+        android:label="@string/app_name_wear"
+        tools:layout="@layout/fragment_wear" />
+
+    <fragment
         android:id="@+id/qr_code_fragment"
         android:name="com.xlythe.sample.camera.QrCodeFragment"
         android:label="@string/app_name_qr_code"
