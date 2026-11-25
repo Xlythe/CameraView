@@ -49,6 +49,8 @@ android {
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
         sourceSets.main.kotlin.filter.exclude '**/com/xlythe/compose/**'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXSegmentationAnalyzer.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXFrameAnalyzer.java'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/x/**'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
     }
@@ -211,6 +213,9 @@ dependencies {
         api 'androidx.lifecycle:lifecycle-runtime-ktx:[2.8.7,)'
         api 'androidx.media3:media3-transformer:[1.11.1,)'
         api 'androidx.media3:media3-effect:[1.11.1,)'
+        // Segmentation is reached only through CameraX's analysis path, so it goes with the
+        // rest of the optional stack rather than weighing down the core build.
+        api 'com.google.mlkit:segmentation-selfie:[16.0.0-beta6,)'
     }
     // The test dependencies stay exact. They reach no consumer, and a suite that silently
     // changed runner underneath a failure is a worse trade than one that needs bumping.
