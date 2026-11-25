@@ -411,6 +411,15 @@ anything else reads an ordinary photo. RAW is the sensor's own reading, much lar
 editor rather than a gallery; RAW_JPEG writes both from one shutter press. All three need the
 CameraX backend - the camera2 backend writes the JPEG the HAL produced and takes no second frame.
 
+Streams and the background
+-----------------
+A stream is the caller's: it runs until you close it, and closing the camera does not close it.
+That matters for an app that goes to the background. The camera cannot be held while another app
+wants it, so the video stops arriving - keeping the picture alive needs picture-in-picture, which
+is the app's business - but the audio half is an AudioRecord that owes the camera nothing and keeps
+running, so a call carries on. Reopening the camera afterwards works, and a stream left open holds
+none of the camera's buffers.
+
 Captions
 -----------------
 Captions go beside a recording rather than inside it. The platform cannot put them inside:
