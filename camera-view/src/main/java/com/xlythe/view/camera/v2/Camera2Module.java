@@ -1353,18 +1353,6 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
-    private static boolean contains(@Nullable int[] values, int value) {
-        if (values == null) {
-            return false;
-        }
-        for (int candidate : values) {
-            if (candidate == value) {
-                return true;
-            }
-        }
-        return false;
-    }
-
     boolean isRecordingSnapshotSupported() {
         try {
             Integer level = mCameraManager.getCameraCharacteristics(getActiveCamera())
