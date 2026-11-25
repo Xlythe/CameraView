@@ -90,6 +90,7 @@ import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.HighSpeedProfile;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.LocationProvider;
 import com.xlythe.view.camera.PermissionChecker;
@@ -1288,15 +1289,24 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         long operationId = ++mVideoOperationId;
         mRecordedVideoDurationMillis = 0;
-        Recorder recorder = new Recorder.Builder().setQualitySelector(createQualitySelector()).build();
+        // A high-speed recording asks for its size through the recorder's quality, because the
+        // session config that carries the frame rate refuses a resolution anywhere else.
+        HighSpeedProfile highSpeed = getHighSpeedProfile();
+        Recorder recorder = new Recorder.Builder().setQualitySelector(highSpeed == null
+                ? createQualitySelector()
+                : CameraXHighSpeed.qualitySelector(highSpeed.getSize())).build();
         CameraInfo cameraInfo = mActiveCamera == null ? null : mActiveCamera.getCameraInfo();
         VideoCapture.Builder<Recorder> videoBuilder = new VideoCapture.Builder<>(recorder)
-                .setMirrorMode(isFrontVideoMirroringEnabled()
-                        ? MirrorMode.MIRROR_MODE_ON_FRONT_ONLY : MirrorMode.MIRROR_MODE_OFF)
                 .setTargetRotation(getTargetRotation());
+        if (highSpeed == null) {
+            // HighSpeedVideoSessionConfig throws on a VideoCapture that names a mirror mode at
+            // all, so this is set only where there is a session that can honour it.
+            videoBuilder.setMirrorMode(isFrontVideoMirroringEnabled()
+                    ? MirrorMode.MIRROR_MODE_ON_FRONT_ONLY : MirrorMode.MIRROR_MODE_OFF);
+        }
         if (cameraInfo != null) {
             videoBuilder.setDynamicRange(selectedDynamicRange(cameraInfo));
-            if (isVideoStabilizationEnabled()
+            if (highSpeed == null && isVideoStabilizationEnabled()
                     && Recorder.getVideoCapabilities(cameraInfo).isStabilizationSupported()) {
                 videoBuilder.setVideoStabilizationEnabled(true);
             }
@@ -1606,15 +1616,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             if (!provider.hasCamera(selector)) throw new IllegalStateException("No camera matches the requested lens facing");
             CameraInfo cameraInfo = provider.getCameraInfo(selector);
             mSensorOrientation = cameraInfo.getSensorRotationDegrees();
-            Preview displayPreview = createDisplayPreview(generation, cameraInfo);
+            // A high-speed session carries the preview and the recording and nothing else, and
+            // its preview has to be built bare: the session config refuses one that names a
+            // resolution, an aspect ratio or a frame rate of its own.
+            HighSpeedProfile highSpeed = mVideoCapture == null ? null : getHighSpeedProfile();
+            Preview displayPreview = highSpeed != null
+                    ? createHighSpeedPreview(generation)
+                    : createDisplayPreview(generation, cameraInfo);
             // A still output is wanted alongside a recording, not instead of it: that is the
             // combination a camera app's video-snapshot button uses. Barcode analysis is the one
             // thing that genuinely takes the slot, because it needs the frames itself.
-            ImageCapture imageCapture = mBarcodeAnalyzer == null
+            ImageCapture imageCapture = mBarcodeAnalyzer == null && highSpeed == null
                     ? createImageCapture(cameraInfo) : null;
             ImageAnalysis imageAnalysis = mVideoCapture == null && mBarcodeAnalyzer != null
                     ? createImageAnalysis() : null;
-            Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews = createStreamPreviews(generation);
+            Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews = highSpeed != null
+                    ? Collections.emptyMap() : createStreamPreviews(generation);
             List<UseCase> requested = new ArrayList<>();
             requested.add(displayPreview);
             if (mVideoCapture != null) requested.add(mVideoCapture);
@@ -1650,7 +1667,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // After unbinding, so that an effect being let go is not closing outputs CameraX is
             // still drawing into, and before binding, because the group carries the effect.
             CameraEffect effect = reconcileFrameEffect(!streamPreviews.isEmpty());
-            Camera camera = bindAtomically(selector, requested, effect);
+            Camera camera = bindAtomically(selector, requested, effect, highSpeed, displayPreview);
             if (generation != mGeneration || !mOpenRequested || mPaused) {
                 provider.unbind(requested.toArray(new UseCase[0]));
                 return false;
@@ -1685,7 +1702,17 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @NonNull private Camera bindAtomically(@NonNull CameraSelector selector,
-            @NonNull List<UseCase> useCases, @Nullable CameraEffect effect) {
+            @NonNull List<UseCase> useCases, @Nullable CameraEffect effect,
+            @Nullable HighSpeedProfile highSpeed, @NonNull Preview preview) {
+        VideoCapture<Recorder> videoCapture = mVideoCapture;
+        if (highSpeed != null && videoCapture != null) {
+            // Bound as a session config rather than as a list of use cases, because the frame
+            // rate and the slow-motion decision live on the config. No view port either: the
+            // config resolves the resolution itself and refuses to be told - and no effect, for
+            // the same reason, since the config validates what it is given and takes neither.
+            return mCameraProvider.bindToLifecycle(this, selector,
+                    CameraXHighSpeed.sessionConfig(videoCapture, preview, highSpeed));
+        }
         int width = getWidth();
         int height = getHeight();
         boolean hasViewPort = isMatchPreviewAspectRatioEnabled() && width > 0 && height > 0;
@@ -1857,12 +1884,42 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return preview;
     }
 
+    /**
+     * The preview a high-speed session will accept: rotation and nothing else.
+     *
+     * <p>HighSpeedVideoSessionConfig throws on a Preview that names a resolution selector, a
+     * target resolution, an aspect ratio or a frame rate, and the session runs at one size
+     * anyway - the one the camera published for the chosen frame rate. Face detection goes too:
+     * the camera2 request options it adds are not among the controls a high-speed session takes.
+     * </p>
+     */
+    @NonNull private Preview createHighSpeedPreview(long generation) {
+        Preview preview = new Preview.Builder().setTargetRotation(getTargetRotation()).build();
+        preview.setSurfaceProvider(mMainExecutor, request -> provideDisplaySurface(generation, request));
+        return preview;
+    }
+
     @Override public boolean isCameraReady() {
         return mActiveCamera != null;
     }
 
     @Override public boolean isSnapshotWhileRecordingSupported() {
         return mSnapshotWhileRecording;
+    }
+
+    @Override public boolean isHighSpeedRecordingSupported() {
+        return !getSupportedHighSpeedProfiles().isEmpty();
+    }
+
+    /**
+     * What the bound camera publishes for high-speed recording. See {@link CameraXHighSpeed}.
+     *
+     * <p>Nothing until a camera is bound: CameraX exposes a camera only as a CameraInfo it hands
+     * back from a bind, and there is nothing to ask before that.</p>
+     */
+    @NonNull @Override public List<HighSpeedProfile> getSupportedHighSpeedProfiles() {
+        Camera camera = mActiveCamera;
+        return CameraXHighSpeed.publishedProfiles(camera == null ? null : camera.getCameraInfo());
     }
 
     @Override
