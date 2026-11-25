@@ -3,6 +3,7 @@ package com.xlythe.view.camera;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.util.Log;
+import android.util.Size;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -18,10 +19,28 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
+import java.util.Objects;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @RequiresApi(18)
 public class VideoStream implements Closeable {
   private static final String TAG = VideoStream.class.getSimpleName();
+
+  // A PipedInputStream defaults to a 1024 byte buffer, which is smaller than a single encoded
+  // key frame. The writer then blocks mid-frame waiting on the reader for every frame, which
+  // stalls the encoder drain loop instead of letting the lossy path shed frames. Size the pipes
+  // to hold several frames, and let the lossy stream start dropping well before they fill.
+  /** Buffer for the encoded video pipe. */
+  private static final int VIDEO_PIPE_BYTES = 1024 * 1024;
+  /** Backlog tolerated on the video pipe before droppable frames are discarded. */
+  private static final int VIDEO_MAX_BUFFERED_BYTES = 256 * 1024;
+  /** Buffer for the PCM audio pipe, whose chunks are far smaller than a video frame. */
+  private static final int AUDIO_PIPE_BYTES = 64 * 1024;
+  /** Backlog tolerated on the audio pipe before chunks are discarded. */
+  private static final int AUDIO_MAX_BUFFERED_BYTES = 16 * 1024;
+
+  /** Ensures recorder and input resources are closed exactly once. */
+  private final AtomicBoolean mClosed = new AtomicBoolean();
 
   /** Determines if this is encoding or decoding a video stream. */
   private final InputType mInputType;
@@ -45,33 +64,26 @@ public class VideoStream implements Closeable {
   private VideoStream(ICameraModule cameraModule, Params params) {
     mInputType = InputType.CAMERA_MODULE;
 
-    if (params.isAudioEnabled()) {
-      AudioRecorder audioRecorder;
-      PipedInputStream audioInputStream;
-      try {
-        audioInputStream = new PipedInputStream();
-        audioRecorder = new AudioRecorder(params.isLossy() ? new LossyPipedOutputStream(audioInputStream) : new PipedOutputStream(audioInputStream));
+    AudioRecorder audioRecorder = null;
+    PipedInputStream audioInputStream = null;
+    VideoRecorder videoRecorder = null;
+    PipedInputStream videoInputStream = null;
+    try {
+      if (params.isAudioEnabled()) {
+        audioInputStream = new PipedInputStream(AUDIO_PIPE_BYTES);
+        audioRecorder = new AudioRecorder(params.isLossy()
+                ? new LossyPipedOutputStream(audioInputStream, AUDIO_MAX_BUFFERED_BYTES)
+                : new PipedOutputStream(audioInputStream));
         audioRecorder.start();
-      } catch (IOException e) {
-        audioRecorder = null;
-        audioInputStream = null;
       }
 
-      mAudioRecorder = audioRecorder;
-      mAudioInputStream = audioInputStream;
-    } else {
-      mAudioRecorder = null;
-      mAudioInputStream = null;
-    }
-
-    if (params.isVideoEnabled()) {
-      VideoRecorder videoRecorder;
-      PipedInputStream videoInputStream;
-      try {
-        videoInputStream = new PipedInputStream();
+      if (params.isVideoEnabled()) {
+        videoInputStream = new PipedInputStream(VIDEO_PIPE_BYTES);
         videoRecorder = new VideoRecorder(
                 cameraModule.getCanvas(),
-                params.isLossy() ? new LossyPipedOutputStream(videoInputStream) : new PipedOutputStream(videoInputStream));
+                params.isLossy()
+                        ? new LossyPipedOutputStream(videoInputStream, VIDEO_MAX_BUFFERED_BYTES)
+                        : new PipedOutputStream(videoInputStream));
         if (params.getBitRate() != 0) {
           videoRecorder.setBitRate(params.getBitRate());
         }
@@ -81,20 +93,26 @@ public class VideoStream implements Closeable {
         if (params.getIFrameInterval() != 0) {
           videoRecorder.setIFrameInterval(params.getIFrameInterval());
         }
+        videoRecorder.setMaxSize(params.getMaxSize());
         videoRecorder.start();
-      } catch (IOException e) {
-        videoRecorder = null;
-        videoInputStream = null;
       }
-
-      mVideoRecorder = videoRecorder;
-      mVideoInputStream = videoInputStream;
-    } else {
-      mVideoRecorder = null;
-      mVideoInputStream = null;
+    } catch (IOException | RuntimeException e) {
+      if (audioRecorder != null) {
+        audioRecorder.stop();
+      }
+      if (videoRecorder != null) {
+        videoRecorder.stop();
+      }
+      closeQuietly(audioInputStream);
+      closeQuietly(videoInputStream);
+      throw new IllegalStateException("Failed to create camera stream", e);
     }
-  }
 
+    mAudioRecorder = audioRecorder;
+    mAudioInputStream = audioInputStream;
+    mVideoRecorder = videoRecorder;
+    mVideoInputStream = videoInputStream;
+  }
   private VideoStream(@Nullable InputStream audioStream,
                       @Nullable InputStream videoStream) {
     mInputType = InputType.INPUT_STREAM;
@@ -108,32 +126,37 @@ public class VideoStream implements Closeable {
 
   @Override
   public void close() {
-    if (mAudioRecorder != null) {
-      mAudioRecorder.stop();
+    if (!mClosed.compareAndSet(false, true)) {
+      return;
     }
-    if (mVideoRecorder != null) {
-      mVideoRecorder.stop();
-    }
-    if (mAudioInputStream != null) {
-      try {
-        mAudioInputStream.close();
-      } catch (IOException e) {
-        // ignored
+    try {
+      if (mAudioRecorder != null) {
+        mAudioRecorder.stop();
       }
+    } catch (RuntimeException e) {
+      Log.e(TAG, "Failed to stop audio stream", e);
     }
-    if (mVideoInputStream != null) {
-      try {
-        mVideoInputStream.close();
-      } catch (IOException e) {
-        // ignored
+    try {
+      if (mVideoRecorder != null) {
+        mVideoRecorder.stop();
       }
+    } catch (RuntimeException e) {
+      Log.e(TAG, "Failed to stop video stream", e);
     }
+    closeQuietly(mAudioInputStream);
+    closeQuietly(mVideoInputStream);
     Log.d(TAG, "VideoStream closed");
   }
 
-  @Override
-  protected void finalize() {
-    close();
+  private static void closeQuietly(@Nullable InputStream inputStream) {
+    if (inputStream == null) {
+      return;
+    }
+    try {
+      inputStream.close();
+    } catch (IOException e) {
+      Log.w(TAG, "Failed to close stream input", e);
+    }
   }
 
   public boolean hasAudio() {
@@ -180,26 +203,26 @@ public class VideoStream implements Closeable {
     @Nullable private InputStream mVideoStream;
 
     Builder setParams(Params params) {
-      mParams = params;
+      mParams = Objects.requireNonNull(params, "Stream params cannot be null");
       return this;
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     Builder attach(ICameraModule cameraModule) {
       setInputType(InputType.CAMERA_MODULE);
-      mCameraModule = cameraModule;
+      mCameraModule = Objects.requireNonNull(cameraModule, "Camera module cannot be null");
       return this;
     }
 
     public Builder withAudioStream(InputStream audioStream) {
       setInputType(InputType.INPUT_STREAM);
-      mAudioStream = audioStream;
+      mAudioStream = Objects.requireNonNull(audioStream, "Audio stream cannot be null");
       return this;
     }
 
     public Builder withVideoStream(InputStream videoStream) {
       setInputType(InputType.INPUT_STREAM);
-      mVideoStream = videoStream;
+      mVideoStream = Objects.requireNonNull(videoStream, "Video stream cannot be null");
       return this;
     }
 
@@ -236,19 +259,22 @@ public class VideoStream implements Closeable {
     private final int mFrameRate;
     private final int mIFrameInterval;
     private final boolean mIsLossy;
+    @Nullable private final Size mMaxSize;
 
     private Params(boolean audioEnabled,
                    boolean videoEnabled,
                    int bitRate,
                    int frameRate,
                    int iframeInterval,
-                   boolean isLossy) {
+                   boolean isLossy,
+                   @Nullable Size maxSize) {
       this.mAudioEnabled = audioEnabled;
       this.mVideoEnabled = videoEnabled;
       this.mBitRate = bitRate;
       this.mFrameRate = frameRate;
       this.mIFrameInterval = iframeInterval;
       this.mIsLossy = isLossy;
+      this.mMaxSize = maxSize;
     }
 
     public boolean isAudioEnabled() {
@@ -275,6 +301,12 @@ public class VideoStream implements Closeable {
       return mIsLossy;
     }
 
+    /** The resolution cap for the video stream, or null to follow the preview. */
+    @Nullable
+    public Size getMaxSize() {
+      return mMaxSize;
+    }
+
     public static class Builder {
       private boolean mAudioEnabled = true;
       private boolean mVideoEnabled = true;
@@ -282,6 +314,7 @@ public class VideoStream implements Closeable {
       private int mFrameRate;
       private int mIFrameInterval;
       private boolean mIsLossy = true;
+      @Nullable private Size mMaxSize;
 
       public Builder setAudioEnabled(boolean audioEnabled) {
         this.mAudioEnabled = audioEnabled;
@@ -313,12 +346,32 @@ public class VideoStream implements Closeable {
         return this;
       }
 
+      /**
+       * Caps the resolution of the video stream, independent of the preview on screen.
+       *
+       * <p>Set this when the stream leaves the device over a link that cannot carry the
+       * preview's resolution, such as a watch reached over Bluetooth. The active camera picks
+       * the closest size it supports within the bound, so the stream is usually smaller than
+       * asked for and never larger. Leave it unset to follow the preview.</p>
+       */
+      public Builder setMaxSize(@Nullable Size maxSize) {
+        mMaxSize = maxSize;
+        return this;
+      }
+
       public Params build() {
         if (!mAudioEnabled && !mVideoEnabled) {
           throw new IllegalStateException("Cannot create a stream with both audio and video disabled");
         }
+        if (mBitRate < 0 || mFrameRate < 0 || mIFrameInterval < 0) {
+          throw new IllegalArgumentException("Stream encoding values cannot be negative");
+        }
+        if (mMaxSize != null && (mMaxSize.getWidth() <= 0 || mMaxSize.getHeight() <= 0)) {
+          throw new IllegalArgumentException("Stream dimensions must be positive: " + mMaxSize);
+        }
 
-        return new Params(mAudioEnabled, mVideoEnabled, mBitRate, mFrameRate, mIFrameInterval, mIsLossy);
+        return new Params(mAudioEnabled, mVideoEnabled, mBitRate, mFrameRate, mIFrameInterval,
+                mIsLossy, mMaxSize);
       }
     }
   }
