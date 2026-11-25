@@ -85,16 +85,19 @@ final class FrameEffect extends CameraEffect {
             @Nullable CameraTextureProvider textureProvider,
             @NonNull Executor executor,
             @NonNull Consumer<Throwable> errorListener) {
-        // One output per target rather than one shared between them, so that the still keeps the
-        // resolution its use case asked for instead of the preview's. They all come off one camera
-        // stream either way - that is what an effect over several use cases costs - but the frame
-        // each output is handed is drawn at its own size.
+        // One output shared by every target. Asking for one per target gives the still its own
+        // resolution instead of the preview's, which is the better picture and is why it was
+        // written that way first - but on a Pixel 7 Pro it aborts the process in the platform's
+        // own media code the moment the effect binds, with "RGBA override BLOB format buffer
+        // should have height == width": the per-target still output is allocated as a BLOB that
+        // the driver will only accept square. A photograph at the pipeline's resolution is worth
+        // having and a native crash is not.
         //
         // CAMERA_AND_SURFACE_ROTATION states what the processor actually does: it draws with the
         // matrix CameraX supplies, so the camera's rotation and the surface's are both already
         // applied and CameraX can go on computing downstream metadata as if it had done them
         // itself.
-        super(targets, OUTPUT_OPTION_ONE_FOR_EACH_TARGET,
+        super(targets, OUTPUT_OPTION_ONE_FOR_ALL_TARGETS,
                 TRANSFORMATION_CAMERA_AND_SURFACE_ROTATION, executor, processor, errorListener);
         mProcessor = processor;
         mTextureProvider = textureProvider;
