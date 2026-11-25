@@ -48,6 +48,8 @@ android {
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
         sourceSets.main.kotlin.filter.exclude '**/com/xlythe/compose/**'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXSegmentationAnalyzer.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXFrameAnalyzer.java'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/x/**'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
     }

@@ -91,6 +91,8 @@ import com.xlythe.view.camera.Captions;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
+import com.xlythe.view.camera.CameraXFrameAnalyzer;
+import com.xlythe.view.camera.CameraXSegmentationAnalyzer;
 import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
@@ -218,7 +220,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** Native barcode-analysis use case in the latest successful bind. */
     @Nullable private ImageAnalysis mImageAnalysis;
     /** Native CameraX barcode analyzer while scanning is requested. */
-    @Nullable private CameraXBarcodeAnalyzer mBarcodeAnalyzer;
+    @Nullable private CameraXFrameAnalyzer mFrameAnalyzer;
     /** Single-thread executor owned by the active native barcode analyzer. */
     @Nullable private ExecutorService mAnalysisExecutor;
     /** Video use case while a recording is being prepared, recorded, or finalized. */
@@ -1153,20 +1155,52 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     private void startBarcodeScannerOnMainThread(@NonNull CameraXBarcodeAnalyzer analyzer) {
-        if (mBarcodeAnalyzer != null) {
-            Log.w(TAG, "CameraX barcode analysis is already active");
+        startFrameAnalyzerOnMainThread(analyzer, "Barcode");
+    }
+
+    /**
+     * Takes the analysis slot, which there is only one of.
+     *
+     * @param what names the thread, so a stack trace says which model is holding it
+     */
+    private void startFrameAnalyzerOnMainThread(@NonNull CameraXFrameAnalyzer analyzer,
+            @NonNull String what) {
+        if (mFrameAnalyzer != null) {
+            Log.w(TAG, "CameraX frame analysis is already active");
             analyzer.close();
             return;
         }
         mAnalysisExecutor = Executors.newSingleThreadExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "CameraView-BarcodeAnalysis");
+            Thread thread = new Thread(runnable, "CameraView-" + what + "Analysis");
             thread.setDaemon(true);
             return thread;
         });
-        mBarcodeAnalyzer = analyzer;
+        mFrameAnalyzer = analyzer;
         if (mOpenRequested && mVideoRecording == null && !mPaused && isHostActive()) {
             reconcileUseCases(true);
         }
+    }
+
+    @Override protected boolean startSegmentation(CameraView.SegmentationListener listener) {
+        if (listener == null) throw new NullPointerException("listener cannot be null");
+        CameraXSegmentationAnalyzer analyzer;
+        try {
+            analyzer = new CameraXSegmentationAnalyzer(
+                    listener, mMainExecutor, isMirroringThisPicture());
+        } catch (RuntimeException | LinkageError error) {
+            // The model is delivered by Play services and its client is built here, so a device
+            // without it fails at construction. Reported rather than thrown, for the same reason
+            // the barcode client is: a camera library may not take an app down because a vision
+            // dependency is missing.
+            Log.w(TAG, "CameraX cannot segment on this device", error);
+            return false;
+        }
+        runOnMainThread(() -> startFrameAnalyzerOnMainThread(analyzer, "Segmentation"));
+        return true;
+    }
+
+    @Override protected void stopSegmentation() {
+        runOnMainThread(this::stopBarcodeScannerOnMainThread);
     }
 
     @Override protected void stopBarcodeScanner() {
@@ -1181,8 +1215,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     private void releaseBarcodeAnalysisResources() {
-        CameraXBarcodeAnalyzer analyzer = mBarcodeAnalyzer;
-        mBarcodeAnalyzer = null;
+        CameraXFrameAnalyzer analyzer = mFrameAnalyzer;
+        mFrameAnalyzer = null;
         if (analyzer != null) analyzer.close();
         ExecutorService executor = mAnalysisExecutor;
         mAnalysisExecutor = null;
@@ -1685,9 +1719,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // A still output is wanted alongside a recording, not instead of it: that is the
             // combination a camera app's video-snapshot button uses. Barcode analysis is the one
             // thing that genuinely takes the slot, because it needs the frames itself.
-            ImageCapture imageCapture = mBarcodeAnalyzer == null && highSpeed == null
+            ImageCapture imageCapture = mFrameAnalyzer == null && highSpeed == null
                     ? createImageCapture(cameraInfo) : null;
-            ImageAnalysis imageAnalysis = mVideoCapture == null && mBarcodeAnalyzer != null
+            ImageAnalysis imageAnalysis = mVideoCapture == null && mFrameAnalyzer != null
                     ? createImageAnalysis() : null;
             Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews = highSpeed != null
                     ? Collections.emptyMap() : createStreamPreviews(generation);
@@ -2285,7 +2319,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @NonNull private ImageAnalysis createImageAnalysis() {
         ExecutorService executor = mAnalysisExecutor;
-        CameraXBarcodeAnalyzer analyzer = mBarcodeAnalyzer;
+        CameraXFrameAnalyzer analyzer = mFrameAnalyzer;
         if (executor == null || analyzer == null) {
             throw new IllegalStateException("Barcode analysis requested without an analyzer executor");
         }
@@ -2440,7 +2474,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         if (mVideoCapture == null && extension != CameraView.Extension.NONE && manager != null) {
             try {
                 int extensionMode = toExtensionMode(extension);
-                boolean analysisCompatible = mBarcodeAnalyzer == null
+                boolean analysisCompatible = mFrameAnalyzer == null
                         || manager.isImageAnalysisSupported(selector, extensionMode);
                 if (analysisCompatible && manager.isExtensionAvailable(selector, extensionMode)) {
                     return manager.getExtensionEnabledCameraSelector(selector, extensionMode);
