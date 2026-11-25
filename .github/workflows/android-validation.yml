@@ -1,7 +1,13 @@
 name: Android validation
 
 on:
+  # Pushes are validated on master only. Every other push is to a branch that has, or is about to
+  # have, a pull request, and pull_request validates those - so an unqualified push trigger ran
+  # every check twice on every change, which is twice the noise on a review and twice the load on
+  # the artifact repositories. It is also how a stack of pull requests opened in a row earned a
+  # 429 from Maven Central.
   push:
+    branches: [master]
   pull_request:
   workflow_dispatch:
   schedule:
@@ -78,6 +84,12 @@ jobs:
           if [ -e /dev/kvm ]; then
             sudo chmod 666 /dev/kvm
           fi
+      # The runner image ships the system images' licences unaccepted, and a managed device is
+      # set up by downloading one - so without this the setup task fails before a test runs.
+      # `yes` is killed by SIGPIPE once sdkmanager stops reading, which is not a failure; a
+      # licence that is genuinely still missing fails the next step loudly.
+      - name: Accept the SDK licences the emulator images need
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - name: Run API 28 and API 37 managed-device tests
         run: >-
           gradle --no-daemon --stacktrace
