@@ -664,15 +664,36 @@ public class CameraView extends FrameLayout {
         setStatus(Status.OPENING);
         try {
             onOpen();
-            if (getStatus() == Status.OPENING) {
-                setStatus(Status.OPEN);
-                if (mOnCameraStateChangedListener != null) {
-                    mOnCameraStateChangedListener.onCameraOpened();
-                }
+            // A backend that opens asynchronously reports for itself through onCameraReady, so
+            // only one that has already finished is promoted here. Announcing it any earlier is
+            // what the fix in this method's history was about: onCameraOpened is the signal an
+            // app enables its shutter button on, and a camera2 session is not configured yet when
+            // open() returns.
+            if (getStatus() == Status.OPENING && mCameraModule.isCameraReady()) {
+                onCameraReady();
             }
         } catch (RuntimeException e) {
             onCameraError(e);
         }
+    }
+
+    /**
+     * Called by the active backend once the camera can actually be used.
+     *
+     * <p>Which is later than open() returning, for every backend that configures a session: the
+     * device has to open and the session has to be configured, both asynchronously. An app that
+     * enabled its shutter on the earlier signal lost its first capture.</p>
+     */
+    void onCameraReady() {
+        runOnMainThread(() -> {
+            if (getStatus() != Status.OPENING) {
+                return;
+            }
+            setStatus(Status.OPEN);
+            if (mOnCameraStateChangedListener != null) {
+                mOnCameraStateChangedListener.onCameraOpened();
+            }
+        });
     }
 
     /*
