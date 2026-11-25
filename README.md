@@ -397,6 +397,23 @@ if (!WorldOverlay.isOccluded(away, depthMetersAt(at.x, at.y), 0.1f)) {
 }
 ```
 
+Captions
+-----------------
+Captions go beside a recording rather than inside it. The platform cannot put them inside:
+MediaMuxer writes audio, video and (from API 26) an `application/`-prefixed metadata track, and has
+no subtitle track at all, while MediaRecorder has no caption API. A sidecar file of the same name is
+what every desktop player and most mobile ones pick up on their own, nothing is re-encoded, and the
+recording is not touched.
+```java
+Captions captions = new Captions.Builder()
+    .addCue(0, 2_500, "Hello.")
+    .addCue(2_500, 4_000, "Is this thing on?")
+    .build();
+captions.writeSubRip(Captions.sidecarFor(videoFile, "srt"));
+// or writeWebVtt(...) for a browser
+```
+Cues may overlap and need not be added in order. Captions are never drawn into the frames.
+
 Frames
 -----------------
 startFrameAnalysis hands every frame to your own analyzer, on a background thread, for detection
