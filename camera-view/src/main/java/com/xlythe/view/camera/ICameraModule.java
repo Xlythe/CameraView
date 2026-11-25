@@ -1,10 +1,14 @@
 package com.xlythe.view.camera;
 
+import android.Manifest.permission;
+import android.annotation.SuppressLint;
 import android.content.Context;
+import android.location.Location;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
@@ -19,6 +23,9 @@ import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.Collections;
 import java.util.List;
@@ -220,7 +227,58 @@ public abstract class ICameraModule {
      * Informs the CameraView to pause and show the taken video
      */
     public void showVideoConfirmation(File file) {
+        attachVideoMetadata(file);
         mView.showVideoConfirmation(file);
+    }
+
+    /**
+     * Records what took the video, which the platform writes nowhere.
+     *
+     * <p>A recording comes out of MediaRecorder structurally correct and anonymous: no udta box
+     * at all, so nothing says which camera, what wrote it, or when, in any field a person or a
+     * tool reads. Checked by dumping the boxes of a real recording rather than assumed.</p>
+     *
+     * <p>Before the caller is told, not after: a listener handed a file is entitled to find it
+     * finished. The write touches a few dozen bytes inside padding the muxer already left, so
+     * it costs a seek rather than a copy, and a failure is logged and dropped - a video that
+     * does not name the phone that took it is still the video.</p>
+     */
+    @SuppressLint("MissingPermission")
+    private void attachVideoMetadata(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        VideoMetadata.Builder metadata = new VideoMetadata.Builder()
+                .setMake(Build.MANUFACTURER)
+                .setModel(Build.MODEL)
+                .setCreationDate(isoDate(System.currentTimeMillis()));
+        // Asked for only where it was granted. A recording that does not say where it was
+        // taken is the right outcome for an app that never asked to know.
+        Location location =
+                PermissionChecker.hasPermissions(getContext(), permission.ACCESS_FINE_LOCATION)
+                        ? LocationProvider.getLastKnownGPSLocation(
+                                getContext(), STALE_VIDEO_LOCATION_MILLIS)
+                        : null;
+        if (location != null) {
+            metadata.setLocation(location.getLatitude(), location.getLongitude());
+        }
+        VideoMetadata.write(file, metadata);
+    }
+
+    /**
+     * How old a fix may be before it is not where this video was taken.
+     *
+     * <p>Read without waiting, because this runs as a recording finishes and a listener is
+     * waiting behind it. A minute is generous for a device that has been pointing at something
+     * long enough to film it.</p>
+     */
+    private static final long STALE_VIDEO_LOCATION_MILLIS = 60 * 1000;
+
+    /** ISO 8601, which is what a reader expects to find in the creation-date box. */
+    private static String isoDate(long timestamp) {
+        SimpleDateFormat format =
+                new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US);
+        return format.format(new Date(timestamp));
     }
 
     public void onVideoFailed() {
