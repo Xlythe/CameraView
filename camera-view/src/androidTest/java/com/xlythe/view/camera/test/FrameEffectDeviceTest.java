@@ -22,9 +22,11 @@ import androidx.exifinterface.media.ExifInterface;
 import androidx.test.rule.GrantPermissionRule;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.gl.BackgroundReplacer;
 import com.xlythe.view.camera.gl.ColorFilter;
 import com.xlythe.view.camera.gl.ColorMatrix;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.gl.SegmentationMask;
 import com.xlythe.view.camera.gl.GlFrame;
 
 import org.junit.After;
@@ -35,6 +37,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 
 import java.io.File;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -247,6 +251,70 @@ public final class FrameEffectDeviceTest {
             unfiltered.recycle();
             grey.recycle();
         }
+    }
+
+    /**
+     * A mask decides what is kept and what is replaced, in the saved photograph.
+     *
+     * <p>Asserted at the two ends, where the answer does not depend on what the camera is
+     * pointed at. A mask that is entirely subject must leave the frame alone; a mask that is
+     * entirely background must leave the background colour and nothing else. A compositor that
+     * ignored the mask, inverted it, or never reached the still would fail one of the two.</p>
+     *
+     * <p>The middle - a real segmentation, softly edged - cannot be asserted without knowing
+     * what is in front of the lens, and is not pretended at here.</p>
+     */
+    @Test
+    public void aMaskDecidesWhatIsReplacedInTheSavedPicture() throws Exception {
+        BackgroundReplacer allBackground = new BackgroundReplacer();
+        allBackground.setBackgroundColor(0xFF00FF00);
+        allBackground.setMask(maskOf(0f));
+
+        Bitmap replaced = captureThrough(allBackground, temporaryFile(".jpg"));
+        try {
+            for (int[] point : samplePoints(replaced)) {
+                int pixel = replaced.getPixel(point[0], point[1]);
+                assertTrue("a mask that is all background should leave only the background"
+                                + " colour, and left " + String.format("#%06X", pixel & 0xFFFFFF),
+                        Color.green(pixel) > 200 && Color.red(pixel) < 60
+                                && Color.blue(pixel) < 60);
+            }
+        } finally {
+            replaced.recycle();
+        }
+
+        BackgroundReplacer allSubject = new BackgroundReplacer();
+        allSubject.setBackgroundColor(0xFF00FF00);
+        allSubject.setMask(maskOf(1f));
+
+        Bitmap kept = captureThrough(allSubject, temporaryFile(".jpg"));
+        try {
+            boolean anyGreenWash = false;
+            for (int[] point : samplePoints(kept)) {
+                int pixel = kept.getPixel(point[0], point[1]);
+                if (Color.green(pixel) > 200 && Color.red(pixel) < 60 && Color.blue(pixel) < 60) {
+                    anyGreenWash = true;
+                }
+            }
+            assertTrue("a mask that is all subject should leave the camera frame, not the"
+                    + " background", !anyGreenWash);
+        } finally {
+            kept.recycle();
+        }
+    }
+
+    /** A mask of one confidence everywhere, which is how the two ends are asked for. */
+    @NonNull
+    private static SegmentationMask maskOf(float confidence) {
+        int width = 16;
+        int height = 16;
+        ByteBuffer buffer = ByteBuffer.allocate(width * height * 4)
+                .order(ByteOrder.nativeOrder());
+        for (int i = 0; i < width * height; i++) {
+            buffer.putFloat(confidence);
+        }
+        buffer.rewind();
+        return new SegmentationMask(buffer, width, height, false);
     }
 
     /** Captures with the given renderer and decodes the result. */
