@@ -30,6 +30,7 @@ import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.Range;
 import android.util.Size;
+import android.util.SizeF;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
@@ -863,9 +864,14 @@ public class Camera2Module extends ICameraModule {
         return minRatio + (maxRatio - minRatio) * fraction;
     }
 
-    static Rect calculateCropRegion(Rect activeArray, float maxDigitalZoom, int zoomLevel) {
+    /** The zoom a level maps onto when the camera zooms by cropping rather than by ratio. */
+    static float cropZoomFor(float maxDigitalZoom, int zoomLevel) {
         float fraction = (float) rangeLimit(zoomLevel) / MAX_ZOOM_LEVEL;
-        float zoom = 1f + (Math.max(1f, maxDigitalZoom) - 1f) * fraction;
+        return 1f + (Math.max(1f, maxDigitalZoom) - 1f) * fraction;
+    }
+
+    static Rect calculateCropRegion(Rect activeArray, float maxDigitalZoom, int zoomLevel) {
+        float zoom = cropZoomFor(maxDigitalZoom, zoomLevel);
         int cropWidth = Math.max(1, (int) (activeArray.width() / zoom));
         int cropHeight = Math.max(1, (int) (activeArray.height() / zoom));
         int cropLeft = (activeArray.width() - cropWidth) / 2;
@@ -1014,6 +1020,70 @@ public class Camera2Module extends ICameraModule {
         // The strategy is carried by the repeating request, so the preview has to be reissued for
         // auto-exposure to converge under the new mode before the next capture.
         reissueRepeatingRequest("the flash strategy");
+    }
+
+    @Override
+    public float getHorizontalFieldOfView() {
+        return fieldOfView(true /* horizontal */);
+    }
+
+    @Override
+    public float getVerticalFieldOfView() {
+        return fieldOfView(false /* horizontal */);
+    }
+
+    /**
+     * The angle of view, worked out from the sensor's size and the lens in front of it.
+     *
+     * <p>The shortest focal length is the one used: a camera that publishes several is either a
+     * zoom lens, where the shortest is the widest view it can give, or a logical camera standing
+     * for several physical ones, where the shortest belongs to the widest of them. Zoom is then
+     * applied on top, since the request this session is issuing is what decides how much of that
+     * view is actually being shown.</p>
+     */
+    private float fieldOfView(boolean horizontal) {
+        try {
+            CameraCharacteristics characteristics =
+                    mCameraManager.getCameraCharacteristics(getActiveCamera());
+            SizeF sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
+            float[] focalLengths =
+                    characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+            if (sensor == null || focalLengths == null || focalLengths.length == 0) {
+                return 0f;
+            }
+            // The first focal length, not the shortest: a zoom ratio of one means the lens the
+            // camera uses by default, and that is the one this array leads with. On a logical
+            // camera the shortest belongs to the ultra-wide, which the ratio reaches by going
+            // below one - so taking it here and then applying the ratio would count it twice.
+            float full = TransformMath.fieldOfViewDegrees(
+                    horizontal ? sensor.getWidth() : sensor.getHeight(), focalLengths[0]);
+            return TransformMath.zoomedFieldOfViewDegrees(
+                    full, effectiveZoomRatio(characteristics));
+        } catch (CameraAccessException | IllegalArgumentException | IllegalStateException error) {
+            if (DEBUG) Log.d(TAG, "Could not work out the field of view", error);
+            return 0f;
+        }
+    }
+
+    /**
+     * How much this session is actually zoomed, whichever way it is doing it.
+     *
+     * <p>Two mechanisms, as in setZoomLevel: the zoom ratio control where it exists, which can
+     * cross between physical lenses, and a crop of the sensor's active array where it does not.
+     * Read here rather than worked out again, so that the angle of view cannot disagree with the
+     * request that produced the picture.</p>
+     */
+    private float effectiveZoomRatio(@NonNull CameraCharacteristics characteristics) {
+        Range<Float> ratioRange = zoomRatioRange(characteristics);
+        if (ratioRange != null) {
+            return zoomRatioFor(ratioRange.getLower(), ratioRange.getUpper(), mZoomLevel);
+        }
+        Float maxDigitalZoom =
+                characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
+        if (maxDigitalZoom == null || maxDigitalZoom <= 1f) {
+            return 1f;
+        }
+        return cropZoomFor(maxDigitalZoom, mZoomLevel);
     }
 
     /** Rebuilds the repeating request, for a setting the request itself carries. */
