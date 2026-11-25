@@ -270,19 +270,22 @@ class VideoSession extends PictureSession {
          * in front of the lens. Tagging it 240 instead would give a correctly timed file nothing
          * plays smoothly, which is the mistake this exists to avoid.</p>
          *
-         * <p>Taken from the device's own ordinary profile rather than fixed at 30: a phone whose
-         * normal recordings are 60fps plays back at 60, and a capture rate that is not actually
-         * faster than playback is left alone rather than being written as slower than life.</p>
+         * <p>Fixed at 30 rather than taken from the device's ordinary profile. Following the
+         * profile looks more respectful of the device and is worse: a Pixel 7 Pro records
+         * ordinarily at 60, so the same 240fps capture came out four times slower there and
+         * eight times slower on the CameraX backend, which encodes slow motion at 30 and says so
+         * in its own SLOW_MOTION_ENCODE_FRAME_RATE. Two backends disagreeing about how slow slow
+         * motion is defeats the point of having both. Measured on that device: 240fps tagged 60
+         * wrote 5187ms from 2000ms of filming where the caller had every reason to expect 16s.
          *
-         * @param profileFrameRate the rate the camera's ordinary profile records at, or 0 when it
-         *     publishes none
+         * <p>A capture rate no faster than playback is left alone rather than written as slower
+         * than life.</p>
          */
-        static int playbackFrameRate(int captureRate, int profileFrameRate) {
-            int playback = profileFrameRate > 0 ? profileFrameRate : DEFAULT_PLAYBACK_FRAME_RATE;
-            if (captureRate > 0 && captureRate < playback) {
+        static int playbackFrameRate(int captureRate) {
+            if (captureRate > 0 && captureRate < DEFAULT_PLAYBACK_FRAME_RATE) {
                 return captureRate;
             }
-            return playback;
+            return DEFAULT_PLAYBACK_FRAME_RATE;
         }
 
         /**
@@ -586,8 +589,7 @@ class VideoSession extends PictureSession {
             // rate while the file declares the slower rate, so a player shows the frames further
             // apart in time than they were taken. Setting the frame rate to the capture rate
             // instead would give a correctly timed file at a rate nothing plays smoothly.
-            mMediaRecorder.setVideoFrameRate(
-                    playbackFrameRate(mHighSpeedProfile.getFrameRate(), fallback.videoFrameRate));
+            mMediaRecorder.setVideoFrameRate(playbackFrameRate(mHighSpeedProfile.getFrameRate()));
             mMediaRecorder.setCaptureRate(mHighSpeedProfile.getFrameRate());
         }
 
