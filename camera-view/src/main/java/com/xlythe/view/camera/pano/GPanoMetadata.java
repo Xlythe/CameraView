@@ -45,6 +45,16 @@ public final class GPanoMetadata {
 
     private static final Charset UTF_8 = Charset.forName("UTF-8");
 
+    /**
+     * The byte order mark an XMP packet header carries.
+     *
+     * <p>Built here rather than written into the string, because a literal one puts the mark in
+     * the middle of this source file - which is a thing lint rejects and a thing that breaks
+     * tools that read source as bytes. The packet still gets it, which is what the XMP
+     * specification asks for.</p>
+     */
+    private static final char PACKET_BOM = (char) 0xFEFF;
+
     /** The largest a JPEG segment can be, counting the two bytes of its own length. */
     private static final int MAX_SEGMENT_BYTES = 0xFFFF;
 
@@ -97,7 +107,8 @@ public final class GPanoMetadata {
     @NonNull
     public byte[] toXmpPacket() {
         StringBuilder xmp = new StringBuilder();
-        xmp.append("<?xpacket begin=\"﻿\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>")
+        xmp.append("<?xpacket begin=\"").append(PACKET_BOM)
+                .append("\" id=\"W5M0MpCehiHzreSzNTczkc9d\"?>")
                 .append("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">")
                 .append("<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">")
                 .append("<rdf:Description rdf:about=\"\"")

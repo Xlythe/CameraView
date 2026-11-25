@@ -52,6 +52,36 @@ public final class Equirectangular {
     }
 
     /**
+     * Where a direction lands, without bringing it back onto the canvas first.
+     *
+     * <p>For drawing a frame as a mesh, where every vertex has to stay next to its neighbours.
+     * Wrapping each one independently is what tears a mesh that straddles the cut in the
+     * cylinder: two vertices a few degrees apart end up at opposite ends of the canvas, and the
+     * quad between them is stretched across the whole picture. Projecting unwrapped puts them a
+     * few pixels apart with both outside the canvas, which is a shape that can be drawn and
+     * then shifted into place.</p>
+     *
+     * @param yawDegrees east of the canvas centre, in any range
+     */
+    public static void projectUnwrapped(float yawDegrees, float pitchDegrees,
+            int canvasWidth, int canvasHeight, @NonNull PointF out) {
+        out.set(
+                canvasWidth * (yawDegrees + HALF_TURN_DEGREES) / FULL_TURN_DEGREES,
+                canvasHeight * (90f - clampPitch(pitchDegrees)) / HALF_TURN_DEGREES);
+    }
+
+    /**
+     * The same direction as a yaw, expressed within half a turn of a reference.
+     *
+     * <p>What keeps a mesh together across the seam: every vertex of a frame is within half a
+     * turn of its centre, so measuring them all from the centre leaves them in one piece
+     * wherever the frame is pointed.</p>
+     */
+    public static float unwrapYawNear(float referenceDegrees, float yawDegrees) {
+        return referenceDegrees + wrapYaw(yawDegrees - referenceDegrees);
+    }
+
+    /**
      * Which way a point in the frame is pointing, once the camera's rotation is applied.
      *
      * <p>The frame is treated as a flat window a unit away from the camera, which is what a

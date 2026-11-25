@@ -8,6 +8,7 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.os.AsyncTask;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -34,6 +35,8 @@ import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
 
 import com.xlythe.view.camera.ar.ArFrameListener;
+import com.xlythe.view.camera.pano.PanoramaCoverage;
+import com.xlythe.view.camera.pano.PanoramaSession;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.BackgroundReplacer;
 import com.xlythe.view.camera.gl.FrameRenderer;
@@ -476,6 +479,9 @@ public class CameraView extends FrameLayout {
     /** The caller's own frame analyzer, if one is running. */
     @Nullable
     private FrameStream mFrameStream;
+
+    /** The sweep in progress, or null when none is. */
+    @Nullable private PanoramaSession mPanoramaSession;
 
     /** The caller's face listener, if the camera agreed to report faces. */
     @Nullable
@@ -1453,6 +1459,101 @@ public class CameraView extends FrameLayout {
         }
         mFrameStream = new FrameStream(mCameraModule.getCanvas(), this, params, analyzer);
         mFrameStream.start();
+    }
+
+    /**
+     * What a sweep is meant to cover.
+     *
+     * @see #startPanorama
+     */
+    public enum PanoramaMode {
+        /** All the way round at eye level, which is what a panorama usually means. */
+        PANORAMA,
+        /** The whole sphere, sky and floor included. */
+        PHOTOSPHERE,
+    }
+
+    /**
+     * Sweeps a panorama, and saves it as one.
+     *
+     * <p>Frames are placed by where the phone was pointed rather than by matching what they
+     * contain, which is what lets this work on any device with no extra dependencies - and it
+     * is why the sweep has to be a turn on the spot. Walking while sweeping moves the camera,
+     * and no rotation can reconcile two views of a near object taken from different places, so
+     * anything close shows a seam. The sample says so on screen, and an app should too.</p>
+     *
+     * <p>The listener reports how far along the sweep is and where to point next; drawing that
+     * is the app's business. Call {@link #stopPanorama} to finish, which saves whatever was
+     * covered - half a sweep is a panorama of half a room, with metadata saying which half.</p>
+     *
+     * <p>The file is a JPEG carrying GPano metadata, so Google Photos and every web viewer
+     * treat it as a panorama rather than as a wide picture.</p>
+     *
+     * @throws IllegalStateException if the camera is not open, or a sweep is already running
+     * @throws UnsupportedOperationException if this backend cannot deliver frames, or the
+     *     device cannot report its rotation
+     */
+    @RequiresApi(19)
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public void startPanorama(@NonNull PanoramaMode mode,
+            @NonNull PanoramaSession.Listener listener) {
+        if (mPanoramaSession != null) {
+            throw new IllegalStateException("A panorama sweep cannot be started twice");
+        }
+        PanoramaSession session = new PanoramaSession(getContext(),
+                mode == PanoramaMode.PHOTOSPHERE
+                        ? PanoramaCoverage.forPhotosphere() : PanoramaCoverage.forPanorama(),
+                PanoramaSession.DEFAULT_CANVAS_WIDTH,
+                getHorizontalFieldOfView(), getVerticalFieldOfView(), listener,
+                this::post);
+        if (!session.isSupported()) {
+            session.close();
+            // Refused rather than accepted and never honoured: a sweep that can never place a
+            // frame reports no progress, which from the outside is the same as a camera that
+            // has not started.
+            throw new UnsupportedOperationException(
+                    "This device cannot report the rotation a sweep is placed by");
+        }
+        // Started before the frames, so that the first frame already has a rotation to go with
+        // it rather than being dropped.
+        session.start();
+        try {
+            startFrameAnalysis(session);
+        } catch (RuntimeException error) {
+            session.close();
+            throw error;
+        }
+        mPanoramaSession = session;
+    }
+
+    /**
+     * Finishes a sweep and writes it to a file.
+     *
+     * <p>Whatever was covered is saved, so this is both the finish and the cancel. The listener
+     * is told which it was. The writing happens off the main thread, because a panorama is a
+     * large picture and compressing one is not quick.</p>
+     */
+    @RequiresApi(19)
+    public void stopPanorama(@NonNull File file) {
+        PanoramaSession session = mPanoramaSession;
+        if (session == null) {
+            return;
+        }
+        mPanoramaSession = null;
+        stopFrameAnalysis();
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+            try {
+                session.finish(file, getPictureQuality());
+            } finally {
+                session.close();
+            }
+        });
+    }
+
+    /** The sweep in progress, for an app that wants to show it filling in, or null. */
+    @Nullable
+    public PanoramaSession getPanoramaSession() {
+        return mPanoramaSession;
     }
 
     /**
