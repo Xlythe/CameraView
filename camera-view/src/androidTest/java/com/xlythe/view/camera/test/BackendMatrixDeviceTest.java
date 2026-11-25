@@ -5,6 +5,7 @@ import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.os.Build;
 import android.util.Size;
 
 import androidx.test.core.app.ActivityScenario;
@@ -71,9 +72,7 @@ public final class BackendMatrixDeviceTest {
 
     @Before
     public void chooseTheBackend() {
-        Assume.assumeTrue("no camera on this device",
-                ApplicationProvider.getApplicationContext().getPackageManager()
-                        .hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY));
+        DeviceState.assumeATestableCamera();
         CameraView.setDefaultBackend(backend);
     }
 
@@ -172,10 +171,19 @@ public final class BackendMatrixDeviceTest {
      */
     @Test
     public void framesReachAnAnalyzer() throws Exception {
+        // Reading YUV_420_888 images from the emulated camera under SwiftShader takes the API 28
+        // emulator process down with it, which fails this test and then aborts every test after
+        // it. Skipped there rather than left to crash: it passes on hardware, so there is nothing
+        // here for the library to fix, and a run that stops halfway tells nobody anything.
+        Assume.assumeFalse("the API 28 emulator image crashes reading YUV images",
+                DeviceState.isEmulator() && Build.VERSION.SDK_INT < 29);
+
         CountDownLatch analyzed = new CountDownLatch(2);
         AtomicReference<Size> size = new AtomicReference<>();
 
         withOpenCamera(camera -> {
+            Assume.assumeTrue(backend + " cannot analyze frames at all",
+                    camera.isFrameAnalysisSupported());
             camera.startFrameAnalysis(frame -> {
                 size.set(new Size(frame.getWidth(), frame.getHeight()));
                 analyzed.countDown();
@@ -283,7 +291,12 @@ public final class BackendMatrixDeviceTest {
                 }
             });
 
-            Assume.assumeTrue("the " + backend + " backend did not open on this device",
+            // Asserted, not assumed. Skipping here is how six CameraX tests quietly passed
+            // on a device where the backend never opened at all: the only thing that stops a
+            // camera opening and is not the library's fault is the screen, and DeviceState has
+            // already ruled that out.
+            assertTrue("the " + backend + " backend did not open on this device "
+                            + DeviceState.whyTheCameraMightNotOpen(),
                     opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             CameraView camera = held.get();
             assertNotNull(camera);

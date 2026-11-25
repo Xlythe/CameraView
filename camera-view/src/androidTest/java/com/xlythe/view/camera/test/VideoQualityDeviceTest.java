@@ -97,9 +97,7 @@ public final class VideoQualityDeviceTest {
 
     @Before
     public void chooseTheBackend() {
-        Assume.assumeTrue("no camera on this device",
-                ApplicationProvider.getApplicationContext().getPackageManager()
-                        .hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY));
+        DeviceState.assumeATestableCamera();
         CameraView.setDefaultBackend(backend);
     }
 
@@ -302,7 +300,8 @@ public final class VideoQualityDeviceTest {
                     camera.open();
                 }
             });
-            assertTrue("the camera never opened on " + backend,
+            assertTrue("the camera never opened on " + backend + " "
+                            + DeviceState.whyTheCameraMightNotOpen(),
                     opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
 
             CameraView camera = held.get();
