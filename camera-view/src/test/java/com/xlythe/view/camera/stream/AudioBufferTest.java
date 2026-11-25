@@ -10,7 +10,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(minSdk = 21)
+@Config(sdk = 37)
 public class AudioBufferTest {
 
     private static class TestAudioBuffer extends AudioBuffer {
@@ -32,5 +32,42 @@ public class AudioBufferTest {
         assertEquals(2048, buffer.getSize());
         assertNotNull(buffer.data());
         assertEquals(2048, buffer.data().length);
+    }
+
+    @Test
+    public void testAudioBufferFallsBackWhenNoRateIsSupported() {
+        AudioBuffer buffer = new AudioBuffer() {
+            @Override
+            protected boolean validSize(int size) {
+                return false;
+            }
+
+            @Override
+            protected int getMinBufferSize(int sampleRate) {
+                return -1;
+            }
+        };
+
+        assertEquals(48000, buffer.getSampleRate());
+        assertEquals(1024, buffer.getSize());
+        assertEquals(1024, buffer.data().length);
+    }
+
+    @Test
+    public void testAudioBufferStopsAtFirstSupportedRate() {
+        AudioBuffer buffer = new AudioBuffer() {
+            @Override
+            protected boolean validSize(int size) {
+                return size > 0;
+            }
+
+            @Override
+            protected int getMinBufferSize(int sampleRate) {
+                return 256;
+            }
+        };
+
+        assertEquals(8000, buffer.getSampleRate());
+        assertEquals(256, buffer.getSize());
     }
 }

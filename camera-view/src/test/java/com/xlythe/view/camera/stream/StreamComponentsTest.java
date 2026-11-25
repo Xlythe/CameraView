@@ -12,12 +12,13 @@ import org.robolectric.annotation.Config;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.io.OutputStream;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(minSdk = 21)
+@Config(sdk = 37)
 public class StreamComponentsTest {
 
     @Test
@@ -43,6 +44,35 @@ public class StreamComponentsTest {
         player.setStreamEndListener(() -> {});
         player.setOnMetadataAvailableListener((w, h, o, f) -> {});
         assertFalse(player.isPlaying());
+    }
+
+    @Test
+    public void stopBeforeStartIsSafeAndIdempotent() throws Exception {
+        InputStream audioInput = Mockito.mock(InputStream.class);
+        AudioPlayer audioPlayer = new AudioPlayer(audioInput);
+        audioPlayer.stop();
+        audioPlayer.stop();
+        Mockito.verify(audioInput, Mockito.times(1)).close();
+
+        OutputStream audioOutput = Mockito.mock(OutputStream.class);
+        AudioRecorder audioRecorder = new AudioRecorder(audioOutput);
+        audioRecorder.stop();
+        audioRecorder.stop();
+        Mockito.verify(audioOutput, Mockito.times(1)).close();
+
+        Surface surface = Mockito.mock(Surface.class);
+        InputStream videoInput = Mockito.mock(InputStream.class);
+        VideoPlayer videoPlayer = new VideoPlayer(surface, videoInput);
+        videoPlayer.stop();
+        videoPlayer.stop();
+        Mockito.verify(videoInput, Mockito.times(1)).close();
+        Mockito.verify(surface, Mockito.times(1)).release();
+
+        OutputStream videoOutput = Mockito.mock(OutputStream.class);
+        VideoRecorder videoRecorder = new VideoRecorder(Mockito.mock(VideoRecorder.Canvas.class), videoOutput);
+        videoRecorder.stop();
+        videoRecorder.stop();
+        Mockito.verify(videoOutput, Mockito.times(1)).close();
     }
 
     @Test

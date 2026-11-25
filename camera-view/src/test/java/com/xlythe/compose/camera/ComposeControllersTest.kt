@@ -16,7 +16,7 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 @RunWith(RobolectricTestRunner::class)
-@Config(minSdk = 21)
+@Config(sdk = [37])
 class ComposeControllersTest {
 
     private lateinit var context: Context
@@ -81,6 +81,14 @@ class ComposeControllersTest {
 
             override fun confirmVideo() {
                 cameraView.confirmVideo()
+            }
+
+            override fun rejectPicture() {
+                cameraView.rejectPicture()
+            }
+
+            override fun rejectVideo() {
+                cameraView.rejectVideo()
             }
 
             override fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, vararg formats: Int) {}

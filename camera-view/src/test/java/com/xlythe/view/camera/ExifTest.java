@@ -18,7 +18,8 @@ import static junit.framework.Assert.assertEquals;
 import static junit.framework.Assert.assertNotNull;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(minSdk=14)
+@SuppressWarnings("JavaUtilDate")
+@Config(sdk = 37)
 public class ExifTest {
     Exif exif;
 
@@ -225,6 +226,48 @@ public class ExifTest {
     private static void assertWithin(float expected, float actual, float variance) {
         if ((variance - Math.abs(actual - expected)) < 0) {
             throw new AssertionFailedError(String.format("\nExpected :%s\nActual   :%s", expected, actual));
+        }
+    }
+
+    /**
+     * SubSecTime is the digits after the decimal point, so the digit count sets the scale. The
+     * old reading treated them as milliseconds, which under-read anything shorter than three
+     * digits by a factor of ten or a hundred.
+     */
+    @Test
+    public void subSecondsScaleByTheirDigitCount() {
+        assertEquals(500, Exif.parseSubSecond("5"));
+        assertEquals(50, Exif.parseSubSecond("05"));
+        assertEquals(5, Exif.parseSubSecond("005"));
+        assertEquals(123, Exif.parseSubSecond("123"));
+
+        // More precision than a millisecond is truncated, not misread.
+        assertEquals(123, Exif.parseSubSecond("1234567"));
+
+        // Anything unparseable reads as no sub-second at all.
+        assertEquals(0, Exif.parseSubSecond(null));
+        assertEquals(0, Exif.parseSubSecond(""));
+        assertEquals(0, Exif.parseSubSecond("abc"));
+        assertEquals(0, Exif.parseSubSecond("-5"));
+    }
+
+    @Test
+    public void subSecondsAreWrittenZeroPadded() {
+        assertEquals("050", Exif.formatSubSecond(50));
+        assertEquals("005", Exif.formatSubSecond(5));
+        assertEquals("500", Exif.formatSubSecond(500));
+        assertEquals("999", Exif.formatSubSecond(999));
+
+        // Out-of-range values clamp rather than writing four digits.
+        assertEquals("999", Exif.formatSubSecond(1500));
+        assertEquals("000", Exif.formatSubSecond(-1));
+    }
+
+    /** What is written has to read back as the same number of milliseconds. */
+    @Test
+    public void subSecondsRoundTrip() {
+        for (long millis : new long[] {0, 1, 5, 50, 99, 123, 500, 999}) {
+            assertEquals(millis, Exif.parseSubSecond(Exif.formatSubSecond(millis)));
         }
     }
 }

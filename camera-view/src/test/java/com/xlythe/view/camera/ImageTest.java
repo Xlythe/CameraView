@@ -16,7 +16,7 @@ import java.io.File;
 import static org.junit.Assert.assertNotNull;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(minSdk = 21)
+@Config(sdk = 37)
 public class ImageTest {
 
     private Context context;
