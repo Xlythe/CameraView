@@ -288,9 +288,14 @@ public class CameraView extends FrameLayout {
      * rather than a gallery to open, and {@link #RAW_JPEG} exists because of that: both files
      * from one shutter press, so something is viewable immediately.</p>
      *
-     * <p>Ask {@link #isPictureFormatSupported} first. All three of these need the CameraX backend
-     * and a camera that offers the format - the camera2 backend writes the JPEG the HAL produced
-     * and has no second reader to take a raw frame from.</p>
+     * <p>Ask {@link #isPictureFormatSupported} first. All three need a camera that offers the
+     * format, and {@link #ULTRA_HDR} needs the CameraX backend as well - its gain map is composed
+     * by CameraX, and the camera2 backend writes the JPEG the HAL produced. {@link #RAW} and
+     * {@link #RAW_JPEG} work on either backend, on a camera that reports the RAW capability.</p>
+     *
+     * <p>A DNG is not a JPEG, so {@link #RAW_JPEG} writes two files from one shutter press: the
+     * JPEG at the destination given to {@link #takePicture(File)}, the DNG beside it under the
+     * same name. The capture is still reported once, with the JPEG, because it was one picture.</p>
      */
     public enum PictureFormat {
         JPEG(0), ULTRA_HDR(1), RAW(2), RAW_JPEG(3);
