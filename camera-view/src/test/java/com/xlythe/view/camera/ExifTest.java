@@ -2,6 +2,8 @@ package com.xlythe.view.camera;
 
 import android.location.Location;
 
+import androidx.exifinterface.media.ExifInterface;
+
 import junit.framework.AssertionFailedError;
 
 import org.junit.Before;
@@ -13,9 +15,11 @@ import org.robolectric.annotation.Config;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.TimeZone;
 
 import static junit.framework.Assert.assertEquals;
 import static junit.framework.Assert.assertNotNull;
+import static junit.framework.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
 @SuppressWarnings("JavaUtilDate")
@@ -215,6 +219,78 @@ public class ExifTest {
         location.setAltitude(5.0);
         exif.attachLocation(location);
         assertNotNull(exif.toString());
+    }
+
+    /**
+     * EXIF timestamps are local time with nothing to say where that was. Exif 2.31 added the
+     * offset tags to answer it, and without them two pictures taken in different timezones
+     * cannot be ordered against each other.
+     */
+    @Test
+    public void timestampsCarryTheirOffsetFromUtc() {
+        exif.attachTimestamp();
+
+        String offset = exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL);
+        assertNotNull("the original timestamp was written without its offset", offset);
+        assertEquals(offset, exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED));
+        assertTrue("not an EXIF offset: " + offset,
+                offset.matches("[+-]\\d\\d:\\d\\d"));
+    }
+
+    /** And the modification time has its own, written when the file is saved. */
+    @Test
+    public void theLastModifiedTimestampCarriesItsOffsetToo() {
+        try {
+            exif.save();
+        } catch (IOException e) {
+            // Expected: the stream is a mock. The attributes are still set.
+        }
+
+        String offset = exif.getAttribute(ExifInterface.TAG_OFFSET_TIME);
+        assertNotNull("the modification time was written without its offset", offset);
+        assertTrue("not an EXIF offset: " + offset, offset.matches("[+-]\\d\\d:\\d\\d"));
+    }
+
+    /**
+     * Removing the timestamp removes the offsets with it.
+     *
+     * <p>A picture stripped of when it was taken but still carrying the timezone it was taken
+     * in has given away roughly where in the world that was, which is most of what stripping
+     * the timestamp was for.</p>
+     */
+    @Test
+    public void removingTheTimestampRemovesTheOffsets() {
+        exif.attachTimestamp();
+        assertNotNull(exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL));
+
+        exif.removeTimestamp();
+
+        assertEquals(null, exif.getAttribute(ExifInterface.TAG_OFFSET_TIME));
+        assertEquals(null, exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL));
+        assertEquals(null, exif.getAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED));
+    }
+
+    /** The offset is written the way EXIF writes it, including for zones off the hour. */
+    @Test
+    public void offsetsAreFormattedAsExifWantsThem() {
+        TimeZone original = TimeZone.getDefault();
+        try {
+            TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+            assertEquals("+00:00", Exif.offsetFromUtc(0));
+
+            // Kolkata is five and a half hours ahead, which is why the minutes are not padding.
+            TimeZone.setDefault(TimeZone.getTimeZone("Asia/Kolkata"));
+            assertEquals("+05:30", Exif.offsetFromUtc(0));
+
+            // And Chatham is twelve and three quarters, so the minutes are not even half-hours.
+            TimeZone.setDefault(TimeZone.getTimeZone("Pacific/Chatham"));
+            assertEquals("+12:45", Exif.offsetFromUtc(0));
+
+            TimeZone.setDefault(TimeZone.getTimeZone("America/Los_Angeles"));
+            assertEquals("-08:00", Exif.offsetFromUtc(0));
+        } finally {
+            TimeZone.setDefault(original);
+        }
     }
 
     private static void assertWithin(long expected, long actual, long variance) {

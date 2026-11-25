@@ -505,6 +505,20 @@ public class LegacyCameraModule extends ICameraModule {
         return getRelativeCameraOrientation(true /* isPreview */);
     }
 
+    /**
+     * No: this backend draws frames rather than producing them.
+     *
+     * <p>{@link #attachSurface} turns each preview callback into a bitmap and paints it onto the
+     * consumer's surface, which is what lets a video stream work. Frame analysis is the other way
+     * round - it hands over an ImageReader surface and waits for YUV planes to read - and a
+     * surface that only accepts pixels through a Canvas can never satisfy it. Said here rather
+     * than discovered after thirty seconds of no frames arriving.</p>
+     */
+    @Override
+    public boolean isFrameAnalysisSupported() {
+        return false;
+    }
+
     @RequiresApi(18)
     @Override
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {

@@ -10,6 +10,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.TimeZone;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -257,6 +258,17 @@ public class Exif {
     }
 
     /**
+     * The raw value of a tag this class has no reader of its own for.
+     *
+     * <p>Not public: the tags with a meaning worth exposing have named accessors, and the rest
+     * are the file's business rather than a caller's.</p>
+     */
+    @Nullable
+    String getAttribute(String tag) {
+        return mExifInterface.getAttribute(tag);
+    }
+
+    /**
      * Returns the width of the photo in pixels.
      */
     public int getWidth() {
@@ -368,6 +380,7 @@ public class Exif {
         String datetime = convertToExifDateTime(now);
 
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, datetime);
+        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME, offsetFromUtc(now));
 
         try {
             long millis = now - convertFromExifDateTime(datetime).getTime();
@@ -663,6 +676,9 @@ public class Exif {
 
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, datetime);
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, datetime);
+        String offset = offsetFromUtc(now);
+        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, offset);
+        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED, offset);
 
         try {
             String subsec = formatSubSecond(now - convertFromExifDateTime(datetime).getTime());
@@ -685,6 +701,11 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, null);
         mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, null);
         mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, null);
+        // The offsets go with them: a picture stripped of when it was taken but still carrying
+        // the timezone it was taken in has given away where in the world that was.
+        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED, null);
         mRemoveTimestamp = true;
     }
 
@@ -723,6 +744,22 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, null);
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, null);
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, null);
+    }
+
+    /**
+     * The offset from UTC, as EXIF writes it.
+     *
+     * <p>EXIF timestamps are local time with nothing to say where that was, which makes them
+     * ambiguous by an hour twice a year and by half the world the rest of the time. Exif 2.31
+     * added these three tags to answer it, and a picture without them cannot be ordered against
+     * one taken in another timezone.</p>
+     */
+    static String offsetFromUtc(long timestamp) {
+        int offsetMinutes = TimeZone.getDefault().getOffset(timestamp) / 60_000;
+        char sign = offsetMinutes < 0 ? '-' : '+';
+        int magnitude = Math.abs(offsetMinutes);
+        return String.format(
+                Locale.US, "%c%02d:%02d", sign, magnitude / 60, magnitude % 60);
     }
 
     /**
