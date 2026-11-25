@@ -5,6 +5,7 @@ import static org.junit.Assert.assertTrue;
 
 import android.graphics.Matrix;
 import android.graphics.PointF;
+import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.Size;
 
@@ -226,6 +227,113 @@ public class TransformMathTest {
                 bufferToView, new Size(0, 480), 100, 100).isIdentity());
         assertTrue(TransformMath.asTextureTransform(
                 bufferToView, new Size(640, 480), 0, 100).isIdentity());
+    }
+
+    /**
+     * A touch becomes the area the camera is told to focus on, in the camera's own coordinates.
+     *
+     * <p>The middle of the view is the middle of that space whichever way round the camera is,
+     * which is the one case where every orientation has to agree.</p>
+     */
+    @Test
+    public void aTouchInTheMiddleMetersTheMiddleAtEveryOrientation() {
+        for (int rotation : new int[] {0, 90, 180, 270}) {
+            Rect area = TransformMath.meteringArea(
+                    500f, 1000f, 1000, 2000, rotation, 1f /* coefficient */);
+
+            assertEquals("centered horizontally at " + rotation,
+                    0, area.centerX());
+            assertEquals("centered vertically at " + rotation, 0, area.centerY());
+            assertEquals("a sixth of the frame across at " + rotation, 300, area.width());
+        }
+    }
+
+    /** The coefficient is what makes a metering area larger than the focus area inside it. */
+    @Test
+    public void theCoefficientScalesTheArea() {
+        Rect focus = TransformMath.meteringArea(500f, 1000f, 1000, 2000, 0, 1f);
+        Rect metering = TransformMath.meteringArea(500f, 1000f, 1000, 2000, 0, 1.5f);
+
+        assertEquals(300, focus.width());
+        assertEquals(450, metering.width());
+        assertTrue("the larger area has to contain the smaller", metering.contains(focus));
+    }
+
+    /**
+     * Which corner of the sensor a corner of the view is depends on how the camera is turned.
+     *
+     * <p>This is the part that is easy to get wrong and impossible to notice: a camera focusing
+     * on the opposite corner from the one that was touched still focuses on something.</p>
+     */
+    @Test
+    public void theOrientationDecidesWhichCornerOfTheSensorATouchLandsOn() {
+        assertEquals("upright, the top left of the view is the top left of the sensor",
+                new Rect(-1000, -1000, -850, -850),
+                TransformMath.meteringArea(0f, 0f, 1000, 2000, 0, 1f));
+
+        assertEquals("upside down, it is the far corner",
+                new Rect(850, 850, 1000, 1000),
+                TransformMath.meteringArea(0f, 0f, 1000, 2000, 180, 1f));
+
+        // Sideways the axes are transposed, so a touch at the left edge, a quarter of the way
+        // down, meters a quarter of the way across and at the top.
+        assertEquals(new Rect(-650, -1000, -350, -850),
+                TransformMath.meteringArea(0f, 500f, 1000, 2000, 90, 1f));
+    }
+
+    /** A view with no size yet is not a reason to meter on the middle of the sensor. */
+    @Test
+    public void aViewWithNoSizeProducesNoArea() {
+        assertTrue(TransformMath.meteringArea(10f, 10f, 0, 1000, 0, 1f).isEmpty());
+        assertTrue(TransformMath.meteringArea(10f, 10f, 1000, 0, 0, 1f).isEmpty());
+        assertTrue(TransformMath.viewArea(
+                new Rect(-100, -100, 100, 100), 0, 1000, 0).isEmpty());
+        assertTrue(TransformMath.viewArea(
+                new Rect(-100, -100, 100, 100), 1000, 0, 0).isEmpty());
+    }
+
+    /**
+     * An area the camera was given maps back onto the view it came from.
+     *
+     * <p>Which is what an app drawing a focus affordance needs: it is told where the camera is
+     * looking, not where the finger was, and the two have to be the same place.</p>
+     */
+    @Test
+    public void aMeteringAreaMapsBackOntoThePointItCameFrom() {
+        for (int rotation : new int[] {0, 90, 180, 270, -90, 450}) {
+            for (float[] point : new float[][] {{500f, 1000f}, {250f, 400f}, {900f, 1800f}}) {
+                Rect area = TransformMath.meteringArea(
+                        point[0], point[1], 1000, 2000, rotation, 1f);
+
+                RectF onView = TransformMath.viewArea(area, 1000, 2000, rotation);
+
+                String where = "(" + point[0] + ", " + point[1] + ") at " + rotation;
+                assertEquals("x of " + where, point[0], onView.centerX(), 1f);
+                assertEquals("y of " + where, point[1], onView.centerY(), 1f);
+                assertTrue("and an area, not a point, at " + where,
+                        onView.width() > 0 && onView.height() > 0);
+            }
+        }
+    }
+
+    /**
+     * An area clamped into the camera's range maps back to where the camera is really looking.
+     *
+     * <p>A touch in the corner cannot be the middle of a metering area, because half of that area
+     * would be off the sensor. Reporting the clamped area rather than the touch is the honest
+     * answer, and it keeps the reported area inside the view.</p>
+     */
+    @Test
+    public void anAreaClampedAtAnEdgeStaysInsideTheView() {
+        Rect area = TransformMath.meteringArea(0f, 0f, 1000, 2000, 0, 1f);
+
+        RectF onView = TransformMath.viewArea(area, 1000, 2000, 0);
+
+        assertEquals(0f, onView.left, TOLERANCE);
+        assertEquals(0f, onView.top, TOLERANCE);
+        assertTrue("the corner of the view is the corner of the area",
+                onView.width() > 0 && onView.width() < 1000f);
+        assertTrue(onView.height() > 0 && onView.height() < 2000f);
     }
 
     private static void assertPointMapsTo(

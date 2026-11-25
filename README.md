@@ -250,6 +250,27 @@ if (mCameraView.isSnapshotWhileRecordingSupported()) {
 }
 ```
 
+Focus
+-----------------
+Tapping the preview focuses the camera there. CameraView draws nothing for it, because an app with
+a camera UI of its own wants its own reticle; setFocusListener is what one is driven by. It reports
+when the camera took a request, where it was aimed in the view's coordinates, and - exactly once
+per request - whether the camera said it converged, so a reticle can confirm a lock rather than
+assume one. A programmatic focus(Rect, Rect) is reported the same way, and a camera that cannot be
+told where to look says so through isFocusSupported.
+```java
+mCameraView.setFocusListener(new CameraView.FocusListener() {
+  @Override public void onFocusRequested(RectF area) {
+    reticle.showAt(area);
+  }
+
+  @Override public void onFocusCompleted(RectF area, boolean locked) {
+    reticle.settle(locked);
+  }
+});
+```
+See FocusReticleView in the sample app for one of these drawn.
+
 Faces
 -----------------
 The camera finds faces on its own, to decide what to focus and expose for. setFaceDetectionListener
