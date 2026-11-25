@@ -1174,9 +1174,17 @@ public class CameraView extends FrameLayout {
         void onBarcodeFound(List<Barcode> barcodes);
     }
 
+    /**
+     * Starts reporting the barcodes the camera can see.
+     *
+     * @return whether scanning started. False when ML Kit's barcode model is not available on
+     *     this device - it is delivered through Play services and an app can ship without the
+     *     initializer that sets it up, so asking for a scanner is a request that can be declined
+     *     rather than a programming error.
+     */
     @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
-    public void enterBarcodeScanner(BarcodeDetectorListener listener, @Barcode.Format int format, @Barcode.Format int... formats) {
+    public boolean enterBarcodeScanner(BarcodeDetectorListener listener, @Barcode.Format int format, @Barcode.Format int... formats) {
         if (!isOpen()) {
             throw new IllegalStateException("Camera must be open before scanning for barcodes");
         }
@@ -1186,11 +1194,24 @@ public class CameraView extends FrameLayout {
         }
 
         mUsingModuleBarcodeScanner = mCameraModule.startBarcodeScanner(listener, format, formats);
-        if (!mUsingModuleBarcodeScanner) {
+        if (mUsingModuleBarcodeScanner) {
+            return true;
+        }
+        try {
             mBarcodeScanner = new BarcodeScanner(
                     mCameraModule.getCanvas(), this, listener, format, formats);
-            mBarcodeScanner.start();
+        } catch (RuntimeException | LinkageError error) {
+            // Building the client is what reaches for the model, and it throws rather than
+            // returning anything when ML Kit was never initialised. Letting that out would mean
+            // an app crashing in a camera library because a vision dependency is missing. The
+            // CameraX backend already declines the same failure in startBarcodeScanner; this is
+            // the path the other two backends take.
+            Log.w(TAG, "Barcode scanning is unavailable on this device", error);
+            mBarcodeScanner = null;
+            return false;
         }
+        mBarcodeScanner.start();
+        return true;
     }
 
     @RequiresApi(19)
