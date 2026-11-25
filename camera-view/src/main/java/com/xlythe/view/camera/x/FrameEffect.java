@@ -1,0 +1,213 @@
+package com.xlythe.view.camera.x;
+
+import android.graphics.SurfaceTexture;
+import android.util.Log;
+import android.util.Size;
+import android.view.Surface;
+
+import androidx.annotation.MainThread;
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.camera.core.CameraEffect;
+import androidx.camera.core.ProcessingException;
+import androidx.camera.core.SurfaceOutput;
+import androidx.camera.core.SurfaceProcessor;
+import androidx.camera.core.SurfaceRequest;
+import androidx.core.util.Consumer;
+
+import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.FrameRenderThread;
+import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.gl.GlMath;
+
+import java.util.LinkedHashSet;
+import java.util.Set;
+import java.util.concurrent.Executor;
+
+/**
+ * The GL core, offered to CameraX as the thing that sits between the camera and the outputs.
+ *
+ * <p>CameraX asks for one surface to write frames into and hands back one per output it wants
+ * drawn, each with its own size and its own transform. That is exactly the shape of
+ * {@link FrameRenderThread}, so there is very little here: the camera's
+ * {@link SurfaceTexture} wrapped in the surface CameraX asked for, and each output registered with
+ * the renderer.</p>
+ *
+ * <p>The rotation, the mirror and the crop all come from {@link SurfaceOutput#updateTransformMatrix},
+ * never from anything worked out here. CameraX already knows the sensor orientation, the target
+ * rotation, the view port and the mirror mode each use case was configured with - including the
+ * front-camera mirroring this library's own settings drive - and it publishes the answer per
+ * output. Recomputing any of it would be a second opinion that disagrees on some device.</p>
+ */
+final class FrameEffect extends CameraEffect {
+    private static final String TAG = ICameraModule.TAG;
+    private static final boolean DEBUG = ICameraModule.DEBUG;
+
+    /**
+     * Every output a frame can reach: the preview, the recording and the still.
+     *
+     * <p>CameraX accepts only certain combinations - a target set has to be one use case, or the
+     * preview and the recording, or all three - so this is the one value that covers the whole
+     * pipeline. Anything a caller draws therefore lands in the file as well as on the screen,
+     * which is the point of putting the frames through GL in the first place.</p>
+     */
+    static final int ALL_TARGETS = PREVIEW | VIDEO_CAPTURE | IMAGE_CAPTURE;
+
+    private final Processor mProcessor;
+    @Nullable private final CameraTextureProvider mTextureProvider;
+
+    /**
+     * Brings up the renderer and wraps it in an effect, or returns null if this device will not
+     * give us a GL context - which the caller answers by binding without an effect.
+     */
+    @Nullable
+    @MainThread
+    static FrameEffect create(
+            int targets,
+            @NonNull Executor executor,
+            @Nullable FrameRenderer renderer,
+            @Nullable CameraTextureProvider textureProvider,
+            @NonNull Consumer<Throwable> errorListener) {
+        FrameRenderThread renderThread = new FrameRenderThread("CameraViewFrameRenderer");
+        renderThread.setCameraTextureProvider(textureProvider);
+        renderThread.setFrameRenderer(renderer);
+        if (!renderThread.start()) {
+            return null;
+        }
+        return new FrameEffect(targets, new Processor(renderThread, executor), textureProvider,
+                executor, errorListener);
+    }
+
+    private FrameEffect(
+            int targets,
+            @NonNull Processor processor,
+            @Nullable CameraTextureProvider textureProvider,
+            @NonNull Executor executor,
+            @NonNull Consumer<Throwable> errorListener) {
+        // One output per target rather than one shared between them, so that the still keeps the
+        // resolution its use case asked for instead of the preview's. They all come off one camera
+        // stream either way - that is what an effect over several use cases costs - but the frame
+        // each output is handed is drawn at its own size.
+        //
+        // CAMERA_AND_SURFACE_ROTATION states what the processor actually does: it draws with the
+        // matrix CameraX supplies, so the camera's rotation and the surface's are both already
+        // applied and CameraX can go on computing downstream metadata as if it had done them
+        // itself.
+        super(targets, OUTPUT_OPTION_ONE_FOR_EACH_TARGET,
+                TRANSFORMATION_CAMERA_AND_SURFACE_ROTATION, executor, processor, errorListener);
+        mProcessor = processor;
+        mTextureProvider = textureProvider;
+    }
+
+    /**
+     * Swaps what draws each frame, without a rebind.
+     *
+     * <p>The context, the thread and the texture all stay as they are, which is why this is worth
+     * having: tearing the renderer down to change what it draws would drop frames and, with a
+     * texture somebody else created, would not be possible at all.</p>
+     */
+    void setFrameRenderer(@Nullable FrameRenderer renderer) {
+        mProcessor.mRenderThread.setFrameRenderer(renderer);
+    }
+
+    /**
+     * Whether the camera is still rendering into this provider's texture.
+     *
+     * <p>The texture is created once, when the renderer starts, so a different provider is a
+     * different effect rather than a setting on this one.</p>
+     */
+    boolean usesTextureFrom(@Nullable CameraTextureProvider provider) {
+        return mTextureProvider == provider;
+    }
+
+    /** Stops drawing, closes every output and gives the GL context back. */
+    @MainThread
+    void release() {
+        mProcessor.release();
+    }
+
+    /**
+     * Everything CameraX calls, on the executor the effect was built with - the main thread, which
+     * is where this module does all of its work. The render thread is told about outputs through
+     * its own thread-safe methods.
+     */
+    private static final class Processor implements SurfaceProcessor {
+        private final FrameRenderThread mRenderThread;
+        private final Executor mExecutor;
+
+        /** The outputs CameraX has given us and not yet asked for back. Main thread only. */
+        private final Set<SurfaceOutput> mOutputs = new LinkedHashSet<>();
+
+        private boolean mReleased;
+
+        private Processor(@NonNull FrameRenderThread renderThread, @NonNull Executor executor) {
+            mRenderThread = renderThread;
+            mExecutor = executor;
+        }
+
+        @Override
+        public void onInputSurface(@NonNull SurfaceRequest request) throws ProcessingException {
+            SurfaceTexture texture = mRenderThread.getInputSurfaceTexture();
+            if (mReleased || texture == null) {
+                // Answered as well as reported: the request is a promise CameraX waits on, and
+                // throwing alone would leave it waiting.
+                request.willNotProvideSurface();
+                throw new ProcessingException();
+            }
+            Size resolution = request.getResolution();
+            texture.setDefaultBufferSize(resolution.getWidth(), resolution.getHeight());
+            // A new Surface per request over the one SurfaceTexture, which is how a rebind at a
+            // different resolution is honoured. The previous one is released from the result
+            // consumer rather than here, because that only runs once CameraX has stopped writing
+            // to it.
+            Surface surface = new Surface(texture);
+            request.provideSurface(surface, mExecutor, result -> {
+                surface.release();
+                if (DEBUG) {
+                    Log.d(TAG, "Frame input surface released with result " + result.getResultCode());
+                }
+            });
+        }
+
+        @Override
+        public void onOutputSurface(@NonNull SurfaceOutput output) throws ProcessingException {
+            if (mReleased) {
+                output.close();
+                throw new ProcessingException();
+            }
+            Surface surface = output.getSurface(mExecutor, event -> {
+                // CameraX wants this output back, which happens when its use case is unbound.
+                // Drawing has to stop before it is closed, or the next frame draws into a surface
+                // that has been handed to somebody else.
+                mRenderThread.removeOutput(output);
+                mOutputs.remove(output);
+                output.close();
+            });
+            mOutputs.add(output);
+            Size size = output.getSize();
+            // The frame is the size of the output, because the matrix above has already rotated
+            // and cropped the camera's buffer to fill it. So the scale type decides nothing here -
+            // which is the intent: where the frame sits is CameraX's answer, not ours.
+            mRenderThread.addOutput(output, surface, size, size, GlMath.ScaleType.FILL_CENTER,
+                    (surfaceTextureMatrix, into) ->
+                            output.updateTransformMatrix(into, surfaceTextureMatrix));
+        }
+
+        @MainThread
+        private void release() {
+            if (mReleased) {
+                return;
+            }
+            mReleased = true;
+            for (SurfaceOutput output : mOutputs) {
+                mRenderThread.removeOutput(output);
+                output.close();
+            }
+            mOutputs.clear();
+            // Last, because it blocks until the render thread has stopped, and the outputs above
+            // are surfaces it was drawing into.
+            mRenderThread.stop();
+        }
+    }
+}
