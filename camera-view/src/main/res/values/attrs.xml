@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <declare-styleable name="CameraView">
+        <attr name="backend" format="enum">
+            <enum name="auto" value="0"/>
+            <enum name="camera2" value="1"/>
+            <enum name="cameraX" value="2"/>
+            <enum name="legacy" value="3"/>
+        </attr>
         <attr name="quality" format="enum">
             <enum name="max" value="0"/>
             <enum name="high" value="1"/>
@@ -22,6 +28,24 @@
             <enum name="back" value="0"/>
             <enum name="front" value="1"/>
         </attr>
+        <attr name="dynamicRange" format="enum">
+            <enum name="sdr" value="0"/>
+            <enum name="hdr" value="1"/>
+        </attr>
+        <attr name="extension" format="enum">
+            <enum name="none" value="0"/>
+            <enum name="bokeh" value="1"/>
+            <enum name="hdr" value="2"/>
+            <enum name="night" value="3"/>
+            <enum name="faceRetouch" value="4"/>
+            <enum name="auto" value="5"/>
+        </attr>
+        <attr name="frontVideoMirroringEnabled" format="boolean" />
+        <attr name="previewStabilizationEnabled" format="boolean" />
+        <attr name="videoStabilizationEnabled" format="boolean" />
+        <attr name="exposureCompensation" format="integer" />
+        <attr name="torchEnabled" format="boolean" />
+        <attr name="lowLightBoostEnabled" format="boolean" />
     </declare-styleable>
     <declare-styleable name="VideoView">
         <attr name="filePath" format="string" />
