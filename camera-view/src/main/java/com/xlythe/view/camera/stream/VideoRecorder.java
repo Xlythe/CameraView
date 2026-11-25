@@ -6,8 +6,10 @@ import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
 import android.media.MediaFormat;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
+import android.util.Size;
 import android.view.Surface;
 
 import androidx.annotation.IntRange;
@@ -20,11 +22,18 @@ import com.google.common.primitives.Ints;
 import com.google.common.util.concurrent.SettableFuture;
 import com.xlythe.view.camera.CameraView;
 
+import static com.xlythe.view.camera.ICameraModule.DEBUG;
+
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.Objects;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import static android.media.MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED;
 import static android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED;
@@ -46,14 +55,23 @@ public class VideoRecorder {
   private static final int DEFAULT_FRAME_RATE = 15;       // 15fps
   private static final int DEFAULT_IFRAME_INTERVAL = 10;  // 10 seconds between I-frames
 
+  /** How far behind the reader may fall, as a duration of video, before frames are dropped. */
+  private static final long TARGET_BACKLOG_MILLIS = 250;
+  /** Floor for the backlog budget, so a very low bit rate still leaves room for a frame. */
+  private static final int MIN_BACKLOG_BYTES = 8 * 1024;
+  /** Ceiling for the backlog budget, so a very high bit rate does not buffer without limit. */
+  private static final int MAX_BACKLOG_BYTES = 512 * 1024;
+
   private static final int INFO_SUCCESS = 0;
   private static final int NO_TIMEOUT = -1;
+  /** Maximum time allowed for the camera/encoder surface handshake. */
+  private static final long SURFACE_TIMEOUT_SECONDS = 10;
 
   /** The stream to write to. */
   private final OutputStream mOutputStream;
 
   /** The encoder that writes bytes into the OutputStream. */
-  @Nullable private volatile MediaCodec mEncoder;
+  private final AtomicReference<MediaCodec> mEncoder = new AtomicReference<>();
 
   /** Draws on our surface. */
   private final Canvas mCanvas;
@@ -67,14 +85,20 @@ public class VideoRecorder {
   /** The iframe interval, in bits per second. */
   private int mIFrameInterval = DEFAULT_IFRAME_INTERVAL;
 
-  /**
-   * If true, the background thread will continue to loop and record video. Once false, the thread
-   * will shut down.
-   */
-  private volatile boolean mIsAlive;
+  /** The largest frame to encode, or null to follow whatever the preview is using. */
+  @Nullable private volatile Size mMaxSize;
 
+  /** Whether the background thread should continue recording video. */
+  private final AtomicBoolean mIsAlive = new AtomicBoolean();
+  /** Ensures the output stream is closed exactly once. */
+  private final AtomicBoolean mStopped = new AtomicBoolean();
   /** The background thread recording video for us. */
-  private Thread mThread;
+  private final AtomicReference<Thread> mThread = new AtomicReference<>();
+
+  /** Frames discarded because the reader fell behind. */
+  private final AtomicLong mDroppedFrames = new AtomicLong();
+  /** Surface provider currently attached to the camera backend. */
+  private final AtomicReference<SurfaceProvider> mSurfaceProvider = new AtomicReference<>();
 
   /**
    * A simple video recorder.
@@ -126,21 +150,42 @@ public class VideoRecorder {
     return mIFrameInterval;
   }
 
+  /**
+   * Caps the resolution this stream encodes, independent of what the preview shows.
+   *
+   * <p>Set this when the stream leaves the device over a link that cannot carry the preview's
+   * resolution. The backend picks the closest size its camera supports within the bound, so the
+   * stream is usually smaller than asked and never larger. Null follows the preview.</p>
+   */
+  public void setMaxSize(@Nullable Size maxSize) {
+    if (maxSize != null && (maxSize.getWidth() <= 0 || maxSize.getHeight() <= 0)) {
+      throw new IllegalArgumentException("Stream dimensions must be positive: " + maxSize);
+    }
+    mMaxSize = maxSize;
+  }
+
+  /** The resolution cap for this stream, or null when it follows the preview. */
+  @Nullable
+  public Size getMaxSize() {
+    return mMaxSize;
+  }
+
   /** @return True if actively recording. False otherwise. */
   public boolean isRecording() {
-    return mIsAlive;
+    return mIsAlive.get();
   }
 
   /** Starts recording video. */
   @RequiresPermission(Manifest.permission.CAMERA)
-  public void start() {
-    if (isRecording()) {
+  public synchronized void start() {
+    if (mThread.get() != null || mStopped.get()) {
       Log.w(TAG, "VideoRecorder is already running");
       return;
     }
 
-    mIsAlive = true;
-    mThread =
+    mIsAlive.set(true);
+    applyBacklogBudget();
+    Thread thread =
             new Thread() {
               @RequiresPermission(Manifest.permission.CAMERA)
               @Override
@@ -154,24 +199,41 @@ public class VideoRecorder {
                 MediaCodecInfo codecInfo = selectCodec(MIME_TYPE);
                 if (codecInfo == null) {
                   Log.e(TAG, "Unable to find an appropriate codec for " + MIME_TYPE);
+                  stopInternal();
                   return;
                 }
 
                 SettableFuture<CameraMetadata> requestedSizeFuture = SettableFuture.create();
                 SettableFuture<Surface> providedSurface = SettableFuture.create();
-                SurfaceProvider surfaceProvider = (width, height, orientation, flipped) -> {
-                  requestedSizeFuture.set(new CameraMetadata(width, height, orientation, flipped));
-                  try {
-                    return providedSurface.get();
-                  } catch (ExecutionException | InterruptedException e) {
-                    throw new RuntimeException(e);
+                SurfaceProvider surfaceProvider = new SurfaceProvider() {
+                  @Override
+                  public Surface getSurface(int width, int height, int orientation, boolean flipped) {
+                    requestedSizeFuture.set(new CameraMetadata(width, height, orientation, flipped));
+                    try {
+                      return providedSurface.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    } catch (ExecutionException | InterruptedException | TimeoutException e) {
+                      throw new RuntimeException(e);
+                    }
+                  }
+
+                  @Nullable
+                  @Override
+                  public Size getMaxSize() {
+                    return VideoRecorder.this.getMaxSize();
                   }
                 };
-                mCanvas.attachSurface(surfaceProvider);
+                synchronized (VideoRecorder.this) {
+                  if (!isRecording()) {
+                    stopInternal();
+                    return;
+                  }
+                  mSurfaceProvider.set(surfaceProvider);
+                  mCanvas.attachSurface(surfaceProvider);
+                }
 
                 Surface surface = null;
                 try {
-                  CameraMetadata metadata = Objects.requireNonNull(requestedSizeFuture.get());
+                  CameraMetadata metadata = Objects.requireNonNull(requestedSizeFuture.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS));
                   MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, metadata.getWidth(), metadata.getHeight());
 
                   // Failing to specify some of these can cause the MediaCodec configure() call to
@@ -194,7 +256,7 @@ public class VideoRecorder {
                           getIFrameInterval());
 
                   MediaCodec encoder = MediaCodec.createByCodecName(codecInfo.getName());
-                  mEncoder = encoder;
+                  mEncoder.set(encoder);
                   encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
                   surface = encoder.createInputSurface();
                   providedSurface.set(surface);
@@ -222,6 +284,7 @@ public class VideoRecorder {
                         encodedData.position(info.offset);
                         write(data, info.presentationTimeUs, info.flags);
                         encoder.releaseOutputBuffer(index, false);
+                        requestSyncFrameIfNeeded(encoder);
                         break;
                       case INFO_TRY_AGAIN_LATER:
                         Log.d(TAG, "Video not ready yet. Trying again later.");
@@ -237,29 +300,44 @@ public class VideoRecorder {
                   }
 
                   encoder.signalEndOfInputStream();
-                } catch (IOException | IllegalArgumentException | IllegalStateException | InterruptedException | ExecutionException e) {
+                } catch (IOException | IllegalArgumentException | IllegalStateException | InterruptedException | ExecutionException | TimeoutException e) {
                   Log.e(TAG, "Exception with recording video stream", e);
                 } finally {
+                  detachSurfaceProvider();
                   stopInternal();
                   if (surface != null) {
-                    mCanvas.detachSurface(surfaceProvider);
                     surface.release();
                   }
                 }
               }
             };
-    mThread.start();
+    mThread.set(thread);
+    thread.start();
   }
 
-  private void closeEncoder() {
-    MediaCodec encoder = mEncoder;
+  private void detachSurfaceProvider() {
+    SurfaceProvider surfaceProvider = mSurfaceProvider.getAndSet(null);
+    if (surfaceProvider == null) return;
+    try {
+      mCanvas.detachSurface(surfaceProvider);
+    } catch (RuntimeException error) {
+      Log.w(TAG, "Unable to detach video stream surface", error);
+    }
+  }
+
+  private synchronized void closeEncoder() {
+    MediaCodec encoder = mEncoder.getAndSet(null);
     if (encoder != null) {
       try {
         encoder.stop();
       } catch (IllegalStateException e) {
         Log.e(TAG, "Exception with recording video stream", e);
       }
-      encoder.release();
+      try {
+        encoder.release();
+      } catch (IllegalStateException e) {
+        Log.e(TAG, "Failed to release video encoder", e);
+      }
     }
   }
 
@@ -289,9 +367,8 @@ public class VideoRecorder {
             .build()
             .asBytes();
 
-    mOutputStream.write(Ints.toByteArray(frame.length));
-    mOutputStream.write(frame);
-    mOutputStream.flush();
+    // The header describes every frame that follows, so it is never droppable.
+    writeFrame(frame, false);
   }
 
   private void write(byte[] data, long presentationTimeUs, int flags) throws IOException {
@@ -302,26 +379,140 @@ public class VideoRecorder {
             .build()
             .asBytes();
 
-    mOutputStream.write(Ints.toByteArray(frame.length));
-    mOutputStream.write(frame);
+    writeFrame(frame, isDroppable(flags));
+  }
+
+  /**
+   * Hands one frame to the output stream.
+   *
+   * <p>On a lossy stream the length prefix and the payload have to be discarded together, so they
+   * go out as a single frame rather than as two writes: dropping only one of them would leave the
+   * reader looking for a length in the middle of a payload, and the format carries no sentinel it
+   * could resynchronize on.</p>
+   */
+  private void writeFrame(byte[] frame, boolean droppable) throws IOException {
+    byte[] prefixed = new byte[Integer.BYTES + frame.length];
+    byte[] length = Ints.toByteArray(frame.length);
+    System.arraycopy(length, 0, prefixed, 0, length.length);
+    System.arraycopy(frame, 0, prefixed, length.length, frame.length);
+
+    if (mOutputStream instanceof LossyPipedOutputStream) {
+      LossyPipedOutputStream lossyOutputStream = (LossyPipedOutputStream) mOutputStream;
+      if (!lossyOutputStream.writeFrame(prefixed, droppable)) {
+        long dropped = mDroppedFrames.incrementAndGet();
+        if (DEBUG) {
+          Log.d(TAG, "Dropped a video frame to keep up with the reader. Total: " + dropped);
+        }
+      }
+      return;
+    }
+
+    mOutputStream.write(prefixed);
     mOutputStream.flush();
   }
 
-  private void stopInternal() {
-    mIsAlive = false;
+  /**
+   * Whether a frame can be discarded without harming the frames after it.
+   *
+   * <p>H.264 sends a key frame and then deltas against it, so every frame until the next key
+   * frame is decoded relative to that one. Dropping a key frame therefore breaks the picture for
+   * up to a whole I-frame interval rather than for a single frame, and dropping the
+   * codec-configuration frame that carries the SPS/PPS leaves the decoder unable to start at
+   * all. Only the deltas are safe to lose.</p>
+   */
+  static boolean isDroppable(int flags) {
+    return (flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) == 0
+            && (flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
+            && (flags & MediaCodec.BUFFER_FLAG_END_OF_STREAM) == 0;
+  }
+
+  /** Number of frames dropped so far because the reader could not keep up. */
+  public long getDroppedFrameCount() {
+    return mDroppedFrames.get();
+  }
+
+  /**
+   * Converts a latency budget into a backlog of bytes at the given bit rate.
+   *
+   * <p>A fixed byte count is the wrong unit for a live stream, because the latency it represents
+   * depends entirely on the bit rate: 128 KiB is under a fifth of a second at 6 Mbps but four
+   * seconds at 256 kbps, and four seconds behind is exactly what dropping frames is meant to
+   * avoid. Clamped at both ends so a very low bit rate still leaves room for a frame and a very
+   * high one does not buffer without limit.</p>
+   */
+  static int backlogBytesFor(int bitRate, long latencyMillis) {
+    long bytes = (long) bitRate / 8 * latencyMillis / 1000;
+    return (int) Math.max(MIN_BACKLOG_BYTES, Math.min(bytes, MAX_BACKLOG_BYTES));
+  }
+
+  /** Applies the latency budget to a lossy sink, which cannot know the bit rate itself. */
+  private void applyBacklogBudget() {
+    if (!(mOutputStream instanceof LossyPipedOutputStream)) {
+      return;
+    }
+    int bytes = backlogBytesFor(getBitRate(), TARGET_BACKLOG_MILLIS);
+    ((LossyPipedOutputStream) mOutputStream).setMaxBufferedBytes(bytes);
+    if (DEBUG) {
+      Log.d(TAG, "Dropping frames past " + bytes + " bytes of backlog at " + getBitRate() + "bps");
+    }
+  }
+
+  /**
+   * Mints a new key frame once the lossy stream has had to discard the ones it had.
+   *
+   * <p>Only the newest key frame matters to a reader resuming playback, so the stream throws
+   * reference frames away rather than queueing them when it is hopelessly behind. That would
+   * otherwise leave the reader with nothing decodable until the next scheduled one, up to a whole
+   * I-frame interval away and ten seconds by default. Asking the encoder for one closes that gap,
+   * and means a long I-frame interval stays affordable for the bandwidth it saves.</p>
+   */
+  private void requestSyncFrameIfNeeded(MediaCodec encoder) {
+    if (!(mOutputStream instanceof LossyPipedOutputStream)) {
+      return;
+    }
     try {
-      mOutputStream.close();
-    } catch (IOException e) {
-      Log.e(TAG, "Failed to close video output stream", e);
+      if (!((LossyPipedOutputStream) mOutputStream).consumeResyncRequest()) {
+        return;
+      }
+    } catch (IOException error) {
+      return;
+    }
+
+    Bundle parameters = new Bundle();
+    parameters.putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0);
+    try {
+      encoder.setParameters(parameters);
+      if (DEBUG) {
+        Log.d(TAG, "Requested a key frame to resume a stream that fell too far behind");
+      }
+    } catch (IllegalStateException error) {
+      Log.w(TAG, "Unable to request a key frame", error);
+    }
+  }
+
+  private void stopInternal() {
+    mIsAlive.set(false);
+    if (mStopped.compareAndSet(false, true)) {
+      try {
+        mOutputStream.close();
+      } catch (IOException e) {
+        Log.e(TAG, "Failed to close video output stream", e);
+      }
     }
     closeEncoder();
   }
 
   /** Stops recording video. */
-  public void stop() {
+  public synchronized void stop() {
+    detachSurfaceProvider();
     stopInternal();
+    Thread thread = mThread.get();
+    if (thread == null || thread == Thread.currentThread()) {
+      return;
+    }
     try {
-      mThread.join(300);
+      thread.interrupt();
+      thread.join(300);
     } catch (InterruptedException e) {
       Log.e(TAG, "Interrupted while joining VideoRecorder thread", e);
       Thread.currentThread().interrupt();
@@ -358,6 +549,19 @@ public class VideoRecorder {
 
   public interface SurfaceProvider {
     Surface getSurface(int width, int height, int orientation, boolean flipped);
+
+    /**
+     * The largest frame this stream wants, or null to follow the preview.
+     *
+     * <p>A backend asks before it picks the resolution it will render into, so a caller sending
+     * the stream over a link that cannot carry the preview can ask for less. The backend chooses
+     * the closest size its camera supports within this bound, so the result is usually smaller
+     * than the value given and never larger.</p>
+     */
+    @Nullable
+    default Size getMaxSize() {
+      return null;
+    }
   }
 
   private static class CameraMetadata {

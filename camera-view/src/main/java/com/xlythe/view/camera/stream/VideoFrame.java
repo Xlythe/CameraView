@@ -91,8 +91,17 @@ class VideoFrame {
 
     ByteBuffer buffer = ByteBuffer.wrap(bytes);
     while (buffer.hasRemaining()) {
+      if (buffer.remaining() < Integer.BYTES) {
+        break;
+      }
+
       int len = buffer.getInt();
-      if (len < 1) continue;
+      if (len < 1) {
+        continue;
+      }
+      if (len > buffer.remaining()) {
+        break;
+      }
 
       byte frameType = buffer.get();
       byte[] data = new byte[len - 1];
