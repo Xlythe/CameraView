@@ -6,8 +6,11 @@
 /build
 /.idea
 *.iml
-/gradle
-gradlew
-gradlew.bat
+# Build tooling, not code. Gradle itself is provisioned rather than carried: the wrapper's
+# jar is a binary and its scripts are generated, so none of them belong in a source tree.
+# CI installs the version it needs; a checkout gets it the same way.
+/gradlew
+/gradlew.bat
+/gradle/wrapper/
 *.apk
 .vscode/settings.json

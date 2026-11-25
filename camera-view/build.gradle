@@ -2,7 +2,7 @@ plugins {
     id 'com.android.library'
     id 'maven-publish'
     id 'signing'
-    id 'org.jetbrains.kotlin.android'
+    id 'jacoco'
     id 'org.jetbrains.kotlin.plugin.compose' version '2.3.21'
     id 'com.gradleup.nmcp' version '1.5.0'
 }
@@ -11,30 +11,53 @@ Properties projectProperties = new Properties()
 projectProperties.load(rootProject.file('gradle.properties').newDataInputStream())
 
 Properties localProperties = new Properties()
-localProperties.load(project.rootProject.file('local.properties').newDataInputStream())
+File localPropertiesFile = project.rootProject.file('local.properties')
+if (localPropertiesFile.exists()) {
+    localProperties.load(localPropertiesFile.newDataInputStream())
+}
+
+// Builds without the optional backends, for an app whose minSdk is older than the newest
+// androidx.camera and Compose releases support. CameraView's own floor is API 21, which the
+// camera2 and legacy backends cover on their own; what forces a higher one is the dependencies
+// CameraX and the Compose wrapper bring with them. Set -Pcameraview.core=true to leave both out:
+// the source directories and their dependencies go together, so what is left is a library that
+// compiles and links against nothing newer than API 21.
+boolean coreOnly = project.hasProperty('cameraview.core')
+        && project.property('cameraview.core').toString().toBoolean()
 
 android {
     compileSdkVersion 37
 
     defaultConfig {
         minSdkVersion 21
+        targetSdkVersion 37
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
 
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = '17'
+    buildFeatures {
+        compose = !coreOnly
     }
 
-    buildFeatures {
-        compose = true
+    if (coreOnly) {
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/x/**'
+        sourceSets.main.kotlin.filter.exclude '**/com/xlythe/compose/**'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java'
+        sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/x/**'
     }
 
     lint {
-        abortOnError false
+        abortOnError = true
+        checkReleaseBuilds = true
         targetSdk 37
+    }
+    buildTypes {
+        debug {
+            enableAndroidTestCoverage = true
+        }
     }
     publishing {
         singleVariant("release") {
@@ -42,20 +65,63 @@ android {
             withJavadocJar()
         }
     }
-    namespace 'com.xlythe.view.camera'
+    namespace = 'com.xlythe.view.camera'
     testOptions {
         targetSdk 37
+        animationsDisabled = true
+        unitTests.includeAndroidResources = true
         unitTests.all {
             maxHeapSize = "2g"
+            jacoco {
+                includeNoLocationClasses = true
+                excludes = ['jdk.internal.*']
+            }
+        }
+        managedDevices {
+            localDevices {
+                pixel2Api30 {
+                    device = 'Pixel 2'
+                    apiLevel = 30
+                    systemImageSource = 'aosp'
+                }
+                pixel6Api37 {
+                    device = 'Pixel 6'
+                    apiLevel = 37
+                    // google_apis rather than aosp, because the 16KB-page images are only
+                    // published under it: asking for aosp here resolves to
+                    // system-images;android-37.0;default_ps16k, which does not exist at any
+                    // architecture, and the setup task fails before a test runs.
+                    systemImageSource = 'google_apis'
+                    pageAlignment = com.android.build.api.dsl.ManagedVirtualDevice.PageAlignment.FORCE_16KB_PAGES
+                    // AGP picks the ABI itself today and will pick arm64-v8a in 10.0, which
+                    // this image cannot translate, so the matrix would turn red on an
+                    // upgrade that has nothing to do with the camera.
+                    testedAbi = 'x86_64'
+                }
+            }
+            groups {
+                cameraMatrix {
+                    targetDevices.addAll(localDevices.pixel2Api30, localDevices.pixel6Api37)
+                }
+            }
         }
     }
 }
 
+jacoco {
+    toolVersion = '0.8.16'
+}
+
 afterEvaluate {
+    def releaseComponent = components.findByName('release')
+    if (releaseComponent == null) {
+        logger.warn('Release software component is not available; publication tasks will remain disabled.')
+        return
+    }
     publishing {
         publications {
             release(MavenPublication) {
-                from components.release
+                from releaseComponent
                 groupId = group = projectProperties.getProperty("bintray.groupId")
                 artifactId = projectProperties.getProperty("bintray.artifact")
                 version = projectProperties.getProperty("bintray.libraryVersion")
@@ -111,25 +177,38 @@ signing {
 
 dependencies {
     api fileTree(include: ['*.jar'], dir: 'libs')
-    api 'androidx.legacy:legacy-support-v4:[1.0.0,)'
-    api 'androidx.exifinterface:exifinterface:[1.4.1,)'
-    api 'androidx.camera:camera-core:[1.4.2,)'
-    api 'androidx.camera:camera-camera2:[1.4.2,)'
-    api 'androidx.camera:camera-lifecycle:[1.4.2,)'
-    api 'androidx.camera:camera-video:[1.4.2,)'
-    api 'com.google.guava:guava:[31.1-android,)'
-    api 'com.google.mlkit:barcode-scanning:[17.3.0,)'
-    api 'androidx.activity:activity-compose:[1.10.1,)'
-    api 'androidx.lifecycle:lifecycle-runtime-ktx:[2.8.7,)'
-    testImplementation 'org.robolectric:robolectric:+'
-    testImplementation 'org.mockito:mockito-core:+'
-    testImplementation 'junit:junit:+'
+    api 'androidx.legacy:legacy-support-v4:1.0.0'
+    api 'androidx.exifinterface:exifinterface:1.4.2'
+    api 'androidx.concurrent:concurrent-futures:1.3.0'
+    api 'com.google.guava:guava:33.8.0-android'
+    api 'com.google.mlkit:barcode-scanning:17.3.0'
+    if (!coreOnly) {
+        api 'androidx.camera:camera-core:1.7.0'
+        api 'androidx.camera:camera-camera2:1.7.0'
+        api 'androidx.camera:camera-lifecycle:1.7.0'
+        api 'androidx.camera:camera-extensions:1.7.0'
+        api 'androidx.camera:camera-video:1.7.0'
+        api 'androidx.activity:activity-compose:1.13.0'
+        api 'androidx.lifecycle:lifecycle-runtime-ktx:2.11.1'
+    }
+    testImplementation 'org.robolectric:robolectric:4.18.1'
+    testImplementation 'androidx.compose.ui:ui-test-junit4-android:1.9.2'
+    debugImplementation 'androidx.compose.ui:ui-test-manifest:1.9.2'
+    testImplementation 'org.mockito:mockito-core:5.24.0'
+    testImplementation 'junit:junit:4.13.2'
+    androidTestImplementation 'androidx.test:core:1.7.0'
+    androidTestImplementation 'androidx.test.ext:junit:1.3.0'
+    androidTestImplementation 'androidx.test:rules:1.7.0'
+    androidTestImplementation 'androidx.test:runner:1.7.0'
+    androidTestImplementation 'androidx.test.espresso:espresso-core:3.7.0'
     constraints {
-        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.2.20") {
+        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk7:2.3.21") {
             because("kotlin-stdlib-jdk7 is now a part of kotlin-stdlib")
         }
-        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.2.20") {
+        implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.21") {
             because("kotlin-stdlib-jdk8 is now a part of kotlin-stdlib")
         }
     }
 }
+
+apply from: rootProject.file('gradle/coverage.gradle')
