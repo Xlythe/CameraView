@@ -169,6 +169,58 @@ class VideoSession extends PictureSession {
          * The best profile the camera actually has for a requested quality, stepping down until
          * one exists. QUALITY_LOW is guaranteed on every camera, so it is the floor.
          */
+        /**
+         * The audio rate to record at, given the profile and the size actually being recorded.
+         *
+         * <p>The profile is chosen by quality and the size separately, from what the camera
+         * supports at that quality and at the preview's aspect ratio, so the two routinely
+         * disagree. Where the recording is bigger than its profile, the profile's audio is too low
+         * for it: the video rate is scaled up to suit, and the audio was left behind.</p>
+         *
+         * <p>Only ever raised, and only as far as the best the device itself publishes - so this
+         * cannot ask an encoder for a rate no profile on the device uses. A recording smaller than
+         * its profile keeps the profile's audio, since there is nothing wrong with it.</p>
+         *
+         * @return the rate to set, or 0 to leave the profile's alone
+         */
+        static int audioBitRateFor(@NonNull CamcorderProfile profile,
+                @Nullable CamcorderProfile best, int width, int height) {
+            if (best == null || best.audioBitRate <= profile.audioBitRate) {
+                return 0;
+            }
+            long recorded = (long) width * height;
+            long inProfile = (long) profile.videoFrameWidth * profile.videoFrameHeight;
+            if (recorded <= inProfile) {
+                return 0;
+            }
+            return best.audioBitRate;
+        }
+
+        /**
+         * The richest profile this camera publishes, for the settings that are not about size.
+         *
+         * @return the profile, or null for a camera that publishes none
+         */
+        @Nullable
+        private static CamcorderProfile highestProfile(int cameraId) {
+            int[] qualities = new int[] {
+                    CamcorderProfile.QUALITY_2160P,
+                    CamcorderProfile.QUALITY_1080P,
+                    CamcorderProfile.QUALITY_720P,
+                    CamcorderProfile.QUALITY_480P,
+            };
+            for (int quality : qualities) {
+                try {
+                    if (CamcorderProfile.hasProfile(cameraId, quality)) {
+                        return CamcorderProfile.get(cameraId, quality);
+                    }
+                } catch (RuntimeException error) {
+                    if (DEBUG) Log.d(TAG, "No profile for quality " + quality, error);
+                }
+            }
+            return null;
+        }
+
         private static CamcorderProfile chooseProfile(int cameraId, CameraView.Quality quality) {
             int[] preferences;
             switch (quality) {
@@ -315,6 +367,16 @@ class VideoSession extends PictureSession {
                 mMediaRecorder.setVideoEncodingBitRate(scaleBitRate(
                         profile.videoBitRate, profile.videoFrameWidth, profile.videoFrameHeight,
                         getWidth(), getHeight()));
+                // setProfile fixed the audio rate the same way, and unlike the video above it was
+                // never corrected - so a recording larger than its profile carried that profile's
+                // audio. A 480p profile is 96kbps, which is not what someone recording 4K
+                // expects, and audio is a rounding error beside the video rate, so there is
+                // nothing to save by skimping on it.
+                int audioBitRate = audioBitRateFor(
+                        profile, highestProfile(intCameraId), getWidth(), getHeight());
+                if (audioBitRate > 0) {
+                    mMediaRecorder.setAudioEncodingBitRate(audioBitRate);
+                }
                 mMediaRecorder.setOrientationHint(mCameraView.getRelativeCameraOrientation());
 
                 Location location = getLocation(getContext());
