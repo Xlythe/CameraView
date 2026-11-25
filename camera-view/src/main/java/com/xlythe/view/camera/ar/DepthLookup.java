@@ -4,6 +4,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.VisibleForTesting;
 
 import com.xlythe.view.camera.WorldOverlay;
+import com.xlythe.view.camera.gl.Sampling;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -80,17 +81,11 @@ public final class DepthLookup implements WorldOverlay.SceneDepth {
     /**
      * Which sample a point in the view falls on, or -1 when it falls outside.
      *
-     * <p>Rounded down rather than nearest, so that the sample covering a point is the one
-     * returned at every point it covers; nearest would make the two edges of a sample disagree
-     * about which sample they are in.</p>
+     * <p>A segmentation mask needs the same mapping onto a grid coarser than the view, so the
+     * arithmetic lives in one place and this defers to it.</p>
      */
     @VisibleForTesting
     static int sampleFor(float position, int viewExtent, int sampleExtent) {
-        if (position < 0 || position >= viewExtent) {
-            return -1;
-        }
-        int sample = (int) (position / viewExtent * sampleExtent);
-        // A point exactly on the far edge rounds into a sample that is not there.
-        return sample >= sampleExtent ? sampleExtent - 1 : sample;
+        return Sampling.sampleFor(position, viewExtent, sampleExtent);
     }
 }
