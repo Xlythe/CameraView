@@ -50,7 +50,11 @@ class VideoSession extends PictureSession {
     private final boolean mSnapshotSupported;
 
     VideoSession(Camera2Module camera2Module, File file) {
-        super(camera2Module);
+        // No RAW output while recording, whatever format was asked for: Camera2's guaranteed
+        // combinations carry a preview, a recording and a still, and a full-size RAW stream
+        // alongside all three is not among them. A snapshot asked for in a RAW format is refused
+        // rather than written as a JPEG the caller did not ask for.
+        super(camera2Module, false /* capturesRaw */);
         mVideoSurface = new VideoSurface(camera2Module, file, getPreviewSurface());
         mSnapshotSupported = camera2Module.isRecordingSnapshotSupported();
     }

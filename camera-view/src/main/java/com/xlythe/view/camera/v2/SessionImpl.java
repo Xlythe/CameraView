@@ -146,6 +146,10 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getPictureQuality();
     }
 
+    CameraView.PictureFormat getPictureFormat() {
+        return mCamera2Module.getPictureFormat();
+    }
+
     void applyFlash(@NonNull CaptureRequest.Builder builder) {
         if (!hasFlash()) {
             return;

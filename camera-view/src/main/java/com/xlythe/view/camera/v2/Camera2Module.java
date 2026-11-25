@@ -1181,6 +1181,23 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
+    /**
+     * The active camera's characteristics, or null when they cannot be read.
+     *
+     * <p>Needed whole rather than a field at a time by DngCreator, which reads the sensor's
+     * colour matrices, black levels and noise profile out of them to describe the raw frame it is
+     * writing.</p>
+     */
+    @Nullable
+    CameraCharacteristics getCameraCharacteristics() {
+        try {
+            return mCameraManager.getCameraCharacteristics(getActiveCamera());
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its characteristics", error);
+            return null;
+        }
+    }
+
     /** Rebuilds the session, for a setting the session itself carries. */
     private void restartActiveSession() {
         mHandler.post(() -> {
