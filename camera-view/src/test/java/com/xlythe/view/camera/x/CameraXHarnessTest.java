@@ -3,9 +3,12 @@ package com.xlythe.view.camera.x;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.shadow.ShadowAnnouncingCameraManager;
 import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
 
@@ -85,6 +88,7 @@ public class CameraXHarnessTest {
 
             exerciseControls(module);
             exerciseQueries(module);
+            exerciseFrameEffectFallback(module);
             exerciseAnalysis(module);
             exerciseRebinds(module);
             exerciseCapture(module);
@@ -298,6 +302,31 @@ public class CameraXHarnessTest {
         FakeCameraXHost.idle();
         module.setTorchEnabled(false);
         FakeCameraXHost.idle();
+    }
+
+    /**
+     * Setting and clearing a renderer on a live camera leaves a live camera.
+     *
+     * <p>Which is the property the fallback exists for. Whether GL actually comes up decides what
+     * the camera then shows, and that is the driver's answer rather than something a test can
+     * arrange either way - so what is asserted is the part that must hold on both kinds of device:
+     * the camera is still bound afterwards, and the probe agrees with what happened.</p>
+     */
+    private static void exerciseFrameEffectFallback(CameraXModule module) {
+        assertTrue("effects are offered until GL has actually failed",
+                module.isFrameEffectSupported());
+
+        FrameRenderer renderer = frame -> false;
+        module.setFrameRenderer(renderer);
+        assertTrue("a camera must survive being asked for an effect",
+                FakeCameraXHost.awaitBind(module));
+        assertSame(renderer, module.getFrameRenderer());
+
+        // Taking the renderer away again is the ordinary path, and must not cost the bind either.
+        module.setFrameRenderer(null);
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertNull(module.getFrameRenderer());
+        assertTrue("clearing a renderer is not a GL failure", module.isFrameEffectSupported());
     }
 
     /** Toggling is the shorthand an app's flip button calls, and it has to rebind. */
