@@ -7,8 +7,11 @@ import android.os.Build;
 import android.os.PowerManager;
 
 import androidx.test.core.app.ApplicationProvider;
+import androidx.test.platform.app.InstrumentationRegistry;
+import androidx.annotation.NonNull;
 
 import org.junit.Assume;
+import com.xlythe.view.camera.CameraView;
 
 /**
  * What the device has to be for a camera test to mean anything.
@@ -21,6 +24,27 @@ import org.junit.Assume;
  */
 final class DeviceState {
     private DeviceState() {}
+
+    /**
+     * Turns the flash off for a test that does not care about it.
+     *
+     * <p>Separate from the tests so there is one place to look when a run starts flashing.</p>
+     */
+    static void turnTheFlashOff(@NonNull CameraView camera) {
+        camera.setFlash(CameraView.Flash.OFF);
+    }
+
+    /**
+     * Skips a test whose whole point is to light the lamp, when someone has asked for a dark run.
+     *
+     * <p>Pass {@code -Pandroid.testInstrumentationRunnerArguments.lamp=off} and nothing in the
+     * suite lights up. The default is to run it, because a torch that never turns on is a torch
+     * nobody is testing - but a person sitting next to the phone gets to say otherwise.</p>
+     */
+    static void assumeTheLampMayBeLit() {
+        String lamp = InstrumentationRegistry.getArguments().getString("lamp");
+        Assume.assumeFalse("a dark run was asked for with -Plamp=off", "off".equals(lamp));
+    }
 
     /** Skips unless there is a camera to test and a screen to show it on. */
     static void assumeATestableCamera() {
