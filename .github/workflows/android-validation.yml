@@ -1,0 +1,94 @@
+name: Android validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 8 * * 1'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-validation-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+      - name: Set up JDK 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          check-latest: false
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+      - name: Verify build, lint, tests, and coverage
+        run: >-
+          ./gradlew --no-daemon --stacktrace
+          :camera-view:lintDebug
+          :app:lintDebug
+          :app-compose:lintDebug
+          :camera-view:testDebugUnitTest
+          :app:testDebugUnitTest
+          :app-compose:testDebugUnitTest
+          :camera-view:jacocoCoreCoverageVerification
+          :camera-view:assembleRelease
+          :app:assembleDebug
+          :app-compose:assembleDebug
+      - name: Upload verification reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verification-reports
+          if-no-files-found: ignore
+          path: |
+            **/build/reports/lint-results-*.html
+            **/build/reports/tests/**
+            camera-view/build/reports/jacoco/**
+
+  managed-device:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+      - name: Set up JDK 21
+        uses: actions/setup-java@03ad4de0992f5dab5e18fcb136590ce7c4a0ac95 # v5.6.0
+        with:
+          distribution: temurin
+          java-version: '21'
+          check-latest: false
+      - name: Configure Gradle
+        uses: gradle/actions/setup-gradle@3f131e8634966bd73d06cc69884922b02e6faf92 # v6.2.0
+      - name: Enable KVM
+        run: |
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm
+          fi
+      - name: Run API 30 and API 37 managed-device tests
+        run: >-
+          ./gradlew --no-daemon --stacktrace
+          :camera-view:cameraMatrixGroupDebugAndroidTest
+          -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect
+      - name: Upload device-test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: managed-device-results
+          if-no-files-found: ignore
+          path: |
+            camera-view/build/reports/androidTests/**
+            camera-view/build/outputs/androidTest-results/**
+            camera-view/build/outputs/code_coverage/**

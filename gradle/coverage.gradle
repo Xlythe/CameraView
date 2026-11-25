@@ -1,0 +1,185 @@
+import org.gradle.testing.jacoco.tasks.JacocoCoverageVerification
+import org.gradle.testing.jacoco.tasks.JacocoReport
+
+def coverageExclusions = [
+        '**/R.class',
+        '**/R$*.class',
+        '**/BuildConfig.*',
+        '**/Manifest*.*'
+]
+
+// JaCoCo needs the compiled classes, and AGP keeps moving where it writes them: Kotlin output
+// lived in build/tmp/kotlin-classes/debug before AGP 9 and lives under built_in_kotlinc now.
+// Accept every layout we have shipped against, then assert below that each language actually
+// matched one. A path that quietly stops existing drops a whole source set from the report
+// instead of failing, which is how the Compose sources went unmeasured.
+def javaClassDirectories = [
+        'intermediates/javac/debug/compileDebugJavaWithJavac/classes'
+]
+def kotlinClassDirectories = [
+        'intermediates/built_in_kotlinc/debug/compileDebugKotlin/classes',
+        'tmp/kotlin-classes/debug'
+]
+
+def classTrees = { List<String> relativePaths, Closure filter ->
+    files(relativePaths.collect { relativePath ->
+        fileTree(layout.buildDirectory.dir(relativePath)) { filter.delegate = delegate; filter() }
+    })
+}
+
+def allProductionClasses = classTrees(javaClassDirectories + kotlinClassDirectories) {
+    exclude coverageExclusions
+}
+
+// These classes are deterministic production logic and must remain thoroughly unit tested: the
+// coordinate maths, the metadata, the stream framing and the small value types. They have no
+// camera, codec or surface in them, so there is no reason for any of them to be less than fully
+// covered, and each has been the home of a real bug - a preview rotated twice, an orientation
+// table with one wrong cell, a GPS speed truncated by the rational it was written as.
+//
+// Everything that drives a camera, a codec or a view lifecycle stays out of this gate and in the
+// full report. Robolectric can reach a surprising amount of it with the right shadows, but not
+// all, and a gate that demands what cannot be reached off a device only teaches people to
+// exclude things.
+def coreCoverageIncludes = [
+        'com/xlythe/view/camera/Exif.class',
+        'com/xlythe/view/camera/Exif$*.class',
+        'com/xlythe/view/camera/PermissionChecker.class',
+        'com/xlythe/view/camera/TransformMath.class',
+        'com/xlythe/view/camera/x/CameraXMath.class',
+        'com/xlythe/view/camera/stream/AudioBuffer.class',
+        'com/xlythe/view/camera/stream/AudioStreamHeader.class',
+        'com/xlythe/view/camera/stream/AudioStreamHeader$*.class',
+        'com/xlythe/view/camera/stream/LossyPipedOutputStream.class',
+        'com/xlythe/view/camera/stream/VideoFrame*.class'
+]
+
+// And a floor under the library as a whole, so the parts that are not in the gate above cannot
+// quietly rot. Set just under where the suite actually stands rather than at an aspiration: a
+// gate nobody can meet is a gate somebody turns off.
+def wholeLibraryLineMinimum = 0.63
+
+def wholeLibraryBranchMinimum = 0.45
+
+def coreProductionClasses = classTrees(javaClassDirectories + kotlinClassDirectories) {
+    include coreCoverageIncludes
+}
+
+def unitCoverageData = layout.buildDirectory.file('jacoco/testDebugUnitTest.exec')
+
+// Instrumented coverage, when a device run has produced any. The paths that only exist on a real
+// camera - a capture that makes a JPEG, two outputs configured at once, a detector running in the
+// image signal processor - cannot be reached off one, so a report built from unit tests alone
+// understates the library and a gate built on it asks for the impossible. AGP writes one file per
+// device under code_coverage, and a connected run writes outputs/code-coverage; both are picked
+// up when present and neither is required, so the report still builds without a device.
+def instrumentedCoverageData = files(
+        fileTree(layout.buildDirectory.dir('outputs/code_coverage')) {
+            include '**/*.ec'
+        },
+        fileTree(layout.buildDirectory.dir('outputs/code-coverage')) {
+            include '**/*.ec'
+        })
+
+def allCoverageData = files(unitCoverageData, instrumentedCoverageData)
+
+/**
+ * Fails when a configured class directory produced nothing, so a moved AGP intermediate path
+ * surfaces as a build failure rather than as a silently smaller report.
+ */
+def assertClassesFound = { String language, List<String> relativePaths ->
+    boolean found = relativePaths.any { relativePath ->
+        File directory = layout.buildDirectory.dir(relativePath).get().asFile
+        directory.isDirectory() && fileTree(directory).matching { include '**/*.class' }.any()
+    }
+    if (!found) {
+        throw new GradleException("No compiled ${language} classes found for coverage. "
+                + "Looked in ${relativePaths}. An AGP upgrade has probably moved the output; "
+                + "update gradle/coverage.gradle rather than leaving the report incomplete.")
+    }
+}
+
+tasks.register('jacocoTestReport', JacocoReport) {
+    group = 'verification'
+    description = 'Generates the whole-library unit-test coverage report.'
+    dependsOn tasks.named('testDebugUnitTest')
+
+    classDirectories.setFrom(allProductionClasses)
+    sourceDirectories.setFrom(files('src/main/java'))
+    executionData.setFrom(allCoverageData)
+
+    doFirst {
+        assertClassesFound('Java', javaClassDirectories)
+        assertClassesFound('Kotlin', kotlinClassDirectories)
+    }
+
+    reports {
+        xml.required = true
+        html.required = true
+        csv.required = false
+    }
+}
+
+tasks.register('jacocoCoreCoverageVerification', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Enforces 90% line and branch coverage for deterministic core logic.'
+    dependsOn tasks.named('jacocoTestReport')
+
+    classDirectories.setFrom(coreProductionClasses)
+    sourceDirectories.setFrom(files('src/main/java'))
+    executionData.setFrom(allCoverageData)
+
+    doFirst {
+        assertClassesFound('Java', javaClassDirectories)
+        assertClassesFound('Kotlin', kotlinClassDirectories)
+    }
+
+    violationRules {
+        rule {
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = 0.90
+            }
+            limit {
+                counter = 'BRANCH'
+                value = 'COVEREDRATIO'
+                minimum = 0.90
+            }
+        }
+    }
+}
+
+tasks.register('jacocoLibraryCoverageVerification', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Holds a floor under the library as a whole, so untested code cannot grow.'
+    dependsOn tasks.named('jacocoTestReport')
+
+    classDirectories.setFrom(allProductionClasses)
+    sourceDirectories.setFrom(files('src/main/java'))
+    executionData.setFrom(allCoverageData)
+
+    violationRules {
+        rule {
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = wholeLibraryLineMinimum
+            }
+            limit {
+                counter = 'BRANCH'
+                value = 'COVEREDRATIO'
+                minimum = wholeLibraryBranchMinimum
+            }
+        }
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('jacocoCoreCoverageVerification')
+    dependsOn tasks.named('jacocoLibraryCoverageVerification')
+}
+
+tasks.matching { it.name == 'testDebugUnitTest' }.configureEach {
+    finalizedBy tasks.named('jacocoTestReport')
+}

@@ -6,8 +6,5 @@
 /build
 /.idea
 *.iml
-/gradle
-gradlew
-gradlew.bat
 *.apk
 .vscode/settings.json
