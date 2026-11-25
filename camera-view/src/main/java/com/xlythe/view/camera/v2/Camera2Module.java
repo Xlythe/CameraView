@@ -50,6 +50,7 @@ import java.util.Locale;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
 
@@ -492,7 +493,9 @@ public class Camera2Module extends ICameraModule {
                         }
                         // The session is configured and targeted, which is the first moment a
                         // capture can succeed.
+                        mAwaitingFormatSession = false;
                         onCameraReady();
+                        capturePendingPicture();
                         if (mZoomLevel != 0) {
                             setZoomLevel(mZoomLevel);
                         }
@@ -508,6 +511,9 @@ public class Camera2Module extends ICameraModule {
                         cameraCaptureSession.close();
                         return;
                     }
+                    // Whatever was waiting for this session is not going to get it.
+                    mAwaitingFormatSession = false;
+                    cancelPendingPicture();
                     failSession(session, cameraCaptureSession,
                             "Failed to configure " + session.getClass().getSimpleName(), null);
                 }
@@ -1222,8 +1228,26 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
-    /** Whether the active camera offers a RAW_SENSOR stream a DNG could be written from. */
+    /**
+     * Whether the active camera offers a RAW_SENSOR stream a DNG could be written from.
+     *
+     * <p>Answers false regardless, for now. The machinery below it works as far as handing a
+     * frame to DngCreator and then takes the process down with SIGSEGV - the backtrace is
+     * DngCreator_nativeWriteImage into TiffWriter::write into a memcpy off the end of the
+     * buffer, on the AsyncTask thread the DNG is written on. The frame belongs to an
+     * ImageReader that a session rebuild closes, and closing a reader frees the buffers it
+     * handed out, so the write runs over memory that is no longer there. Making that safe means
+     * the reader outliving every write started against it, which is a lifecycle change rather
+     * than a patch.</p>
+     *
+     * <p>Until then the capability is refused, because a library that can crash its host on a
+     * public setting is worse than one that cannot offer the setting at all. The code and its
+     * tests stay: the probe is the only thing standing between them and being usable again.</p>
+     */
     private boolean isRawCaptureSupported() {
+        if (!sRawCaptureEnabled) {
+            return false;
+        }
         CameraCharacteristics characteristics = getCameraCharacteristics();
         if (characteristics == null) {
             return false;
@@ -1262,9 +1286,60 @@ public class Camera2Module extends ICameraModule {
         CameraView.PictureFormat before = getPictureFormat();
         super.setPictureFormat(format);
         if (getPictureFormat() != before) {
-            // The RAW output is a surface of the session's, so a format that needs one only takes
-            // hold when the session is built again.
+            // The RAW output is a surface of the session's, so a format that needs one only
+            // takes hold when the session is built again. Until the camera says that session is
+            // configured, a capture asked for in this format has nowhere to go.
+            mAwaitingFormatSession = true;
             restartActiveSession();
+        }
+    }
+
+    /**
+     * Holds a capture until the session being built for its format is configured.
+     *
+     * <p>One at a time: a second request replaces the first, which is what a caller pressing
+     * the shutter twice means. The timeout exists because a session that never configures would
+     * otherwise leave the caller waiting on a callback that is not coming - a failure reported
+     * late is still better than silence.</p>
+     */
+    private void awaitSessionThenCapture(@NonNull File file) {
+        cancelPendingPicture();
+        mPendingPictureFile = file;
+        mPendingPictureTimeout = () -> {
+            if (mPendingPictureFile == null) {
+                return;
+            }
+            Log.w(TAG, "The session for this picture format never configured");
+            mPendingPictureFile = null;
+            mPendingPictureTimeout = null;
+            onImageFailed();
+        };
+        mHandler.postDelayed(mPendingPictureTimeout, PENDING_PICTURE_TIMEOUT_MILLIS);
+    }
+
+    /** Takes the picture that was waiting for this session, if there was one. */
+    private void capturePendingPicture() {
+        File file = mPendingPictureFile;
+        if (file == null) {
+            return;
+        }
+        mPendingPictureFile = null;
+        if (mPendingPictureTimeout != null) {
+            mHandler.removeCallbacks(mPendingPictureTimeout);
+            mPendingPictureTimeout = null;
+        }
+        takePicture(file);
+    }
+
+    /** Drops a waiting capture, reporting the failure the caller is owed. */
+    private void cancelPendingPicture() {
+        if (mPendingPictureTimeout != null) {
+            mHandler.removeCallbacks(mPendingPictureTimeout);
+            mPendingPictureTimeout = null;
+        }
+        if (mPendingPictureFile != null) {
+            mPendingPictureFile = null;
+            onImageFailed();
         }
     }
 
@@ -1284,6 +1359,31 @@ public class Camera2Module extends ICameraModule {
             return null;
         }
     }
+
+    /**
+     * How long a capture waits for the session its format needs.
+     *
+     * <p>Generous, because configuring a session means the camera reallocating its streams, and
+     * mean enough that a caller is told rather than left waiting.</p>
+     */
+    private static final long PENDING_PICTURE_TIMEOUT_MILLIS = 5000;
+
+    /** True between a format change and the session for it being configured. */
+    private boolean mAwaitingFormatSession;
+
+    /** A capture waiting for that session, or null. */
+    @Nullable private File mPendingPictureFile;
+
+    /** What reports the failure if that session never arrives. */
+    @Nullable private Runnable mPendingPictureTimeout;
+
+    /**
+     * Whether RAW is offered at all. False until the write outlives its reader safely.
+     *
+     * <p>A named constant rather than a deleted branch, so what has to change to turn it back
+     * on is one line and a fix, not an archaeology exercise.</p>
+     */
+    @VisibleForTesting static boolean sRawCaptureEnabled = false;
 
     /** Rebuilds the session, for a setting the session itself carries. */
     private void restartActiveSession() {
@@ -1549,6 +1649,15 @@ public class Camera2Module extends ICameraModule {
     public void takePicture(File file) {
         if (file == null) {
             throw new IllegalArgumentException("Picture destination cannot be null");
+        }
+        // A format change rebuilds the session, and a capture session is configured by the
+        // camera rather than by us - the device calls back when it is ready. So a caller who
+        // sets a format and takes a picture on the next line arrives while the session that
+        // can honour it does not exist yet. Waiting is the only correct answer: refusing would
+        // fail a capture for a reason the caller cannot see and could not have avoided.
+        if (mAwaitingFormatSession) {
+            awaitSessionThenCapture(file);
+            return;
         }
         if (mCaptureSession == null || mActiveSession == null || mCameraDevice == null) {
             Log.w(TAG, "Cannot take picture before Camera2 preview is ready");

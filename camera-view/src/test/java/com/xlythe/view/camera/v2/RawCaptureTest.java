@@ -54,6 +54,23 @@ public class RawCaptureTest {
      */
     private int readersBefore;
 
+    /**
+     * RAW is switched off for applications, and switched on here.
+     *
+     * <p>It crashes the process on a device - the DNG write outlives the ImageReader that owns
+     * the frame - so no app may ask for it yet. None of that happens against a fake camera,
+     * which frees nothing, so the machinery stays covered while it waits for the fix.</p>
+     */
+    @Before
+    public void enableRawForTheseTests() {
+        Camera2Module.sRawCaptureEnabled = true;
+    }
+
+    @After
+    public void disableRawAgain() {
+        Camera2Module.sRawCaptureEnabled = false;
+    }
+
     @Before
     public void setUp() {
         readersBefore = ShadowInjectableImageReader.openReaderCount();
@@ -195,26 +212,34 @@ public class RawCaptureTest {
     }
 
     /**
-     * A capture a session cannot honour is refused, not written as something else.
+     * A capture asked for straight after a format change waits for that format's session.
      *
-     * <p>Reachable while the session is still being rebuilt for a new format, and on a recording
-     * session, which carries no RAW output because Camera2 guarantees no combination that has a
-     * preview, a recording and a full-sensor RAW stream in it.</p>
+     * <p>This asserted the opposite once, and documented the race as though it were the
+     * contract. Changing the format rebuilds the session and the camera configures it on its
+     * own schedule, so a caller who writes the two lines in the order they mean them used to
+     * get a refusal they could neither see the reason for nor avoid. The capture is now held
+     * until the session is configured, and dropped with a failure if it never is.</p>
+     *
+     * <p>A recording session is the other way to reach the refusal and still does: it carries
+     * no RAW output, because Camera2 guarantees no combination with a preview, a recording and
+     * a full-sensor RAW stream in it.</p>
      */
     @Test
-    public void aRawCaptureTheSessionCannotTakeIsRefused() {
+    public void aCaptureWaitsForTheFormatChangeItFollows() {
         Camera2Module module = givenACamera(FakeCamera2.RawSupport.FULL);
         module.open();
         FakeCamera2.idleMainLooper();
         File output = new File(context.getCacheDir(), "refused.dng");
 
-        // The rebuild is posted, so this capture reaches the session configured for JPEG while
-        // the requested format is already RAW.
         module.setPictureFormat(CameraView.PictureFormat.RAW);
         module.takePicture(output);
 
-        assertTrue("expected the capture to be refused", failed.get());
-        assertEquals(null, captured.get());
+        // Checked before the looper runs, which is the whole point: at this instant the session
+        // that can take the picture does not exist, and the old behaviour reported a failure
+        // here. Waiting is not the same as failing. What happens after the session configures
+        // needs a camera, and RawCaptureDeviceTest is where that is asserted.
+        assertFalse("a capture must not be refused for a session it could have waited for",
+                failed.get());
         assertFalse("and nothing written in its place", output.exists());
     }
 
