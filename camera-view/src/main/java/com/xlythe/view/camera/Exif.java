@@ -1,9 +1,15 @@
 package com.xlythe.view.camera;
 
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
+import android.graphics.Point;
 import android.location.Location;
 import android.util.Log;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.text.ParseException;
@@ -14,6 +20,7 @@ import java.util.TimeZone;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import androidx.exifinterface.media.ExifInterface;
 
 /**
@@ -21,6 +28,7 @@ import androidx.exifinterface.media.ExifInterface;
  */
 public class Exif {
     private static final String TAG = Exif.class.getSimpleName();
+    private static final boolean DEBUG = false;
 
     // SimpleDateFormat keeps mutable parsing state, so a shared instance cannot be used from more
     // than one thread. Pictures are saved on AsyncTask's thread pool, so two captures finishing
@@ -44,11 +52,43 @@ public class Exif {
     /** Thousandths, which is finer than any GPS reports and well inside a rational's range. */
     private static final long RATIONAL_SCALE = 1000;
 
+    /** Exif 2.32, the version whose tags this class writes. */
+    private static final String EXIF_VERSION_2_32 = "0232";
+    private static final String FLASHPIX_VERSION_1_0 = "0100";
+    private static final String COLOR_SPACE_SRGB = "1";
+    private static final String RESOLUTION_UNIT_INCHES = "2";
+    private static final String DEFAULT_RESOLUTION = "72/1";
+    private static final String Y_CB_CR_POSITIONING_CENTERED = "1";
+    /** The thumbnail size the specification suggests, and small enough to fit beside the Exif. */
+    private static final int THUMBNAIL_WIDTH = 160;
+    private static final int THUMBNAIL_HEIGHT = 120;
+    /** Tried in turn until one fits the room left beside the Exif. */
+    private static final int[] THUMBNAIL_QUALITIES = {80, 60, 40, 25};
+    /** Y, Cb, Cr and nothing in the fourth slot: bytes 1, 2, 3, 0. */
+    private static final String COMPONENTS_Y_CB_CR = "\u0001\u0002\u0003\u0000";
+
+    /** The GPS tag version every current writer declares, as the four bytes 2, 3, 0, 0. */
+    private static final String GPS_VERSION_2_3 = "2/1,3/1,0/1,0/1";
+    /** The datum Android's fixes are expressed in, named because a coordinate needs one. */
+    private static final String WGS_84 = "WGS-84";
+    private static final String ALTITUDE_ABOVE_SEA_LEVEL = "0";
+    private static final String ALTITUDE_BELOW_SEA_LEVEL = "1";
+    /** True north rather than magnetic, which is what Location.getBearing reports. */
+    private static final String DIRECTION_TRUE_NORTH = "T";
+
     private static final String KILOMETERS_PER_HOUR = "K";
     private static final String MILES_PER_HOUR = "M";
     private static final String KNOTS = "N";
 
     private final ExifInterface mExifInterface;
+
+    /**
+     * The file this came from, where there was one.
+     *
+     * <p>Only needed to measure the image when no tag says how big it is, which is a real case:
+     * the CameraX backend writes a JPEG carrying neither ImageWidth nor PixelXDimension.</p>
+     */
+    @Nullable private final String mFilePath;
 
     // When true, avoid saving any time. This is a privacy issue.
     private boolean mRemoveTimestamp = false;
@@ -58,15 +98,13 @@ public class Exif {
     }
 
     public Exif(String filePath) throws IOException {
-        this(new ExifInterface(filePath));
+        mExifInterface = new ExifInterface(filePath);
+        mFilePath = filePath;
     }
 
     public Exif(InputStream is) throws IOException {
-        this(new ExifInterface(is));
-    }
-
-    private Exif(ExifInterface exifInterface) {
-        mExifInterface = exifInterface;
+        mExifInterface = new ExifInterface(is);
+        mFilePath = null;
     }
 
     /**
@@ -76,7 +114,128 @@ public class Exif {
         if (!mRemoveTimestamp) {
             attachLastModifiedTimestamp();
         }
+        attachMandatoryTags();
         mExifInterface.saveAttributes();
+    }
+
+    /**
+     * Fills in the tags Exif requires of a compressed image, where they are absent or nonsense.
+     *
+     * <p>Mandatory for a compressed image, per CIPA DC-008 tables 17 and 18: ExifVersion,
+     * ComponentsConfiguration, ColorSpace, PixelXDimension, PixelYDimension and
+     * YCbCrPositioning. The resolution triple and FlashpixVersion are Optional there, and are
+     * written anyway for a narrower reason - they were already present and set to zero.</p>
+     *
+     * <p>Measured on a Pixel 7 Pro, not assumed: a capture came back declaring ColorSpace 0,
+     * ResolutionUnit 0, YCbCrPositioning 0 and a resolution of 0/1 on the camera2 and CameraX
+     * backends, and simply missing all of them on the legacy one. Optional does not mean a
+     * value may be nonsense: zero is not one of the two choices for a resolution unit, and a
+     * resolution of zero describes nothing, so a reader meets a file that claims to be Exif and
+     * then contradicts itself. The legacy backend's file was the honest kind of wrong - it left
+     * them out.</p>
+     *
+     * <p>Only absent or invalid values are written. A camera that reports its own resolution,
+     * colour space or positioning knows more about the sensor than this does, and overwriting it
+     * would trade a real measurement for a convention.</p>
+     */
+    private void attachMandatoryTags() {
+        // 2.32, because the offset tags this class writes arrived in 2.31 and a file carrying
+        // them while declaring an earlier version is asking to be parsed wrongly.
+        if (isBlank(mExifInterface.getAttribute(ExifInterface.TAG_EXIF_VERSION))) {
+            mExifInterface.setAttribute(ExifInterface.TAG_EXIF_VERSION, EXIF_VERSION_2_32);
+        }
+        if (isBlank(mExifInterface.getAttribute(ExifInterface.TAG_FLASHPIX_VERSION))) {
+            mExifInterface.setAttribute(ExifInterface.TAG_FLASHPIX_VERSION, FLASHPIX_VERSION_1_0);
+        }
+        // sRGB. The other legal value means "uncalibrated", which is a claim about the sensor
+        // this cannot make on the camera's behalf.
+        if (isUnsetOrZero(ExifInterface.TAG_COLOR_SPACE)) {
+            mExifInterface.setAttribute(ExifInterface.TAG_COLOR_SPACE, COLOR_SPACE_SRGB);
+        }
+        // Inches, and 72 of them to the unit: the convention for a photograph that was never
+        // printed and has no real resolution to report.
+        if (isUnsetOrZero(ExifInterface.TAG_RESOLUTION_UNIT)) {
+            mExifInterface.setAttribute(ExifInterface.TAG_RESOLUTION_UNIT, RESOLUTION_UNIT_INCHES);
+        }
+        if (isUnsetOrZeroRational(ExifInterface.TAG_X_RESOLUTION)) {
+            mExifInterface.setAttribute(ExifInterface.TAG_X_RESOLUTION, DEFAULT_RESOLUTION);
+        }
+        if (isUnsetOrZeroRational(ExifInterface.TAG_Y_RESOLUTION)) {
+            mExifInterface.setAttribute(ExifInterface.TAG_Y_RESOLUTION, DEFAULT_RESOLUTION);
+        }
+        // Centered, which is what every JPEG encoder on a phone produces.
+        if (isUnsetOrZero(ExifInterface.TAG_Y_CB_CR_POSITIONING)) {
+            mExifInterface.setAttribute(
+                    ExifInterface.TAG_Y_CB_CR_POSITIONING, Y_CB_CR_POSITIONING_CENTERED);
+        }
+        // YCbCr in the usual order, as the four bytes 1, 2, 3, 0. The legacy backend omits it;
+        // the other two write it already, which is why this only fills a gap.
+        if (mExifInterface.getAttribute(ExifInterface.TAG_COMPONENTS_CONFIGURATION) == null) {
+            mExifInterface.setAttribute(
+                    ExifInterface.TAG_COMPONENTS_CONFIGURATION, COMPONENTS_Y_CB_CR);
+        }
+        // The pixel dimensions, which the CameraX backend leaves out along with ImageWidth, so
+        // there is nothing to copy them from and the image itself has to be measured.
+        if (isUnsetOrZero(ExifInterface.TAG_PIXEL_X_DIMENSION)
+                || isUnsetOrZero(ExifInterface.TAG_PIXEL_Y_DIMENSION)) {
+            Point size = measureImage();
+            if (size != null) {
+                mExifInterface.setAttribute(
+                        ExifInterface.TAG_PIXEL_X_DIMENSION, Integer.toString(size.x));
+                mExifInterface.setAttribute(
+                        ExifInterface.TAG_PIXEL_Y_DIMENSION, Integer.toString(size.y));
+            }
+        }
+    }
+
+    /**
+     * How big the image actually is, read from its own header.
+     *
+     * <p>Preferred over the tags because this is called precisely when the tags are missing, and
+     * decoding bounds costs no pixels - inJustDecodeBounds reads the JPEG's frame header and
+     * stops.</p>
+     *
+     * @return the size, or null when there is no file to measure or it will not decode
+     */
+    @Nullable
+    private Point measureImage() {
+        int width = getWidth();
+        int height = getHeight();
+        if (width > 0 && height > 0) {
+            return new Point(width, height);
+        }
+        if (mFilePath == null) {
+            return null;
+        }
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        try {
+            BitmapFactory.decodeFile(mFilePath, bounds);
+        } catch (RuntimeException | OutOfMemoryError error) {
+            // A file that will not decode is a file whose size cannot be stated, which is worth
+            // nothing more than leaving the tag out. Writing the rest of the metadata still
+            // matters, so this must not be what stops it.
+            Log.w(TAG, "Unable to measure the image to record its dimensions", error);
+            return null;
+        }
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null;
+        }
+        return new Point(bounds.outWidth, bounds.outHeight);
+    }
+
+    /** Whether a tag is missing or holds the zero that stands for "nobody filled this in". */
+    private boolean isUnsetOrZero(@NonNull String tag) {
+        return mExifInterface.getAttributeInt(tag, 0) == 0;
+    }
+
+    /** The same, for a rational, whose zero is written 0/1 rather than 0. */
+    private boolean isUnsetOrZeroRational(@NonNull String tag) {
+        return mExifInterface.getAttributeDouble(tag, 0) == 0;
+    }
+
+    private static boolean isBlank(@Nullable String value) {
+        return value == null || value.trim().isEmpty();
     }
 
     public void copyFrom(Exif exif) {
@@ -266,6 +425,155 @@ public class Exif {
     @Nullable
     String getAttribute(String tag) {
         return mExifInterface.getAttribute(tag);
+    }
+
+    /**
+     * Writes a thumbnail into the file, if it has none and there is room for one.
+     *
+     * <p>Exif keeps a small copy of the picture in a second directory so that a gallery can draw
+     * a grid without decoding every photograph at full size. Two of the three backends write no
+     * thumbnail, and no Android API will add one - androidx's ExifInterface reads thumbnails and
+     * has no setter - so the directory is written by hand.</p>
+     *
+     * <p>Call it after {@link #save()}: it works on the file as it stands on disc, and saving
+     * again afterwards would rewrite the Exif block and drop it.</p>
+     *
+     * @return true if a thumbnail was written
+     */
+    public boolean attachThumbnail() {
+        if (mFilePath == null) {
+            return false;
+        }
+        File file = new File(mFilePath);
+        try {
+            byte[] original = read(file);
+            if (original == null) {
+                return false;
+            }
+            byte[] updated = repairOrEncode(file, original);
+            if (updated == null) {
+                return false;
+            }
+            FileOutputStream out = new FileOutputStream(file);
+            try {
+                out.write(updated);
+            } finally {
+                out.close();
+            }
+            return true;
+        } catch (IOException | RuntimeException | OutOfMemoryError error) {
+            // A photograph without a thumbnail is a photograph. Losing one is never worth
+            // failing a capture that has already succeeded.
+            Log.w(TAG, "Unable to attach a thumbnail", error);
+            return false;
+        }
+    }
+
+    /**
+     * Declares the thumbnail already in the file, or makes one if there is none.
+     *
+     * <p>Repair first, and it is usually repair. A camera writes a thumbnail of its own, then
+     * the Exif block is rewritten and the Compression tag that said what it was does not
+     * survive, leaving bytes no reader will touch. Naming them again costs a few dozen bytes and
+     * keeps the camera's own thumbnail; encoding a new one costs a decode, a scale and fifteen
+     * kilobytes of a segment that has a hard limit.</p>
+     *
+     * @return the updated file, or null when nothing could be done
+     */
+    @Nullable
+    private byte[] repairOrEncode(@NonNull File file, @NonNull byte[] original) {
+        int orientation = getOrientation();
+        byte[] declared = ExifThumbnail.declareExistingThumbnail(original, orientation);
+        if (declared != null) {
+            return declared;
+        }
+        int room = ExifThumbnail.roomForThumbnail(original);
+        if (room <= 0) {
+            if (DEBUG) Log.d(TAG, "No room beside this file's Exif for a thumbnail");
+            return null;
+        }
+        byte[] thumbnail = encodeThumbnail(file, room);
+        if (thumbnail == null) {
+            return null;
+        }
+        return ExifThumbnail.attach(original, thumbnail, orientation);
+    }
+
+    /**
+     * Shrinks the picture to a thumbnail and encodes it as JPEG.
+     *
+     * <p>Sampled down while decoding rather than afterwards, so a 12-megapixel capture is never
+     * held in memory to make a postage stamp of it. The target is the 160x120 the specification
+     * suggests; inSampleSize only halves, so the result is the first power-of-two reduction that
+     * is no larger than the target in both directions.</p>
+     */
+    @Nullable
+    private byte[] encodeThumbnail(@NonNull File file, int room) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(file.getPath(), bounds);
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null;
+        }
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sampleSizeFor(bounds.outWidth, bounds.outHeight);
+        Bitmap bitmap = BitmapFactory.decodeFile(file.getPath(), options);
+        if (bitmap == null) {
+            return null;
+        }
+        try {
+            // Quality first, because a slightly softer thumbnail at the right size reads better
+            // than a sharp one at half of it, and because the room left over is whatever a maker
+            // note did not take - on some devices that is generous and on others it is almost
+            // nothing.
+            for (int quality : THUMBNAIL_QUALITIES) {
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                if (!bitmap.compress(Bitmap.CompressFormat.JPEG, quality, bytes)) {
+                    return null;
+                }
+                if (bytes.size() <= room) {
+                    return bytes.toByteArray();
+                }
+            }
+            if (DEBUG) Log.d(TAG, "A thumbnail will not fit in " + room + " bytes");
+            return null;
+        } finally {
+            bitmap.recycle();
+        }
+    }
+
+    /** The first halving that brings both sides to the target or below. */
+    @VisibleForTesting
+    static int sampleSizeFor(int width, int height) {
+        int sample = 1;
+        while (width / (sample * 2) >= THUMBNAIL_WIDTH
+                && height / (sample * 2) >= THUMBNAIL_HEIGHT) {
+            sample *= 2;
+        }
+        return sample;
+    }
+
+    @Nullable
+    private static byte[] read(@NonNull File file) throws IOException {
+        long length = file.length();
+        if (length <= 0 || length > Integer.MAX_VALUE) {
+            return null;
+        }
+        byte[] data = new byte[(int) length];
+        FileInputStream in = new FileInputStream(file);
+        try {
+            int read = 0;
+            while (read < data.length) {
+                int count = in.read(data, read, data.length - read);
+                if (count < 0) {
+                    return null;
+                }
+                read += count;
+            }
+        } finally {
+            in.close();
+        }
+        return data;
     }
 
     /**
@@ -676,14 +984,19 @@ public class Exif {
 
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, datetime);
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, datetime);
+        // And the IFD0 one, which removeTimestamp has always cleared: a file that kept DateTime
+        // while losing the other two was stripped of nothing a reader actually looks at first.
+        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, datetime);
         String offset = offsetFromUtc(now);
         mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, offset);
         mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED, offset);
+        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME, offset);
 
         try {
             String subsec = formatSubSecond(now - convertFromExifDateTime(datetime).getTime());
             mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subsec);
             mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, subsec);
+            mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, subsec);
         } catch (ParseException e) {
             Log.w(TAG, "Unable to record the sub-second timestamp", e);
         }
@@ -715,15 +1028,39 @@ public class Exif {
     public void attachLocation(Location location) {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, location.getProvider());
         mExifInterface.setLatLong(location.getLatitude(), location.getLongitude());
+        // 2.3.0.0, the version every GPS IFD written this century declares. A reader that finds
+        // the IFD without it has to guess at the layout of what follows.
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_VERSION_ID, GPS_VERSION_2_3);
+        // Android fixes are WGS-84, and a coordinate without its datum is a coordinate that
+        // cannot be placed on a map to better than a few hundred metres.
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_MAP_DATUM, WGS_84);
         if (location.hasAltitude()) {
-            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, Integer.toString(0));
+            // The sign lives in the reference byte, not in the number: GPSAltitude is an
+            // unsigned rational, so a negative altitude written straight in is not below sea
+            // level, it is unreadable.
+            double altitude = location.getAltitude();
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF,
+                    altitude < 0 ? ALTITUDE_BELOW_SEA_LEVEL : ALTITUDE_ABOVE_SEA_LEVEL);
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE,
-                    rational(location.getAltitude()));
+                    rational(Math.abs(altitude)));
         }
         if (location.hasSpeed()) {
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, KILOMETERS_PER_HOUR);
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, rational(
                     Speed.fromMetersPerSecond(location.getSpeed()).toKilometersPerHour()));
+        }
+        if (location.hasBearing()) {
+            // Where the device was heading, which is not where the camera was pointing -
+            // GPSImgDirection is that, and a fix cannot know it.
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_TRACK_REF, DIRECTION_TRUE_NORTH);
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_TRACK,
+                    rational(location.getBearing()));
+        }
+        if (location.hasAccuracy()) {
+            // How much the coordinate above should be trusted, in metres. Without it a fix good
+            // to a street and a fix good to a city look exactly alike.
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_H_POSITIONING_ERROR,
+                    rational(location.getAccuracy()));
         }
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, convertToExifDate(location.getTime()));
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, convertToExifTime(location.getTime()));
@@ -744,6 +1081,16 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, null);
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, null);
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, null);
+        // The rest of what a fix knows, for the same reason the timezone goes with the time: a
+        // picture stripped of where it was taken, still carrying which way the phone was moving
+        // and how good the fix was, has not been stripped of much.
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_TRACK, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_TRACK_REF, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_H_POSITIONING_ERROR, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_MAP_DATUM, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_VERSION_ID, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_IMG_DIRECTION, null);
+        mExifInterface.setAttribute(ExifInterface.TAG_GPS_IMG_DIRECTION_REF, null);
     }
 
     /**

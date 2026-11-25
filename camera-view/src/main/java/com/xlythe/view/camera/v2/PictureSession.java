@@ -286,6 +286,9 @@ class PictureSession extends PreviewSession {
                     exif.attachLocation(location);
                 }
                 exif.save();
+                // After saving, not before: saveAttributes rewrites the Exif block and
+                // would drop a directory appended to it.
+                exif.attachThumbnail();
             } catch (IOException e) {
                 Log.e(TAG, "Failed to update EXIF", e);
             }

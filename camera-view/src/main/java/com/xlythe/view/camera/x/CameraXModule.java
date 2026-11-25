@@ -19,6 +19,7 @@ import android.graphics.SurfaceTexture;
 import android.location.Location;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.AsyncTask;
 import android.os.Looper;
 import android.util.Log;
 import android.util.Range;
@@ -86,6 +87,7 @@ import androidx.lifecycle.ViewTreeLifecycleOwner;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Captions;
+import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
@@ -99,6 +101,7 @@ import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -1211,6 +1214,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         ImageCapture.OnImageSavedCallback callback = new ImageCapture.OnImageSavedCallback() {
             @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
                 if (!completePendingImage(operationId)) return;
+                finishExif(file);
                 showImageConfirmation(file);
             }
             @Override public void onError(@NonNull ImageCaptureException error) {
@@ -1232,6 +1236,32 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         imageCapture.takePicture(options, mMainExecutor, callback);
+    }
+
+    /**
+     * Brings a CameraX capture up to what the other two backends write.
+     *
+     * <p>CameraX sets the location and the orientation through ImageCapture.Metadata and stops
+     * there, so its files were the only ones with no timezone offsets, no sub-second times, no
+     * pixel dimensions and no thumbnail - measured on a Pixel 7 Pro, where the capture came back
+     * missing PixelXDimension entirely. The camera2 and legacy paths have always finished the
+     * job through Exif; this is that same pass.</p>
+     *
+     * <p>Runs on the main thread, where the callback arrives, so it is posted to the background
+     * instead: it reads and rewrites the file.</p>
+     */
+    private void finishExif(@NonNull File file) {
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+            try {
+                Exif exif = new Exif(file);
+                exif.attachTimestamp();
+                exif.save();
+                // After save, because saveAttributes rewrites the block this appends to.
+                exif.attachThumbnail();
+            } catch (IOException | RuntimeException error) {
+                Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
+            }
+        });
     }
 
     private void scheduleImageTimeout(long operationId) {
