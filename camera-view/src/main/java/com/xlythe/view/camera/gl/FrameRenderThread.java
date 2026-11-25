@@ -40,13 +40,15 @@ public final class FrameRenderThread {
     private static final String TAG = ICameraModule.TAG;
 
     /**
-     * How long to wait for the context to come up before giving up on it.
+     * How long to wait for the context to come up, or to go away, before giving up on it.
      *
-     * <p>Generous, because it is only ever waited on once and a cold GL driver on a slow device
-     * takes longer than it looks like it should. Hitting it means the thread is wedged, which is
-     * reported as GL being unavailable rather than hanging the camera.</p>
+     * <p>Under the five seconds an unresponsive main thread costs an app, because this is waited
+     * on from there: a camera being configured is a main-thread operation in every backend here.
+     * Two is far longer than bringing an EGL context up takes even on a cold driver, so reaching
+     * it means the thread is wedged - which is reported as GL being unavailable rather than held
+     * on to until the system kills the app.</p>
      */
-    private static final long START_TIMEOUT_SECONDS = 5;
+    private static final long START_TIMEOUT_SECONDS = 2;
 
     /** How the matrix a frame is drawn with is arrived at, which is the backend's business. */
     public interface TextureTransform {
