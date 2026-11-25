@@ -20,7 +20,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** CameraX ImageAnalysis adapter for CameraView's ML Kit barcode callback. */
 @RestrictTo(RestrictTo.Scope.LIBRARY)
-public final class CameraXBarcodeAnalyzer implements ImageAnalysis.Analyzer, AutoCloseable {
+public final class CameraXBarcodeAnalyzer implements CameraXFrameAnalyzer {
     /** Log tag shared with CameraView. */
     private static final String TAG = CameraView.class.getSimpleName();
     /** ML Kit scanner processing CameraX image proxies. */

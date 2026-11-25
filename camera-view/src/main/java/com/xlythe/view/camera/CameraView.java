@@ -34,7 +34,9 @@ import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
 
 import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.BackgroundReplacer;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.gl.SegmentationMask;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
@@ -453,6 +455,8 @@ public class CameraView extends FrameLayout {
     private BarcodeScanner mBarcodeScanner;
     /** Whether the active backend owns a native barcode analysis use case. */
     private boolean mUsingModuleBarcodeScanner;
+    /** Whether enterBackgroundReplacement is in force. */
+    private boolean mReplacingBackground;
 
     /** The caller's own frame analyzer, if one is running. */
     @Nullable
@@ -1290,6 +1294,67 @@ public class CameraView extends FrameLayout {
         }
         mBarcodeScanner.start();
         return true;
+    }
+
+    /**
+     * What a segmenter reports: which parts of each frame are the subject.
+     *
+     * <p>Delivered on the main thread, as often as the model manages, which is slower than the
+     * frame rate and is expected to be. A listener that holds onto a mask is holding onto a
+     * description of a moment that has passed.</p>
+     */
+    public interface SegmentationListener {
+        void onSegmentation(@NonNull SegmentationMask mask);
+    }
+
+    /**
+     * Starts segmenting frames and feeding the result to a renderer that composites with it.
+     *
+     * <p>The two halves are separate on purpose and can be used apart: a caller with their own
+     * model can drive {@link BackgroundReplacer#setMask} themselves, and a caller who only
+     * wants to know where the subject is can take the masks and draw nothing. This is the
+     * convenience for the common case of wanting a different background.</p>
+     *
+     * <p>Only the CameraX backend can do it, because it needs a frame stream alongside a
+     * running preview. It also takes the one analysis slot, so it cannot run at the same time
+     * as the barcode scanner.</p>
+     *
+     * @return false where the backend cannot segment or the model is unavailable
+     */
+    @RequiresApi(21)
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public boolean enterBackgroundReplacement(@NonNull BackgroundReplacer replacer) {
+        if (!isOpen()) {
+            throw new IllegalStateException(
+                    "Camera must be open before replacing the background");
+        }
+        if (!isFrameEffectSupported()) {
+            Log.w(TAG, "This backend draws no effects, so there is nothing to composite with");
+            return false;
+        }
+        setFrameRenderer(replacer);
+        if (!mCameraModule.startSegmentation(replacer::setMask)) {
+            setFrameRenderer(null);
+            return false;
+        }
+        mReplacingBackground = true;
+        return true;
+    }
+
+    /** Stops segmenting and puts the camera frame back as it was. */
+    @RequiresApi(21)
+    public void exitBackgroundReplacement() {
+        if (!mReplacingBackground) {
+            return;
+        }
+        mReplacingBackground = false;
+        mCameraModule.stopSegmentation();
+        setFrameRenderer(null);
+    }
+
+    /** Whether a background is currently being replaced. */
+    public boolean isReplacingBackground() {
+        return mReplacingBackground;
     }
 
     @RequiresApi(19)

@@ -123,6 +123,20 @@ public abstract class ICameraModule {
     }
 
     protected void stopBarcodeScanner() {}
+
+    /**
+     * Starts handing frames to a segmenter, if this backend can.
+     *
+     * <p>False by default, and false on every backend but CameraX: segmentation needs a stream
+     * of frames while the preview keeps running, which is what an ImageAnalysis use case is
+     * for and what the other two have no equivalent of.</p>
+     */
+    protected boolean startSegmentation(CameraView.SegmentationListener listener) {
+        return false;
+    }
+
+    /** Stops handing frames to a segmenter and releases the model. */
+    protected void stopSegmentation() {}
     @RequiresApi(18)
     public VideoRecorder.Canvas getCanvas() {
         return new VideoRecorder.Canvas() {
