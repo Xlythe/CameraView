@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.test;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
@@ -278,16 +279,21 @@ public final class CameraDeviceCaptureTest {
             sleep(500);
             zoom.set(camera.getZoomLevel());
 
-            camera.setFlash(CameraView.Flash.OFF);
+            // Away from the OFF the harness set, so a setter that did nothing would show.
+            // Choosing a mode lights nothing on its own; only a capture does, and this test
+            // takes no picture.
+            camera.setFlash(CameraView.Flash.ON);
             sleep(200);
             flash.set(camera.getFlash());
+            camera.setFlash(CameraView.Flash.OFF);
 
             camera.focus(new Rect(-100, -100, 100, 100), new Rect(-200, -200, 200, 200));
             sleep(500);
         });
 
         assertTrue("zoom stayed inside its range", zoom.get() >= 0);
-        assertTrue(flash.get() == CameraView.Flash.OFF);
+        assertEquals("the flash mode has to be the one that was asked for",
+                CameraView.Flash.ON, flash.get());
     }
 
     /** Switching lenses on a real camera reconfigures a session rather than just a flag. */
@@ -349,6 +355,12 @@ public final class CameraDeviceCaptureTest {
                     opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             CameraView camera = held.get();
             assertNotNull(camera);
+            // The library's default is AUTO, so in a dim room every capture in this suite fires
+            // the flash - a dozen times over a full run, which is unpleasant for whoever is
+            // holding the phone and makes the captures depend on the light in the room. Nothing
+            // here asserts on exposure; the tests that mean to exercise the flash set the mode
+            // they want themselves.
+            DeviceState.turnTheFlashOff(camera);
             try {
                 action.run(camera);
             } finally {
