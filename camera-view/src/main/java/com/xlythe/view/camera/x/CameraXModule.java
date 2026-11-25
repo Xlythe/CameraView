@@ -2225,6 +2225,20 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         if (format == CameraView.PictureFormat.JPEG) {
             return true;
         }
+        // RAW is refused here whatever the camera says it can do. Asking CameraX 1.7.0 for it on
+        // a Pixel 7 Pro kills the process: an AssertionError out of DngCreator's native writer,
+        // thrown on camerax_io inside androidx.camera.core.imagecapture.DngImage2Disk, where
+        // nothing this library owns is on the stack and nothing it can catch is either. The
+        // camera2 backend writes DNGs itself and is the way to ask for one.
+        //
+        // Reported rather than worked around, because the fault is above us: a library may not
+        // hand an app a setting that crashes it. Re-enabling this needs the upstream fix, or a
+        // device quirk narrow enough to be trusted - and the quirk would have to be proven on
+        // hardware that crashes, not on hardware that happens to work.
+        if (format == CameraView.PictureFormat.RAW
+                || format == CameraView.PictureFormat.RAW_JPEG) {
+            return false;
+        }
         Camera camera = mActiveCamera;
         Integer outputFormat = outputFormatFor(format);
         if (camera == null || outputFormat == null) {

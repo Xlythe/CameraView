@@ -231,6 +231,12 @@ public final class FakeCamera2 {
         shadow.set(CameraCharacteristics.CONTROL_MAX_REGIONS_AE, 1);
         shadow.set(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM, 4f);
         shadow.set(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE, new Rect(0, 0, 4000, 3000));
+        // The geometry a DNG is written against. A real camera publishes these and
+        // DngCreator refuses any buffer that is not one of them, so a fake without them
+        // is a fake no RAW capture could succeed on.
+        shadow.set(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                new Rect(0, 0, SIZE_RAW.getWidth(), SIZE_RAW.getHeight()));
+        shadow.set(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE, SIZE_RAW);
         // A plausible phone sensor and lens: 5.76mm x 4.29mm behind a 4.3mm lens, which is about
         // 67 degrees across. Published so that anything working out an angle of view has
         // something to work from - a camera that publishes neither can only decline.
