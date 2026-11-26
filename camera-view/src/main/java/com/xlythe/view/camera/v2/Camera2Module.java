@@ -487,6 +487,7 @@ public class Camera2Module extends ICameraModule {
                             mRegisteringSession = null;
                         }
                         mReopenAttempts = 0;
+                        clampExposureCompensation();
                         if (!mIsPaused) {
                             session.onAvailable(mCameraDevice, mCaptureSession);
                         }
@@ -1049,6 +1050,92 @@ public class Camera2Module extends ICameraModule {
         super.setTorchEnabled(enabled);
         if (changed) {
             reissueRepeatingRequest("the torch");
+        }
+    }
+
+    /**
+     * Sets the exposure compensation index, in the camera's own steps.
+     *
+     * <p>With no camera open there is no range to hold the index to, so it is kept as given and
+     * clamped once a session is configured. An open camera that cannot compensate refuses it.</p>
+     */
+    @AnyThread
+    @Override
+    public void setExposureCompensation(int exposureCompensation) {
+        if (mCameraDevice == null) {
+            super.setExposureCompensation(exposureCompensation);
+            return;
+        }
+        Range<Integer> range = exposureCompensationRange(getActiveCharacteristics());
+        if (range == null) {
+            Log.w(TAG, "Ignoring exposure request because the active camera does not support it");
+            return;
+        }
+        int clamped = range.clamp(exposureCompensation);
+        boolean changed = clamped != getExposureCompensation();
+        super.setExposureCompensation(clamped);
+        if (changed) {
+            reissueRepeatingRequest("exposure compensation");
+        }
+    }
+
+    @Override
+    public int getMinExposureCompensation() {
+        Range<Integer> range = publishedExposureCompensationRange(getActiveCharacteristics());
+        return range == null ? 0 : range.getLower();
+    }
+
+    @Override
+    public int getMaxExposureCompensation() {
+        Range<Integer> range = publishedExposureCompensationRange(getActiveCharacteristics());
+        return range == null ? 0 : range.getUpper();
+    }
+
+    @Override
+    public boolean isExposureCompensationSupported() {
+        return exposureCompensationRange(getActiveCharacteristics()) != null;
+    }
+
+    /** Holds the index to the range of the camera now configured, for one set before it was. */
+    private void clampExposureCompensation() {
+        Range<Integer> range = exposureCompensationRange(getActiveCharacteristics());
+        if (range != null) {
+            super.setExposureCompensation(range.clamp(getExposureCompensation()));
+        }
+    }
+
+    /**
+     * The exposure compensation range a camera can apply, or null for one that cannot.
+     *
+     * <p>A range that stops at zero on either side counts as none, which is where the CameraX
+     * backend draws the line too.</p>
+     */
+    @Nullable
+    static Range<Integer> exposureCompensationRange(
+            @Nullable CameraCharacteristics characteristics) {
+        Range<Integer> range = publishedExposureCompensationRange(characteristics);
+        if (range == null || range.getLower() == 0 || range.getUpper() == 0) {
+            return null;
+        }
+        return range;
+    }
+
+    /** The range as published, which reports a minimum and maximum even where it is unusable. */
+    @Nullable
+    private static Range<Integer> publishedExposureCompensationRange(
+            @Nullable CameraCharacteristics characteristics) {
+        return characteristics == null ? null
+                : characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
+    }
+
+    /** The active camera's characteristics, or null when it cannot be asked. */
+    @Nullable
+    CameraCharacteristics getActiveCharacteristics() {
+        try {
+            return mCameraManager.getCameraCharacteristics(getActiveCamera());
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its characteristics", error);
+            return null;
         }
     }
 
