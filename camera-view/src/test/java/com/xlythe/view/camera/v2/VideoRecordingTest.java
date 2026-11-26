@@ -1,11 +1,14 @@
 package com.xlythe.view.camera.v2;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.media.MediaActionSound;
 
+import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
 
@@ -16,6 +19,7 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowMediaActionSound;
 
 import java.io.File;
 import java.util.concurrent.atomic.AtomicReference;
@@ -40,6 +44,7 @@ public class VideoRecordingTest {
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
         module = new Camera2Module(cameraView);
         output = new File(context.getCacheDir(), "recording-test.mp4");
+        CameraSoundsTest.resetSounds();
     }
 
     @After
@@ -89,6 +94,42 @@ public class VideoRecordingTest {
 
         assertFalse(module.isRecording());
         assertTrue("expected a PictureSession again", activeSession() instanceof PictureSession);
+    }
+
+    /** A tone as the recorder starts and another once it has stopped, so neither is recorded. */
+    @Test
+    public void aRecordingIsBracketedByItsTones() {
+        module.open();
+        FakeCamera2.idleMainLooper();
+        module.startRecording(output);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(1,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.START_VIDEO_RECORDING));
+        assertEquals(0,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.STOP_VIDEO_RECORDING));
+
+        module.stopRecording();
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(1,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.STOP_VIDEO_RECORDING));
+    }
+
+    @Test
+    public void silencedRecordingsHaveNoTones() {
+        module.setShutterSoundEnabled(false);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        module.startRecording(output);
+        FakeCamera2.idleMainLooper();
+        module.stopRecording();
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(0,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.START_VIDEO_RECORDING));
+        assertEquals(0,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.STOP_VIDEO_RECORDING));
     }
 
     @Test

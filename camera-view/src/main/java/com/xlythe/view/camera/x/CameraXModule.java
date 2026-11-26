@@ -219,6 +219,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Nullable private Recording mVideoRecording;
     /** Output file associated with the active recording. */
     @Nullable private File mVideoFile;
+    /** Whether the active recording reached its Start event, so its end deserves a tone. */
+    private boolean mVideoStarted;
     /** Latest CameraX preview transformation metadata. */
     @Nullable private SurfaceRequest.TransformationInfo mTransformationInfo;
 
@@ -1186,6 +1188,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         ImageCapture.OutputFileOptions options = new ImageCapture.OutputFileOptions.Builder(file)
                 .setMetadata(metadata).build();
         imageCapture.takePicture(options, mMainExecutor, new ImageCapture.OnImageSavedCallback() {
+            @Override public void onCaptureStarted() {
+                onShutter();
+            }
             @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
                 if (!completePendingImage(operationId)) return;
                 showImageConfirmation(file);
@@ -1298,7 +1303,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             PendingRecording pending = recorder.prepareRecording(getContext(), output.build());
             if (PermissionChecker.hasPermissions(getContext(), Manifest.permission.RECORD_AUDIO)) pending = pending.withAudioEnabled();
             mVideoFile = file;
+            mVideoStarted = false;
             mState = State.RECORDING;
+            onRecordingStarting();
             mVideoRecording = pending.start(mMainExecutor, event -> handleVideoEvent(operationId, file, event));
             scheduleRecordingStartTimeout(operationId);
             publishSnapshot();
@@ -1320,6 +1327,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mRecordedVideoDurationMillis = Math.max(mRecordedVideoDurationMillis,
                 event.getRecordingStats().getRecordedDurationNanos() / 1_000_000L);
         if (event instanceof VideoRecordEvent.Start) {
+            mVideoStarted = true;
             cancelRecordingStartTimeout();
             mState = State.RECORDING;
             publishSnapshot();
@@ -1331,6 +1339,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         if (!(event instanceof VideoRecordEvent.Finalize)) return;
         VideoRecordEvent.Finalize finalized = (VideoRecordEvent.Finalize) event;
+        if (mVideoStarted) {
+            mVideoStarted = false;
+            onRecordingStopped();
+        }
         cancelDurationStop();
         cancelRecordingTimeouts();
         mVideoOperationId++;

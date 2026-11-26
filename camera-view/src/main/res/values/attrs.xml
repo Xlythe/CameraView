@@ -44,6 +44,7 @@
         <attr name="exposureCompensation" format="integer" />
         <attr name="torchEnabled" format="boolean" />
         <attr name="lowLightBoostEnabled" format="boolean" />
+        <attr name="shutterSoundEnabled" format="boolean" />
         <attr name="focusReticleEnabled" format="boolean" />
         <attr name="focusReticleColor" format="color" />
         <attr name="focusReticleLockedColor" format="color" />

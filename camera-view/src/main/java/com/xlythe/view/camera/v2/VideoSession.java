@@ -406,6 +406,7 @@ class VideoSession extends PictureSession {
             }
 
             try {
+                mCameraView.onRecordingStarting();
                 mMediaRecorder.start();
                 mIsRecordingVideo = true;
             } catch (IllegalStateException e) {
@@ -441,13 +442,20 @@ class VideoSession extends PictureSession {
             }
             if (mIsRecordingVideo) {
                 mIsRecordingVideo = false;
+                boolean stopped = false;
                 try {
                     mMediaRecorder.stop();
+                    stopped = true;
+                    mCameraView.onRecordingStopped();
                     mMediaRecorder.reset();
                     showVideoConfirmation(mFile);
                 } catch (RuntimeException e) {
                     // MediaRecorder can crash with 'stop failed.'
                     Log.e(TAG, "Let me guess. 'stop failed.'?", e);
+                    if (!stopped) {
+                        // The recording has ended all the same, so its tone still plays.
+                        mCameraView.onRecordingStopped();
+                    }
                     onVideoFailed();
                 }
             } else {

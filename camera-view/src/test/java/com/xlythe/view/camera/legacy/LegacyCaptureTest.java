@@ -10,8 +10,10 @@ import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 import android.media.CamcorderProfile;
+import android.media.MediaActionSound;
 import android.media.MediaRecorder;
 
+import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
 
@@ -26,6 +28,8 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowCamcorderProfile;
 import org.robolectric.shadows.ShadowCamera;
 import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.shadows.ShadowMediaActionSound;
+import org.robolectric.util.ReflectionHelpers;
 
 import java.io.File;
 import java.io.IOException;
@@ -111,6 +115,45 @@ public class LegacyCaptureTest {
         // - decode, orient, write, report - rather than the bytes.
         assertTrue("the capture has to come back one way or the other",
                 captured.get() != null || failures.get() > 0);
+    }
+
+    /** The platform clicks for the old API itself, so the library adds only the callback. */
+    @Test
+    public void theClickIsThePlatformsOwn() throws IOException {
+        CameraSoundsTest.resetSounds();
+        AtomicInteger shutters = new AtomicInteger();
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onShutter() { shutters.incrementAndGet(); }
+            @Override public void onImageConfirmation() {}
+            @Override public void onImageCaptured(File file) {}
+            @Override public void onFailure() {}
+        });
+        module.open();
+        idle();
+        File file = File.createTempFile("legacy", ".jpg");
+        file.deleteOnExit();
+
+        module.takePicture(file);
+        idle();
+        flushBackgroundWork();
+
+        assertEquals(1, shutters.get());
+        assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+    }
+
+    /** Silencing the shutter is passed on to the platform, whichever way round it is set. */
+    @Test
+    public void silencingTheShutterReachesThePlatform() {
+        module.setShutterSoundEnabled(false);
+        module.open();
+        idle();
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+
+        assertFalse(Shadows.shadowOf(camera).isShutterSoundEnabled());
+
+        module.setShutterSoundEnabled(true);
+
+        assertTrue(Shadows.shadowOf(camera).isShutterSoundEnabled());
     }
 
     /** A capture asked for before the camera is open fails rather than throwing. */
@@ -256,6 +299,8 @@ public class LegacyCaptureTest {
         Camera.CameraInfo info = new Camera.CameraInfo();
         info.facing = facing;
         info.orientation = orientation;
+        // As every camera reports outside the countries that require the sound.
+        info.canDisableShutterSound = true;
         ShadowCamera.addCameraInfo(id, info);
     }
 

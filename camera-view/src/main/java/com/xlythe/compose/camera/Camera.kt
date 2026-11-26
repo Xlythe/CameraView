@@ -466,9 +466,13 @@ private fun Extension.toCameraView() = when (this) {
  * @param pictureQuality How hard a still capture is compressed, from 1 to 100.
  * @param stabilizationEnabled Steadies the preview and recorded video, where the camera can.
  * @param lowLightBoostEnabled Brightens the preview in the dark.
+ * @param shutterSoundEnabled Plays the platform's click and recording tones. Where the law
+ *  requires them, they play regardless.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
+ * @param onShutter Called as a picture is exposed, before it is saved: the moment for a shutter
+ *  animation, or for a sound of the app's own with [shutterSoundEnabled] off.
  */
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
@@ -493,8 +497,10 @@ fun Camera(
     pictureQuality: Int = ICameraModule.DEFAULT_PICTURE_QUALITY,
     stabilizationEnabled: Boolean = false,
     lowLightBoostEnabled: Boolean = false,
+    shutterSoundEnabled: Boolean = true,
     controller: MutableState<CameraController?>,
     state: MutableState<CameraState?> = remember { mutableStateOf(null) },
+    onShutter: () -> Unit = {},
     onImageConfirmation: () -> Unit = {},
     onImageCaptured: (file: File) -> Unit = {},
     onImageCaptureFailed: () -> Unit = {},
@@ -512,6 +518,7 @@ fun Camera(
     // installed on it capture whichever lambdas the first composition happened to pass. A caller
     // whose callbacks close over state would then keep being called with the stale ones. Track
     // the latest instead, so the listeners read them at the moment they fire.
+    val currentOnShutter by rememberUpdatedState(onShutter)
     val currentOnImageConfirmation by rememberUpdatedState(onImageConfirmation)
     val currentOnImageCaptured by rememberUpdatedState(onImageCaptured)
     val currentOnImageCaptureFailed by rememberUpdatedState(onImageCaptureFailed)
@@ -539,6 +546,10 @@ fun Camera(
             this.onFinishInflate()
 
             this.setOnImageCapturedListener(object : CameraView.OnImageCapturedListener {
+                override fun onShutter() {
+                    currentOnShutter()
+                }
+
                 override fun onImageConfirmation() {
                     currentOnImageConfirmation()
                 }
@@ -700,6 +711,7 @@ fun Camera(
         view.pictureQuality = pictureQuality
         view.isStabilizationEnabled = stabilizationEnabled
         view.isLowLightBoostEnabled = lowLightBoostEnabled
+        view.isShutterSoundEnabled = shutterSoundEnabled
         // What the camera can do depends on what it has just been asked for - a lens, an extension
         // and a zoom each change the answers - so the snapshot is taken after the settings land.
         publishState(view)

@@ -144,7 +144,13 @@ class PictureSession extends PreviewSession {
             }
             applyZoom(builder);
             builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
-            session.capture(builder.build(), null /* callback */, getHandler());
+            session.capture(builder.build(), new CameraCaptureSession.CaptureCallback() {
+                @Override
+                public void onCaptureStarted(@NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request, long timestamp, long frameNumber) {
+                    onShutter();
+                }
+            }, getHandler());
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to create capture request", e);

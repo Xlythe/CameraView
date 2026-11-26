@@ -112,6 +112,7 @@ public class LegacyCameraModule extends ICameraModule {
             parameters.setPictureFormat(ImageFormat.JPEG);
             parameters.setJpegQuality(getPictureQuality());
             mCamera.setParameters(parameters);
+            applyShutterSound();
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
             mCamera.startPreview();
@@ -198,6 +199,33 @@ public class LegacyCameraModule extends ICameraModule {
         setTransform(matrix);
     }
 
+    /** The platform plays the old API's click and recording tones itself. */
+    @Override
+    protected boolean playsSystemSounds() {
+        return true;
+    }
+
+    @Override
+    public void setShutterSoundEnabled(boolean enabled) {
+        super.setShutterSoundEnabled(enabled);
+        applyShutterSound();
+    }
+
+    /**
+     * Asks the platform to play its click or not. Where the sound is required it refuses and
+     * plays it anyway. The recording tones it plays regardless.
+     */
+    private void applyShutterSound() {
+        if (mCamera == null) {
+            return;
+        }
+        try {
+            mCamera.enableShutterSound(isShutterSoundEnabled());
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to set the shutter sound", e);
+        }
+    }
+
     @Override
     public void takePicture(File file) {
         if (mCamera == null) {
@@ -208,7 +236,7 @@ public class LegacyCameraModule extends ICameraModule {
             onImageFailed();
             return;
         }
-        mCamera.takePicture(null, null, new LegacyPictureListener(
+        mCamera.takePicture(this::onShutter, null, new LegacyPictureListener(
                 file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(), this));
     }
 
