@@ -30,6 +30,7 @@ import android.widget.ImageView;
 import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
@@ -169,6 +170,8 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_LOW_LIGHT_BOOST = "low_light_boost";
     /** Saved-state key for whether the camera's sounds play. */
     private static final String EXTRA_SHUTTER_SOUND = "shutter_sound";
+    /** Saved-state key for the app's own shutter sound. */
+    private static final String EXTRA_SHUTTER_SOUND_RES = "shutter_sound_res";
 
     /**
      * The lifecycle state of the camera and its preview surface.
@@ -542,6 +545,7 @@ public class CameraView extends FrameLayout {
             setVideoConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmVideos, isVideoConfirmationEnabled()));
             setMatchPreviewAspectRatio(a.getBoolean(R.styleable.CameraView_matchPreviewAspectRatio, isMatchPreviewAspectRatioEnabled()));
             setShutterSoundEnabled(a.getBoolean(R.styleable.CameraView_shutterSoundEnabled, isShutterSoundEnabled()));
+            setShutterSound(a.getResourceId(R.styleable.CameraView_shutterSound, getShutterSound()));
             setDynamicRange(DynamicRange.fromId(a.getInteger(R.styleable.CameraView_dynamicRange, getDynamicRange().id)));
             setExtension(Extension.fromId(a.getInteger(R.styleable.CameraView_extension, getExtension().id)));
             setStabilizationEnabled(a.getBoolean(R.styleable.CameraView_stabilizationEnabled, isStabilizationEnabled()));
@@ -613,6 +617,7 @@ public class CameraView extends FrameLayout {
         state.putBoolean(EXTRA_TORCH, isTorchEnabled());
         state.putBoolean(EXTRA_LOW_LIGHT_BOOST, isLowLightBoostEnabled());
         state.putBoolean(EXTRA_SHUTTER_SOUND, isShutterSoundEnabled());
+        state.putInt(EXTRA_SHUTTER_SOUND_RES, getShutterSound());
         if (mImagePendingConfirmation != null) {
             state.putString(EXTRA_PENDING_IMAGE_FILE_PATH, mImagePendingConfirmation.getAbsolutePath());
         }
@@ -647,6 +652,7 @@ public class CameraView extends FrameLayout {
             setTorchEnabled(state.getBoolean(EXTRA_TORCH));
             setLowLightBoostEnabled(state.getBoolean(EXTRA_LOW_LIGHT_BOOST));
             setShutterSoundEnabled(state.getBoolean(EXTRA_SHUTTER_SOUND, true));
+            setShutterSound(state.getInt(EXTRA_SHUTTER_SOUND_RES));
 
             if (state.containsKey(EXTRA_PENDING_IMAGE_FILE_PATH)) {
                 File file = new File(state.getString(EXTRA_PENDING_IMAGE_FILE_PATH));
@@ -1638,6 +1644,23 @@ public class CameraView extends FrameLayout {
     /** Returns whether the camera's sounds are wanted. */
     public boolean isShutterSoundEnabled() {
         return mCameraModule.isShutterSoundEnabled();
+    }
+
+    /**
+     * Plays a sound of the app's own in place of the platform's shutter click, or the click
+     * again for 0. Recordings keep the platform's tones.
+     *
+     * <p>Where a shutter sound is required this one counts, and plays just as the click would.
+     * </p>
+     */
+    public void setShutterSound(@RawRes int soundRes) {
+        mCameraModule.setShutterSound(soundRes);
+    }
+
+    /** Returns the app's own shutter sound, or 0 for the platform's click. */
+    @RawRes
+    public int getShutterSound() {
+        return mCameraModule.getShutterSound();
     }
 
     /**

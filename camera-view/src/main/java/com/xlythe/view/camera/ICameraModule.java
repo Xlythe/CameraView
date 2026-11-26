@@ -11,6 +11,7 @@ import android.os.Looper;
 import android.os.Parcelable;
 import android.util.Log;
 
+import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
 
@@ -187,8 +188,8 @@ public abstract class ICameraModule {
 
     /** Called as a picture is exposed: the click plays, and the listener hears of it. */
     public void onShutter() {
-        if (!playsSystemSounds()) {
-            mSounds.play(MediaActionSound.SHUTTER_CLICK, mShutterSoundEnabled);
+        if (playsOwnClick()) {
+            mSounds.play(getContext(), MediaActionSound.SHUTTER_CLICK, mShutterSoundEnabled);
         }
         mView.onShutter();
     }
@@ -199,20 +200,40 @@ public abstract class ICameraModule {
      */
     public void onRecordingStarting() {
         if (!playsSystemSounds()) {
-            mSounds.play(MediaActionSound.START_VIDEO_RECORDING, mShutterSoundEnabled);
+            mSounds.play(getContext(), MediaActionSound.START_VIDEO_RECORDING,
+                    mShutterSoundEnabled);
         }
     }
 
     /** Called once the recorder has stopped, so the tone is not in the recording. */
     public void onRecordingStopped() {
         if (!playsSystemSounds()) {
-            mSounds.play(MediaActionSound.STOP_VIDEO_RECORDING, mShutterSoundEnabled);
+            mSounds.play(getContext(), MediaActionSound.STOP_VIDEO_RECORDING,
+                    mShutterSoundEnabled);
         }
     }
 
     /** Whether the platform plays this backend's camera sounds, as it does for the old API. */
     protected boolean playsSystemSounds() {
         return false;
+    }
+
+    /**
+     * Whether the library plays the shutter click. A backend whose platform plays its own may
+     * still hand the click over, to play the app's sound in its place.
+     */
+    protected boolean playsOwnClick() {
+        return !playsSystemSounds();
+    }
+
+    /** Sets a sound of the app's own for the shutter, or 0 for the platform's click. */
+    public void setShutterSound(@RawRes int soundRes) {
+        mSounds.setShutterSound(soundRes);
+    }
+
+    @RawRes
+    public int getShutterSound() {
+        return mSounds.getShutterSound();
     }
 
     public void setShutterSoundEnabled(boolean enabled) {
@@ -225,8 +246,8 @@ public abstract class ICameraModule {
 
     /** Loads the sounds as the camera opens, so the first picture's click is not late. */
     void loadSounds() {
-        if (!playsSystemSounds() && (mShutterSoundEnabled || CameraSounds.isRequired())) {
-            mSounds.load();
+        if (playsOwnClick() && (mShutterSoundEnabled || CameraSounds.isRequired())) {
+            mSounds.load(getContext());
         }
     }
 

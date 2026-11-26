@@ -74,6 +74,7 @@ public class CameraViewStateTest {
         cameraView.setExposureCompensation(3);
         cameraView.setTorchEnabled(true);
         cameraView.setShutterSoundEnabled(false);
+        cameraView.setShutterSound(0x7f120001);
 
         CameraView restored = saveAndRestore(cameraView);
 
@@ -90,6 +91,7 @@ public class CameraViewStateTest {
         assertEquals(3, restored.getExposureCompensation());
         assertTrue(restored.isTorchEnabled());
         assertFalse(restored.isShutterSoundEnabled());
+        assertEquals(0x7f120001, restored.getShutterSound());
     }
 
     /** A capture waiting to be confirmed has to still be waiting on the other side. */

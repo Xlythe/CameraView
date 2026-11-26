@@ -13,6 +13,7 @@ import android.os.Looper
 import android.os.Parcelable
 import android.util.Log
 import android.util.SparseArray
+import androidx.annotation.RawRes
 import androidx.annotation.RequiresPermission
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -468,6 +469,7 @@ private fun Extension.toCameraView() = when (this) {
  * @param lowLightBoostEnabled Brightens the preview in the dark.
  * @param shutterSoundEnabled Plays the platform's click and recording tones. Where the law
  *  requires them, they play regardless.
+ * @param shutterSound A raw resource played in place of the platform's click, or 0 for the click.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
@@ -498,6 +500,7 @@ fun Camera(
     stabilizationEnabled: Boolean = false,
     lowLightBoostEnabled: Boolean = false,
     shutterSoundEnabled: Boolean = true,
+    @RawRes shutterSound: Int = 0,
     controller: MutableState<CameraController?>,
     state: MutableState<CameraState?> = remember { mutableStateOf(null) },
     onShutter: () -> Unit = {},
@@ -712,6 +715,7 @@ fun Camera(
         view.isStabilizationEnabled = stabilizationEnabled
         view.isLowLightBoostEnabled = lowLightBoostEnabled
         view.isShutterSoundEnabled = shutterSoundEnabled
+        view.shutterSound = shutterSound
         // What the camera can do depends on what it has just been asked for - a lens, an extension
         // and a zoom each change the answers - so the snapshot is taken after the settings land.
         publishState(view)

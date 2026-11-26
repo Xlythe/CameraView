@@ -156,6 +156,51 @@ public class LegacyCaptureTest {
         assertTrue(Shadows.shadowOf(camera).isShutterSoundEnabled());
     }
 
+    /** An app's own shutter sound silences the platform's click, and the library plays it. */
+    @Test
+    public void anAppsShutterSoundReplacesThePlatformsClick() throws IOException {
+        CameraSoundsTest.resetSounds();
+        module.setShutterSound(0x7f120001);
+        module.open();
+        idle();
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        File file = File.createTempFile("legacy", ".jpg");
+        file.deleteOnExit();
+
+        module.takePicture(file);
+        idle();
+        flushBackgroundWork();
+
+        assertFalse(Shadows.shadowOf(camera).isShutterSoundEnabled());
+        // Not loaded yet in a test, so the platform's click stands in, played by the library.
+        assertEquals(1, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+    }
+
+    /** Where the click is required the platform keeps it, and the library adds nothing. */
+    @Test
+    public void aRequiredClickStaysThePlatforms() throws IOException {
+        CameraSoundsTest.resetSounds();
+        ShadowCamera.clearCameraInfo();
+        Camera.CameraInfo info = new Camera.CameraInfo();
+        info.facing = Camera.CameraInfo.CAMERA_FACING_BACK;
+        info.orientation = 90;
+        info.canDisableShutterSound = false;
+        ShadowCamera.addCameraInfo(0, info);
+        module.setShutterSound(0x7f120001);
+        module.open();
+        idle();
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        File file = File.createTempFile("legacy", ".jpg");
+        file.deleteOnExit();
+
+        module.takePicture(file);
+        idle();
+        flushBackgroundWork();
+
+        assertTrue(Shadows.shadowOf(camera).isShutterSoundEnabled());
+        assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+    }
+
     /** A capture asked for before the camera is open fails rather than throwing. */
     @Test
     public void aCaptureBeforeOpeningFails() throws IOException {
