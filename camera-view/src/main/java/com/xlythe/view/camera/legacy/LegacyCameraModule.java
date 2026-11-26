@@ -227,37 +227,40 @@ public class LegacyCameraModule extends ICameraModule {
 
         mVideoRecorder.setAudioSource(MediaRecorder.AudioSource.DEFAULT);
         mVideoRecorder.setVideoSource(MediaRecorder.VideoSource.DEFAULT);
+        // Every profile below is fetched for the camera actually in use. The single-argument
+        // overload returns the first back-facing camera's profile whatever camera is open, so on
+        // the front camera it handed MediaRecorder a size and encoder configuration belonging to
+        // a different sensor - which is one way to get a recording full of green lines.
         switch (getQuality()) {
             case MAX:
                 if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_HIGH)) {
-                    mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH));
+                    mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_HIGH));
                     break;
                 }
                 // Fall-through
             case HIGH:
                 if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_1080P)) {
-                    mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_1080P));
+                    mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_1080P));
                     break;
                 }
                 // Fall-through
             case MEDIUM:
                 if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_720P)) {
-                    mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_720P));
+                    mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_720P));
                     break;
                 }
                 // Fall-through
             case LOW:
                 if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_480P)) {
-                    mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_480P));
+                    mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_480P));
                     break;
                 }
                 // Fall-through
             default:
-                mVideoRecorder.setProfile(CamcorderProfile.get(CamcorderProfile.QUALITY_LOW));
+                mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_LOW));
                 break;
         }
         mVideoRecorder.setOutputFile(file.getAbsolutePath());
-        mVideoRecorder.setMaxDuration((int) getMaxVideoDuration());
         mVideoRecorder.setMaxDuration((int) getMaxVideoDuration());
         mVideoRecorder.setMaxFileSize(getMaxVideoSize());
         mVideoRecorder.setOrientationHint(getRelativeCameraOrientation(false /* isPreview */));
@@ -540,6 +543,48 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     protected int getRelativeCameraOrientation() {
         return getRelativeCameraOrientation(true /* isPreview */);
+    }
+
+    /**
+     * The angle of view, which this API reports itself.
+     *
+     * <p>Camera.Parameters gives the angle for the lens wide open, with no account of zoom, so
+     * the zoom this module has applied is taken off here to match what the preview is showing.
+     * </p>
+     */
+    @Override
+    public float getHorizontalFieldOfView() {
+        return fieldOfView(true /* horizontal */);
+    }
+
+    @Override
+    public float getVerticalFieldOfView() {
+        return fieldOfView(false /* horizontal */);
+    }
+
+    private float fieldOfView(boolean horizontal) {
+        Camera camera = mCamera;
+        if (camera == null) {
+            return 0f;
+        }
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            float full = horizontal
+                    ? parameters.getHorizontalViewAngle() : parameters.getVerticalViewAngle();
+            if (!parameters.isZoomSupported()) {
+                return full;
+            }
+            List<Integer> ratios = parameters.getZoomRatios();
+            int index = parameters.getZoom();
+            if (ratios == null || index < 0 || index >= ratios.size()) {
+                return full;
+            }
+            // getZoomRatios is in hundredths, so 100 is no zoom at all.
+            return TransformMath.zoomedFieldOfViewDegrees(full, ratios.get(index) / 100f);
+        } catch (RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Could not work out the field of view", error);
+            return 0f;
+        }
     }
 
     /**

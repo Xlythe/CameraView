@@ -25,6 +25,71 @@ import org.robolectric.annotation.Config;
 public class TransformMathTest {
     private static final float TOLERANCE = 0.01f;
 
+    /**
+     * The angle a lens sees across a sensor, which is what turns a bearing into a screen position.
+     *
+     * <p>Checked against arithmetic that can be done by hand: a 36mm-wide frame behind a 50mm
+     * lens is the classic case, and 2*atan(36/100) is 39.6 degrees.</p>
+     */
+    @Test
+    public void aFieldOfViewComesFromTheSensorAndTheLens() {
+        assertEquals(39.60f,
+                TransformMath.fieldOfViewDegrees(36f /* mm */, 50f /* mm */), 0.05f);
+        assertEquals("the same frame is narrower the short way across",
+                26.99f, TransformMath.fieldOfViewDegrees(24f, 50f), 0.05f);
+
+        // A phone: a small sensor behind a very short lens, which is why it sees so much.
+        assertEquals(67.63f, TransformMath.fieldOfViewDegrees(5.76f, 4.3f), 0.05f);
+
+        // A longer lens on the same sensor sees less.
+        assertTrue("a longer lens must see less",
+                TransformMath.fieldOfViewDegrees(5.76f, 6f)
+                        < TransformMath.fieldOfViewDegrees(5.76f, 4.3f));
+    }
+
+    /** A camera that will not say how big its sensor is gets no answer invented for it. */
+    @Test
+    public void anUnknownSensorOrLensHasNoFieldOfView() {
+        assertEquals(0f, TransformMath.fieldOfViewDegrees(0f, 50f), 0f);
+        assertEquals(0f, TransformMath.fieldOfViewDegrees(36f, 0f), 0f);
+        assertEquals(0f, TransformMath.fieldOfViewDegrees(-36f, 50f), 0f);
+        assertEquals(0f, TransformMath.fieldOfViewDegrees(36f, -50f), 0f);
+    }
+
+    /**
+     * Zooming narrows the view, but not in proportion to the zoom.
+     *
+     * <p>This is the whole reason the method exists. Doubling the zoom halves the width of what
+     * is visible, which halves the tangent of the half-angle rather than the angle - so a 60
+     * degree view at 2x is 32.2 degrees, not 30. Anything drawing by bearing and dividing
+     * instead would put its marker in the wrong place, and more wrongly the further from centre
+     * it is.</p>
+     */
+    @Test
+    public void zoomNarrowsTheViewByTangentAndNotByRatio() {
+        assertEquals(32.20f, TransformMath.zoomedFieldOfViewDegrees(60f, 2f), 0.05f);
+        assertTrue("dividing the angle would have given 30",
+                TransformMath.zoomedFieldOfViewDegrees(60f, 2f) > 30f);
+
+        assertEquals("no zoom is no change",
+                60f, TransformMath.zoomedFieldOfViewDegrees(60f, 1f), 0.001f);
+        assertTrue("more zoom is always less view",
+                TransformMath.zoomedFieldOfViewDegrees(60f, 4f)
+                        < TransformMath.zoomedFieldOfViewDegrees(60f, 2f));
+
+        // A logical camera can report a ratio below one, which is a wider view than its own 1x.
+        assertTrue("a ratio below one widens the view",
+                TransformMath.zoomedFieldOfViewDegrees(60f, 0.5f) > 60f);
+    }
+
+    /** And nothing to narrow, or no ratio to narrow it by, answers nothing. */
+    @Test
+    public void anUnknownZoomOrViewHasNoAngle() {
+        assertEquals(0f, TransformMath.zoomedFieldOfViewDegrees(0f, 2f), 0f);
+        assertEquals(0f, TransformMath.zoomedFieldOfViewDegrees(60f, 0f), 0f);
+        assertEquals(0f, TransformMath.zoomedFieldOfViewDegrees(60f, -2f), 0f);
+    }
+
     @Test
     public void rotationsNormalizeIntoACircle() {
         assertEquals(0, TransformMath.within360(0));

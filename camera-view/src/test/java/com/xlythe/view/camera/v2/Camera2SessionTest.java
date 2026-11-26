@@ -45,6 +45,34 @@ public class Camera2SessionTest {
         cameraView.release();
     }
 
+    /**
+     * The angle of view the camera can see, and what zoom does to it.
+     *
+     * <p>This is what maps a direction in the world onto a position on the preview, so anything
+     * drawn over the camera to point at something depends on it. The fake camera publishes a
+     * 5.76mm by 4.29mm sensor behind a 4.3mm lens, and the arithmetic can be done by hand:
+     * 2*atan(5.76/8.6) is 67.63 degrees across.</p>
+     */
+    @Test
+    public void reportsTheAngleOfViewAndNarrowsItWithZoom() throws Exception {
+        float wide = module.getHorizontalFieldOfView();
+        assertEquals("a 5.76mm sensor behind a 4.3mm lens", 67.63f, wide, 0.1f);
+
+        float tall = module.getVerticalFieldOfView();
+        assertEquals("and 53.02 degrees the short way", 53.02f, tall, 0.1f);
+        assertTrue("the sensor is wider than it is tall, so the angle is too", wide > tall);
+
+        module.setZoomLevel(module.getMaxZoomLevel());
+        float zoomed = module.getHorizontalFieldOfView();
+        assertTrue("zooming in has to narrow the view: " + wide + " -> " + zoomed,
+                zoomed < wide);
+        assertTrue("and never to nothing", zoomed > 0f);
+
+        module.setZoomLevel(0);
+        assertEquals("coming back out restores it",
+                wide, module.getHorizontalFieldOfView(), 0.1f);
+    }
+
     @Test
     public void readsCapabilitiesFromTheActiveCamera() throws Exception {
         assertEquals(FakeCamera2.BACK_ID, module.getActiveCamera());

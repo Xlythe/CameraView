@@ -3,6 +3,7 @@ package com.xlythe.view.camera.v2;
 import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
+import android.util.SizeF;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
@@ -183,6 +184,12 @@ public final class FakeCamera2 {
         shadow.set(CameraCharacteristics.CONTROL_MAX_REGIONS_AE, 1);
         shadow.set(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM, 4f);
         shadow.set(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE, new Rect(0, 0, 4000, 3000));
+        // A plausible phone sensor and lens: 5.76mm x 4.29mm behind a 4.3mm lens, which is about
+        // 67 degrees across. Published so that anything working out an angle of view has
+        // something to work from - a camera that publishes neither can only decline.
+        shadow.set(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE, new SizeF(5.76f, 4.29f));
+        shadow.set(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS,
+                new float[] {4.3f, 6.0f});
         if (faceDetection) {
             shadow.set(CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES,
                     new int[] {CameraMetadata.STATISTICS_FACE_DETECT_MODE_OFF,
