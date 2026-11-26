@@ -226,10 +226,13 @@ class PictureSession extends PreviewSession {
         int height = mPictureSurface.getHeight();
         ImageReader reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
         Size size = new Size(width, height);
+        // Drawn as the camera would have written it, in the sensor's orientation and unmirrored,
+        // so the Exif turn and mirror below finish it as they finish the camera's own JPEG.
         boolean armed = effect.drawStillInto(reader.getSurface(), size,
                 GlMath.ScaleType.FILL_CENTER,
-                (surfaceTextureMatrix, into) ->
-                        System.arraycopy(surfaceTextureMatrix, 0, into, 0, into.length),
+                (surfaceTextureMatrix, into) -> System.arraycopy(
+                        GlMath.withoutCameraTransform(surfaceTextureMatrix),
+                        0, into, 0, into.length),
                 () -> {});
         if (!armed) {
             reader.close();

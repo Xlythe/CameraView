@@ -255,6 +255,55 @@ public final class FrameEffectDeviceTest {
     }
 
     /**
+     * And a picture drawn through an effect is shown the way its preview was, from either lens.
+     *
+     * <p>A drawn picture is encoded from pixels the renderer read back rather than by the camera,
+     * and then tagged with the turn and the mirror the camera's own JPEG would have carried - so
+     * it has to be drawn the way the camera writes one, or the tag turns it a second time.</p>
+     */
+    @Test
+    public void aPictureThroughAnEffectIsShownAsItsPreviewWas() throws Exception {
+        for (CameraView.LensFacing lensFacing : CameraView.LensFacing.values()) {
+            File file = temporaryFile(".jpg");
+            CountDownLatch finished = new CountDownLatch(1);
+            AtomicReference<File> captured = new AtomicReference<>();
+            AtomicReference<Bitmap> preview = new AtomicReference<>();
+
+            boolean opened = withOpenCamera(new Quarters(), lensFacing, camera -> {
+                camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+                    @Override public void onImageConfirmation() {}
+
+                    @Override public void onImageCaptured(File saved) {
+                        captured.set(saved);
+                        finished.countDown();
+                    }
+
+                    @Override public void onFailure() {
+                        finished.countDown();
+                    }
+                });
+                Thread.sleep(1_000);
+                preview.set(ShownFrames.onScreen(camera));
+                camera.takePicture(file);
+                assertTrue("the capture never reported",
+                        finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            });
+            if (!opened) {
+                continue;
+            }
+
+            assertNotNull("the " + lensFacing + " capture failed", captured.get());
+            Bitmap picture = ShownFrames.ofPicture(captured.get());
+            try {
+                assertSameQuarters(lensFacing + " picture", preview.get(), picture);
+            } finally {
+                picture.recycle();
+            }
+            Log.i(FILTER_TAG, backend + " " + lensFacing + " picture shows the preview's quarters");
+        }
+    }
+
+    /**
      * A drawn picture is encoded from what the renderer produced and carries no gain map, so a
      * camera that writes Ultra HDR stops offering it while anything is drawing.
      */
