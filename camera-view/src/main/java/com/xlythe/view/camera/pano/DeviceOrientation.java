@@ -8,6 +8,7 @@ import android.hardware.SensorManager;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.Nullable;
 
 import static com.xlythe.view.camera.ICameraModule.TAG;
@@ -32,7 +33,16 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
  * <p>So the conversion is {@link #toPanoramaFrame}, kept as a function of a matrix rather than
  * folded into the listener, because it is the half of this that can be checked without a
  * phone.</p>
+
+ * <h2>Not part of the API</h2>
+ *
+ * <p>Where the phone is pointed, for the sweep that places frames by it. Restricted to the
+ * library: an app that wants the rotation has the sensor itself, and what is here is only the
+ * conversion into the frame this package paints in.</p>
+ *
+ * @hide
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class DeviceOrientation implements SensorEventListener {
     private final SensorManager mSensorManager;
 

@@ -3,6 +3,7 @@ package com.xlythe.view.camera.pano;
 import android.graphics.PointF;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 
 /**
  * Where a camera frame lands on an equirectangular canvas, given where the camera was pointed.
@@ -24,7 +25,16 @@ import androidx.annotation.NonNull;
  *
  * <p>Everything here is arithmetic on angles, which is the half of panorama capture that can be
  * tested without a camera, a GPU or a room.</p>
+
+ * <h2>Not part of the API</h2>
+ *
+ * <p>The projection a sweep is painted with. Restricted to the library: an app is handed
+ * positions it can draw at - through WorldOverlay for a marker, or GPanoBounds for how much
+ * of the sphere a file covers - and needs none of the arithmetic behind them.</p>
+ *
+ * @hide
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class Equirectangular {
     /** A full turn, which is the width of the canvas in degrees. */
     public static final float FULL_TURN_DEGREES = 360f;

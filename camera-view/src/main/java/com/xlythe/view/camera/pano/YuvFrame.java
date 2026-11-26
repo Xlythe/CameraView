@@ -9,6 +9,7 @@ import android.media.Image;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
@@ -37,7 +38,16 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
  * decode per frame and a little quality, and it is the only conversion in the framework that
  * works on every version this library supports; frames being blended into a panorama are the
  * case where that trade is clearly worth it.</p>
+
+ * <h2>Not part of the API</h2>
+ *
+ * <p>Converting a camera frame into pixels, for the sweep that has to draw one. Restricted to
+ * the library: a frame an app asked for arrives through FrameStream, which hands over the
+ * image the camera produced, already in the form a detector wants.</p>
+ *
+ * @hide
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class YuvFrame {
     /**
      * How hard to compress on the way through JPEG.

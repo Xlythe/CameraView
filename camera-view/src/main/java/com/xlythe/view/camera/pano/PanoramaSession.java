@@ -232,12 +232,6 @@ public final class PanoramaSession implements FrameStream.Analyzer, Closeable {
         }
     }
 
-    /** What this session was asked to cover, for an app drawing its own guidance. */
-    @NonNull
-    public PanoramaCoverage getCoverage() {
-        return mCoverage;
-    }
-
     /** The newest direction the camera was pointed, or null before any frame arrived. */
     @Nullable
     public float[] getLastDirection() {

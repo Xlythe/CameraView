@@ -8,6 +8,7 @@ import android.graphics.Rect;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
@@ -42,7 +43,16 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
  *
  * <p>Not thread safe, and not meant to be: it holds a bitmap the size of the sphere and is
  * written from whichever thread the frames arrive on.</p>
+
+ * <h2>Not part of the API</h2>
+ *
+ * <p>The sphere a sweep is painted on, which PanoramaSession owns. Restricted to the library:
+ * an app sweeps through CameraView.startPanorama and is handed the finished file, and the
+ * canvas is how that file is made.</p>
+ *
+ * @hide
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class PanoramaCanvas {
     /**
      * How many quads across and down each frame is cut into.

@@ -1,6 +1,7 @@
 package com.xlythe.view.camera.pano;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
 
 /**
@@ -20,7 +21,16 @@ import androidx.annotation.VisibleForTesting;
  * <p>Not thread safe. It is written from whichever thread the frames arrive on and read for
  * guidance, so a caller that reads it elsewhere should read {@link #getProgress} and the
  * suggestion rather than walking the grid.</p>
+
+ * <h2>Not part of the API</h2>
+ *
+ * <p>What a sweep has covered, which the session tracks for the caller. Restricted to the
+ * library: how far along a sweep is and where to point next are reported to the listener on
+ * every frame, which is what an app draws its guidance from.</p>
+ *
+ * @hide
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class PanoramaCoverage {
     /** How wide and tall a cell is, in degrees. Finer than anyone can aim a phone. */
     @VisibleForTesting
