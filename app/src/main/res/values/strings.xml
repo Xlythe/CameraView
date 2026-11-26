@@ -35,6 +35,9 @@
     <string name="panorama_status_saving">Saving\u2026</string>
     <string name="panorama_status_saved">Saved %1$s</string>
     <string name="panorama_status_failed">The sweep could not be saved</string>
+    <string name="panorama_view">Look around</string>
+    <string name="panorama_view_close">Back to the camera</string>
+    <string name="panorama_status_viewing">Drag to look around, pinch to zoom. Black is where the sweep did not reach.</string>
     <string name="ar_status_unavailable">AR is not available on this device, so the camera is running without it</string>
     <string name="ar_status_looking">Move the phone slowly to let it work out where it is</string>
     <string name="ar_status_tap">Tap the floor to stand a pillar of light on it</string>

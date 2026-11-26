@@ -294,11 +294,18 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** The high-speed session config currently bound, which unbinds separately from use cases. */
     @Nullable private SessionConfig mBoundSessionConfig;
 
-    /** The high-speed profiles this camera will actually bind, worked out once per camera. */
+    /** The high-speed profiles this camera will actually bind, worked out once per lens. */
     @Nullable private List<HighSpeedProfile> mBindableHighSpeedProfiles;
 
-    /** The camera the cached profiles were worked out for, so a lens switch recomputes them. */
-    @Nullable private CameraInfo mHighSpeedProfilesCamera;
+    /**
+     * The lens the cached profiles were worked out for, so a switch recomputes them.
+     *
+     * <p>The lens rather than the CameraInfo, because the question is about the camera and not
+     * about whatever is bound to it. Keyed on the binding, a caller that asked while a rebind
+     * was in flight got an empty list and read it as a camera that cannot record slow motion -
+     * which in a long run of tests showed up as the feature quietly not being exercised.</p>
+     */
+    private int mHighSpeedProfilesLens = Integer.MIN_VALUE;
 
     /** Set when a layout settles during a capture, so the rebind it asks for is owed, not lost. */
     private boolean mSizeRebindPending;
@@ -2063,23 +2070,32 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * back from a bind, and there is nothing to ask before that.</p>
      */
     @NonNull @Override public List<HighSpeedProfile> getSupportedHighSpeedProfiles() {
+        int lens = getLensFacing();
+        // Cached because this is asked repeatedly - every setHighSpeedProfile checks against it -
+        // and answering means building a throwaway session config per profile to ask CameraX
+        // about. What a camera can record does not change, so it is cached per lens.
+        List<HighSpeedProfile> cached = mBindableHighSpeedProfiles;
+        if (cached != null && lens == mHighSpeedProfilesLens) {
+            return cached;
+        }
         Camera camera = mActiveCamera;
         if (camera == null) {
+            // Nothing to ask yet. Not cached, so that the first real answer replaces it rather
+            // than this standing in for the life of the view.
             return Collections.emptyList();
         }
         CameraInfo cameraInfo = camera.getCameraInfo();
-        // Cached because this is asked repeatedly - every setHighSpeedProfile checks against it -
-        // and answering means building a throwaway session config per profile to ask CameraX
-        // about. The answer cannot change for a camera, so it is cached per camera.
-        List<HighSpeedProfile> cached = mBindableHighSpeedProfiles;
-        if (cached != null && cameraInfo == mHighSpeedProfilesCamera) {
-            return cached;
-        }
         List<HighSpeedProfile> bindable = CameraXHighSpeed.bindableProfiles(
                 cameraInfo, CameraXHighSpeed.publishedProfiles(cameraInfo));
-        mHighSpeedProfilesCamera = cameraInfo;
+        mHighSpeedProfilesLens = lens;
         mBindableHighSpeedProfiles = bindable;
         return bindable;
+    }
+
+    /** Which lens is wanted, which is known whether or not anything is bound to it. */
+    private int getLensFacing() {
+        return isUsingFrontFacingCamera() ? CameraSelector.LENS_FACING_FRONT
+                : CameraSelector.LENS_FACING_BACK;
     }
 
     @Override

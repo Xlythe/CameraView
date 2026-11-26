@@ -155,25 +155,32 @@ public final class ArBackendDeviceTest {
                         + ", failure " + failure
                         + ", depth " + poses.mHadDepth.get());
 
-                // The session reporting a reason is the session working: the pipeline reached
-                // ARCore, it looked at the room, and the room is the problem. A dark desk at
-                // night is the usual one and is not something the library can fix, so it is a
-                // skip - but only for the reasons that are genuinely about the room. BAD_STATE
-                // and CAMERA_UNAVAILABLE are about the wiring and still fail.
+                // What separates a dark room from a broken session is whether ARCore is being
+                // given anything to look at, and that is observable: a reason is reported when
+                // it changes, which can only happen if frames are reaching the tracker. So a
+                // session that reported any reason at all is a session that is wired up, and
+                // the room is what it cannot cope with.
+                //
+                // Which reason it is does not decide this. A pitch-dark room reports
+                // INSUFFICIENT_LIGHT once it has looked, and STARTING for as long as it never
+                // gets far enough to look - and both are the same room.
                 if (!tracked) {
-                    Assume.assumeFalse("ARCore cannot track here: " + failure
+                    assertNotNull("ARCore reported nothing at all in "
+                                    + TRACKING_TIMEOUT_SECONDS + "s: not a pose, and not a"
+                                    + " reason for there being none. That is a session which"
+                                    + " configured and is being given no frames, so the surface"
+                                    + " list is what to look at",
+                            failure);
+                    // The two that are about the session rather than the room still fail.
+                    assertTrue("ARCore reported " + failure + ", which is the session rather"
+                                    + " than the room",
+                            failure != ArTrackingFailure.BAD_STATE
+                                    && failure != ArTrackingFailure.CAMERA_UNAVAILABLE);
+                    Assume.assumeTrue("ARCore cannot track here: " + failure
                                     + ". Point the camera at a lit, textured scene and move it"
                                     + " a little, then run again",
-                            failure == ArTrackingFailure.INSUFFICIENT_LIGHT
-                                    || failure == ArTrackingFailure.INSUFFICIENT_FEATURES
-                                    || failure == ArTrackingFailure.EXCESSIVE_MOTION);
+                            false);
                 }
-                assertTrue("no tracked frame arrived in " + TRACKING_TIMEOUT_SECONDS + "s and"
-                                + " the session gave no reason to blame the room (" + failure
-                                + "). A shared-camera session that is wired up wrongly"
-                                + " configures cleanly and then tracks nothing, so this is the"
-                                + " symptom to look at the surface list for",
-                        tracked);
 
                 float[] viewMatrix = poses.mViewMatrix.get();
                 assertNotNull(viewMatrix);

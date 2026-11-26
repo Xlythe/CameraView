@@ -37,6 +37,17 @@
             android:layout_height="match_parent"
             camera:quality="high" />
 
+        <!--
+          Over the preview, and shown only once a sweep has been saved: the same file, wrapped
+          back onto the sphere it was taken from, which is the only way to see whether a
+          panorama came out right.
+        -->
+        <com.xlythe.view.camera.pano.PhotosphereView
+            android:id="@+id/panorama_viewer"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:visibility="gone" />
+
         <!-- Turned to point at whichever gap the sweep wants filled next. -->
         <TextView
             android:id="@+id/panorama_arrow"
@@ -93,6 +104,15 @@
                     android:layout_weight="1"
                     android:enabled="false"
                     android:text="@string/panorama_start" />
+
+                <Button
+                    android:id="@+id/panorama_view"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:layout_weight="1"
+                    android:text="@string/panorama_view"
+                    android:visibility="gone" />
 
             </LinearLayout>
 

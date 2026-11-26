@@ -15,6 +15,7 @@ import androidx.annotation.Nullable;
 import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.pano.PanoramaSession;
+import com.xlythe.view.camera.pano.PhotosphereView;
 
 import java.io.File;
 
@@ -35,6 +36,12 @@ public class PanoramaFragment extends CameraFragment {
     private Button mStartStop;
     private ImageView mPreview;
     private View mArrow;
+    private PhotosphereView mViewer;
+    private Button mViewButton;
+
+    /** The last sweep that was saved, which is what the viewer shows. */
+    @Nullable
+    private File mSaved;
 
     private CameraView.PanoramaMode mMode = CameraView.PanoramaMode.PANORAMA;
     private boolean mSweeping;
@@ -48,7 +55,10 @@ public class PanoramaFragment extends CameraFragment {
         mStartStop = view.findViewById(R.id.panorama_start_stop);
         mPreview = view.findViewById(R.id.panorama_preview);
         mArrow = view.findViewById(R.id.panorama_arrow);
+        mViewer = view.findViewById(R.id.panorama_viewer);
+        mViewButton = view.findViewById(R.id.panorama_view);
         mStartStop.setOnClickListener(ignored -> toggleSweep());
+        mViewButton.setOnClickListener(ignored -> toggleViewer());
         view.findViewById(R.id.panorama_mode).setOnClickListener(ignored -> toggleMode());
         showMode();
         return view;
@@ -90,6 +100,39 @@ public class PanoramaFragment extends CameraFragment {
                 ? R.string.panorama_mode_flat : R.string.panorama_mode_sphere);
     }
 
+    /**
+     * Shows the sweep wrapped back onto the sphere, or goes back to the camera.
+     *
+     * <p>Decoded off the main thread, because a photosphere is a large picture and a sweep that
+     * filled the canvas is eight megapixels of it.</p>
+     */
+    private void toggleViewer() {
+        if (mViewer.getVisibility() == View.VISIBLE) {
+            mViewer.setVisibility(View.GONE);
+            mViewButton.setText(R.string.panorama_view);
+            mStartStop.setEnabled(true);
+            mStatus.setText(R.string.panorama_status_ready);
+            return;
+        }
+        File saved = mSaved;
+        if (saved == null) {
+            return;
+        }
+        mStartStop.setEnabled(false);
+        mViewButton.setText(R.string.panorama_view_close);
+        mStatus.setText(R.string.panorama_status_viewing);
+        mViewer.setVisibility(View.VISIBLE);
+        new Thread(() -> {
+            boolean shown = mViewer.setPanorama(saved);
+            if (!shown) {
+                mViewer.post(() -> {
+                    mStatus.setText(R.string.panorama_status_failed);
+                    toggleViewer();
+                });
+            }
+        }, "PanoramaViewer").start();
+    }
+
     private void toggleSweep() {
         if (mSweeping) {
             stopSweep();
@@ -115,6 +158,8 @@ public class PanoramaFragment extends CameraFragment {
                     // Into the gallery, the same as a still, so the panorama can be opened in a
                     // viewer that understands the metadata it carries.
                     CaptureSaver.save(requireContext(), file, false, saved -> {});
+                    mSaved = file;
+                    mViewButton.setVisibility(View.VISIBLE);
                 }
 
                 @Override
