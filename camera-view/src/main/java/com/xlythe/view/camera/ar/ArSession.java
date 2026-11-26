@@ -6,6 +6,7 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
+import androidx.annotation.RestrictTo;
 
 import com.google.ar.core.Config;
 import com.google.ar.core.Frame;
@@ -40,8 +41,19 @@ import java.util.List;
  * capture request must use {@code TEMPLATE_RECORD}, and while ARCore is resumed the app must
  * not call {@code setRepeatingRequest} itself - either one produces a session that looks like
  * it is working and tracks nothing.</p>
+ *
+ * <h2>Not part of the API</h2>
+ *
+ * <p>Restricted to the library, because its methods hand out ARCore types and nothing this
+ * library offers should require an app to compile against ARCore. What an app uses is
+ * {@link ArAvailability} to decide whether to offer AR at all, the AR backend to run it, and
+ * {@link ArFrame} to be told where the camera is - none of which name a type ARCore
+ * defines.</p>
+ *
+ * @hide
  */
 @RequiresApi(24)
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class ArSession implements AutoCloseable {
     private static final String TAG = "ArSession";
 
