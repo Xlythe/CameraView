@@ -45,21 +45,46 @@ import androidx.collection.ArrayMap;
 
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LegacyCameraModule extends ICameraModule {
+    /** No camera chosen yet, which is not the same as camera zero. */
     private static final int INVALID_CAMERA_ID = -1;
 
     /** The zoom scale CameraView publishes, matching the Camera2 and CameraX backends. */
     private static final int MAX_ZOOM_LEVEL = 100;
 
+    /**
+     * How old a location may be and still describe where a picture was taken.
+     *
+     * <p>Two hours, because what is wanted is the place rather than the moment, and a fix from
+     * earlier in the same outing names the place correctly. Starting a live scan when the camera
+     * opens would be more accurate and would cost a radio running for as long as the camera is
+     * on, for a field most viewers read to the nearest town.</p>
+     */
     private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
+
+    /**
+     * How long to wait for the GPS to answer, which is deliberately almost no time at all.
+     *
+     * <p>The point is to take whatever fix is already there, not to hold a capture while the
+     * radio warms up. A picture is never delayed for its metadata.</p>
+     */
     private static final long GPS_TIMEOUT_MILLIS = 10;
 
+    /** Which of the device's cameras is selected, as an index into Camera.getNumberOfCameras. */
     private int mActiveCamera = INVALID_CAMERA_ID;
+
+    /** The open camera, or null when none is open - including after a failed open. */
     private Camera mCamera;
+
+    /** The preview size chosen for the open camera, or null when no camera is open. */
     @Nullable private Camera.Size mPreviewSize;
 
+    /** The recorder for a recording in progress, or null when nothing is being recorded. */
     private MediaRecorder mVideoRecorder;
+
+    /** Where the recording in progress is being written. */
     private File mVideoFile;
 
+    /** The surfaces handed out for streaming, each with the holder that feeds it. */
     private final Map<VideoRecorder.SurfaceProvider, LegacySurfaceHolder> mSurfaceProviders = new ArrayMap<>();
 
     public LegacyCameraModule(CameraView view) {
@@ -90,8 +115,20 @@ public class LegacyCameraModule extends ICameraModule {
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
             mCamera.startPreview();
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            // A camera opened but never started is worse than no camera: close() would release
+            // it, but takePicture() and startRecording() would both act on one configured by
+            // halves. Put the module back where a failed Camera.open leaves it. RuntimeException
+            // is caught with it because setParameters and startPreview throw that, not IOException,
+            // on a camera that will not take what it was given.
             Log.e(TAG, "Failed to properly initialize camera", e);
+            try {
+                mCamera.release();
+            } catch (RuntimeException released) {
+                Log.w(TAG, "Camera would not release after a failed open", released);
+            }
+            mCamera = null;
+            mPreviewSize = null;
         }
     }
 
