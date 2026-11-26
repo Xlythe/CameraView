@@ -5,6 +5,7 @@ import android.annotation.SuppressLint;
 import android.util.Log;
 import android.util.Size;
 
+import androidx.annotation.IntRange;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -113,6 +114,7 @@ public class VideoStream implements Closeable {
     mVideoRecorder = videoRecorder;
     mVideoInputStream = videoInputStream;
   }
+
   private VideoStream(@Nullable InputStream audioStream,
                       @Nullable InputStream videoStream) {
     mInputType = InputType.INPUT_STREAM;
@@ -253,19 +255,27 @@ public class VideoStream implements Closeable {
   }
 
   public static class Params {
+    /** Whether the stream carries an audio channel, which is what needs the microphone. */
     private final boolean mAudioEnabled;
+    /** Whether the stream carries a video channel. */
     private final boolean mVideoEnabled;
-    private final int mBitRate;
-    private final int mFrameRate;
-    private final int mIFrameInterval;
+    /** Bits per second the encoder aims for. */
+    @IntRange(from = 1) private final int mBitRate;
+    /** Frames per second the encoder aims for. */
+    @IntRange(from = 1) private final int mFrameRate;
+    /** Seconds between key frames. A stream can only be joined at one, so this bounds how long
+     * a reader waits before the first picture appears; zero makes every frame a key frame. */
+    @IntRange(from = 0) private final int mIFrameInterval;
+    /** Whether a reader that falls behind loses frames rather than blocking the encoder. */
     private final boolean mIsLossy;
+    /** The largest frame to encode, or null to let the camera choose. */
     @Nullable private final Size mMaxSize;
 
     private Params(boolean audioEnabled,
                    boolean videoEnabled,
-                   int bitRate,
-                   int frameRate,
-                   int iframeInterval,
+                   @IntRange(from = 1) int bitRate,
+                   @IntRange(from = 1) int frameRate,
+                   @IntRange(from = 0) int iframeInterval,
                    boolean isLossy,
                    @Nullable Size maxSize) {
       this.mAudioEnabled = audioEnabled;
@@ -285,14 +295,17 @@ public class VideoStream implements Closeable {
       return mVideoEnabled;
     }
 
+    @IntRange(from = 1)
     public int getBitRate() {
       return mBitRate;
     }
 
+    @IntRange(from = 1)
     public int getFrameRate() {
       return mFrameRate;
     }
 
+    @IntRange(from = 0)
     public int getIFrameInterval() {
       return mIFrameInterval;
     }
@@ -326,17 +339,18 @@ public class VideoStream implements Closeable {
         return this;
       }
 
-      public Builder setBitRate(int bitRate) {
+      public Builder setBitRate(@IntRange(from = 1) int bitRate) {
         mBitRate = bitRate;
         return this;
       }
 
-      public Builder setFrameRate(int frameRate) {
+      public Builder setFrameRate(@IntRange(from = 1) int frameRate) {
         mFrameRate = frameRate;
         return this;
       }
 
-      public Builder setIFrameInterval(int iFrameInterval) {
+      /** Seconds between key frames; zero makes every frame one. */
+      public Builder setIFrameInterval(@IntRange(from = 0) int iFrameInterval) {
         mIFrameInterval = iFrameInterval;
         return this;
       }
