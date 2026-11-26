@@ -324,4 +324,25 @@ public class ExifTagsTest {
             out.write(value & 0xFF);
         }
     }
+
+
+    /** Nor does a rational over nothing, which no reader could divide. */
+    @Test
+    public void aRationalOverZeroIsNotWritten() {
+        assertNull(ExifTags.write(exifJpeg(), new ExifTags.Builder()
+                .set(ExifTags.Tag.PRESSURE, "1013/0")));
+    }
+
+    /** A tag whose type is raw bytes rather than text still reads back as what was written. */
+    @Test
+    public void aTagStoredAsUndefinedBytesSurvives() {
+        byte[] out = ExifTags.write(exifJpeg(), new ExifTags.Builder()
+                .set(ExifTags.Tag.LEARNING_OPT_OUT_IN, "1"));
+
+        assertNotNull(out);
+        assertEquals("1", ExifTags.read(out, ExifTags.Tag.LEARNING_OPT_OUT_IN));
+    }
+
+
+
 }
