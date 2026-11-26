@@ -543,13 +543,11 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     /**
-     * No: this backend draws frames rather than producing them.
+     * False: this backend paints frames onto a surface rather than handing them over.
      *
-     * <p>{@link #attachSurface} turns each preview callback into a bitmap and paints it onto the
-     * consumer's surface, which is what lets a video stream work. Frame analysis is the other way
-     * round - it hands over an ImageReader surface and waits for YUV planes to read - and a
-     * surface that only accepts pixels through a Canvas can never satisfy it. Said here rather
-     * than discovered after thirty seconds of no frames arriving.</p>
+     * <p>An analyzer reads YUV planes from an ImageReader surface. The old Camera API delivers
+     * preview bytes to a callback, which {@link #attachSurface} draws through a Canvas, and a
+     * surface that only accepts pixels cannot be read back.</p>
      */
     @Override
     public boolean isFrameAnalysisSupported() {

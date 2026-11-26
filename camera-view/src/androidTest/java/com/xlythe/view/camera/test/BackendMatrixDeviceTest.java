@@ -183,11 +183,10 @@ public final class BackendMatrixDeviceTest {
 
         withOpenCamera(camera -> {
             Assume.assumeTrue(backend + " cannot analyze frames at all",
-                    camera.isFrameAnalysisSupported());
-            camera.startFrameAnalysis(frame -> {
-                size.set(new Size(frame.getWidth(), frame.getHeight()));
-                analyzed.countDown();
-            }, new FrameStream.Params().setMaxSize(new Size(640, 480)));
+                    camera.startFrameAnalysis(frame -> {
+                        size.set(new Size(frame.getWidth(), frame.getHeight()));
+                        analyzed.countDown();
+                    }, new FrameStream.Params().setMaxSize(new Size(640, 480))));
             assertTrue("no frames on " + backend,
                     analyzed.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             camera.stopFrameAnalysis();

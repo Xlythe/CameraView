@@ -1175,9 +1175,7 @@ public class CameraView extends FrameLayout {
      * Starts reporting the barcodes the camera can see.
      *
      * @return whether scanning started. False when ML Kit's barcode model is not available on
-     *     this device - it is delivered through Play services and an app can ship without the
-     *     initializer that sets it up, so asking for a scanner is a request that can be declined
-     *     rather than a programming error.
+     *     this device.
      */
     @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
@@ -1199,10 +1197,7 @@ public class CameraView extends FrameLayout {
                     mCameraModule.getCanvas(), this, listener, format, formats);
         } catch (RuntimeException | LinkageError error) {
             // Building the client is what reaches for the model, and it throws rather than
-            // returning anything when ML Kit was never initialised. Letting that out would mean
-            // an app crashing in a camera library because a vision dependency is missing. The
-            // CameraX backend already declines the same failure in startBarcodeScanner; this is
-            // the path the other two backends take.
+            // returning anything when ML Kit was never initialised.
             Log.w(TAG, "Barcode scanning is unavailable on this device", error);
             mBarcodeScanner = null;
             return false;
@@ -1234,12 +1229,13 @@ public class CameraView extends FrameLayout {
      * <p>This runs alongside the preview and recording, and stays attached across a lens switch.
      * Call {@link #stopFrameAnalysis()} to let the camera give the buffers back.</p>
      *
+     * @return whether analysis started. False on a backend that cannot produce frames to read.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
      */
     @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
-    public void startFrameAnalysis(@NonNull FrameStream.Analyzer analyzer) {
-        startFrameAnalysis(analyzer, new FrameStream.Params());
+    public boolean startFrameAnalysis(@NonNull FrameStream.Analyzer analyzer) {
+        return startFrameAnalysis(analyzer, new FrameStream.Params());
     }
 
     /**
@@ -1249,7 +1245,7 @@ public class CameraView extends FrameLayout {
      */
     @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
-    public void startFrameAnalysis(
+    public boolean startFrameAnalysis(
             @NonNull FrameStream.Analyzer analyzer, @NonNull FrameStream.Params params) {
         if (!isOpen()) {
             throw new IllegalStateException("Camera must be open before analyzing frames");
@@ -1257,25 +1253,13 @@ public class CameraView extends FrameLayout {
         if (mFrameStream != null) {
             throw new IllegalStateException("Frame analysis cannot be started twice");
         }
-        if (!isFrameAnalysisSupported()) {
-            // Refused rather than accepted and never honoured. The old backend has no way to
-            // produce the frames an analyzer reads, and a caller waiting on frames that cannot
-            // come has no way to tell that from a camera that is merely slow.
-            throw new UnsupportedOperationException("The " + getBackend()
-                    + " backend cannot analyze frames; check isFrameAnalysisSupported() first");
+        if (!mCameraModule.isFrameAnalysisSupported()) {
+            Log.w(TAG, "The " + getBackend() + " backend cannot analyze frames");
+            return false;
         }
         mFrameStream = new FrameStream(mCameraModule.getCanvas(), this, params, analyzer);
         mFrameStream.start();
-    }
-
-    /**
-     * Whether {@link #startFrameAnalysis} will work on the backend in use.
-     *
-     * <p>Every camera2-based backend can; {@link Backend#LEGACY} cannot, because the original
-     * Camera API hands out preview bytes rather than a surface an analyzer can read.</p>
-     */
-    public boolean isFrameAnalysisSupported() {
-        return mCameraModule.isFrameAnalysisSupported();
+        return true;
     }
 
     /** Stops the analyzer started by {@link #startFrameAnalysis}. */

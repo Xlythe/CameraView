@@ -718,8 +718,6 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, null);
         mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, null);
         mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, null);
-        // The offsets go with them: a picture stripped of when it was taken but still carrying
-        // the timezone it was taken in has given away where in the world that was.
         mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME, null);
         mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, null);
         mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED, null);
@@ -764,7 +762,7 @@ public class Exif {
     }
 
     /**
-     * The offset from UTC, as EXIF writes it.
+     * The offset from UTC.
      *
      * <p>EXIF timestamps are local time with nothing to say where that was, which makes them
      * ambiguous by an hour twice a year and by half the world the rest of the time. Exif 2.31

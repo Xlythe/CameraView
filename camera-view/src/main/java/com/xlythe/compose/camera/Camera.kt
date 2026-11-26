@@ -148,9 +148,6 @@ private class CameraControllerImpl(
         } else {
             IntArray(0)
         }
-        // Said out loud rather than dropped. The view declines when ML Kit's model is not on the
-        // device, and a caller watching for barcodes that can never arrive has no other way to
-        // tell that from a camera that is simply not pointed at one.
         if (!view.enterBarcodeScanner({ barcodes -> listener(barcodes) }, requested[0], *rest)) {
             Log.w(TAG, "Barcode scanning is unavailable on this device")
         }

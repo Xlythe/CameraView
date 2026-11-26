@@ -1208,6 +1208,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mMainHandler.removeCallbacks(mImageTimeoutTask);
         mImageTimeoutTask = null;
     }
+
     /**
      * Where the device already knows it is, for the paths that run on the main thread.
      *
@@ -1268,9 +1269,6 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             if (getMaxVideoSize() != CameraView.INDEFINITE_VIDEO_SIZE) output.setFileSizeLimit(getMaxVideoSize());
             Location where = getLastKnownLocation();
             if (where != null) {
-                // Camera2 and the old backend have always recorded where a video was taken and
-                // this one did not, so the same recording came out of CameraX with no location at
-                // all - the sort of difference between backends nobody goes looking for.
                 output.setLocation(where);
             }
             PendingRecording pending = recorder.prepareRecording(getContext(), output.build());
