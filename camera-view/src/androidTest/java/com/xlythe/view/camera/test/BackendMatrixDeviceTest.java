@@ -348,12 +348,6 @@ public final class BackendMatrixDeviceTest {
         AtomicReference<String> offered = new AtomicReference<>();
 
         withOpenCamera(camera -> {
-            // Stabilization first, and given time to finish, because it rebuilds the session: the
-            // others are then set on the session the capture is taken from.
-            if (camera.isStabilizationSupported()) {
-                camera.setStabilizationEnabled(true);
-                sleep(3_000);
-            }
             int exposure = camera.getMaxExposureCompensation() / 2;
             if (camera.isExposureCompensationSupported()) {
                 camera.setExposureCompensation(exposure);
@@ -361,7 +355,13 @@ public final class BackendMatrixDeviceTest {
             if (camera.isLowLightBoostSupported()) {
                 camera.setLowLightBoostEnabled(true);
             }
-            sleep(1_000);
+            // Stabilization last, because it rebuilds the session and what was set before it has
+            // to survive that, including a request the camera has not confirmed yet.
+            if (camera.isStabilizationSupported()) {
+                camera.setStabilizationEnabled(true);
+            }
+            // Long enough for the rebuilt session to be configured and confirm the others.
+            sleep(3_000);
             offered.set("exposure=" + (camera.isExposureCompensationSupported() ? exposure : 0)
                     + " stabilization=" + camera.isStabilizationSupported()
                     + " lowLightBoost=" + camera.isLowLightBoostSupported());

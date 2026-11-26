@@ -262,7 +262,7 @@ public final class FakeCamera2 {
      * <p>The camera manager hands out the instance it was given, so the change is seen by every
      * later query, including those of a module that is already open.</p>
      */
-    static <T> void setCharacteristic(Context context, String id,
+    public static <T> void setCharacteristic(Context context, String id,
             CameraCharacteristics.Key<T> key, T value) {
         try {
             CameraCharacteristics characteristics =

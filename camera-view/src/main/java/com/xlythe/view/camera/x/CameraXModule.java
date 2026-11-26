@@ -28,12 +28,14 @@ import android.util.SizeF;
 import android.view.Surface;
 import android.view.View;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
 import androidx.camera.core.Camera;
+import androidx.camera.core.CameraControl;
 import androidx.camera.camera2.interop.Camera2CameraInfo;
 import androidx.camera.camera2.interop.Camera2Interop;
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop;
@@ -104,6 +106,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -259,6 +262,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private int mSensorOrientation;
     /** Last accepted public zoom level in the range 0..100. */
     private int mZoomLevel;
+    /**
+     * The exposure index last asked for, which ICameraModule's is not: that one is what the camera
+     * confirmed. Applied again after every bind. Main thread only.
+     */
+    private int mRequestedExposureCompensation;
     /** Last non-zero CameraView layout width used to choose resolutions and ViewPort. */
     private int mLastWidth;
     /** Last non-zero CameraView layout height used to choose resolutions and ViewPort. */
@@ -932,9 +940,19 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         runOnMainThread(() -> setExposureCompensationOnMainThread(exposureCompensation));
     }
 
+    /**
+     * Asks the bound camera for an exposure index.
+     *
+     * <p>The index is reported as accepted once the camera confirms it, which it does through a
+     * later capture result. A rebind that lands first cancels the request without the camera
+     * having refused anything, so the request is kept in {@link #mRequestedExposureCompensation}
+     * and applied again once the next camera is bound. Only a refusal gives it up.</p>
+     */
+    @MainThread
     private void setExposureCompensationOnMainThread(int exposureCompensation) {
         Camera camera = mActiveCamera;
         if (camera == null) {
+            mRequestedExposureCompensation = exposureCompensation;
             super.setExposureCompensation(exposureCompensation);
             return;
         }
@@ -945,12 +963,24 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         Range<Integer> range = exposure.getExposureCompensationRange();
         int clamped = Math.max(range.getLower(), Math.min(exposureCompensation, range.getUpper()));
+        mRequestedExposureCompensation = clamped;
         ListenableFuture<Integer> result = camera.getCameraControl().setExposureCompensationIndex(clamped);
         result.addListener(() -> {
             try {
                 super.setExposureCompensation(result.get());
+            } catch (CancellationException error) {
+                // Cancelled rather than refused, so the request stands.
+                if (DEBUG) Log.d(TAG, "Exposure request cancelled", error);
             } catch (ExecutionException error) {
+                if (error.getCause() instanceof CameraControl.OperationCanceledException) {
+                    // A rebind or a newer request, not a refusal, so the request stands.
+                    if (DEBUG) Log.d(TAG, "Exposure request cancelled", error.getCause());
+                    return;
+                }
                 Log.w(TAG, "Exposure request failed", error.getCause());
+                if (mRequestedExposureCompensation == clamped) {
+                    mRequestedExposureCompensation = getExposureCompensation();
+                }
             } catch (InterruptedException error) {
                 Thread.currentThread().interrupt();
                 Log.w(TAG, "Exposure request interrupted", error);
@@ -1645,8 +1675,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // Bound, which is the first moment a capture can succeed.
             onCameraReady();
             if (mZoomLevel > 0) setZoomOnMainThread(mZoomLevel);
-            if (getExposureCompensation() != 0) {
-                setExposureCompensationOnMainThread(getExposureCompensation());
+            if (mRequestedExposureCompensation != 0) {
+                setExposureCompensationOnMainThread(mRequestedExposureCompensation);
             }
             if (isTorchEnabled()) setTorchEnabledOnMainThread(true);
             if (isLowLightBoostEnabled()) setLowLightBoostEnabledOnMainThread(true);
