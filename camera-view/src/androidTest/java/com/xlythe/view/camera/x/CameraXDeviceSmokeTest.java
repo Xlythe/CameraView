@@ -88,13 +88,9 @@ public final class CameraXDeviceSmokeTest {
 
             scenario.onActivity(activity -> {
                 CameraXModule module = moduleReference.get();
-                if (module.isPreviewStabilizationSupported()) {
-                    module.setPreviewStabilizationEnabled(true);
-                    assertTrue(module.isPreviewStabilizationEnabled());
-                }
-                if (module.isVideoStabilizationSupported()) {
-                    module.setVideoStabilizationEnabled(true);
-                    assertTrue(module.isVideoStabilizationEnabled());
+                if (module.isStabilizationSupported()) {
+                    module.setStabilizationEnabled(true);
+                    assertTrue(module.isStabilizationEnabled());
                 }
                 if (module.isExposureCompensationSupported()) {
                     module.setExposureCompensation(module.getMinExposureCompensation());

@@ -140,10 +140,8 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_EXTENSION = "extension";
     /** Saved-state key for front-video mirroring. */
     private static final String EXTRA_FRONT_VIDEO_MIRRORING = "front_video_mirroring";
-    /** Saved-state key for preview stabilization. */
-    private static final String EXTRA_PREVIEW_STABILIZATION = "preview_stabilization";
-    /** Saved-state key for video stabilization. */
-    private static final String EXTRA_VIDEO_STABILIZATION = "video_stabilization";
+    /** Saved-state key for stabilization. */
+    private static final String EXTRA_STABILIZATION = "stabilization";
     /** Saved-state key for exposure compensation. */
     private static final String EXTRA_EXPOSURE_COMPENSATION = "exposure_compensation";
     /** Saved-state key for torch state. */
@@ -250,6 +248,7 @@ public class CameraView extends FrameLayout {
             throw new IllegalArgumentException();
         }
     }
+
     /** Selects standard or high dynamic range video when supported by the active backend. */
     public enum DynamicRange {
         SDR(0), HDR(1);
@@ -496,8 +495,7 @@ public class CameraView extends FrameLayout {
             setDynamicRange(DynamicRange.fromId(a.getInteger(R.styleable.CameraView_dynamicRange, getDynamicRange().id)));
             setExtension(Extension.fromId(a.getInteger(R.styleable.CameraView_extension, getExtension().id)));
             setFrontVideoMirroringEnabled(a.getBoolean(R.styleable.CameraView_frontVideoMirroringEnabled, isFrontVideoMirroringEnabled()));
-            setPreviewStabilizationEnabled(a.getBoolean(R.styleable.CameraView_previewStabilizationEnabled, isPreviewStabilizationEnabled()));
-            setVideoStabilizationEnabled(a.getBoolean(R.styleable.CameraView_videoStabilizationEnabled, isVideoStabilizationEnabled()));
+            setStabilizationEnabled(a.getBoolean(R.styleable.CameraView_stabilizationEnabled, isStabilizationEnabled()));
             setExposureCompensation(a.getInteger(R.styleable.CameraView_exposureCompensation, getExposureCompensation()));
             setTorchEnabled(a.getBoolean(R.styleable.CameraView_torchEnabled, isTorchEnabled()));
             setLowLightBoostEnabled(a.getBoolean(R.styleable.CameraView_lowLightBoostEnabled, isLowLightBoostEnabled()));
@@ -555,8 +553,7 @@ public class CameraView extends FrameLayout {
         state.putInt(EXTRA_DYNAMIC_RANGE, getDynamicRange().id);
         state.putInt(EXTRA_EXTENSION, getExtension().id);
         state.putBoolean(EXTRA_FRONT_VIDEO_MIRRORING, isFrontVideoMirroringEnabled());
-        state.putBoolean(EXTRA_PREVIEW_STABILIZATION, isPreviewStabilizationEnabled());
-        state.putBoolean(EXTRA_VIDEO_STABILIZATION, isVideoStabilizationEnabled());
+        state.putBoolean(EXTRA_STABILIZATION, isStabilizationEnabled());
         state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
         state.putBoolean(EXTRA_TORCH, isTorchEnabled());
         state.putBoolean(EXTRA_LOW_LIGHT_BOOST, isLowLightBoostEnabled());
@@ -590,8 +587,7 @@ public class CameraView extends FrameLayout {
             setDynamicRange(DynamicRange.fromId(state.getInt(EXTRA_DYNAMIC_RANGE, DynamicRange.SDR.id)));
             setExtension(Extension.fromId(state.getInt(EXTRA_EXTENSION, Extension.NONE.id)));
             setFrontVideoMirroringEnabled(state.getBoolean(EXTRA_FRONT_VIDEO_MIRRORING, true));
-            setPreviewStabilizationEnabled(state.getBoolean(EXTRA_PREVIEW_STABILIZATION));
-            setVideoStabilizationEnabled(state.getBoolean(EXTRA_VIDEO_STABILIZATION));
+            setStabilizationEnabled(state.getBoolean(EXTRA_STABILIZATION));
             setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
             setTorchEnabled(state.getBoolean(EXTRA_TORCH));
             setLowLightBoostEnabled(state.getBoolean(EXTRA_LOW_LIGHT_BOOST));
@@ -628,6 +624,7 @@ public class CameraView extends FrameLayout {
         }
         mStatus = status;
     }
+
     private void runOnMainThread(Runnable runnable) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             runnable.run();
@@ -1443,6 +1440,7 @@ public class CameraView extends FrameLayout {
     public boolean isExtensionSupported(Extension extension) {
         return mCameraModule.isExtensionSupported(extension);
     }
+
     /** Controls whether front-camera video files are mirrored. */
     public void setFrontVideoMirroringEnabled(boolean enabled) {
         mCameraModule.setFrontVideoMirroringEnabled(enabled);
@@ -1453,34 +1451,25 @@ public class CameraView extends FrameLayout {
         return mCameraModule.isFrontVideoMirroringEnabled();
     }
 
-    /** Enables stabilized preview output when the active camera supports it. */
-    public void setPreviewStabilizationEnabled(boolean enabled) {
-        mCameraModule.setPreviewStabilizationEnabled(enabled);
+    /**
+     * Steadies the picture, in the preview and in a recording, where the camera can.
+     *
+     * <p>One switch rather than two. A camera may be able to steady one and not the other,
+     * and each is then steadied where it can be; which of the two a given camera manages is
+     * not something a caller can act on.</p>
+     */
+    public void setStabilizationEnabled(boolean enabled) {
+        mCameraModule.setStabilizationEnabled(enabled);
     }
 
-    /** Returns whether preview stabilization is requested. */
-    public boolean isPreviewStabilizationEnabled() {
-        return mCameraModule.isPreviewStabilizationEnabled();
+    /** Returns whether stabilization is requested. */
+    public boolean isStabilizationEnabled() {
+        return mCameraModule.isStabilizationEnabled();
     }
 
-    /** Returns whether preview stabilization is supported by the active camera. */
-    public boolean isPreviewStabilizationSupported() {
-        return mCameraModule.isPreviewStabilizationSupported();
-    }
-
-    /** Enables stabilized recorded video when the active camera supports it. */
-    public void setVideoStabilizationEnabled(boolean enabled) {
-        mCameraModule.setVideoStabilizationEnabled(enabled);
-    }
-
-    /** Returns whether video stabilization is requested. */
-    public boolean isVideoStabilizationEnabled() {
-        return mCameraModule.isVideoStabilizationEnabled();
-    }
-
-    /** Returns whether video stabilization is supported by the active camera. */
-    public boolean isVideoStabilizationSupported() {
-        return mCameraModule.isVideoStabilizationSupported();
+    /** Returns whether the active camera can steady either the preview or a recording. */
+    public boolean isStabilizationSupported() {
+        return mCameraModule.isStabilizationSupported();
     }
 
     /** Sets the exposure compensation index, clamped to the active camera's range. */
@@ -1532,6 +1521,7 @@ public class CameraView extends FrameLayout {
     public boolean isLowLightBoostSupported() {
         return mCameraModule.isLowLightBoostSupported();
     }
+
     protected int getRelativeCameraOrientation() {
         return mCameraModule.getRelativeCameraOrientation();
     }

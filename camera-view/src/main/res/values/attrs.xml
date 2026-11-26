@@ -41,8 +41,7 @@
             <enum name="auto" value="5"/>
         </attr>
         <attr name="frontVideoMirroringEnabled" format="boolean" />
-        <attr name="previewStabilizationEnabled" format="boolean" />
-        <attr name="videoStabilizationEnabled" format="boolean" />
+        <attr name="stabilizationEnabled" format="boolean" />
         <attr name="exposureCompensation" format="integer" />
         <attr name="torchEnabled" format="boolean" />
         <attr name="lowLightBoostEnabled" format="boolean" />

@@ -100,8 +100,7 @@ public class CameraViewTest {
         cameraView.setDynamicRange(CameraView.DynamicRange.HDR);
         cameraView.setExtension(CameraView.Extension.NIGHT);
         cameraView.setFrontVideoMirroringEnabled(false);
-        cameraView.setPreviewStabilizationEnabled(true);
-        cameraView.setVideoStabilizationEnabled(true);
+        cameraView.setStabilizationEnabled(true);
         cameraView.setExposureCompensation(2);
         cameraView.setTorchEnabled(true);
         cameraView.setLowLightBoostEnabled(true);
@@ -109,16 +108,14 @@ public class CameraViewTest {
         assertEquals(CameraView.DynamicRange.HDR, cameraView.getDynamicRange());
         assertEquals(CameraView.Extension.NIGHT, cameraView.getExtension());
         assertFalse(cameraView.isFrontVideoMirroringEnabled());
-        assertTrue(cameraView.isPreviewStabilizationEnabled());
-        assertTrue(cameraView.isVideoStabilizationEnabled());
+        assertTrue(cameraView.isStabilizationEnabled());
         assertEquals(2, cameraView.getExposureCompensation());
         assertTrue(cameraView.isTorchEnabled());
         assertTrue(cameraView.isLowLightBoostEnabled());
         assertFalse(cameraView.isDynamicRangeSupported(CameraView.DynamicRange.HDR));
         assertFalse(cameraView.isExtensionSupported(CameraView.Extension.NIGHT));
         assertTrue(cameraView.isExtensionSupported(CameraView.Extension.NONE));
-        assertFalse(cameraView.isPreviewStabilizationSupported());
-        assertFalse(cameraView.isVideoStabilizationSupported());
+        assertFalse(cameraView.isStabilizationSupported());
         assertFalse(cameraView.isExposureCompensationSupported());
         assertFalse(cameraView.isLowLightBoostSupported());
     }

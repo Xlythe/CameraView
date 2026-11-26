@@ -245,8 +245,7 @@ public class CameraViewLifecycleTest {
         // None of these are supported by the fake camera, and a caller has to be able to ask.
         assertFalse(cameraView.isExposureCompensationSupported());
         assertFalse(cameraView.isLowLightBoostSupported());
-        assertFalse(cameraView.isPreviewStabilizationSupported());
-        assertFalse(cameraView.isVideoStabilizationSupported());
+        assertFalse(cameraView.isStabilizationSupported());
         assertTrue(cameraView.isDynamicRangeSupported(CameraView.DynamicRange.SDR));
         assertFalse(cameraView.isExtensionSupported(CameraView.Extension.BOKEH));
         assertNotNull(cameraView.getQuality());

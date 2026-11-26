@@ -44,10 +44,8 @@ public abstract class ICameraModule {
     private CameraView.Extension mExtension = CameraView.Extension.NONE;
     /** Whether front-camera video output should be mirrored. */
     private boolean mFrontVideoMirroringEnabled = true;
-    /** Whether preview stabilization is requested. */
-    private boolean mPreviewStabilizationEnabled;
-    /** Whether video stabilization is requested. */
-    private boolean mVideoStabilizationEnabled;
+    /** Whether a steadied picture is requested, of the preview and of a recording alike. */
+    private boolean mStabilizationEnabled;
     /** Requested exposure compensation index. */
     private int mExposureCompensation;
     /** Whether continuous torch illumination is requested. */
@@ -98,6 +96,7 @@ public abstract class ICameraModule {
     }
 
     protected void stopBarcodeScanner() {}
+
     @RequiresApi(18)
     public VideoRecorder.Canvas getCanvas() {
         return new VideoRecorder.Canvas() {
@@ -310,6 +309,7 @@ public abstract class ICameraModule {
     public synchronized boolean isExtensionSupported(CameraView.Extension extension) {
         return extension == CameraView.Extension.NONE;
     }
+
     public synchronized void setFrontVideoMirroringEnabled(boolean enabled) {
         mFrontVideoMirroringEnabled = enabled;
     }
@@ -318,27 +318,15 @@ public abstract class ICameraModule {
         return mFrontVideoMirroringEnabled;
     }
 
-    public synchronized void setPreviewStabilizationEnabled(boolean enabled) {
-        mPreviewStabilizationEnabled = enabled;
+    public synchronized void setStabilizationEnabled(boolean enabled) {
+        mStabilizationEnabled = enabled;
     }
 
-    public synchronized boolean isPreviewStabilizationEnabled() {
-        return mPreviewStabilizationEnabled;
+    public synchronized boolean isStabilizationEnabled() {
+        return mStabilizationEnabled;
     }
 
-    public synchronized boolean isPreviewStabilizationSupported() {
-        return false;
-    }
-
-    public synchronized void setVideoStabilizationEnabled(boolean enabled) {
-        mVideoStabilizationEnabled = enabled;
-    }
-
-    public synchronized boolean isVideoStabilizationEnabled() {
-        return mVideoStabilizationEnabled;
-    }
-
-    public synchronized boolean isVideoStabilizationSupported() {
+    public synchronized boolean isStabilizationSupported() {
         return false;
     }
 

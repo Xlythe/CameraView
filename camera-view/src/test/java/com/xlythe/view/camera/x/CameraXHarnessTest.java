@@ -140,15 +140,12 @@ public class CameraXHarnessTest {
         FakeCameraXHost.idle();
         assertFalse(module.isLowLightBoostEnabled());
 
-        assertFalse(module.isPreviewStabilizationSupported());
-        module.setPreviewStabilizationEnabled(true);
+        assertFalse(module.isStabilizationSupported());
+        module.setStabilizationEnabled(true);
         FakeCameraXHost.idle();
-        assertFalse(module.isPreviewStabilizationEnabled());
+        assertFalse(module.isStabilizationEnabled());
 
-        assertFalse(module.isVideoStabilizationSupported());
-        module.setVideoStabilizationEnabled(true);
         FakeCameraXHost.idle();
-        assertFalse(module.isVideoStabilizationEnabled());
 
         // HDR is refused for the same reason, leaving the range at SDR.
         module.setDynamicRange(CameraView.DynamicRange.HDR);

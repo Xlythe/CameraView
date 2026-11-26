@@ -170,14 +170,12 @@ public class CameraViewAttributesTest {
     @Test
     public void theCapabilityAttributesAreReadAndHeld() {
         CameraView view = from(builder -> builder
-                .addAttribute(R.attr.previewStabilizationEnabled, "true")
-                .addAttribute(R.attr.videoStabilizationEnabled, "true")
+                .addAttribute(R.attr.stabilizationEnabled, "true")
                 .addAttribute(R.attr.torchEnabled, "true")
                 .addAttribute(R.attr.lowLightBoostEnabled, "true")
                 .addAttribute(R.attr.exposureCompensation, "2"));
 
-        assertTrue(view.isPreviewStabilizationEnabled());
-        assertTrue(view.isVideoStabilizationEnabled());
+        assertTrue(view.isStabilizationEnabled());
         assertTrue(view.isLowLightBoostEnabled());
         assertTrue(view.isTorchEnabled());
         assertEquals(2, view.getExposureCompensation());

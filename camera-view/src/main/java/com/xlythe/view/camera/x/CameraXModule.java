@@ -71,6 +71,7 @@ import androidx.camera.video.Recording;
 import androidx.camera.video.VideoCapabilities;
 import androidx.camera.video.VideoCapture;
 import androidx.camera.video.VideoRecordEvent;
+import androidx.camera.extensions.ExtensionMode;
 import androidx.camera.extensions.ExtensionsManager;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Lifecycle;
@@ -617,6 +618,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             }
         }, mMainExecutor);
     }
+
     private void failProvider(@NonNull Throwable error) {
         mState = State.ERROR;
         Log.e(TAG, "Unable to initialize CameraX", error);
@@ -721,6 +723,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mFrontFacing = frontFacing;
         mGeneration++;
     }
+
     @Override public void focus(Rect focus, Rect metering) {
         if (focus == null || metering == null) return;
         runOnMainThread(() -> focusOnMainThread(focus, metering));
@@ -793,17 +796,21 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return mSnapshotZoomLevel;
         }
     }
+
     @Override public int getMaxZoomLevel() { return MAX_ZOOM_LEVEL; }
+
     @Override public boolean isZoomSupported() {
         synchronized (mSnapshotLock) {
             return mSnapshotZoomSupported;
         }
     }
+
     @Override public boolean hasFlash() {
         synchronized (mSnapshotLock) {
             return mSnapshotHasFlash;
         }
     }
+
     @Override public void setFlash(CameraView.Flash flash) {
         super.setFlash(flash);
         runOnMainThread(() -> { if (mImageCapture != null) mImageCapture.setFlashMode(getFlashMode()); });
@@ -869,47 +876,36 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     private static int toExtensionMode(@NonNull CameraView.Extension extension) {
         switch (extension) {
-            case BOKEH: return androidx.camera.extensions.ExtensionMode.BOKEH;
-            case HDR: return androidx.camera.extensions.ExtensionMode.HDR;
-            case NIGHT: return androidx.camera.extensions.ExtensionMode.NIGHT;
-            case FACE_RETOUCH: return androidx.camera.extensions.ExtensionMode.FACE_RETOUCH;
-            case AUTO: return androidx.camera.extensions.ExtensionMode.AUTO;
+            case BOKEH: return ExtensionMode.BOKEH;
+            case HDR: return ExtensionMode.HDR;
+            case NIGHT: return ExtensionMode.NIGHT;
+            case FACE_RETOUCH: return ExtensionMode.FACE_RETOUCH;
+            case AUTO: return ExtensionMode.AUTO;
             case NONE:
-            default: return androidx.camera.extensions.ExtensionMode.NONE;
+            default: return ExtensionMode.NONE;
         }
     }
+
     @Override public void setFrontVideoMirroringEnabled(boolean enabled) {
         super.setFrontVideoMirroringEnabled(enabled);
     }
 
-    @Override public void setPreviewStabilizationEnabled(boolean enabled) {
-        if (enabled && mActiveCamera != null && !isPreviewStabilizationSupported()) {
-            Log.w(TAG, "Ignoring preview stabilization because the active camera does not support it");
+    @Override public void setStabilizationEnabled(boolean enabled) {
+        if (enabled && mActiveCamera != null && !isStabilizationSupported()) {
+            Log.w(TAG, "Ignoring stabilization because the active camera does not support it");
             return;
         }
-        super.setPreviewStabilizationEnabled(enabled);
+        super.setStabilizationEnabled(enabled);
         rebindConfiguration();
     }
 
-    @Override public boolean isPreviewStabilizationSupported() {
+    /** True when the camera can steady either the preview or a recording. */
+    @Override public boolean isStabilizationSupported() {
         synchronized (mSnapshotLock) {
-            return mSnapshotPreviewStabilizationSupported;
+            return mSnapshotPreviewStabilizationSupported || mSnapshotVideoStabilizationSupported;
         }
     }
 
-    @Override public void setVideoStabilizationEnabled(boolean enabled) {
-        if (enabled && mActiveCamera != null && !isVideoStabilizationSupported()) {
-            Log.w(TAG, "Ignoring video stabilization because the active camera does not support it");
-            return;
-        }
-        super.setVideoStabilizationEnabled(enabled);
-    }
-
-    @Override public boolean isVideoStabilizationSupported() {
-        synchronized (mSnapshotLock) {
-            return mSnapshotVideoStabilizationSupported;
-        }
-    }
 
     @Override public void setExposureCompensation(int exposureCompensation) {
         runOnMainThread(() -> setExposureCompensationOnMainThread(exposureCompensation));
@@ -1031,6 +1027,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             }
         });
     }
+
     @Override public void setMaxVideoDuration(long duration) {
         super.setMaxVideoDuration(duration);
         runOnMainThread(() -> {
@@ -1146,6 +1143,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mAnalysisExecutor = null;
         if (executor != null) executor.shutdownNow();
     }
+
     @Override public void takePicture(File file) {
         if (file == null) throw new NullPointerException("file cannot be null");
         runOnMainThread(() -> takePictureOnMainThread(file));
@@ -1210,6 +1208,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mMainHandler.removeCallbacks(mImageTimeoutTask);
         mImageTimeoutTask = null;
     }
+
     @SuppressLint("MissingPermission")
     @Nullable private Location getLocation() {
         if (!PermissionChecker.hasPermissions(getContext(), Manifest.permission.ACCESS_FINE_LOCATION)) return null;
@@ -1239,7 +1238,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .setTargetRotation(getTargetRotation());
         if (cameraInfo != null) {
             videoBuilder.setDynamicRange(selectedDynamicRange(cameraInfo));
-            if (isVideoStabilizationEnabled()
+            if (isStabilizationEnabled()
                     && Recorder.getVideoCapabilities(cameraInfo).isStabilizationSupported()) {
                 videoBuilder.setVideoStabilizationEnabled(true);
             }
@@ -1433,6 +1432,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         cancelRecordingStartTimeout();
         cancelRecordingFinalizeTimeout();
     }
+
     private void scheduleDurationStop(long operationId) {
         cancelDurationStop();
         long remaining = remainingDurationMillis(
@@ -1491,6 +1491,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         Log.w(TAG, "Falling back to SDR because HDR is unavailable for this lens");
         return DynamicRange.SDR;
     }
+
     @NonNull private QualitySelector createQualitySelector() {
         List<Quality> priorities = videoQualityPriority(getQuality());
         Quality lowestPreference = priorities.get(priorities.size() - 1);
@@ -1521,6 +1522,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         return qualities;
     }
+
     @SuppressLint("MissingPermission")
     private boolean reconcileUseCases(boolean reportFailure) {
         if (mDestroyed) return false;
@@ -1570,7 +1572,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mSnapshotWhileRecording = mVideoCapture != null && imageCapture != null;
             if (!streamPreviews.isEmpty()
                     && !provider.getCameraInfo(selector).isSessionConfigSupported(createSessionConfig(requested))) {
-                if (isPreviewStabilizationEnabled()) {
+                if (isStabilizationEnabled()) {
                     displayPreview = createDisplayPreview(generation, cameraInfo, false);
                     requested.set(0, displayPreview);
                     Log.w(TAG, "Preview stabilization is unavailable while a custom stream is attached");
@@ -1652,7 +1654,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         Preview.Builder builder = new Preview.Builder()
                 .setResolutionSelector(createResolutionSelector())
                 .setTargetRotation(getTargetRotation());
-        if (allowStabilization && isPreviewStabilizationEnabled()
+        if (allowStabilization && isStabilizationEnabled()
                 && Preview.getPreviewCapabilities(cameraInfo).isStabilizationSupported()) {
             builder.setPreviewStabilizationEnabled(true);
         }
@@ -1867,6 +1869,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         analysis.setAnalyzer(executor, analyzer);
         return analysis;
     }
+
     @NonNull private Map<VideoRecorder.SurfaceProvider, Preview> createStreamPreviews(long generation) {
         Map<VideoRecorder.SurfaceProvider, Preview> previews = new LinkedHashMap<>();
         for (VideoRecorder.SurfaceProvider surfaceProvider : mSurfaceProviders) {
@@ -1973,6 +1976,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             default: return new Size(720, 480);
         }
     }
+
     @NonNull private AspectRatioStrategy getAspectRatioStrategy() {
         int width = Math.max(getWidth(), getHeight());
         int height = Math.min(getWidth(), getHeight());
@@ -2043,6 +2047,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Override protected int getRelativeCameraOrientation() {
         return getRelativeImageOrientation(getDisplayRotation(), getSensorOrientation(), mFrontFacing, false);
     }
+
     @Override protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
         if (surfaceProvider == null) return;
         runOnMainThread(() -> {
@@ -2073,7 +2078,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                     return;
                 }
             }
-            if (mSurfaceProviders.isEmpty() && isPreviewStabilizationEnabled()
+            if (mSurfaceProviders.isEmpty() && isStabilizationEnabled()
                     && mOpenRequested && !mPaused && mVideoRecording == null) {
                 long generation = mGeneration;
                 mMainHandler.postDelayed(() -> {

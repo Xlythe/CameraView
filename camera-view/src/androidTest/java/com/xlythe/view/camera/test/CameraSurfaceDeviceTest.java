@@ -299,8 +299,8 @@ public final class CameraSurfaceDeviceTest {
                 camera.setExposureCompensation(1);
                 sleep(300);
             }
-            if (camera.isPreviewStabilizationSupported()) {
-                camera.setPreviewStabilizationEnabled(true);
+            if (camera.isStabilizationSupported()) {
+                camera.setStabilizationEnabled(true);
                 sleep(1_000);
             }
             if (camera.isColorSpaceSupported(CameraView.ColorSpace.DISPLAY_P3)) {
