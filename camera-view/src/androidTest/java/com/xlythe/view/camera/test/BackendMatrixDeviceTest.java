@@ -1,12 +1,15 @@
 package com.xlythe.view.camera.test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.os.SystemClock;
+import android.util.Log;
 import android.util.Size;
 import android.view.ViewGroup;
 
@@ -29,12 +32,16 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -51,7 +58,21 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @RunWith(Parameterized.class)
 public final class BackendMatrixDeviceTest {
+    private static final String TAG = "BackendMatrixDeviceTest";
     private static final long TIMEOUT_SECONDS = 30;
+
+    /** Long enough for exposure and focus to settle, and a zero-shutter-lag buffer to fill. */
+    private static final long SETTLE_MILLIS = 2_000;
+    /** Pictures taken and thrown away first, so the numbers are not the first capture's. */
+    private static final int WARM_UP_PICTURES = 1;
+    /** Pictures timed after the warm-up. */
+    private static final int TIMED_PICTURES = 5;
+    /**
+     * The longest any backend may take to expose a picture. Loose on purpose: the numbers are
+     * the hardware's as much as the library's, and this only catches a capture that waits on
+     * something it should not.
+     */
+    private static final long MAX_SHUTTER_MILLIS = 1_000;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<CameraView.Backend> backends() {
@@ -123,6 +144,81 @@ public final class BackendMatrixDeviceTest {
 
         assertNotNull("the capture failed on " + backend, captured.get());
         assertTrue(captured.get().length() > 0);
+    }
+
+    /**
+     * How long a picture takes: to be exposed, which is the lag a person feels, and to be saved.
+     *
+     * <p>Logged so backends and devices can be compared, and asserted only loosely. The sounds
+     * are off, since eighteen clicks in a row are for nobody's benefit.</p>
+     */
+    @Test
+    public void theShutterLagIsMeasured() throws Exception {
+        List<Long> exposed = new ArrayList<>();
+        List<Long> saved = new ArrayList<>();
+
+        withOpenCamera(camera -> {
+            camera.setShutterSoundEnabled(false);
+            sleep(SETTLE_MILLIS);
+            for (int i = 0; i < WARM_UP_PICTURES + TIMED_PICTURES; i++) {
+                long[] millis = takeTimedPicture(camera);
+                if (i >= WARM_UP_PICTURES) {
+                    exposed.add(millis[0]);
+                    saved.add(millis[1]);
+                }
+            }
+        });
+
+        Log.i(TAG, backend + " on " + Build.MODEL + ": exposed after " + summary(exposed)
+                + ", saved after " + summary(saved));
+        for (long millis : exposed) {
+            assertTrue(backend + " took " + millis + "ms to expose a picture",
+                    millis < MAX_SHUTTER_MILLIS);
+        }
+    }
+
+    /** Takes a picture, returning how long it took to be exposed and to be saved. */
+    private long[] takeTimedPicture(CameraView camera) throws Exception {
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicInteger shutters = new AtomicInteger();
+        AtomicLong exposedAt = new AtomicLong();
+        AtomicLong savedAt = new AtomicLong();
+        camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onShutter() {
+                exposedAt.compareAndSet(0, SystemClock.elapsedRealtime());
+                shutters.incrementAndGet();
+            }
+
+            @Override public void onImageConfirmation() {}
+
+            @Override public void onImageCaptured(File file) {
+                savedAt.set(SystemClock.elapsedRealtime());
+                finished.countDown();
+            }
+
+            @Override public void onFailure() {
+                finished.countDown();
+            }
+        });
+
+        long pressedAt = SystemClock.elapsedRealtime();
+        camera.takePicture(temporaryFile(".jpg"));
+
+        assertTrue("the capture never reported on " + backend,
+                finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertFalse("the capture failed on " + backend, savedAt.get() == 0);
+        assertEquals("one shutter per picture on " + backend, 1, shutters.get());
+        assertTrue("the shutter comes before the picture is saved",
+                exposedAt.get() <= savedAt.get());
+        return new long[] {exposedAt.get() - pressedAt, savedAt.get() - pressedAt};
+    }
+
+    /** The median and range of some timings, in milliseconds. */
+    private static String summary(List<Long> millis) {
+        List<Long> sorted = new ArrayList<>(millis);
+        Collections.sort(sorted);
+        return "median " + sorted.get(sorted.size() / 2) + "ms (" + sorted.get(0) + "-"
+                + sorted.get(sorted.size() - 1) + "ms)";
     }
 
     /**
