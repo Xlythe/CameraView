@@ -56,6 +56,13 @@ interface CameraController {
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     fun startRecording(file: File)
     fun stopRecording()
+
+    /**
+     * A stream carries audio as well as video, so it needs the microphone too - the implementation
+     * has always required it, and saying so here is what warns a caller coding against this
+     * interface rather than against the class behind it.
+     */
+    @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
     fun stream(): VideoStream?
     fun toggleCamera()
     fun confirmPicture()
@@ -123,7 +130,8 @@ private class CameraControllerImpl(
             ?: Log.e(TAG, "View not available for rejectVideo")
     }
 
-    @SuppressLint("MissingPermission", "WrongConstant")
+    @SuppressLint("WrongConstant")
+    @RequiresPermission(Manifest.permission.CAMERA)
     override fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, @Barcode.Format vararg formats: Int) {
         if (formats.isNotEmpty()) {
             val first = formats[0]
