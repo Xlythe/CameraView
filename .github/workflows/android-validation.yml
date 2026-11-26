@@ -89,6 +89,14 @@ jobs:
       # failure; a licence that is genuinely still missing fails the next step loudly.
       - name: Accept the SDK licences the emulator images need
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      # The two devices are set up in parallel, and each installs the emulator and its image if
+      # they are missing, so both unpack the emulator into one directory and one fails.
+      - name: Install the emulator and system images
+        run: >-
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          emulator
+          "system-images;android-28;google_apis;x86"
+          "system-images;android-37.0;google_apis_ps16k;x86_64"
       - name: Run API 28 and API 37 managed-device tests
         run: >-
           gradle --no-daemon --stacktrace
