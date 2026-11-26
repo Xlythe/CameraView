@@ -351,6 +351,40 @@ float x = getWidth() * (0.5f + (float) Math.tan(Math.toRadians(bearing))
         / (2f * (float) Math.tan(Math.toRadians(fov / 2))));
 ```
 
+Filters and masks
+-----------------
+setFrameRenderer puts your own drawing between the camera and everything it writes to: the
+preview, the recording and the photograph. Not every camera can do this, and
+isFrameEffectSupported says whether this one can. The renderer is called on the GL thread with the
+frame already on a texture, so a filter is a shader and nothing is re-encoded.
+```java
+if (mCameraView.isFrameEffectSupported()) {
+    mCameraView.setFrameRenderer(new ColorFilter(ColorMatrix.sepia()));
+}
+mCameraView.setFrameRenderer(null); // back to the camera's own frames
+```
+ColorMatrix has the usual ones (grayscale, sepia, invert, saturation, contrast, brightness and
+tint), and ColorFilter takes any 4x5 matrix of your own. A renderer that returns false from
+onDrawFrame passes the frame through, so one renderer can filter some frames and leave others
+alone.
+
+For a mask rather than a filter, enterBackgroundReplacement segments the subject out of each frame
+and composites it over something else. It takes the frames an analyzer would, so it cannot run at
+the same time as startFrameAnalysis or the barcode scanner, and that is refused rather than left to
+break quietly.
+```java
+BackgroundReplacer replacer = new BackgroundReplacer();
+replacer.setBackgroundImage(bitmap); // or setBackgroundColor(Color.BLUE)
+mCameraView.enterBackgroundReplacement(replacer);
+mCameraView.exitBackgroundReplacement();
+```
+The two halves work apart: a caller with their own model drives BackgroundReplacer.setMask itself,
+and a caller who only wants to know where the subject is takes the masks and draws nothing.
+
+A photograph taken while something is drawing is the camera's full resolution, drawn as the
+preview shows it and encoded from that. Such a picture carries no Ultra HDR gain map, so
+isPictureFormatSupported reports Ultra HDR unsupported until nothing is drawing.
+
 Frames
 -----------------
 startFrameAnalysis hands every frame to your own analyzer, on a background thread, for detection
