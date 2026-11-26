@@ -56,8 +56,26 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Magenta is the colour because nothing in a room is that: a frame that arrives unaltered, or
  * half-drawn, or from the wrong texture, fails this rather than passing by luck.</p>
  */
-@RunWith(AndroidJUnit4.class)
+@RunWith(org.junit.runners.Parameterized.class)
 public final class FrameEffectDeviceTest {
+    /**
+     * Both backends that put frames through GL.
+     *
+     * <p>CameraX has a seam for it and always did. Camera2 did not: its frames went to the
+     * surfaces in its session, and the session is now built so that those surfaces are the
+     * renderer's. Running the same assertions against both is the point - a filter that
+     * reaches the preview and not the photograph is a bug, and only an end-to-end check on
+     * each backend says which one it reached.</p>
+     */
+    @org.junit.runners.Parameterized.Parameters(name = "{0}")
+    public static java.util.Collection<CameraView.Backend> backends() {
+        return java.util.Arrays.asList(
+                CameraView.Backend.CAMERA2, CameraView.Backend.CAMERA_X);
+    }
+
+    @org.junit.runners.Parameterized.Parameter
+    public CameraView.Backend backend;
+
     private static final long TIMEOUT_SECONDS = 30;
     /** How far a channel may stray, which is a JPEG quantising a flat field and nothing more. */
     private static final int TOLERANCE = 24;
@@ -76,9 +94,9 @@ public final class FrameEffectDeviceTest {
     );
 
     @Before
-    public void useTheBackendThatHasEffects() {
+    public void useTheBackendUnderTest() {
         DeviceState.assumeATestableCamera();
-        CameraView.setDefaultBackend(CameraView.Backend.CAMERA_X);
+        CameraView.setDefaultBackend(backend);
     }
 
     @After

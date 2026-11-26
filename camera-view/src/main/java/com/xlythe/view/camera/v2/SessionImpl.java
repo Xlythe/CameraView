@@ -69,6 +69,31 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getHandler();
     }
 
+    /**
+     * The module this session belongs to, for the few things a session asks it directly.
+     *
+     * <p>Most of what a session needs is already forwarded by a named method here. This is for
+     * the pieces that are about the module itself rather than about a setting - the GL pipeline
+     * the camera may be writing into, and the context a file is saved with.</p>
+     */
+    @NonNull
+    Camera2Module getModule() {
+        return mCamera2Module;
+    }
+
+    @NonNull
+    Context getContext() {
+        return mCamera2Module.getContext();
+    }
+
+    boolean isMirroringThisPicture() {
+        return mCamera2Module.isMirroringThisPicture();
+    }
+
+    void showImageConfirmation(@NonNull java.io.File file) {
+        mCamera2Module.showImageConfirmation(file);
+    }
+
     boolean hasFlash() {
         return mCamera2Module.hasFlash();
     }
@@ -288,6 +313,11 @@ abstract class SessionImpl implements Camera2Module.Session {
 
         void onVideoFailed() {
             mCameraView.onVideoFailed();
+        }
+
+        /** Whether this surface has been given a size, and so can be asked for one. */
+        boolean hasSize() {
+            return mSize != null;
         }
 
         int getWidth() {

@@ -152,6 +152,19 @@ public class ArCameraModule extends Camera2Module {
         return isArActive() ? CameraView.Backend.AR : CameraView.Backend.CAMERA2;
     }
 
+    /**
+     * No, because this backend is already drawing the frames.
+     *
+     * <p>ARCore owns the texture the camera is read into and this module draws from it, so a
+     * second pipeline would be a second render thread competing for the same frames. An app in
+     * AR mode draws onto the world through {@link #setArFrameListener} and its own overlay,
+     * which is the arrangement AR is for.</p>
+     */
+    @Override
+    public boolean isFrameEffectSupported() {
+        return false;
+    }
+
     /** What to tell about every tracked frame, or null for nothing. */
     @Override
     public void setArFrameListener(@Nullable ArFrameListener listener) {

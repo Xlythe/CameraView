@@ -2,6 +2,7 @@ package com.xlythe.view.camera;
 
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertSame;
 
 import android.content.Context;
@@ -82,16 +83,20 @@ public class FrameEffectSeamTest {
     }
 
     /**
-     * Camera2 and the original Camera API hand their buffers straight to the surfaces that consume
-     * them, so there is nowhere for a frame to be drawn on the way out and both say so.
+     * Camera2 draws frames; the original Camera API has nowhere to draw them.
+     *
+     * <p>Camera2 used to answer no, on the grounds that it hands its buffers straight to the
+     * surfaces that consume them - which is true and turned out not to matter, because the
+     * surfaces its session writes to can be the renderer's as easily as the preview's. The old
+     * backend really has nowhere: it gives buffers to a consumer with nothing in between.</p>
      *
      * <p>CameraX's answer is asserted against the bound backend in {@code CameraXHarnessTest},
      * because reaching it here would mean standing a camera provider up.</p>
      */
     @Test
-    public void theOlderBackendsHaveNowhereToDrawAFrame() {
+    public void camera2DrawsFramesAndTheOldestBackendDoesNot() {
         CameraView.setDefaultBackend(CameraView.Backend.CAMERA2);
-        assertFalse(new CameraView(context).isFrameEffectSupported());
+        assertTrue(new CameraView(context).isFrameEffectSupported());
 
         CameraView.setDefaultBackend(CameraView.Backend.LEGACY);
         assertFalse(new CameraView(context).isFrameEffectSupported());

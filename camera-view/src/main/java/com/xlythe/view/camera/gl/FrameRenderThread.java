@@ -20,6 +20,7 @@ import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The thread that owns the GL context, the camera's {@link SurfaceTexture} and the outputs.
@@ -82,6 +83,25 @@ public final class FrameRenderThread {
         }
     }
 
+    /** One still waiting for its frame, and where to draw it when it arrives. */
+    private static final class Still {
+        private final Surface mSurface;
+        private final Size mSize;
+        private final GlMath.ScaleType mScaleType;
+        private final TextureTransform mTransform;
+        private final Runnable mOnDrawn;
+
+        private Still(@NonNull Surface surface, @NonNull Size size,
+                @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform,
+                @NonNull Runnable onDrawn) {
+            mSurface = surface;
+            mSize = size;
+            mScaleType = scaleType;
+            mTransform = transform;
+            mOnDrawn = onDrawn;
+        }
+    }
+
     private final String mName;
 
     /**
@@ -101,6 +121,26 @@ public final class FrameRenderThread {
     @Nullable private OesTextureProgram mProgram;
     @Nullable private SurfaceTexture mSurfaceTexture;
     @Nullable private GlFrame mFrame;
+
+    /**
+     * A second input, for one frame at a time at a size of its own.
+     *
+     * <p>Here because a still is not a preview frame. A camera gives its full resolution only to
+     * a capture request aimed at a high-resolution target, so an effect that drew the preview
+     * stream into the photograph would quietly turn a twelve megapixel camera into a two
+     * megapixel one. This is that target: the camera writes one full-size frame here, it goes
+     * through the same renderer as every other frame, and the result is what gets saved.</p>
+     *
+     * <p>Null until {@link #createStillInput} is called, which is only when an effect is
+     * running - a texture and a buffer the size of a photograph are not worth holding
+     * otherwise.</p>
+     */
+    @Nullable private SurfaceTexture mStillTexture;
+    @Nullable private Surface mStillSurface;
+    private int mStillTextureName;
+
+    /** What to do with the next frame to land on the still input, or null for nothing. */
+    @Nullable private Still mPendingStill;
     @Nullable private volatile FrameRenderer mRenderer;
     @Nullable private CameraTextureProvider mTextureProvider;
     private int mTextureName;
@@ -171,6 +211,163 @@ public final class FrameRenderThread {
     @Nullable
     public SurfaceTexture getInputSurfaceTexture() {
         return mSurfaceTexture;
+    }
+
+    /**
+     * The surface a camera writes a full-size still into, created on first use.
+     *
+     * <p>Blocks until the render thread has made it, because the caller is building a capture
+     * session around it and cannot be given it later. Returns null if the thread is not running
+     * or will not make one.</p>
+     *
+     * @param size the size the camera will write, which is the size the still comes out
+     */
+    @Nullable
+    public Surface createStillInput(@NonNull Size size) {
+        Handler handler = mHandler;
+        if (!mRunning || handler == null) {
+            return null;
+        }
+        CountDownLatch ready = new CountDownLatch(1);
+        AtomicReference<Surface> created = new AtomicReference<>();
+        handler.post(() -> {
+            try {
+                created.set(makeStillInput(size));
+            } catch (RuntimeException | LinkageError error) {
+                Log.w(TAG, "This device will not render stills through GL", error);
+            } finally {
+                ready.countDown();
+            }
+        });
+        try {
+            if (!ready.await(START_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                Log.w(TAG, "Timed out making a still input");
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
+        return created.get();
+    }
+
+    /** Runs on the render thread. Replaces any previous still input, since its size may differ. */
+    @Nullable
+    private Surface makeStillInput(@NonNull Size size) {
+        EglCore egl = mEgl;
+        OesTextureProgram program = mProgram;
+        if (egl == null || program == null) {
+            return null;
+        }
+        egl.makeCurrent();
+        releaseStillInput();
+        mStillTextureName = program.createExternalTexture();
+        SurfaceTexture texture = new SurfaceTexture(mStillTextureName);
+        texture.setDefaultBufferSize(size.getWidth(), size.getHeight());
+        texture.setOnFrameAvailableListener(this::onStillAvailable, mHandler);
+        mStillTexture = texture;
+        mStillSurface = new Surface(texture);
+        return mStillSurface;
+    }
+
+    /**
+     * Draws the next frame to arrive on the still input into a surface, once.
+     *
+     * <p>Armed rather than drawn, because the frame has not been taken yet: the caller asks for
+     * this and then tells the camera to capture, and the drawing happens when the frame
+     * lands.</p>
+     *
+     * @param onDrawn called on the render thread once the frame has been drawn and presented
+     * @return whether the request was armed
+     */
+    public boolean drawStillInto(@NonNull Surface surface, @NonNull Size size,
+            @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform,
+            @NonNull Runnable onDrawn) {
+        Handler handler = mHandler;
+        if (!mRunning || handler == null) {
+            return false;
+        }
+        handler.post(() -> mPendingStill =
+                new Still(surface, size, scaleType, transform, onDrawn));
+        return true;
+    }
+
+    /** Stops waiting for a still, for a capture that failed before the camera wrote anything. */
+    public void cancelStill() {
+        post(() -> mPendingStill = null);
+    }
+
+    /** Runs on the render thread: a full-size frame has arrived for a still. */
+    private void onStillAvailable(@NonNull SurfaceTexture texture) {
+        EglCore egl = mEgl;
+        Still still = mPendingStill;
+        if (!mRunning || egl == null) {
+            return;
+        }
+        try {
+            egl.makeCurrent();
+            texture.updateTexImage();
+            if (still == null) {
+                // A frame nobody asked for, which happens when a capture is abandoned. It still
+                // has to be consumed or the texture stays full and the next one never arrives.
+                return;
+            }
+            mPendingStill = null;
+            texture.getTransformMatrix(mSurfaceTextureMatrix);
+            drawStill(still, texture.getTimestamp());
+        } catch (RuntimeException | LinkageError error) {
+            Log.w(TAG, "Dropped a still frame", error);
+            mPendingStill = null;
+        }
+    }
+
+    /** Draws the still input into its one output, through the renderer like any other frame. */
+    private void drawStill(@NonNull Still still, long timestampNanos) {
+        EglCore egl = mEgl;
+        GlFrame frame = mFrame;
+        if (egl == null || frame == null) {
+            return;
+        }
+        EGLSurface eglSurface = null;
+        try {
+            eglSurface = egl.createWindowSurface(still.mSurface);
+            egl.makeCurrent(eglSurface);
+            still.mTransform.onTextureTransform(mSurfaceTextureMatrix, mTextureMatrix);
+            GLES20.glViewport(0, 0, still.mSize.getWidth(), still.mSize.getHeight());
+            GLES20.glClearColor(0f, 0f, 0f, 1f);
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+            frame.set(mStillTextureName, mTextureMatrix, still.mSize.getWidth(),
+                    still.mSize.getHeight(), timestampNanos,
+                    GlMath.viewport(still.mScaleType, still.mSize, still.mSize));
+            FrameRenderer renderer = mRenderer;
+            if (renderer == null || !renderer.onDrawFrame(frame)) {
+                frame.drawCameraFrame();
+            }
+            egl.setPresentationTime(eglSurface, timestampNanos);
+            egl.swapBuffers(eglSurface);
+        } finally {
+            if (eglSurface != null) {
+                egl.releaseSurface(eglSurface);
+            }
+            // Told after the surface is released, so a caller that reads the result cannot race
+            // the GL driver still holding it.
+            still.mOnDrawn.run();
+        }
+    }
+
+    private void releaseStillInput() {
+        mPendingStill = null;
+        if (mStillSurface != null) {
+            mStillSurface.release();
+            mStillSurface = null;
+        }
+        if (mStillTexture != null) {
+            mStillTexture.setOnFrameAvailableListener(null);
+            mStillTexture.release();
+            mStillTexture = null;
+        }
+        if (mStillTextureName != 0 && mProgram != null) {
+            mProgram.deleteTexture(mStillTextureName);
+        }
+        mStillTextureName = 0;
     }
 
     /**
@@ -388,6 +585,7 @@ public final class FrameRenderThread {
             releaseOutput(output);
         }
         mOutputs.clear();
+        releaseStillInput();
         if (mSurfaceTexture != null) {
             mSurfaceTexture.setOnFrameAvailableListener(null);
             mSurfaceTexture.release();
