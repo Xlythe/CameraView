@@ -5,6 +5,7 @@ plugins {
     id 'jacoco'
     id 'org.jetbrains.kotlin.plugin.compose' version '2.3.21'
     id 'com.gradleup.nmcp' version '1.5.0'
+    id 'io.github.takahirom.roborazzi' version '1.70.0'
 }
 
 Properties projectProperties = new Properties()
@@ -209,6 +210,7 @@ dependencies {
     // The test dependencies stay exact. They reach no consumer, and a suite that silently
     // changed runner underneath a failure is a worse trade than one that needs bumping.
     testImplementation 'org.robolectric:robolectric:4.18.1'
+    testImplementation 'io.github.takahirom.roborazzi:roborazzi:1.70.0'
     testImplementation 'androidx.compose.ui:ui-test-junit4-android:1.9.2'
     debugImplementation 'androidx.compose.ui:ui-test-manifest:1.9.2'
     testImplementation 'org.mockito:mockito-core:5.24.0'

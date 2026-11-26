@@ -43,7 +43,8 @@ public class CameraViewTest {
 
     @Test
     public void programmaticConstructionCreatesPreviewViews() {
-        assertEquals(3, cameraView.getChildCount());
+        // The preview, the two confirmation views, and the focus reticle over them.
+        assertEquals(4, cameraView.getChildCount());
         assertNotNull(cameraView.asTextureView());
     }
 
