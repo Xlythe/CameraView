@@ -2,6 +2,8 @@ package com.xlythe.view.camera.stream;
 
 import androidx.annotation.RestrictTo;
 
+import com.xlythe.view.camera.VideoStream;
+
 /**
  * A buffer sized for the sample rate the caller asked for.
  *
@@ -29,9 +31,11 @@ public abstract class AudioBuffer {
    * <p>Twice the bandwidth of the telephone rate it replaces and a different thing to listen to.
    * A caller recording music rather than a conversation should ask for more.</p>
    */
+  @VideoStream.SampleRate
   public static final int DEFAULT_SAMPLE_RATE = 16000;
 
   /** One channel. Stereo needs two microphones and a caller who asked for it. */
+  @VideoStream.ChannelCount
   public static final int DEFAULT_CHANNEL_COUNT = 1;
 
   private final int mSize;
@@ -47,7 +51,8 @@ public abstract class AudioBuffer {
    * @param preferredSampleRate tried first, and used if the device can size a buffer for it
    * @param channelCount 1 or 2; a device that cannot do two falls back to one
    */
-  protected AudioBuffer(int preferredSampleRate, int channelCount) {
+  protected AudioBuffer(@VideoStream.SampleRate int preferredSampleRate,
+      @VideoStream.ChannelCount int channelCount) {
     int channels = channelCount >= 2 ? 2 : 1;
     int size = getMinBufferSize(preferredSampleRate, channels);
     int sampleRate = preferredSampleRate;

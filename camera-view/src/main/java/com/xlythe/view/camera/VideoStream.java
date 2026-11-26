@@ -5,6 +5,7 @@ import android.annotation.SuppressLint;
 import android.util.Log;
 import android.util.Size;
 
+import androidx.annotation.IntDef;
 import androidx.annotation.IntRange;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -21,6 +22,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -258,6 +261,16 @@ public class VideoStream implements Closeable {
     }
   }
 
+  /** A rate audio can be recorded at, in hertz: the ones the recorder can fall back through. */
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({8000, 11025, 16000, 22050, 44100, 48000})
+  public @interface SampleRate {}
+
+  /** One channel or two. */
+  @Retention(RetentionPolicy.SOURCE)
+  @IntDef({1, 2})
+  public @interface ChannelCount {}
+
   public static class Params {
     /** Whether the stream carries an audio channel, which is what needs the microphone. */
     private final boolean mAudioEnabled;
@@ -311,13 +324,13 @@ public class VideoStream implements Closeable {
     }
 
     /** The sample rate audio should be recorded at, in hertz. */
-    @IntRange(from = 1)
+    @SampleRate
     public int getAudioSampleRate() {
       return mAudioSampleRate;
     }
 
-    /** How many audio channels to record, 1 or 2. */
-    @IntRange(from = 1, to = 2)
+    /** How many audio channels to record. */
+    @ChannelCount
     public int getAudioChannelCount() {
       return mAudioChannelCount;
     }
@@ -406,7 +419,7 @@ public class VideoStream implements Closeable {
        * the highest it can, and the stream says which it settled on in its header, so the other
        * end does not have to be told separately.</p>
        */
-      public Builder setAudioSampleRate(int audioSampleRate) {
+      public Builder setAudioSampleRate(@SampleRate int audioSampleRate) {
         mAudioSampleRate = audioSampleRate;
         return this;
       }
@@ -418,7 +431,7 @@ public class VideoStream implements Closeable {
        * bandwidth; a device that cannot manage it records one and says so in the header. The
        * second channel is given up before the sample rate is.</p>
        */
-      public Builder setAudioChannelCount(int audioChannelCount) {
+      public Builder setAudioChannelCount(@ChannelCount int audioChannelCount) {
         mAudioChannelCount = audioChannelCount;
         return this;
       }

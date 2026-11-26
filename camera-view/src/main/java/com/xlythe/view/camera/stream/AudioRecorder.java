@@ -9,6 +9,8 @@ import android.util.Log;
 
 import androidx.annotation.RequiresPermission;
 
+import com.xlythe.view.camera.VideoStream;
+
 import com.xlythe.view.camera.CameraView;
 
 import java.io.IOException;
@@ -70,7 +72,8 @@ public class AudioRecorder {
    * @param sampleRate the rate to record at, if the device can
    * @param channelCount 1 or 2
    */
-  public AudioRecorder(OutputStream outputStream, int sampleRate, int channelCount) {
+  public AudioRecorder(OutputStream outputStream, @VideoStream.SampleRate int sampleRate,
+      @VideoStream.ChannelCount int channelCount) {
     this.mOutputStream = outputStream;
     this.mPreferredSampleRate = sampleRate;
     this.mPreferredChannelCount = channelCount;
@@ -188,7 +191,8 @@ public class AudioRecorder {
   }
 
   private static class Buffer extends AudioBuffer {
-    Buffer(int sampleRate, int channelCount) {
+    Buffer(@VideoStream.SampleRate int sampleRate,
+        @VideoStream.ChannelCount int channelCount) {
       super(sampleRate, channelCount);
     }
 
