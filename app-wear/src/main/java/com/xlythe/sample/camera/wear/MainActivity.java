@@ -2,6 +2,7 @@ package com.xlythe.sample.camera.wear;
 
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.View;
@@ -9,8 +10,13 @@ import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.TextView;
 
+import androidx.annotation.IntDef;
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
+import androidx.annotation.UiThread;
+import androidx.annotation.WorkerThread;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.google.android.gms.wearable.CapabilityClient;
@@ -21,6 +27,8 @@ import com.xlythe.view.camera.VideoStream;
 import com.xlythe.view.camera.VideoView;
 
 import java.io.File;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.Set;
 import java.util.concurrent.Executors;
 
@@ -32,6 +40,12 @@ import java.util.concurrent.Executors;
  * {@link VideoView}, which is the same thing the phone sample does with a local pipe. That is why
  * none of this lives in the library: the only part that is specific to a watch is the transport.
  * </p>
+ *
+ * <p>Started by hand, from the watch's own launcher. Nothing on the phone brings it up and there
+ * is no notification to drive it from: opening the camera on the phone does not reach the watch,
+ * because a watch app that launched itself whenever a camera opened would be a worse sample than
+ * one that waits to be asked. It is this screen that starts the conversation - on start it looks
+ * for the phone by the capability the phone declares, and asks it to begin previewing.</p>
  */
 public class MainActivity extends AppCompatActivity {
     private static final String TAG = "CameraViewWear";
@@ -39,17 +53,45 @@ public class MainActivity extends AppCompatActivity {
     /** Declared by the phone app in wear.xml, and how the watch finds it. */
     private static final String CAPABILITY_PHONE_CAMERA = "camera_view_sample";
 
+    /** Why a Data Layer channel closed, as the Wearable API reports it. */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef({
+            ChannelClient.ChannelCallback.CLOSE_REASON_NORMAL,
+            ChannelClient.ChannelCallback.CLOSE_REASON_DISCONNECTED,
+            ChannelClient.ChannelCallback.CLOSE_REASON_REMOTE_CLOSE,
+            ChannelClient.ChannelCallback.CLOSE_REASON_LOCAL_CLOSE,
+            ChannelClient.ChannelCallback.CLOSE_REASON_CONNECTION_TIMEOUT,
+    })
+    private @interface CloseReason {}
+
+    /** Draws the phone's preview, fed from a channel rather than from a camera. */
     private VideoView mPreview;
+
+    /** Covers the preview with the last picture taken, until it is tapped away. */
     private ImageView mPicture;
+
+    /** Asks the phone for a picture; disabled while no phone is reachable. */
     private Button mShutter;
+
+    /** The one line of text this screen has room for. */
     private TextView mStatus;
 
+    /** The node running the phone half of this sample, or null while none is reachable. */
     @Nullable private Node mPhone;
+
+    /** The preview currently playing, held so it can be closed when the screen stops. */
     @Nullable private VideoStream mStream;
 
+    /**
+     * Receives the channels the phone opens.
+     *
+     * <p>Registered without a Looper, so the Wearable API delivers these off the main
+     * thread.</p>
+     */
     private final ChannelClient.ChannelCallback mChannelCallback =
             new ChannelClient.ChannelCallback() {
                 @Override
+                @WorkerThread
                 public void onChannelOpened(@NonNull ChannelClient.Channel channel) {
                     if (WearProtocol.PATH_PREVIEW.equals(channel.getPath())) {
                         showPreview(channel);
@@ -59,8 +101,9 @@ public class MainActivity extends AppCompatActivity {
                 }
 
                 @Override
+                @WorkerThread
                 public void onChannelClosed(@NonNull ChannelClient.Channel channel,
-                        int closeReason, int appSpecificErrorCode) {
+                        @CloseReason int closeReason, int appSpecificErrorCode) {
                     if (WearProtocol.PATH_PREVIEW.equals(channel.getPath())) {
                         runOnUiThread(() -> setStatus(R.string.status_preview_ended));
                     }
@@ -102,6 +145,7 @@ public class MainActivity extends AppCompatActivity {
      * <p>A watch can be connected to more than one thing, and only the node running the phone
      * half of this sample can answer.</p>
      */
+    @MainThread
     private void findPhone() {
         setStatus(R.string.status_looking_for_phone);
         Wearable.getCapabilityClient(this)
@@ -124,6 +168,7 @@ public class MainActivity extends AppCompatActivity {
                 });
     }
 
+    @MainThread
     private void takePicture() {
         if (mPhone == null) {
             findPhone();
@@ -134,7 +179,8 @@ public class MainActivity extends AppCompatActivity {
     }
 
     /** Sends a one-shot message, which is all the watch ever needs to send. */
-    private void tell(String path) {
+    @MainThread
+    private void tell(@NonNull String path) {
         Node phone = mPhone;
         if (phone == null) {
             return;
@@ -150,7 +196,8 @@ public class MainActivity extends AppCompatActivity {
      * <p>The channel's input stream is H.264 exactly as CameraView's encoder produced it, which is
      * what VideoView.setStream expects, so there is nothing to decode here.</p>
      */
-    private void showPreview(ChannelClient.Channel channel) {
+    @WorkerThread
+    private void showPreview(@NonNull ChannelClient.Channel channel) {
         ChannelClient channels = Wearable.getChannelClient(this);
         channels.getInputStream(channel).addOnSuccessListener(this, inputStream -> {
             closeStream();
@@ -171,10 +218,11 @@ public class MainActivity extends AppCompatActivity {
      * watch link takes long enough that holding it in memory while it arrives is the wrong
      * trade.</p>
      */
-    private void showPicture(ChannelClient.Channel channel) {
+    @WorkerThread
+    private void showPicture(@NonNull ChannelClient.Channel channel) {
         File file = new File(getCacheDir(), "from-phone.jpg");
         Wearable.getChannelClient(this)
-                .receiveFile(channel, android.net.Uri.fromFile(file), false /* append */)
+                .receiveFile(channel, Uri.fromFile(file), false /* append */)
                 .addOnSuccessListener(this, ignored -> decode(file))
                 .addOnFailureListener(this, error -> {
                     Log.w(TAG, "Could not receive the picture", error);
@@ -182,13 +230,15 @@ public class MainActivity extends AppCompatActivity {
                 });
     }
 
-    private void decode(File file) {
+    /** Decodes off the main thread, then shows the result on it. */
+    @MainThread
+    private void decode(@NonNull File file) {
         Executors.newSingleThreadExecutor().execute(() -> {
-            // Decoded small: a watch screen is a few hundred pixels across and the phone's
-            // picture is thousands.
-            BitmapFactory.Options options = new BitmapFactory.Options();
-            options.inSampleSize = 4;
-            Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath(), options);
+            // Decoded as it arrives. The phone scales the picture to something a watch screen
+            // can draw before it sends it, so there is nothing to sample down here - and the
+            // sample size this used to guess at was wrong for any capture that was not a few
+            // thousand pixels across.
+            Bitmap bitmap = BitmapFactory.decodeFile(file.getAbsolutePath());
             runOnUiThread(() -> {
                 if (bitmap == null) {
                     setStatus(R.string.status_capture_failed);
@@ -201,6 +251,7 @@ public class MainActivity extends AppCompatActivity {
         });
     }
 
+    @MainThread
     private void closeStream() {
         VideoStream stream = mStream;
         mStream = null;
@@ -214,7 +265,8 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void setStatus(int message) {
+    @UiThread
+    private void setStatus(@StringRes int message) {
         mStatus.setText(message);
     }
 }
