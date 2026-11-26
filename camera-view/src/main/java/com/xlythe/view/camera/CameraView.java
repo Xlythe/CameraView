@@ -35,6 +35,7 @@ import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
 
 import com.xlythe.view.camera.ar.ArFrameListener;
+import com.xlythe.view.camera.caption.SpeechTranscriber;
 import com.xlythe.view.camera.pano.PanoramaCoverage;
 import com.xlythe.view.camera.pano.PanoramaSession;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
@@ -1459,6 +1460,39 @@ public class CameraView extends FrameLayout {
         }
         mFrameStream = new FrameStream(mCameraModule.getCanvas(), this, params, analyzer);
         mFrameStream.start();
+    }
+
+    /**
+     * Whether a recording made by this view can be transcribed into captions.
+     *
+     * <p>Needs Android 13, where the platform recogniser first accepted a file rather than only
+     * the microphone, and a recogniser installed to accept it. Worth asking before offering
+     * captions, because there is nothing this library can do on a device without both - an app
+     * that needs them anyway has to bring its own model, and {@link Captions} will write
+     * whatever that produces.</p>
+     */
+    public boolean isTranscriptionSupported() {
+        return Build.VERSION.SDK_INT >= 33 && SpeechTranscriber.isSupported(getContext());
+    }
+
+    /**
+     * Writes captions for a recording, from what was said in it.
+     *
+     * <p>Beside the recording rather than burned into it: a subtitle file of the same name,
+     * which players pick up and viewers can turn off. Nothing is re-encoded, so the recording
+     * is not touched and adding captions costs no quality.</p>
+     *
+     * <p>Runs in the background and is not quick - it decodes the audio and recognises all of
+     * it - so the listener reports progress as well as the result. It is called on the main
+     * thread.</p>
+     *
+     * @param video a recording, which must have an audio track
+     */
+    @RequiresApi(33)
+    public void transcribe(@NonNull File video, @NonNull SpeechTranscriber.Format format,
+            @NonNull SpeechTranscriber.Listener listener) {
+        SpeechTranscriber transcriber = new SpeechTranscriber(getContext());
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> transcriber.transcribe(video, format, listener));
     }
 
     /**
