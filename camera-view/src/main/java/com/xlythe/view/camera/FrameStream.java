@@ -15,6 +15,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.RestrictTo;
 
 import com.google.common.util.concurrent.SettableFuture;
 import com.xlythe.view.camera.stream.VideoRecorder;
@@ -220,6 +221,24 @@ public final class FrameStream implements Closeable {
 
     /** Starts delivering frames. Does nothing if already started. */
     @RequiresPermission(Manifest.permission.CAMERA)
+    /**
+     * A stream the library drives itself, rather than one an app asked for.
+     *
+     * <p>Here because a backend that has no analysis use case to borrow - Camera2 - gets frames
+     * the same way an app does, and its module lives in another package. Restricted rather than
+     * made public: an app starts a stream through
+     * {@link CameraView#startFrameAnalysis(Analyzer)}, which also keeps the one analysis slot
+     * accounted for.</p>
+     *
+     * @hide
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @NonNull
+    public static FrameStream forLibrary(@NonNull VideoRecorder.Canvas canvas,
+            @NonNull Params params, @NonNull Analyzer analyzer) {
+        return new FrameStream(canvas, null /* view */, params, analyzer);
+    }
+
     public void start() {
         if (!mIsAlive.compareAndSet(false, true)) {
             Log.w(TAG, "FrameStream is already running");

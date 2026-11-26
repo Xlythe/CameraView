@@ -34,6 +34,11 @@ import android.util.SizeF;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.FrameStream;
+import com.xlythe.view.camera.SegmentationAnalyzer;
+import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.FrameRenderThread;
+import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.TransformMath;
@@ -228,6 +233,165 @@ public class Camera2Module extends ICameraModule {
      */
     @NonNull
     private final CameraManager mCameraManager;
+
+    /**
+     * The GL pipeline the camera frames go through, or null when nothing is drawing them.
+     *
+     * <p>Only up while a renderer or a texture provider is set, because it costs a thread, an
+     * EGL context and a texture, and because routing frames through it changes what the camera
+     * is asked to write to - a camera that nothing is drawing should go straight to the
+     * preview as it always has.</p>
+     */
+    @Nullable
+    private FrameRenderThread mEffect;
+
+    /** Set once GL has failed here, so the camera carries on without offering effects again. */
+    private boolean mGlUnavailable;
+
+    /**
+     * Whether frames can be put through GL on the way out.
+     *
+     * <p>True, which it was not: the frames of a Camera2 session go to the surfaces in that
+     * session, and those surfaces can be the renderer's as easily as the preview's. What makes
+     * it work for the photograph as well as the preview is that a still is taken through a
+     * second input at the camera's own resolution rather than off the preview stream - an
+     * effect that drew the preview into the photograph would quietly turn a twelve megapixel
+     * camera into a two megapixel one.</p>
+     */
+    @Override
+    public boolean isFrameEffectSupported() {
+        return !mGlUnavailable;
+    }
+
+    @Override
+    public void setFrameRenderer(@Nullable FrameRenderer renderer) {
+        super.setFrameRenderer(renderer);
+        mHandler.post(this::applyFrameEffect);
+    }
+
+    @Override
+    public void setCameraTextureProvider(@Nullable CameraTextureProvider provider) {
+        super.setCameraTextureProvider(provider);
+        mHandler.post(this::applyFrameEffect);
+    }
+
+    /**
+     * Brings the pipeline into line with what the caller has asked for.
+     *
+     * <p>Rebuilds the session only when the pipeline comes up or goes down, because that is
+     * when the surfaces the camera writes to change. Changing what is drawn is a field on a
+     * renderer that is already running, and reconfiguring the camera for it would drop frames
+     * for nothing.</p>
+     */
+    private void applyFrameEffect() {
+        if (!isFrameEffectSupported()) {
+            // A subclass that draws the frames itself, which the AR backend does.
+            return;
+        }
+        boolean wanted = getFrameRenderer() != null || getCameraTextureProvider() != null;
+        boolean running = mEffect != null;
+        if (wanted == running) {
+            if (mEffect != null) {
+                mEffect.setFrameRenderer(getFrameRenderer());
+            }
+            return;
+        }
+        if (wanted) {
+            FrameRenderThread effect = new FrameRenderThread("CameraViewCamera2Renderer");
+            effect.setCameraTextureProvider(getCameraTextureProvider());
+            effect.setFrameRenderer(getFrameRenderer());
+            if (!effect.start()) {
+                // A device whose driver will not give us a context is a device the camera still
+                // has to work on, so the effect is refused and not offered again.
+                mGlUnavailable = true;
+                return;
+            }
+            mEffect = effect;
+        } else {
+            FrameRenderThread effect = mEffect;
+            mEffect = null;
+            if (effect != null) {
+                effect.stop();
+            }
+        }
+        restartActiveSession();
+    }
+
+    /** The pipeline, for the sessions that have to point the camera at it. */
+    @Nullable
+    FrameRenderThread getEffect() {
+        return mEffect;
+    }
+
+    /** The frames being segmented, or null when nothing is. */
+    @Nullable
+    private FrameStream mSegmentationStream;
+
+    @Nullable
+    private SegmentationAnalyzer mSegmentationAnalyzer;
+
+    /**
+     * Starts segmenting frames, through a stream of this session's own.
+     *
+     * <p>Camera2 has no analysis use case to borrow, so the frames come from a
+     * {@link FrameStream} - the same one an app would use for its own detection - which adds a
+     * reader to the session alongside whatever else is in it. That is a second stream, not a
+     * third: while an effect is running the camera writes one stream into the renderer, so the
+     * reader brings the total to two.</p>
+     *
+     * <p>It takes the frames the way a caller's own analyzer would, so the two cannot both run.
+     * Said here rather than discovered later: an app that wants to segment and scan barcodes at
+     * once needs its own model for one of them.</p>
+     */
+    @SuppressLint("MissingPermission")
+    @Override
+    protected boolean startSegmentation(CameraView.SegmentationListener listener) {
+        if (listener == null) {
+            throw new NullPointerException("listener cannot be null");
+        }
+        if (!isFrameAnalysisSupported()) {
+            return false;
+        }
+        stopSegmentation();
+        SegmentationAnalyzer analyzer;
+        try {
+            analyzer = new SegmentationAnalyzer(listener, mHandler::post,
+                    isUsingFrontFacingCamera());
+        } catch (RuntimeException | LinkageError error) {
+            // The model is delivered by Play services and its client is built here, so a device
+            // without it fails at construction. Reported rather than thrown: a camera library
+            // may not take an app down because a vision dependency is missing.
+            Log.w(TAG, "This device cannot segment", error);
+            return false;
+        }
+        try {
+            FrameStream stream = FrameStream.forLibrary(
+                    getCanvas(), new FrameStream.Params(), analyzer);
+            stream.start();
+            mSegmentationStream = stream;
+            mSegmentationAnalyzer = analyzer;
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to start segmenting frames", error);
+            analyzer.close();
+            return false;
+        }
+    }
+
+    @Override
+    protected void stopSegmentation() {
+        FrameStream stream = mSegmentationStream;
+        SegmentationAnalyzer analyzer = mSegmentationAnalyzer;
+        mSegmentationStream = null;
+        mSegmentationAnalyzer = null;
+        if (stream != null) {
+            stream.close();
+        }
+        if (analyzer != null) {
+            // After the stream, so no frame arrives for a model that has been released.
+            analyzer.close();
+        }
+    }
 
     /**
      * This is the id of the camera (eg. front or back facing) that we're currently using.
@@ -630,6 +794,11 @@ public class Camera2Module extends ICameraModule {
         if (mIsOpen) {
             return;
         }
+        // Brought back up if a renderer is still set, since close() took it down: an app that
+        // sets a renderer once and then rotates the screen expects it to still be there.
+        if (mEffect == null && !mGlUnavailable) {
+            applyFrameEffect();
+        }
         closeCameraResources();
         mIsOpen = true;
         mReopenAttempts = 0;
@@ -640,6 +809,14 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public void close() {
+        stopSegmentation();
+        FrameRenderThread effect = mEffect;
+        mEffect = null;
+        if (effect != null) {
+            // Before the session, because it is drawing into surfaces the session owns and
+            // stopping it blocks until it has.
+            effect.stop();
+        }
         mIsOpen = false;
         mReopenAttempts = 0;
         mPendingOpenGeneration = 0;

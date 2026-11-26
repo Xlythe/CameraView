@@ -1178,7 +1178,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         CameraXSegmentationAnalyzer analyzer;
         try {
             analyzer = new CameraXSegmentationAnalyzer(
-                    listener, mMainExecutor, isMirroringThisPicture());
+                    listener, mMainExecutor, isUsingFrontFacingCamera());
         } catch (RuntimeException | LinkageError error) {
             // The model is delivered by Play services and its client is built here, so a device
             // without it fails at construction. Reported rather than thrown, for the same reason

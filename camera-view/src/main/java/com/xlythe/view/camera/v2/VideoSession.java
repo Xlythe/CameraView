@@ -18,6 +18,8 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.gl.FrameRenderThread;
+import com.xlythe.view.camera.gl.GlMath;
 
 import java.io.File;
 import java.io.IOException;
@@ -92,6 +94,8 @@ class VideoSession extends PictureSession {
             onVideoFailed();
             throw new CameraAccessException(CameraAccessException.CAMERA_ERROR);
         }
+        // After the recorder has a size, which is what the renderer has to be told.
+        attachRecorderToRenderer();
     }
 
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
@@ -104,7 +108,11 @@ class VideoSession extends PictureSession {
         applyZoom(builder);
         applyFaceDetection(builder);
         builder.addTarget(getPreviewSurface().getSurface());
-        builder.addTarget(mVideoSurface.getSurface());
+        if (!mThroughGl) {
+            // While an effect is running the recorder is drawn into rather than captured into,
+            // so it is not a target: the camera writes one stream, into the renderer.
+            builder.addTarget(mVideoSurface.getSurface());
+        }
         return builder.build();
     }
 
@@ -149,17 +157,58 @@ class VideoSession extends PictureSession {
 
     @Override
     public void close() {
+        if (mThroughGl) {
+            FrameRenderThread effect = getModule().getEffect();
+            if (effect != null) {
+                // Before the recorder stops, because the renderer is drawing into its surface
+                // and removing an output waits until it has stopped.
+                effect.removeOutput(mVideoSurface);
+            }
+            mThroughGl = false;
+        }
         super.close();
         mVideoSurface.stopRecording();
         mVideoSurface.close();
     }
 
+    /**
+     * Whether the recording is being drawn by the renderer rather than filled by the camera.
+     *
+     * <p>Decided once the sizes are known, in {@link #initialize}, because that is when there
+     * is a recorder surface to hand the renderer.</p>
+     */
+    private boolean mThroughGl;
+
     @NonNull
     @Override
     public List<Surface> getSurfaces() {
         List<Surface> surfaces = super.getSurfaces();
-        surfaces.add(mVideoSurface.getSurface());
+        if (!mThroughGl) {
+            surfaces.add(mVideoSurface.getSurface());
+        }
         return surfaces;
+    }
+
+    /**
+     * Gives the recorder to the renderer, so that what is recorded is what is on screen.
+     *
+     * <p>Without this a filter would reach the preview and the photograph and not the video,
+     * which is the one output somebody would notice last and mind most. The recorder takes a
+     * surface and does not care who fills it, so the renderer fills it with the same frame it
+     * is drawing everywhere else.</p>
+     */
+    private void attachRecorderToRenderer() {
+        FrameRenderThread effect = getModule().getEffect();
+        if (effect == null) {
+            mThroughGl = false;
+            return;
+        }
+        Size size = new Size(mVideoSurface.getWidth(), mVideoSurface.getHeight());
+        effect.addOutput(mVideoSurface, mVideoSurface.getSurface(), size, size,
+                GlMath.ScaleType.FILL_CENTER,
+                (surfaceTextureMatrix, into) ->
+                        System.arraycopy(surfaceTextureMatrix, 0, into, 0, into.length));
+        mThroughGl = true;
     }
 
     public File getFile() {

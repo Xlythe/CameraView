@@ -1288,9 +1288,10 @@ public class CameraView extends FrameLayout {
      * wants to know where the subject is can take the masks and draw nothing. This is the
      * convenience for the common case of wanting a different background.</p>
      *
-     * <p>Only the CameraX backend can do it, because it needs a frame stream alongside a
-     * running preview. It also takes the one analysis slot, so it cannot run at the same time
-     * as the barcode scanner.</p>
+     * <p>Both camera backends can do it. It needs a frame stream alongside a running preview,
+     * which CameraX has a use case for and Camera2 gets by adding a reader to its session. It
+     * takes the frames a caller's own analyzer would, so it cannot run at the same time as the
+     * barcode scanner or anything else reading frames.</p>
      *
      * @return false where the backend cannot segment or the model is unavailable
      */
@@ -1490,10 +1491,20 @@ public class CameraView extends FrameLayout {
      * Whether {@link #setFrameRenderer} and {@link #setCameraTextureProvider} do anything on the
      * backend in use.
      *
-     * <p>{@link Backend#CAMERA_X} can, because androidx.camera has a seam for putting a processor
-     * between the camera and its outputs. The other two deliver camera buffers straight to the
-     * surfaces that consume them, so there is nowhere for a frame to be drawn on the way, and they
-     * report false rather than accepting a renderer that would never be called.</p>
+     * <p>Both camera backends can. CameraX has a seam for putting a processor between the
+     * camera and its outputs; Camera2 has no such seam and needs none, because the surfaces its
+     * session writes to can be the renderer's as easily as the preview's. The old backend
+     * reports false: it hands buffers to the surfaces that consume them with nothing in
+     * between.</p>
+     *
+     * <p>What it reaches is the preview, the recording and the photograph. The photograph is
+     * the one worth saying out loud, because the easy way to do it is wrong: on Camera2 the
+     * still is taken through a second input at the camera's own resolution rather than off the
+     * preview stream, since drawing the preview into the file would quietly turn a twelve
+     * megapixel camera into a two megapixel one. It is encoded from what the renderer drew, so
+     * it does not go through the camera's own JPEG encoder, and a DNG is left alone entirely -
+     * a RAW frame is the sensor's own grid and there is nothing for a renderer to draw into
+     * it.</p>
      *
      * <p>False also once GL has failed on this device, which is reported here rather than thrown
      * so that the camera carries on working without the effect.</p>

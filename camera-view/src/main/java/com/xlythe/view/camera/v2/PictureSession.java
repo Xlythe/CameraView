@@ -4,6 +4,8 @@ import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
+import android.graphics.Bitmap;
+import android.graphics.PixelFormat;
 import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -22,6 +24,8 @@ import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.gl.FrameRenderThread;
+import com.xlythe.view.camera.gl.GlMath;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -61,6 +65,15 @@ class PictureSession extends PreviewSession {
 
     private final PictureSurface mPictureSurface;
 
+    /**
+     * The renderer input the camera writes a still into, or null when nothing is drawing.
+     *
+     * <p>Made once in {@link #initialize} and held, because the session is configured around it
+     * and the request has to target the same one.</p>
+     */
+    @Nullable
+    private Surface mEffectStillInput;
+
     PictureSession(Camera2Module camera2Module) {
         super(camera2Module);
         mPictureSurface = new PictureSurface(camera2Module, getPreviewSurface());
@@ -75,7 +88,29 @@ class PictureSession extends PreviewSession {
         onPreviewInitialized(map);
         if (hasStillCapture()) {
             mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr());
+            // Once the still has a size, and once only: asking the renderer for an input makes
+            // one, so asking twice leaves the session configured around a surface that nothing
+            // is drawing into - which is a capture that configures and then never arrives.
+            mEffectStillInput = createEffectStillInput();
         }
+    }
+
+    /**
+     * Where the camera writes a still while an effect is running, or null when none is.
+     *
+     * <p>A second input to the renderer rather than the preview stream it is already drawing,
+     * because a camera gives its full resolution only to a request aimed at a high-resolution
+     * target. Taking the photograph off the preview would quietly turn a twelve megapixel
+     * camera into a two megapixel one.</p>
+     */
+    @Nullable
+    private Surface createEffectStillInput() {
+        FrameRenderThread effect = getModule().getEffect();
+        if (effect == null || !mPictureSurface.hasSize()) {
+            return null;
+        }
+        return effect.createStillInput(
+                new Size(mPictureSurface.getWidth(), mPictureSurface.getHeight()));
     }
 
     /** Lets a subclass add its own outputs once the preview has a size and before the still does. */
@@ -114,9 +149,18 @@ class PictureSession extends PreviewSession {
     @Override
     public List<Surface> getSurfaces() {
         List<Surface> surfaces = super.getSurfaces();
-        if (hasStillCapture()) {
-            surfaces.add(mPictureSurface.getSurface());
+        if (!hasStillCapture()) {
+            return surfaces;
         }
+        Surface stillInput = mEffectStillInput;
+        if (stillInput != null) {
+            // The renderer's own input, at the size the camera would have written the JPEG.
+            // The reader is left out: a frame drawn by GL cannot land in a JPEG reader, so the
+            // photograph is encoded from what the renderer produced instead.
+            surfaces.add(stillInput);
+            return surfaces;
+        }
+        surfaces.add(mPictureSurface.getSurface());
         return surfaces;
     }
 
@@ -130,6 +174,11 @@ class PictureSession extends PreviewSession {
         if (!hasStillCapture()) {
             Log.w(TAG, "This camera cannot take a picture in its current configuration");
             onImageFailed();
+            return;
+        }
+        FrameRenderThread effect = getModule().getEffect();
+        if (effect != null) {
+            takeDrawnPicture(effect, file, device, session);
             return;
         }
         mPictureSurface.initializePicture(file);
@@ -149,6 +198,181 @@ class PictureSession extends PreviewSession {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to create capture request", e);
             onImageFailed();
+        }
+    }
+
+    /**
+     * Takes a picture that the renderer has drawn.
+     *
+     * <p>The camera writes one full-size frame into the renderer, the renderer draws it the way
+     * it draws every other frame, and what comes out is read back and encoded. So a filter, a
+     * mask or a replaced background reaches the photograph and not only the preview - which is
+     * the whole point, since a filter you can see and cannot keep is a bug rather than a
+     * feature.</p>
+     *
+     * <p>Encoded here rather than by the camera, which is the cost of this: the JPEG comes from
+     * a bitmap this writes, so it does not go through whatever the camera's own encoder would
+     * have done. The resolution is the camera's, which is the part that matters.</p>
+     */
+    private void takeDrawnPicture(@NonNull FrameRenderThread effect, @NonNull File file,
+            @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
+        Surface input = mEffectStillInput;
+        if (input == null) {
+            Log.w(TAG, "The renderer has no still input, so there is nothing to draw into");
+            onImageFailed();
+            return;
+        }
+        int width = mPictureSurface.getWidth();
+        int height = mPictureSurface.getHeight();
+        ImageReader reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
+        Size size = new Size(width, height);
+        boolean armed = effect.drawStillInto(reader.getSurface(), size,
+                GlMath.ScaleType.FILL_CENTER,
+                (surfaceTextureMatrix, into) ->
+                        System.arraycopy(surfaceTextureMatrix, 0, into, 0, into.length),
+                () -> {});
+        if (!armed) {
+            reader.close();
+            onImageFailed();
+            return;
+        }
+        reader.setOnImageAvailableListener(ready -> {
+            android.media.Image drawn = null;
+            try {
+                drawn = ready.acquireLatestImage();
+                if (drawn == null) {
+                    return;
+                }
+                new DrawnImageSaver(getContext(), toBitmap(drawn), getRelativeCameraOrientation(),
+                        getModule().isUsingFrontFacingCamera(), file, getPictureQuality(), this)
+                        .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+            } catch (RuntimeException error) {
+                Log.e(TAG, "Failed to read back a drawn picture", error);
+                onImageFailed();
+            } finally {
+                if (drawn != null) {
+                    drawn.close();
+                }
+                // One frame is all that was asked for, and the reader holds native buffers.
+                ready.setOnImageAvailableListener(null, null);
+                ready.close();
+            }
+        }, getHandler());
+
+        try {
+            CaptureRequest.Builder builder =
+                    device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+            builder.set(CaptureRequest.CONTROL_AF_MODE,
+                    CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+            applyFlash(builder);
+            builder.addTarget(input);
+            if (mMeteringRectangle != null) {
+                builder.set(CaptureRequest.CONTROL_AE_REGIONS,
+                        new MeteringRectangle[] {mMeteringRectangle});
+                builder.set(CaptureRequest.CONTROL_AF_REGIONS,
+                        new MeteringRectangle[] {mMeteringRectangle});
+            }
+            applyZoom(builder);
+            session.capture(builder.build(), null, getHandler());
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException error) {
+            Log.e(TAG, "Failed to request a drawn picture", error);
+            effect.cancelStill();
+            reader.setOnImageAvailableListener(null, null);
+            reader.close();
+            onImageFailed();
+        }
+    }
+
+    /** The drawn frame as a bitmap, which is RGBA and so needs no conversion beyond the stride. */
+    @NonNull
+    private static Bitmap toBitmap(@NonNull android.media.Image drawn) {
+        android.media.Image.Plane plane = drawn.getPlanes()[0];
+        int rowStride = plane.getRowStride();
+        int pixelStride = plane.getPixelStride();
+        // The reader pads each row out to its stride, so the bitmap is made wide enough to hold
+        // the padding and then cropped - reading it as if it were packed shears the picture.
+        int padded = rowStride / pixelStride;
+        Bitmap full = Bitmap.createBitmap(padded, drawn.getHeight(), Bitmap.Config.ARGB_8888);
+        full.copyPixelsFromBuffer(plane.getBuffer());
+        if (padded == drawn.getWidth()) {
+            return full;
+        }
+        Bitmap cropped = Bitmap.createBitmap(full, 0, 0, drawn.getWidth(), drawn.getHeight());
+        full.recycle();
+        return cropped;
+    }
+
+    /**
+     * Writes a drawn picture, and finishes it the way a captured one is finished.
+     *
+     * <p>Separate from {@link ImageSaver} because what it is given is already pixels rather than
+     * a camera frame, but the half that matters is the same: the timestamp, the orientation, the
+     * mirror and the location all have to reach the file, or a filtered photograph would be the
+     * only one in the library missing them.</p>
+     */
+    private static final class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
+        private final Context mContext;
+        private final Bitmap mBitmap;
+        private final int mOrientation;
+        private final boolean mIsReversed;
+        private final File mFile;
+        private final int mQuality;
+        private final PictureSession mSession;
+
+        private DrawnImageSaver(@NonNull Context context, @NonNull Bitmap bitmap, int orientation,
+                boolean reversed, @NonNull File file, int quality,
+                @NonNull PictureSession session) {
+            mContext = context.getApplicationContext();
+            mBitmap = bitmap;
+            mOrientation = orientation;
+            mIsReversed = reversed;
+            mFile = file;
+            mQuality = quality;
+            mSession = session;
+        }
+
+        @WorkerThread
+        @Override
+        protected Boolean doInBackground(Void... params) {
+            try (FileOutputStream output = new FileOutputStream(mFile)) {
+                if (!mBitmap.compress(Bitmap.CompressFormat.JPEG, mQuality, output)) {
+                    Log.e(TAG, "Failed to compress a drawn picture");
+                    return false;
+                }
+            } catch (IOException | RuntimeException error) {
+                Log.e(TAG, "Failed to write a drawn picture", error);
+                if (mFile.exists() && !mFile.delete()) {
+                    Log.w(TAG, "Failed to clean up a partially written picture");
+                }
+                return false;
+            } finally {
+                mBitmap.recycle();
+            }
+            try {
+                Exif exif = new Exif(mFile);
+                exif.attachTimestamp();
+                exif.rotate(mOrientation);
+                if (mIsReversed) {
+                    exif.flipHorizontally();
+                }
+                Location location = SessionImpl.CameraSurface.getLocation(mContext);
+                if (location != null) {
+                    exif.attachLocation(location);
+                }
+                exif.save();
+            } catch (IOException error) {
+                Log.e(TAG, "Failed to update EXIF on a drawn picture", error);
+            }
+            return true;
+        }
+
+        @Override
+        protected void onPostExecute(Boolean saved) {
+            if (Boolean.TRUE.equals(saved)) {
+                mSession.showImageConfirmation(mFile);
+            } else {
+                mSession.onImageFailed();
+            }
         }
     }
 
