@@ -1,6 +1,7 @@
 package com.xlythe.compose.camera
 
 import android.Manifest
+import android.graphics.Rect
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
@@ -8,10 +9,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.xlythe.view.camera.CameraView
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView
+import com.xlythe.view.camera.shadow.ShadowInjectableImageReader
 import com.xlythe.view.camera.v2.FakeCamera2
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -38,7 +41,8 @@ import java.io.File
 // Composed at API 34: Compose's own view calls InputManager.getInstance(), which was removed
 // from the platform afterwards and which Robolectric does not stand in for, so composing at a
 // newer level fails before any of this code runs. Nothing here is version-specific.
-@Config(sdk = [34], shadows = [ShadowAvailableTextureView::class])
+@Config(sdk = [34],
+        shadows = [ShadowAvailableTextureView::class, ShadowInjectableImageReader::class])
 class CameraComposableTest {
     @get:Rule
     val compose = createAndroidComposeRule<ComponentActivity>()
@@ -258,6 +262,224 @@ class CameraComposableTest {
         // Either it is still in flight or it has failed; what it must not do is throw at the
         // caller, who has no way to know whether the camera is ready.
         assertTrue(failures.size <= 1)
+    }
+
+    /** The settings the backends read, which have to land on the view like the older ones. */
+    @Test
+    fun theBackendSettingsReachTheCamera() {
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent {
+            Camera(
+                zoomLevel = 50,
+                exposureCompensation = 2,
+                torchEnabled = true,
+                dynamicRange = DynamicRange.HDR,
+                extension = Extension.BOKEH,
+                pictureQuality = 60,
+                stabilizationEnabled = true,
+                lowLightBoostEnabled = true,
+                frontVideoMirroringEnabled = false,
+                controller = controller,
+            )
+        }
+        compose.waitForIdle()
+
+        val camera = requireCameraView()
+        assertEquals(50, camera.zoomLevel)
+        assertEquals(2, camera.exposureCompensation)
+        assertTrue(camera.isTorchEnabled)
+        assertEquals(CameraView.DynamicRange.HDR, camera.dynamicRange)
+        assertEquals(CameraView.Extension.BOKEH, camera.extension)
+        assertEquals(60, camera.pictureQuality)
+        assertTrue(camera.isStabilizationEnabled)
+        assertTrue(camera.isLowLightBoostEnabled)
+        assertFalse(camera.isFrontVideoMirroringEnabled)
+    }
+
+    /** And the ones left out keep the camera's own defaults rather than a zeroed version. */
+    @Test
+    fun theBackendSettingsDefaultToTheCamerasOwn() {
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent { Camera(controller = controller) }
+        compose.waitForIdle()
+
+        val camera = requireCameraView()
+        assertEquals(CameraView.ColorSpace.SRGB, camera.colorSpace)
+        assertEquals(CameraView.DynamicRange.SDR, camera.dynamicRange)
+        assertEquals(CameraView.Extension.NONE, camera.extension)
+        assertEquals(95, camera.pictureQuality)
+        assertTrue("front video matches the preview it was framed in",
+                camera.isFrontVideoMirroringEnabled)
+        assertFalse(camera.isTorchEnabled)
+    }
+
+    /**
+     * A colour space this camera cannot record in is declined rather than applied, and the
+     * published state says so beforehand.
+     */
+    @Test
+    fun anUnsupportedColorSpaceIsDeclined() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+
+        compose.setContent {
+            Camera(colorSpace = ColorSpace.DISPLAY_P3, controller = controller, state = state)
+        }
+        compose.waitForIdle()
+
+        assertEquals(setOf(ColorSpace.SRGB), requireNotNull(state.value).supportedColorSpaces)
+        assertEquals("the request is dropped, not half-applied",
+                CameraView.ColorSpace.SRGB, requireCameraView().colorSpace)
+    }
+
+    /** The queries are published once there is a camera to answer them. */
+    @Test
+    fun theStateReportsWhatTheCameraCanDo() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+
+        val published = requireNotNull(state.value) { "an open camera has answers to give" }
+        assertTrue(published.hasFlash)
+        assertTrue(published.hasFrontFacingCamera)
+        assertFalse(published.isUsingFrontFacingCamera)
+        assertTrue(published.isZoomSupported)
+        assertEquals(100, published.maxZoomLevel)
+        assertTrue(published.isFaceDetectionSupported)
+        assertTrue("a FULL camera2 device can hold a still alongside a recording",
+                published.isSnapshotWhileRecordingSupported)
+        assertEquals(setOf(DynamicRange.SDR), published.supportedDynamicRanges)
+        assertEquals(setOf(Extension.NONE), published.supportedExtensions)
+        assertFalse(published.isRecording)
+        assertFalse(published.isAnalyzingFrames)
+        assertTrue("the fake camera publishes its optics",
+                published.horizontalFieldOfView > 0f && published.verticalFieldOfView > 0f)
+    }
+
+    /** A closed camera has nothing to report, which is not the same as reporting false. */
+    @Test
+    fun theStateIsWithdrawnWhenTheCameraCloses() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+        assertNotNull(state.value)
+
+        requireCameraView().close()
+        compose.waitForIdle()
+
+        assertNull("a closed camera cannot answer for the camera it was", state.value)
+    }
+
+    /** Another lens is another camera, which may answer differently. */
+    @Test
+    fun theStateFollowsALensSwitch() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+        assertFalse(requireNotNull(state.value).isUsingFrontFacingCamera)
+
+        requireNotNull(controller.value).toggleCamera()
+        compose.waitForIdle()
+
+        assertTrue("nothing announces a lens switch, so the action has to republish",
+                requireNotNull(state.value).isUsingFrontFacingCamera)
+    }
+
+    /** Zoom left out belongs to the camera, so a gesture is not undone by a recomposition. */
+    @Test
+    fun zoomIsLeftToTheCameraWhenNoLevelIsGiven() {
+        val flash = mutableStateOf(Flash.AUTO)
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent { Camera(flash = flash.value, controller = controller) }
+        compose.waitForIdle()
+        requireCameraView().zoomLevel = 25
+
+        flash.value = Flash.ON
+        compose.waitForIdle()
+
+        assertEquals("a pinch has to survive the next recomposition",
+                25, requireCameraView().zoomLevel)
+    }
+
+    /** Zoom asked for belongs to the caller, and is asserted again on every recomposition. */
+    @Test
+    fun aStatedZoomLevelIsReapplied() {
+        val flash = mutableStateOf(Flash.AUTO)
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent { Camera(flash = flash.value, zoomLevel = 10, controller = controller) }
+        compose.waitForIdle()
+        requireCameraView().zoomLevel = 25
+
+        flash.value = Flash.ON
+        compose.waitForIdle()
+
+        assertEquals(10, requireCameraView().zoomLevel)
+    }
+
+    /** Frame analysis is driven through the controller and reported in the state. */
+    @Test
+    fun frameAnalysisStartsAndStopsThroughTheController() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+        val camera = requireNotNull(controller.value)
+
+        camera.startFrameAnalysis({})
+        compose.waitForIdle()
+        assertTrue(requireNotNull(state.value).isAnalyzingFrames)
+
+        camera.stopFrameAnalysis()
+        compose.waitForIdle()
+
+        assertFalse(requireNotNull(state.value).isAnalyzingFrames)
+    }
+
+    /** Analysis cannot be started twice, and the wrapper passes the refusal on. */
+    @Test
+    fun frameAnalysisCannotBeStartedTwice() {
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent { Camera(controller = controller) }
+        compose.waitForIdle()
+        val camera = requireNotNull(controller.value)
+        camera.startFrameAnalysis({})
+
+        assertThrows(IllegalStateException::class.java) { camera.startFrameAnalysis({}) }
+
+        camera.stopFrameAnalysis()
+    }
+
+    /** Face detection says whether the camera took the listener on. */
+    @Test
+    fun faceDetectionReportsWhetherTheCameraTookItOn() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+        val camera = requireNotNull(controller.value)
+        assertTrue(requireNotNull(state.value).isFaceDetectionSupported)
+
+        assertTrue("this camera reports faces", camera.setFaceDetectionListener { _, _ -> })
+        assertTrue("letting go always succeeds", camera.setFaceDetectionListener(null))
+    }
+
+    /** Focus on an area the caller chose, rather than where the preview happened to be tapped. */
+    @Test
+    fun theControllerFocusesWhereItIsTold() {
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent { Camera(controller = controller) }
+        compose.waitForIdle()
+
+        requireNotNull(controller.value)
+            .focus(Rect(-100, -100, 100, 100), Rect(-150, -150, 150, 150))
+        compose.waitForIdle()
+
+        assertTrue("focusing is not a reason to lose the camera", requireCameraView().isOpen)
     }
 
     private fun requireCameraView(): CameraView {

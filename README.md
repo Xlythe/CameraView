@@ -43,18 +43,51 @@ Camera
 Camera is a Composable that simplifies the Android Camera APIs.
 
 Camera includes the optional attributes quality [max, high, medium, low],
-lensFacing [back, front], maxVideoDuration [milliseconds], and maxVideoSize [bytes].
+flash [auto, on, off], lensFacing [back, front], maxVideoDuration [milliseconds],
+maxVideoSize [bytes], pinchToZoom [boolean], imageConfirmationEnabled [boolean],
+videoConfirmationEnabled [boolean] and matchPreviewAspectRatioEnabled [boolean].
 ```kotlin
 val cameraController = remember { mutableStateOf<CameraController?>(null) }
 Camera(
     modifier = Modifier,
-    quality = Camera.Quality.HIGH,
-    lensFacing = Camera.LensFacing.BACK,
+    quality = Quality.HIGH,
+    lensFacing = LensFacing.BACK,
     maxVideoDuration = 10000,
     maxVideoSize = 10000000,
     controller = cameraController
 )
 ```
+
+Camera also accepts zoomLevel [0 to maxZoomLevel, or null to leave the zoom to pinchToZoom],
+pictureQuality [1 to 100], colorSpace [srgb, displayP3], exposureCompensation [integer],
+torchEnabled [boolean], dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch,
+auto], stabilizationEnabled [boolean], lowLightBoostEnabled [boolean] and
+frontVideoMirroringEnabled [boolean]. Not every camera can do all of these, so CameraState below
+says which this one supports.
+
+Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
+opens, and is republished when the camera reconfigures, so ask it before offering a control: a
+request the active camera cannot honour is dropped rather than applied.
+```kotlin
+val cameraState = remember { mutableStateOf<CameraState?>(null) }
+Camera(
+    modifier = Modifier,
+    controller = cameraController,
+    state = cameraState,
+    torchEnabled = torchOn
+)
+
+val camera = cameraState.value
+if (camera != null && camera.hasFlash) {
+    Button(onClick = { torchOn = !torchOn }) { Text("Torch") }
+}
+```
+
+CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, isZoomSupported,
+maxZoomLevel, isExposureCompensationSupported, minExposureCompensation, maxExposureCompensation,
+supportedColorSpaces, supportedDynamicRanges, supportedExtensions, isStabilizationSupported,
+isLowLightBoostSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
+horizontalFieldOfView, verticalFieldOfView, isRecording and isAnalyzingFrames.
 
 Camera's methods are rather straight forward.
 
@@ -77,6 +110,20 @@ cameraController.stream()
 Toggles between the various cameras on the device (typically the front and back cameras)
 ```kotlin
 cameraController.toggleCamera()
+```
+Focuses and exposes for an area of the preview, in coordinates from -1000 to 1000
+```kotlin
+cameraController.focus(focusArea, meteringArea)
+```
+Hands every camera frame to an analyzer on a background thread, until stopFrameAnalysis
+```kotlin
+cameraController.startFrameAnalysis { frame -> ... }
+cameraController.stopFrameAnalysis()
+```
+Reports the faces the camera is already tracking, or stops when given null. Returns false if this
+camera cannot report faces, in which case the listener is never called.
+```kotlin
+cameraController.setFaceDetectionListener { faces, faceToView -> ... }
 ```
 
 CameraFragment
