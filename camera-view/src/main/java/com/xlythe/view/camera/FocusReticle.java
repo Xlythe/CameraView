@@ -1,4 +1,4 @@
-package com.xlythe.sample.camera;
+package com.xlythe.view.camera;
 
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
@@ -7,41 +7,39 @@ import android.content.Context;
 import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.RectF;
-import android.util.AttributeSet;
 import android.util.TypedValue;
 import android.view.View;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RestrictTo;
+import androidx.annotation.UiThread;
+import androidx.annotation.VisibleForTesting;
 
 /**
- * The focus reticle a camera app draws, as an overlay over a
- * {@link com.xlythe.view.camera.CameraView}.
+ * The reticle {@link CameraView} draws where a focus request lands.
  *
- * <p>CameraView draws nothing over its own preview, because an app with a camera UI of its own
- * wants its own affordance. This is what one looks like: it is driven by
- * {@link com.xlythe.view.camera.CameraView.FocusListener}, so it appears when the camera took the
- * request and confirms only what the camera said it managed - a reticle that locks on its own is
- * telling the user something nobody checked.</p>
- *
- * <p>Drawn rather than animated with views so that the reticle can sit anywhere in the preview
- * without a layout pass per touch.</p>
+ * <p>Driven by what the camera reports, not by the touch: it appears when the camera takes a
+ * request and turns to the locked colour only if the camera says it converged.</p>
  */
-public class FocusReticleView extends View {
-    /** How long the reticle takes to converge on the point, in milliseconds. */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
+public class FocusReticle extends View {
+    /** How long the reticle takes to close on the point, in milliseconds. */
     private static final long CONVERGE_MILLIS = 160;
 
-    /** How long a settled reticle stays up before it leaves. */
+    /** How long a locked reticle stays up, so the confirmation is readable. */
     private static final long HOLD_MILLIS = 450;
 
+    /** How long the reticle takes to fade out once settled. */
     private static final long FADE_MILLIS = 220;
 
-    /** How much larger the reticle starts than it ends: the whole of the converging movement. */
+    /** How much larger the reticle starts than it ends. */
     private static final float ENTRY_SCALE = 1.35f;
 
     private static final int STROKE_DP = 2;
 
-    /** Kept well inside the reticle's own corners, so the ticks read as marks rather than sides. */
+    /** The length of the ticks at each side, as a fraction of the reticle. */
     private static final float TICK_FRACTION = 0.14f;
 
     private static final float CORNER_FRACTION = 0.18f;
@@ -51,80 +49,107 @@ public class FocusReticleView extends View {
 
     private static final int MAX_SIZE_DP = 112;
 
-    private static final int COLOR_FOCUSING = 0xFFFFFFFF;
+    /** White, while the camera is still working on the request. */
+    static final int DEFAULT_FOCUSING_COLOR = 0xFFFFFFFF;
 
-    private static final int COLOR_LOCKED = 0xFFFFD54F;
+    /** Amber, once the camera reports it converged. */
+    static final int DEFAULT_LOCKED_COLOR = 0xFFFFD54F;
 
     private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
+    /** Reused for every frame, so drawing allocates nothing. */
     private final RectF mReticle = new RectF();
 
+    @ColorInt private int mFocusingColor = DEFAULT_FOCUSING_COLOR;
+
+    @ColorInt private int mLockedColor = DEFAULT_LOCKED_COLOR;
+
+    /** The colour being drawn now: one of the two above. */
+    @ColorInt private int mColor = DEFAULT_FOCUSING_COLOR;
+
     private float mCenterX;
+
     private float mCenterY;
+
+    /** The reticle's side at rest, in pixels, already clamped to the bounds above. */
     private float mSize;
 
-    /** 0 while converging, 1 once settled on the point. */
+    /** 0 while closing on the point, 1 once settled on it. */
     private float mConvergence;
 
     private float mAlpha;
 
-    private int mColor = COLOR_FOCUSING;
+    /** The running animation, cancelled when a new one starts. */
+    @Nullable private ValueAnimator mAnimator;
 
-    @Nullable
-    private ValueAnimator mAnimator;
-
-    public FocusReticleView(Context context) {
-        this(context, null);
-    }
-
-    public FocusReticleView(Context context, @Nullable AttributeSet attrs) {
-        this(context, attrs, 0);
-    }
-
-    public FocusReticleView(Context context, @Nullable AttributeSet attrs, int defStyleAttr) {
-        super(context, attrs, defStyleAttr);
+    public FocusReticle(@NonNull Context context) {
+        super(context);
         mPaint.setStyle(Paint.Style.STROKE);
         mPaint.setStrokeWidth(dp(STROKE_DP));
         mPaint.setStrokeCap(Paint.Cap.ROUND);
+        // Drawn over the preview, and never in the way of a tap meant for it.
+        setClickable(false);
+        setFocusable(false);
+        setWillNotDraw(false);
+    }
+
+    /** The colours for a request in progress and for one the camera locked onto. */
+    public void setColors(@ColorInt int focusing, @ColorInt int locked) {
+        mFocusingColor = focusing;
+        mLockedColor = locked;
+        invalidate();
     }
 
     /**
-     * Shows the reticle converging on an area the camera has started focusing on.
+     * Shows the reticle closing on an area the camera has started focusing on.
      *
      * @param area where the camera is focusing, in this view's coordinates
      */
+    @UiThread
     public void showAt(@NonNull RectF area) {
         mCenterX = area.centerX();
         mCenterY = area.centerY();
         mSize = Math.max(dp(MIN_SIZE_DP),
                 Math.min(Math.min(area.width(), area.height()), dp(MAX_SIZE_DP)));
-        mColor = COLOR_FOCUSING;
-        // Restarted from the beginning rather than continued: a new request is aimed somewhere
-        // else, so the movement has to happen again at the new point.
+        mColor = mFocusingColor;
+        // Restarted rather than continued: a new request is aimed somewhere else.
         animate(converging(), CONVERGE_MILLIS, 0, null);
     }
 
     /**
-     * Takes the reticle away, confirming the point first if the camera actually locked onto it.
+     * Takes the reticle away, confirming the point first if the camera locked onto it.
      *
      * @param locked what the camera reported, not what the touch hoped for
      */
+    @UiThread
     public void settle(boolean locked) {
         if (mAlpha <= 0f && mConvergence <= 0f) {
-            // Nothing is on screen - a focus that finished before this overlay heard it started.
             return;
         }
-        mColor = locked ? COLOR_LOCKED : COLOR_FOCUSING;
-        // Snapped to its resting size, because a camera can answer in less time than the entry
-        // takes and a reticle left frozen part of the way in reads as something that stalled.
+        mColor = locked ? mLockedColor : mFocusingColor;
+        // Snapped to rest, because a camera can answer before the entry finishes.
         mConvergence = 1f;
         mAlpha = 1f;
-        // A lock is held for a moment before it goes, so the confirmation is readable; a focus
-        // that did not lock simply leaves, confirming nothing.
         animate(fadingOut(), FADE_MILLIS, locked ? HOLD_MILLIS : 0, () -> mConvergence = 0f);
     }
 
-    /** Animates the converging movement, which brings the reticle in as it shrinks. */
+    /**
+     * Puts the reticle in a state without animating to it, for a screenshot test.
+     *
+     * @param convergence 0 for the start of the entry, 1 for at rest
+     */
+    @VisibleForTesting
+    void showStatic(@NonNull RectF area, boolean locked, float convergence) {
+        mCenterX = area.centerX();
+        mCenterY = area.centerY();
+        mSize = Math.max(dp(MIN_SIZE_DP),
+                Math.min(Math.min(area.width(), area.height()), dp(MAX_SIZE_DP)));
+        mColor = locked ? mLockedColor : mFocusingColor;
+        mConvergence = convergence;
+        mAlpha = 1f;
+        invalidate();
+    }
+
     private ValueAnimator converging() {
         ValueAnimator animator = ValueAnimator.ofFloat(0f, 1f);
         animator.addUpdateListener(value -> {
@@ -171,8 +196,8 @@ public class FocusReticleView extends View {
             return;
         }
 
-        // The reticle enters larger than it ends and closes on the point, which is the whole of
-        // the feedback: a square that merely appeared would read as a label rather than an act.
+        // Enters larger than it ends and closes on the point; a square that merely appeared
+        // would read as a label rather than an act.
         float scale = ENTRY_SCALE + (1f - ENTRY_SCALE) * mConvergence;
         float half = mSize * scale / 2f;
         mReticle.set(mCenterX - half, mCenterY - half, mCenterX + half, mCenterY + half);

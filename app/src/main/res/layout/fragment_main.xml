@@ -39,15 +39,6 @@
             android:layout_height="match_parent"
             camera:quality="high" />
 
-        <!-- The focus affordance is the app's, not the library's. Not clickable, so touches
-             reach the CameraView underneath and tap-to-focus still works. -->
-        <com.xlythe.sample.camera.FocusReticleView
-            android:id="@+id/focus_reticle"
-            android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:clickable="false"
-            android:focusable="false" />
-
         <!-- Bottom Control Bar -->
         <LinearLayout
             android:layout_width="match_parent"

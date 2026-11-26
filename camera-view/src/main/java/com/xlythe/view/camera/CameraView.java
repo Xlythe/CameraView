@@ -27,6 +27,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -381,6 +382,14 @@ public class CameraView extends FrameLayout {
     private RectF mPendingFocusArea;
     /** Answers a request the camera never came back about, so every request is answered once. */
     private final Runnable mFocusTimeoutRunnable = () -> onFocusCompleted(false);
+    /** Drawn over the preview where a focus request lands. */
+    @Nullable
+    private FocusReticle mFocusReticle;
+    private boolean mFocusReticleEnabled = true;
+    @ColorInt
+    private int mFocusReticleColor = FocusReticle.DEFAULT_FOCUSING_COLOR;
+    @ColorInt
+    private int mFocusReticleLockedColor = FocusReticle.DEFAULT_LOCKED_COLOR;
 
     // For pinch-to-zoom
     private PinchToZoomGestureDetector mScaleDetector;
@@ -527,6 +536,11 @@ public class CameraView extends FrameLayout {
             setExposureCompensation(a.getInteger(R.styleable.CameraView_exposureCompensation, getExposureCompensation()));
             setTorchEnabled(a.getBoolean(R.styleable.CameraView_torchEnabled, isTorchEnabled()));
             setLowLightBoostEnabled(a.getBoolean(R.styleable.CameraView_lowLightBoostEnabled, isLowLightBoostEnabled()));
+            mFocusReticleEnabled = a.getBoolean(R.styleable.CameraView_focusReticleEnabled, true);
+            mFocusReticleColor = a.getColor(
+                    R.styleable.CameraView_focusReticleColor, FocusReticle.DEFAULT_FOCUSING_COLOR);
+            mFocusReticleLockedColor = a.getColor(
+                    R.styleable.CameraView_focusReticleLockedColor, FocusReticle.DEFAULT_LOCKED_COLOR);
             a.recycle();
         }
 
@@ -551,6 +565,8 @@ public class CameraView extends FrameLayout {
         addView(mCameraView = new TextureView(getContext()));
         addView(mImagePreview = new ImageView(getContext()));
         addView(mVideoPreview = new VideoView(getContext()));
+        addView(mFocusReticle = new FocusReticle(getContext()));
+        mFocusReticle.setColors(mFocusReticleColor, mFocusReticleLockedColor);
         mImagePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
         mImagePreview.setVisibility(View.GONE);
         mVideoPreview.setVisibility(View.GONE);
@@ -1525,6 +1541,9 @@ public class CameraView extends FrameLayout {
         mHandler.removeCallbacks(mFocusTimeoutRunnable);
         mPendingFocusArea = area;
         mHandler.postDelayed(mFocusTimeoutRunnable, FOCUS_TIMEOUT_MILLIS);
+        if (mFocusReticleEnabled && mFocusReticle != null) {
+            mFocusReticle.showAt(area);
+        }
         if (mFocusListener != null) {
             mFocusListener.onFocusRequested(new RectF(area));
         }
@@ -1541,9 +1560,27 @@ public class CameraView extends FrameLayout {
         }
         mPendingFocusArea = null;
         mHandler.removeCallbacks(mFocusTimeoutRunnable);
+        if (mFocusReticleEnabled && mFocusReticle != null) {
+            mFocusReticle.settle(locked);
+        }
         if (mFocusListener != null) {
             mFocusListener.onFocusCompleted(area, locked);
         }
+    }
+
+    /**
+     * Whether to draw a reticle where a focus request lands. On by default; turn it off to draw
+     * your own from a {@link FocusListener}.
+     */
+    public void setFocusReticleEnabled(boolean enabled) {
+        mFocusReticleEnabled = enabled;
+        if (!enabled && mFocusReticle != null) {
+            mFocusReticle.settle(false);
+        }
+    }
+
+    public boolean isFocusReticleEnabled() {
+        return mFocusReticleEnabled;
     }
 
     /**
