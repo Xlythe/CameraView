@@ -1012,15 +1012,11 @@ public class Camera2Module extends ICameraModule {
     public void setQuality(CameraView.Quality quality) {
         super.setQuality(quality);
 
-        // When quality changes, we need to update our session with the new dimensions
-        if (mActiveSession != null) {
-            if (mActiveSession instanceof PictureSession) {
-                setSession(new PictureSession(this));
-            } else if (mActiveSession instanceof VideoSession) {
-                setSession(new VideoSession(this, ((VideoSession) mActiveSession).getFile()));
-            } else if (mActiveSession instanceof StreamSession) {
-                // Ignored. Streams cannot be restarted so we'll update quality once the stream ends.
-            }
+        // The dimensions belong to the session, so it is rebuilt with them - except while
+        // recording or streaming, which a rebuild would end. The session after it is built with
+        // the new quality.
+        if (mActiveSession != null && !isRecordingOrStreaming()) {
+            setSession(new PictureSession(this));
         }
     }
 
@@ -1183,7 +1179,7 @@ public class Camera2Module extends ICameraModule {
         boolean changed = enabled != isStabilizationEnabled();
         super.setStabilizationEnabled(enabled);
         if (changed) {
-            restartPictureSession();
+            restartActiveSession();
         }
     }
 
@@ -1457,28 +1453,32 @@ public class Camera2Module extends ICameraModule {
                 && profiles.getSupportedColorSpaces(ImageFormat.JPEG_R).contains(named);
     }
 
-    /** Rebuilds the session, for a setting the session itself carries. */
+    /**
+     * Rebuilds the session, for a setting the session itself carries, unless
+     * {@link #isRecordingOrStreaming}.
+     */
     private void restartActiveSession() {
         mHandler.post(() -> {
-            Session session = mActiveSession;
-            if (mCameraDevice == null || session == null || mIsPaused) {
-                return;
-            }
-            setSession(session instanceof PictureSession && !(session instanceof VideoSession)
-                    ? new PictureSession(this) : session);
-        });
-    }
-
-    /** Rebuilds the session for a setting it carries, unless it is recording or streaming. */
-    private void restartPictureSession() {
-        mHandler.post(() -> {
-            Session session = mActiveSession;
-            if (mCameraDevice == null || mIsPaused || !(session instanceof PictureSession)
-                    || session instanceof VideoSession) {
+            if (mCameraDevice == null || mActiveSession == null || mIsPaused
+                    || isRecordingOrStreaming()) {
                 return;
             }
             setSession(new PictureSession(this));
         });
+    }
+
+    /**
+     * Whether a recording or a stream owns the session, or is about to.
+     *
+     * <p>Neither can be rebuilt without ending it, so a setting the session carries waits for the
+     * session built after it. That is the library's rule: a recording is never cut short by a
+     * settings change.</p>
+     */
+    private boolean isRecordingOrStreaming() {
+        return mIsRecording
+                || mActiveSession instanceof VideoSession || mActiveSession instanceof StreamSession
+                || mRegisteringSession instanceof VideoSession
+                || mRegisteringSession instanceof StreamSession;
     }
 
     @Override
