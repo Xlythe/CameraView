@@ -9,6 +9,8 @@ import android.util.Log;
 
 import androidx.annotation.RequiresPermission;
 
+import com.xlythe.view.camera.VideoStream;
+
 import com.xlythe.view.camera.CameraView;
 
 import java.io.IOException;
@@ -44,8 +46,15 @@ public class AudioRecorder {
    *
    * @param pfd The output stream of the recording.
    */
+  /** The rate asked for, which the buffer may not be able to honour. */
+  private final int mPreferredSampleRate;
+
+  /** The channel count asked for, likewise. */
+  private final int mPreferredChannelCount;
+
   public AudioRecorder(ParcelFileDescriptor pfd) {
-    mOutputStream = new ParcelFileDescriptor.AutoCloseOutputStream(pfd);
+    this(new ParcelFileDescriptor.AutoCloseOutputStream(pfd),
+            AudioBuffer.DEFAULT_SAMPLE_RATE, AudioBuffer.DEFAULT_CHANNEL_COUNT);
   }
 
   /**
@@ -54,7 +63,20 @@ public class AudioRecorder {
    * @param outputStream The output stream of the recording.
    */
   public AudioRecorder(OutputStream outputStream) {
+    this(outputStream, AudioBuffer.DEFAULT_SAMPLE_RATE, AudioBuffer.DEFAULT_CHANNEL_COUNT);
+  }
+
+  /**
+   * A simple audio recorder, at a chosen rate.
+   *
+   * @param sampleRate the rate to record at, if the device can
+   * @param channelCount 1 or 2
+   */
+  public AudioRecorder(OutputStream outputStream, @VideoStream.SampleRate int sampleRate,
+      @VideoStream.ChannelCount int channelCount) {
     this.mOutputStream = outputStream;
+    this.mPreferredSampleRate = sampleRate;
+    this.mPreferredChannelCount = channelCount;
   }
 
   /** @return True if actively recording. False otherwise. */
@@ -78,12 +100,17 @@ public class AudioRecorder {
               public void run() {
                 setThreadPriority(THREAD_PRIORITY_AUDIO);
 
-                Buffer buffer = new Buffer();
+                Buffer buffer = new Buffer(mPreferredSampleRate, mPreferredChannelCount);
                 AudioRecord record =
                         new AudioRecord(
-                                MediaRecorder.AudioSource.DEFAULT,
+                                // The same reasoning as the recording paths: the microphone
+                                // facing the camera, with camcorder tuning rather than the
+                                // speech processing that pumps on anything but a voice.
+                                MediaRecorder.AudioSource.CAMCORDER,
                                 buffer.getSampleRate(),
-                                AudioFormat.CHANNEL_IN_MONO,
+                                buffer.getChannelCount() >= 2
+                                        ? AudioFormat.CHANNEL_IN_STEREO
+                                        : AudioFormat.CHANNEL_IN_MONO,
                                 AudioFormat.ENCODING_PCM_16BIT,
                                 buffer.getSize());
 
@@ -99,7 +126,7 @@ public class AudioRecorder {
                 // Tell the other end what it is about to receive, so it does not have to guess
                 // the sample rate from its own hardware and play the audio at the wrong pitch.
                 try {
-                  new AudioStreamHeader(buffer.getSampleRate(), 1 /* mono */,
+                  new AudioStreamHeader(buffer.getSampleRate(), buffer.getChannelCount(),
                           AudioFormat.ENCODING_PCM_16BIT).writeTo(mOutputStream);
                 } catch (java.io.IOException error) {
                   Log.e(TAG, "Failed to describe the audio stream", error);
@@ -164,13 +191,18 @@ public class AudioRecorder {
   }
 
   private static class Buffer extends AudioBuffer {
+    Buffer(@VideoStream.SampleRate int sampleRate,
+        @VideoStream.ChannelCount int channelCount) {
+      super(sampleRate, channelCount);
+    }
+
     @Override
     protected boolean validSize(int size) {
       return size != AudioRecord.ERROR && size != AudioRecord.ERROR_BAD_VALUE;
     }
 
     @Override
-    protected int getMinBufferSize(int sampleRate) {
+    protected int getMinBufferSize(int sampleRate, int channelCount) {
       return AudioRecord.getMinBufferSize(
               sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
     }
