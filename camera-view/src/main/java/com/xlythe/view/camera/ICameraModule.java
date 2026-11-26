@@ -20,6 +20,7 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
 import java.util.concurrent.CountDownLatch;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -474,6 +475,65 @@ public abstract class ICameraModule {
      */
     public boolean isSnapshotWhileRecordingSupported() {
         return false;
+    }
+
+    /** The high-speed choice recordings are made at, or null for ordinary speed. */
+    @Nullable
+    private HighSpeedProfile mHighSpeedProfile;
+
+    /**
+     * Whether this camera will record above its normal frame rate, for slow-motion playback.
+     *
+     * <p>False, which is the answer for a backend that cannot ask the camera. There is nothing
+     * conservative about a backend guessing yes: a session configured for a frame rate the
+     * camera never published fails outright, and the recording is lost with it.</p>
+     */
+    public boolean isHighSpeedRecordingSupported() {
+        return false;
+    }
+
+    /**
+     * Every frame size and frame rate this camera records high-speed video at.
+     *
+     * <p>Empty for a backend or a camera with none. The combinations are the camera's own, not a
+     * cross product: see {@link HighSpeedProfile}.</p>
+     */
+    @NonNull
+    public List<HighSpeedProfile> getSupportedHighSpeedProfiles() {
+        return Collections.emptyList();
+    }
+
+    /**
+     * Records at one of the published high-speed choices, or at ordinary speed when given null.
+     *
+     * <p>Declined, leaving the previous choice, when the camera does not publish it - the same
+     * way an unsupported picture format is. A backend that accepted the request would fail to
+     * configure its next recording session instead, which is a worse place to find out.</p>
+     *
+     * @return whether the camera is now set to record at the requested choice
+     */
+    public synchronized boolean setHighSpeedProfile(@Nullable HighSpeedProfile profile) {
+        if (profile == null) {
+            mHighSpeedProfile = null;
+            return true;
+        }
+        HighSpeedProfile published = HighSpeedProfile.match(
+                getSupportedHighSpeedProfiles(), profile.getSize(), profile.getFrameRate());
+        if (published == null) {
+            Log.w(TAG, "This camera does not record " + profile + "; keeping " + mHighSpeedProfile);
+            return false;
+        }
+        // The camera's published pair rather than the caller's copy of it. A high-speed request
+        // is only accepted with a frame rate range the camera published, and the match above
+        // compares the size and the rate, so a hand-built range could pass here and then be
+        // refused by the camera at the point where the recording is at stake.
+        mHighSpeedProfile = published;
+        return true;
+    }
+
+    @Nullable
+    public synchronized HighSpeedProfile getHighSpeedProfile() {
+        return mHighSpeedProfile;
     }
 
     /**

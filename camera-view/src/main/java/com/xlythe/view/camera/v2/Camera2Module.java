@@ -35,6 +35,7 @@ import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Face;
+import com.xlythe.view.camera.HighSpeedProfile;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
@@ -42,6 +43,7 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
@@ -470,7 +472,7 @@ public class Camera2Module extends ICameraModule {
             session.initialize(map);
 
             // Now, with all of our surfaces, we'll ask for a new session
-            createCaptureSession(session.getSurfaces(), new CameraCaptureSession.StateCallback() {
+            createCaptureSession(session, session.getSurfaces(), new CameraCaptureSession.StateCallback() {
                 @Override
                 public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
                     if (!mIsOpen || mCameraDevice == null || mRegisteringSession != session) {
@@ -524,11 +526,18 @@ public class Camera2Module extends ICameraModule {
      * on uses, and it has nothing to gain from being rewritten for a feature that is not in
      * play.</p>
      */
-    private void createCaptureSession(@NonNull List<Surface> surfaces,
+    private void createCaptureSession(@NonNull Session session, @NonNull List<Surface> surfaces,
             @NonNull CameraCaptureSession.StateCallback callback) throws CameraAccessException {
         CameraDevice device = mCameraDevice;
         if (device == null) {
             throw new IllegalStateException("Camera has no device to configure");
+        }
+        if (session.isHighSpeed() && Build.VERSION.SDK_INT >= 23) {
+            // A recording above the camera's normal frame rate needs its own kind of session,
+            // which takes no colour space: a session configuration cannot be both high speed and
+            // anything else, so a high-speed recording is always sRGB.
+            HighSpeedCapture.createSession(device, surfaces, callback, mHandler);
+            return;
         }
         if (Build.VERSION.SDK_INT < 34 || getColorSpace() == CameraView.ColorSpace.SRGB) {
             device.createCaptureSession(surfaces, callback, mHandler);
@@ -1014,7 +1023,8 @@ public class Camera2Module extends ICameraModule {
             if (mActiveSession instanceof PictureSession) {
                 setSession(new PictureSession(this));
             } else if (mActiveSession instanceof VideoSession) {
-                setSession(new VideoSession(this, ((VideoSession) mActiveSession).getFile()));
+                setSession(new VideoSession(this, ((VideoSession) mActiveSession).getFile(),
+                        getHighSpeedProfile()));
             } else if (mActiveSession instanceof StreamSession) {
                 // Ignored. Streams cannot be restarted so we'll update quality once the stream ends.
             }
@@ -1289,7 +1299,58 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public boolean isSnapshotWhileRecordingSupported() {
-        return isRecordingSnapshotSupported();
+        // A high-speed session has room for the preview and the recording and nothing else, so
+        // the hardware level stops mattering the moment one is asked for.
+        return getHighSpeedProfile() == null && isRecordingSnapshotSupported();
+    }
+
+    @Override
+    public boolean isHighSpeedRecordingSupported() {
+        return !getSupportedHighSpeedProfiles().isEmpty();
+    }
+
+    /**
+     * What the camera itself publishes for high-speed recording.
+     *
+     * <p>Read from the stream configuration map rather than inferred from anything: a device
+     * lists the sizes it will run fast at and, per size, the frame rate ranges it reaches, and a
+     * session asked for a combination that is not on that list fails to configure. The
+     * capability flag is checked first because a camera may publish the configurations without
+     * guaranteeing the session - the flag is the promise.</p>
+     */
+    @NonNull
+    @Override
+    public List<HighSpeedProfile> getSupportedHighSpeedProfiles() {
+        // The configurations go back to API 21 but the session that runs them arrived in 23, so
+        // on an older platform there is nothing here to offer.
+        if (Build.VERSION.SDK_INT < 23) {
+            return Collections.emptyList();
+        }
+        try {
+            CameraCharacteristics characteristics =
+                    mCameraManager.getCameraCharacteristics(getActiveCamera());
+            int[] capabilities =
+                    characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+            if (!contains(capabilities, CameraMetadata
+                    .REQUEST_AVAILABLE_CAPABILITIES_CONSTRAINED_HIGH_SPEED_VIDEO)) {
+                return Collections.emptyList();
+            }
+            StreamConfigurationMap map =
+                    characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            Size[] sizes = map == null ? null : map.getHighSpeedVideoSizes();
+            if (sizes == null) {
+                return Collections.emptyList();
+            }
+            List<HighSpeedProfile> profiles = new ArrayList<>();
+            for (Size size : sizes) {
+                profiles.addAll(
+                        HighSpeedProfile.forSize(size, map.getHighSpeedVideoFpsRangesFor(size)));
+            }
+            return HighSpeedProfile.ordered(profiles);
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its high-speed configurations", error);
+            return Collections.emptyList();
+        }
     }
 
     boolean isRecordingSnapshotSupported() {
@@ -1519,7 +1580,7 @@ public class Camera2Module extends ICameraModule {
         }
 
         mIsRecording = true;
-        setSession(new VideoSession(this, file));
+        setSession(new VideoSession(this, file, getHighSpeedProfile()));
     }
 
     @Override
@@ -1819,6 +1880,16 @@ public class Camera2Module extends ICameraModule {
      * A session has multiple surfaces for the camera to draw to.
      */
     interface Session {
+        /**
+         * Whether this session has to be a constrained high-speed one.
+         *
+         * <p>Asked before the session is created, because high speed is a kind of session rather
+         * than a setting on one. See {@link HighSpeedCapture}.</p>
+         */
+        default boolean isHighSpeed() {
+            return false;
+        }
+
         void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException;
         void onLayoutChanged() throws CameraAccessException;
         @NonNull List<Surface> getSurfaces();

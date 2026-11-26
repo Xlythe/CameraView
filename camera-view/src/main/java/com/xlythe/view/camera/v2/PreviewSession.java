@@ -19,6 +19,7 @@ import java.util.List;
 
 import androidx.annotation.CallSuper;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
@@ -39,6 +40,18 @@ class PreviewSession extends SessionImpl {
 
     CameraSurface getPreviewSurface() {
         return mPreviewSurface;
+    }
+
+    /**
+     * Pins the preview to one size instead of letting it be chosen for the view.
+     *
+     * <p>Only a constrained high-speed session needs this: the camera accepts that session only
+     * when every surface in it is the same size, and that size is one it published for high
+     * speed. A preview chosen for the view would be a different one, and the session would not
+     * configure.</p>
+     */
+    void requirePreviewSize(@NonNull Size size) {
+        mPreviewSurface.mRequiredSize = size;
     }
 
     @Override
@@ -127,6 +140,10 @@ class PreviewSession extends SessionImpl {
 
         private Surface mSurface;
 
+        /** The one size this preview may be, or null to choose one for the view. */
+        @Nullable
+        private Size mRequiredSize;
+
         PreviewSurface(Camera2Module cameraView) {
             super(cameraView);
         }
@@ -134,7 +151,8 @@ class PreviewSession extends SessionImpl {
         @Override
         void initialize(StreamConfigurationMap map) {
             if (DEBUG) Log.d(TAG, "Initializing PreviewSession");
-            super.initialize(chooseOptimalSize(getSizes(map), mCameraView.getWidth(), mCameraView.getHeight()));
+            super.initialize(mRequiredSize != null ? mRequiredSize
+                    : chooseOptimalSize(getSizes(map), mCameraView.getWidth(), mCameraView.getHeight()));
 
             SurfaceTexture texture = mCameraView.getSurfaceTexture();
             if (texture == null) {
