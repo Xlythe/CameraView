@@ -45,6 +45,8 @@ def coreCoverageIncludes = [
         'com/xlythe/view/camera/Exif.class',
         'com/xlythe/view/camera/Exif$*.class',
         'com/xlythe/view/camera/PermissionChecker.class',
+        'com/xlythe/view/camera/Captions.class',
+        'com/xlythe/view/camera/Captions$*.class',
         'com/xlythe/view/camera/TransformMath.class',
         'com/xlythe/view/camera/WorldOverlay.class',
         'com/xlythe/view/camera/WorldOverlay$*.class',
