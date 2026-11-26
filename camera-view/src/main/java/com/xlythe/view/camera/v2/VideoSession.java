@@ -78,6 +78,11 @@ class VideoSession extends PictureSession {
     }
 
     @Override
+    protected boolean allowsUltraHdr() {
+        return false;
+    }
+
+    @Override
     @SuppressLint({"WrongThread", "ThreadConstraint"})
     protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
             throws CameraAccessException {

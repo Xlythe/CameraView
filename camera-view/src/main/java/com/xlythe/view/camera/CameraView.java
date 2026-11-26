@@ -320,6 +320,18 @@ public class CameraView extends FrameLayout {
     }
 
     /**
+     * The file a picture is written as.
+     *
+     * <p>{@link #ULTRA_HDR} is a JPEG carrying a gain map: an HDR display uses it to brighten the
+     * highlights, and anything else shows the JPEG beneath.</p>
+     */
+    public enum PictureFormat {
+        /** What every camera writes. */
+        JPEG,
+        ULTRA_HDR
+    }
+
+    /**
      * {@link TextureView.SurfaceTextureListener} handles several lifecycle events on a
      * {@link TextureView}.
      */
@@ -1379,6 +1391,23 @@ public class CameraView extends FrameLayout {
 
     public ColorSpace getColorSpace() {
         return mCameraModule.getColorSpace();
+    }
+
+    /** Whether this camera can write pictures in a given format. */
+    public boolean isPictureFormatSupported(PictureFormat format) {
+        return mCameraModule.isPictureFormatSupported(format);
+    }
+
+    /**
+     * The format pictures are written in, JPEG by default. A format this camera cannot write is
+     * logged and dropped.
+     */
+    public void setPictureFormat(PictureFormat format) {
+        mCameraModule.setPictureFormat(format);
+    }
+
+    public PictureFormat getPictureFormat() {
+        return mCameraModule.getPictureFormat();
     }
 
     /**

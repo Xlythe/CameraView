@@ -1929,13 +1929,45 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @NonNull private ImageCapture createImageCapture(@NonNull CameraInfo cameraInfo) {
-        return new ImageCapture.Builder()
+        ImageCapture.Builder builder = new ImageCapture.Builder()
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
                 .setCaptureMode(getCaptureMode())
-                .setJpegQuality(getPictureQuality())
-                .build();
+                .setJpegQuality(getPictureQuality());
+        // Checked against this camera as well as on request, since the lens may have changed.
+        if (getPictureFormat() == CameraView.PictureFormat.ULTRA_HDR
+                && writesUltraHdr(cameraInfo)) {
+            builder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR);
+        }
+        return builder.build();
+    }
+
+    private static boolean writesUltraHdr(@NonNull CameraInfo cameraInfo) {
+        try {
+            return ImageCapture.getImageCaptureCapabilities(cameraInfo).getSupportedOutputFormats()
+                    .contains(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not ask which picture formats this camera writes", error);
+            return false;
+        }
+    }
+
+    @Override public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        if (format != CameraView.PictureFormat.ULTRA_HDR) {
+            return super.isPictureFormatSupported(format);
+        }
+        Camera camera = mActiveCamera;
+        return camera != null && writesUltraHdr(camera.getCameraInfo());
+    }
+
+    @Override public void setPictureFormat(CameraView.PictureFormat format) {
+        CameraView.PictureFormat before = getPictureFormat();
+        super.setPictureFormat(format);
+        if (getPictureFormat() != before) {
+            // The format belongs to the use case, not to a capture.
+            rebindConfiguration();
+        }
     }
 
     @NonNull private ImageAnalysis createImageAnalysis() {

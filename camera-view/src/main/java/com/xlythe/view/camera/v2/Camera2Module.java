@@ -47,6 +47,7 @@ import java.util.Locale;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
+import androidx.annotation.VisibleForTesting;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
@@ -1179,6 +1180,57 @@ public class Camera2Module extends ICameraModule {
             default:
                 return null;
         }
+    }
+
+    @Override
+    public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        if (format != CameraView.PictureFormat.ULTRA_HDR) {
+            return super.isPictureFormatSupported(format);
+        }
+        if (Build.VERSION.SDK_INT < 34) {
+            return false;
+        }
+        try {
+            return writesUltraHdr(
+                    mCameraManager.getCameraCharacteristics(getActiveCamera()), getColorSpace());
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report whether it writes Ultra HDR", error);
+            return false;
+        }
+    }
+
+    @Override
+    public void setPictureFormat(CameraView.PictureFormat format) {
+        CameraView.PictureFormat before = getPictureFormat();
+        super.setPictureFormat(format);
+        if (getPictureFormat() != before) {
+            // The format belongs to the still's reader, which the session is built around.
+            restartActiveSession();
+        }
+    }
+
+    /**
+     * Whether a camera writes JPEG_R, in the colour space asked for. The gain map is composed by
+     * the camera, so one that does not list the format cannot produce it.
+     */
+    @RequiresApi(34)
+    @VisibleForTesting
+    static boolean writesUltraHdr(
+            CameraCharacteristics characteristics, CameraView.ColorSpace colorSpace) {
+        StreamConfigurationMap map =
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+        Size[] sizes = map == null ? null : map.getOutputSizes(ImageFormat.JPEG_R);
+        if (sizes == null || sizes.length == 0) {
+            return false;
+        }
+        if (colorSpace == CameraView.ColorSpace.SRGB) {
+            return true;
+        }
+        android.graphics.ColorSpace.Named named = namedColorSpace(colorSpace);
+        android.hardware.camera2.params.ColorSpaceProfiles profiles =
+                characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES);
+        return named != null && profiles != null
+                && profiles.getSupportedColorSpaces(ImageFormat.JPEG_R).contains(named);
     }
 
     /** Rebuilds the session, for a setting the session itself carries. */

@@ -349,6 +349,7 @@ class CameraComposableTest {
                 published.isSnapshotWhileRecordingSupported)
         assertEquals(setOf(DynamicRange.SDR), published.supportedDynamicRanges)
         assertEquals(setOf(Extension.NONE), published.supportedExtensions)
+        assertEquals(setOf(PictureFormat.JPEG), published.supportedPictureFormats)
         assertFalse(published.isRecording)
         assertFalse(published.isAnalyzingFrames)
         assertTrue("the fake camera publishes its optics",

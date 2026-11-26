@@ -187,6 +187,12 @@ public class CameraXHarnessTest {
         FakeCameraXHost.idle();
         assertEquals(CameraView.DynamicRange.SDR, module.getDynamicRange());
 
+        // And so is Ultra HDR, leaving pictures as JPEG.
+        assertFalse(module.isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR));
+        module.setPictureFormat(CameraView.PictureFormat.ULTRA_HDR);
+        FakeCameraXHost.idle();
+        assertEquals(CameraView.PictureFormat.JPEG, module.getPictureFormat());
+
         // CameraX flips a front recording itself, so the file matches the preview.
         assertTrue(module.isFrontVideoMirrored());
 
