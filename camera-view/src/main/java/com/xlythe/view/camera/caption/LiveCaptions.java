@@ -89,6 +89,18 @@ public final class LiveCaptions {
     private Intent mRequest;
 
     private boolean mStarted;
+
+    /**
+     * Whether the audio is a stream the caller supplied rather than the microphone.
+     *
+     * <p>It decides what an error means. A microphone can be listened to again, so a phrase the
+     * recogniser could not place is a pause to carry on through. A stream cannot: the samples
+     * were in a pipe, they have been read, and starting again leaves the recogniser listening
+     * to a drained pipe for ever - which looks from the outside like audio that never arrived.
+     * So on a stream the first error is the end, and it is reported.</p>
+     */
+    private boolean mFromStream;
+
     private long mSessionStartMs;
     private long mPhraseStartMs;
     private int mConsecutiveFailures;
@@ -187,6 +199,7 @@ public final class LiveCaptions {
                 android.media.AudioFormat.ENCODING_PCM_16BIT);
         request.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_SAMPLING_RATE, sampleRate);
         request.putExtra(RecognizerIntent.EXTRA_AUDIO_SOURCE_CHANNEL_COUNT, channelCount);
+        mFromStream = true;
         startWith(request, spoken, translateTo, listener);
         return new java.io.FileOutputStream(pipe[1].getFileDescriptor());
     }
@@ -198,9 +211,11 @@ public final class LiveCaptions {
             throw new IllegalStateException(
                     "A recogniser can only be used from the main thread");
         }
+        boolean fromStream = mFromStream;
         if (mStarted) {
             stop();
         }
+        mFromStream = fromStream;
         if (!isSupported(mContext)) {
             fail(listener, "This device has no speech recogniser");
             return;
@@ -299,6 +314,7 @@ public final class LiveCaptions {
     @MainThread
     public void stop() {
         mStarted = false;
+        mFromStream = false;
         mRequest = null;
         mLastPartial = null;
         SpeechRecognizer recognizer = mRecognizer;
@@ -359,7 +375,9 @@ public final class LiveCaptions {
         @Override
         public void onError(int error) {
             mLastPartial = null;
-            if (isFatal(error)) {
+            if (isFatal(error) || mFromStream) {
+                // On a stream there is nothing to listen to a second time, so the first error
+                // is the answer rather than something to wait through.
                 failAndStop(describe(error));
                 return;
             }

@@ -3,6 +3,7 @@ package com.xlythe.view.camera.pano;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
@@ -37,7 +38,16 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
  * after the start of the image, so this goes after it rather than first - and in its own
  * segment rather than inside the Exif, because XMP is identified by a different header and a
  * reader looking for one will not find it in the other.</p>
+
+ * <h2>Not part of the API</h2>
+ *
+ * <p>Writing the metadata that makes a picture a panorama. Restricted to the library, which
+ * writes it for every sweep it saves. Reading it back is the half an app has a use for, and
+ * that is GPanoBounds.</p>
+ *
+ * @hide
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class GPanoMetadata {
     /** What an XMP segment announces itself as, including the terminator. */
     @VisibleForTesting

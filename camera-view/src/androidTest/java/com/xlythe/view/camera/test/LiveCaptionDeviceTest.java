@@ -147,11 +147,16 @@ public final class LiveCaptionDeviceTest {
         boolean heard = captions.mHeard.await(TIMEOUT_SECONDS, TimeUnit.SECONDS);
         InstrumentationRegistry.getInstrumentation().runOnMainSync(live::stop);
 
+        // What separates this library from the recogniser is whether a reason came back. A
+        // recogniser that was busy, or that made nothing of a synthesised voice, has said so -
+        // and neither is something this code can fix, so it is a skip. Silence with no reason
+        // at all is the pipeline, and that fails.
         String failure = captions.mFailure.get();
-        Assume.assumeTrue("this device would not caption the stream: " + failure,
+        Assume.assumeTrue("the recogniser would not caption this stream: " + failure,
                 failure == null);
-        assertTrue("nothing was captioned in " + TIMEOUT_SECONDS + "s, so either the audio"
-                        + " never reached the recogniser or it made nothing of it", heard);
+        assertTrue("nothing was captioned in " + TIMEOUT_SECONDS + "s and the recogniser gave"
+                        + " no reason, so the audio never reached it - the pipe and the"
+                        + " descriptor are what to look at", heard);
         assertFalse("a caption arrived with no words in it", captions.mLines.isEmpty());
         for (LiveCaption caption : captions.mLines) {
             assertFalse("a caption should have text", caption.getText().trim().isEmpty());

@@ -1,6 +1,7 @@
 package com.xlythe.view.camera.ar;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
 
 import com.xlythe.view.camera.WorldOverlay;
@@ -29,7 +30,15 @@ import java.nio.ByteOrder;
  * <p>Where the camera image and the depth image have different aspect ratios the depth image is
  * a crop of the camera image, so some of the viewfinder has no depth at all. That is reported as
  * no reading too.</p>
+
+ * <h2>Not part of the API</h2>
+ *
+ * <p>Reading metres out of a depth image. Restricted to the library: an app is handed it as a
+ * WorldOverlay.SceneDepth, which is all an occlusion test takes.</p>
+ *
+ * @hide
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class DepthLookup implements WorldOverlay.SceneDepth {
     /** ARCore reports millimetres; the overlay works in metres. */
     private static final float MILLIMETRES_PER_METRE = 1000f;

@@ -1,6 +1,7 @@
 package com.xlythe.view.camera.caption;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.Nullable;
 
 import com.xlythe.view.camera.Captions;
@@ -30,7 +31,15 @@ import java.util.List;
  * for timings or cannot produce them, and there is nothing in the result to tell those apart -
  * so a window whose words all say zero is treated as untimed, which is the reading that cannot
  * put a caption in the wrong place.</p>
+
+ * <h2>Not part of the API</h2>
+ *
+ * <p>Turning what was heard into caption lines. Restricted to the library: an app is given
+ * the finished Captions and the subtitle file written beside the recording.</p>
+ *
+ * @hide
  */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class Transcript {
     /**
      * How many characters a caption line may run to before it is split.
