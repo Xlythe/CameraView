@@ -136,7 +136,7 @@ class PictureSession extends PreviewSession {
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            applyFlash(builder);
+            applyAeMode(builder, true /* withFlashStrategy */);
             builder.addTarget(mPictureSurface.getSurface());
             if (mMeteringRectangle != null) {
                 builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});

@@ -45,6 +45,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
@@ -1029,6 +1030,26 @@ public class Camera2Module extends ICameraModule {
         // The strategy is carried by the repeating request, so the preview has to be reissued for
         // auto-exposure to converge under the new mode before the next capture.
         reissueRepeatingRequest("the flash strategy");
+    }
+
+    /**
+     * Lights the flash continuously, on every request the session makes.
+     *
+     * <p>Refused only while a camera without a flash is open. A request made before then is kept,
+     * and lights the torch on whichever camera opens if it has one.</p>
+     */
+    @AnyThread
+    @Override
+    public void setTorchEnabled(boolean enabled) {
+        if (enabled && mCameraDevice != null && !hasFlash()) {
+            Log.w(TAG, "Ignoring torch request because the active camera has no flash unit");
+            return;
+        }
+        boolean changed = enabled != isTorchEnabled();
+        super.setTorchEnabled(enabled);
+        if (changed) {
+            reissueRepeatingRequest("the torch");
+        }
     }
 
     @Override

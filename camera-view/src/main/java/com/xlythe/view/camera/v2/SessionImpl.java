@@ -79,15 +79,6 @@ abstract class SessionImpl implements Camera2Module.Session {
     }
 
     /**
-     * Applies the requested flash strategy to a capture request.
-     *
-     * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
-     * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
-     * on the repeating preview request, because that is the only stream auto-exposure can converge
-     * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
-     * reason.</p>
-     */
-    /**
      * Asks the camera for the faces it is tracking, when something wants them.
      *
      * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
@@ -147,7 +138,38 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getPictureQuality();
     }
 
-    void applyFlash(@NonNull CaptureRequest.Builder builder) {
+    /** Whether the torch should be lit, which takes a camera with a flash to light. */
+    boolean isTorchLit() {
+        return mCamera2Module.isTorchEnabled() && hasFlash();
+    }
+
+    /**
+     * Chooses the auto-exposure mode, which the torch and the flash strategy share.
+     *
+     * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
+     * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
+     * on the repeating preview request, because that is the only stream auto-exposure can converge
+     * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
+     * reason.</p>
+     *
+     * <p>The torch is FLASH_MODE_TORCH under plain ON, and it goes on a still as well, so that a
+     * picture neither puts it out nor has the flash strategy fire over it.</p>
+     *
+     * @param withFlashStrategy whether the flash strategy belongs on this request. A recording
+     *     leaves it off, since there is no still for the flash to fire for.
+     */
+    void applyAeMode(@NonNull CaptureRequest.Builder builder, boolean withFlashStrategy) {
+        if (isTorchLit()) {
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
+            return;
+        }
+        if (withFlashStrategy) {
+            applyFlash(builder);
+        }
+    }
+
+    private void applyFlash(@NonNull CaptureRequest.Builder builder) {
         if (!hasFlash()) {
             return;
         }

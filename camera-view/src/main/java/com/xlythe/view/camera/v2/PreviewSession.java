@@ -55,7 +55,7 @@ class PreviewSession extends SessionImpl {
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-        applyFlash(builder);
+        applyAeMode(builder, true /* withFlashStrategy */);
         if (mMeteringRectangle != null) {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
