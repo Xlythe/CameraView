@@ -74,6 +74,22 @@ public final class GlMath {
     }
 
     /**
+     * Whether a frame's timestamp is on the clock that keeps counting through sleep, rather than
+     * the monotonic one an encoder lines video up with audio on.
+     *
+     * <p>A camera writing to an encoder moves its timestamps onto the monotonic clock itself. A
+     * camera writing to a SurfaceTexture leaves them on its own, which may be the other one - and
+     * a video track that starts as far after its audio as the phone has spent asleep. Which clock
+     * a timestamp is on is read off the timestamp, by which of the two it is nearer, because the
+     * renderer is not told which camera wrote it.</p>
+     */
+    public static boolean isOnRealtimeClock(long timestampNanos, long monotonicNowNanos,
+            long realtimeNowNanos) {
+        return Math.abs(realtimeNowNanos - timestampNanos)
+                < Math.abs(monotonicNowNanos - timestampNanos);
+    }
+
+    /**
      * Where a frame is drawn inside an output, as {@code glViewport} takes it.
      *
      * <p>The frame keeps its aspect ratio either way; the two scale types differ only in which

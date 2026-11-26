@@ -5,6 +5,7 @@ import android.opengl.EGLSurface;
 import android.opengl.GLES20;
 import android.os.Handler;
 import android.os.HandlerThread;
+import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -69,17 +70,30 @@ public final class FrameRenderThread {
         private final Size mFrameSize;
         private final GlMath.ScaleType mScaleType;
         private final TextureTransform mTransform;
+        /**
+         * Whether this surface feeds an encoder, which takes its presentation times on the
+         * monotonic clock. See {@link GlMath#isOnRealtimeClock}.
+         */
+        private final boolean mEncoder;
+        /**
+         * Whether the camera's timestamps are on the clock that counts sleep, and have to be
+         * moved before an encoder sees them. Null until the first frame decides it, and then
+         * kept, because two frames that disagreed would go backwards in time.
+         */
+        @Nullable private Boolean mRealtimeClock;
         @Nullable private EGLSurface mEglSurface;
         /** Set once this output has failed, so a broken surface is not retried every frame. */
         private boolean mFailed;
 
         private Output(@NonNull Surface surface, @NonNull Size size, @NonNull Size frameSize,
-                @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform) {
+                @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform,
+                boolean encoder) {
             mSurface = surface;
             mSize = size;
             mFrameSize = frameSize;
             mScaleType = scaleType;
             mTransform = transform;
+            mEncoder = encoder;
         }
     }
 
@@ -381,7 +395,25 @@ public final class FrameRenderThread {
     public void addOutput(@NonNull Object key, @NonNull Surface surface, @NonNull Size size,
             @NonNull Size frameSize, @NonNull GlMath.ScaleType scaleType,
             @NonNull TextureTransform transform) {
-        Output output = new Output(surface, size, frameSize, scaleType, transform);
+        putOutput(key, new Output(surface, size, frameSize, scaleType, transform, false));
+    }
+
+    /**
+     * Adds an encoder's input surface to draw every frame into, filling it.
+     *
+     * <p>Separate from {@link #addOutput} because an encoder reads the presentation time of every
+     * frame as when it happened, against its audio, so the time has to be on the encoder's
+     * clock.</p>
+     *
+     * @param key identifies this output for {@link #removeOutput}; the caller's own object
+     */
+    public void addEncoderOutput(@NonNull Object key, @NonNull Surface surface,
+            @NonNull Size size, @NonNull TextureTransform transform) {
+        putOutput(key, new Output(
+                surface, size, size, GlMath.ScaleType.FILL_CENTER, transform, true));
+    }
+
+    private void putOutput(@NonNull Object key, @NonNull Output output) {
         post(() -> {
             releaseOutput(mOutputs.remove(key));
             mOutputs.put(key, output);
@@ -517,7 +549,7 @@ public final class FrameRenderThread {
             if (renderer == null || !renderer.onDrawFrame(frame)) {
                 frame.drawCameraFrame();
             }
-            egl.setPresentationTime(output.mEglSurface, timestampNanos);
+            egl.setPresentationTime(output.mEglSurface, presentationTime(output, timestampNanos));
             egl.swapBuffers(output.mEglSurface);
         } catch (RuntimeException | LinkageError error) {
             // This output is gone, which happens when a use case is unbound a frame before the
@@ -526,6 +558,22 @@ public final class FrameRenderThread {
             output.mFailed = true;
             releaseOutput(output);
         }
+    }
+
+    /** When an output is told a frame happened, which for an encoder is on its own clock. */
+    private static long presentationTime(@NonNull Output output, long timestampNanos) {
+        if (!output.mEncoder) {
+            return timestampNanos;
+        }
+        long monotonicNanos = System.nanoTime();
+        long realtimeNanos = SystemClock.elapsedRealtimeNanos();
+        if (output.mRealtimeClock == null) {
+            output.mRealtimeClock =
+                    GlMath.isOnRealtimeClock(timestampNanos, monotonicNanos, realtimeNanos);
+        }
+        return output.mRealtimeClock
+                ? timestampNanos - (realtimeNanos - monotonicNanos)
+                : timestampNanos;
     }
 
     private void releaseOutput(@Nullable Output output) {

@@ -2,6 +2,7 @@ package com.xlythe.view.camera.gl;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
@@ -197,5 +198,20 @@ public final class GlMathTest {
         float[] first = GlMath.fullFrameQuad();
         first[0] = 7f;
         assertEquals(-1f, GlMath.fullFrameQuad()[0], 0f);
+    }
+
+    /** A frame a moment old on a phone that has slept for fifteen minutes since it booted. */
+    @Test
+    public void aTimestampIsOnWhicheverClockItIsNearer() {
+        long monotonicNow = 5_000_000_000L;
+        long realtimeNow = 905_000_000_000L;
+        assertFalse(GlMath.isOnRealtimeClock(4_990_000_000L, monotonicNow, realtimeNow));
+        assertTrue(GlMath.isOnRealtimeClock(904_990_000_000L, monotonicNow, realtimeNow));
+    }
+
+    /** A phone that has never slept has one clock, and nothing to move. */
+    @Test
+    public void clocksThatAgreeAreTakenAsMonotonic() {
+        assertFalse(GlMath.isOnRealtimeClock(4_990_000_000L, 5_000_000_000L, 5_000_000_000L));
     }
 }

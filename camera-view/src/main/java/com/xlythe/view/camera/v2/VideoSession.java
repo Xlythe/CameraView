@@ -19,7 +19,6 @@ import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.gl.FrameRenderThread;
-import com.xlythe.view.camera.gl.GlMath;
 
 import java.io.File;
 import java.io.IOException;
@@ -204,8 +203,7 @@ class VideoSession extends PictureSession {
             return;
         }
         Size size = new Size(mVideoSurface.getWidth(), mVideoSurface.getHeight());
-        effect.addOutput(mVideoSurface, mVideoSurface.getSurface(), size, size,
-                GlMath.ScaleType.FILL_CENTER,
+        effect.addEncoderOutput(mVideoSurface, mVideoSurface.getSurface(), size,
                 (surfaceTextureMatrix, into) ->
                         System.arraycopy(surfaceTextureMatrix, 0, into, 0, into.length));
         mThroughGl = true;
