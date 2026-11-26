@@ -1383,6 +1383,13 @@ public class CameraView extends FrameLayout {
             Log.w(TAG, "This backend draws no effects, so there is nothing to composite with");
             return false;
         }
+        if (mFrameStream != null) {
+            // The other half of the refusal in startFrameAnalysis: whichever starts second is
+            // the one that would be left without frames.
+            Log.w(TAG, "Frames are already being analyzed, so there is nothing left to segment;"
+                    + " call stopFrameAnalysis() first");
+            return false;
+        }
         setFrameRenderer(replacer);
         if (!mCameraModule.startSegmentation(replacer::setMask)) {
             setFrameRenderer(null);
@@ -1453,6 +1460,13 @@ public class CameraView extends FrameLayout {
         }
         if (mFrameStream != null) {
             throw new IllegalStateException("Frame analysis cannot be started twice");
+        }
+        if (mReplacingBackground) {
+            // Both read the camera's frames, and on the Camera2 backend both want a reader in
+            // the session - the second would replace the first and segmentation would stop
+            // with nothing to say so. Refused rather than allowed to break quietly.
+            throw new IllegalStateException("Frame analysis cannot run while a background is"
+                    + " being replaced; call exitBackgroundReplacement() first");
         }
         if (!isFrameAnalysisSupported()) {
             // Refused rather than accepted and never honoured. The old backend has no way to

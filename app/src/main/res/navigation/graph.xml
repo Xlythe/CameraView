@@ -59,4 +59,10 @@
         android:label="@string/app_name_caption"
         tools:layout="@layout/fragment_caption" />
 
+    <fragment
+        android:id="@+id/live_caption_fragment"
+        android:name="com.xlythe.sample.camera.LiveCaptionFragment"
+        android:label="@string/app_name_live_caption"
+        tools:layout="@layout/fragment_live_caption" />
+
 </navigation>

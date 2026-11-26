@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:camera="http://schemas.android.com/apk/res-auto"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <FrameLayout
+        android:id="@id/layout_permissions"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#121212">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@id/request_permissions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:paddingHorizontal="24dp"
+            android:paddingVertical="12dp"
+            android:text="@string/btn_request_permissions"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="24dp"
+            app:elevation="4dp" />
+
+    </FrameLayout>
+
+    <RelativeLayout
+        android:id="@id/layout_camera"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <com.xlythe.view.camera.CameraView
+            android:id="@id/camera"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            camera:quality="high" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:background="#99000000"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <!--
+              Two lines, the spoken one above the translated one, which is how a call shows it:
+              the words arrive first and the meaning a moment later.
+            -->
+            <TextView
+                android:id="@+id/live_caption"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minLines="2"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp" />
+
+            <TextView
+                android:id="@+id/live_translation"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:minLines="2"
+                android:textColor="#7FD4FF"
+                android:textSize="20sp" />
+
+            <TextView
+                android:id="@+id/live_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="12dp"
+                android:paddingBottom="12dp"
+                android:textColor="#BBBBBB"
+                android:textSize="14sp" />
+
+            <Button
+                android:id="@+id/live_start_stop"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:enabled="false"
+                android:text="@string/live_start" />
+
+        </LinearLayout>
+
+    </RelativeLayout>
+
+</FrameLayout>

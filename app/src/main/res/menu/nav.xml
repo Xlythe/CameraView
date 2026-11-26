@@ -35,4 +35,8 @@
         android:id="@+id/caption_fragment"
         android:icon="@drawable/ic_stream"
         android:title="@string/app_name_caption" />
+    <item
+        android:id="@+id/live_caption_fragment"
+        android:icon="@drawable/ic_stream"
+        android:title="@string/app_name_live_caption" />
 </menu>

@@ -10,6 +10,16 @@
     <string name="app_name_ar">AR Demo</string>
     <string name="app_name_panorama">Panorama Demo</string>
     <string name="app_name_caption">Caption Demo</string>
+    <string name="app_name_live_caption">Live Caption Demo</string>
+    <string name="live_start">Start captioning</string>
+    <string name="live_stop">Stop</string>
+    <string name="live_status_unsupported">This device has no speech recogniser, so there is nothing to caption with</string>
+    <string name="live_status_ready">Start captioning and talk. The words appear as you say them, with the translation underneath.</string>
+    <string name="live_status_ready_no_translation">Start captioning and talk. This device has no translation languages downloaded, so the words will arrive untranslated.</string>
+    <string name="live_status_listening">Listening\u2026</string>
+    <string name="live_status_hearing">Still hearing this sentence</string>
+    <string name="live_status_settled">That sentence is settled</string>
+    <string name="live_status_no_translation">No translation languages on this device. Tap here to get them.</string>
     <string name="caption_record">Record</string>
     <string name="caption_stop">Stop and transcribe</string>
     <string name="caption_status_unsupported">This device cannot transcribe a recording. It needs Android 13, where the recogniser first accepted a file, and a recogniser installed.</string>
