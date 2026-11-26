@@ -38,6 +38,9 @@ public class LinkBackpressureTest {
     /** One and a half times the stream on average, gone for half of every two seconds. */
     private static final Link GAPPY = Link.bursty("gappy", 1.5, 2000, 1500);
 
+    /** A fifth more than the stream on average, gone for 300ms of every 700ms. */
+    private static final Link JITTERY = Link.bursty("jitter", 1.2, 700, 400);
+
     /** The fixed audio threshold VideoStream starts with: half a second at 16kHz mono. */
     private static final int FIXED_AUDIO_THRESHOLD = 16 * 1024;
 
@@ -218,16 +221,44 @@ public class LinkBackpressureTest {
     /**
      * Video catches up on its own, because the player renders each frame as it lands. Audio
      * cannot: the track plays at the rate the audio was recorded, so the delay an outage leaves
-     * behind is still there at the end of the run.
+     * behind stays for the rest of the stream unless the player discards it - 431ms after a paced
+     * transport, and the whole three seconds after an unbounded one.
      */
     @Test
-    public void audioNeverWorksOffTheDelayAnOutageLeaves() throws IOException {
-        Result audio = run(Media.AUDIO, OUTAGE, Transport.acknowledged(200), Pump.PACED);
+    public void theAudioPlayerWorksOffTheDelayAnOutageLeaves() throws IOException {
+        List<String> rows = new ArrayList<>();
+        for (Strategy strategy : STRATEGIES) {
+            Result before = new LinkSimulation(Media.AUDIO).link(OUTAGE)
+                    .transport(strategy.transport).pump(strategy.pump).catchUp(false).run();
+            Result after = run(Media.AUDIO, OUTAGE, strategy.transport, strategy.pump);
+            rows.add(before.row());
+            rows.add(after.row());
+            assertEquals(before.row(), -1, before.recovery());
+            assertTrue(after.row(), after.recovery() >= 0);
+            assertTrue(after.row(), after.tailLatency() < 200);
+        }
         Result video = run(Media.VIDEO, OUTAGE, Transport.acknowledged(200), Pump.PACED);
-        assertEquals(audio.row(), -1, audio.recovery());
-        assertTrue(audio.row(), audio.tailLatency() > 400);
-        assertTrue(video.row(), video.recovery() >= 0);
+        rows.add(video.row());
         assertTrue(video.row(), video.tailLatency() < 100);
+        System.out.println(String.join("\n", rows));
+    }
+
+    /**
+     * The cushion that rides out a link's gaps is not delay, and discarding it would only turn
+     * each gap into silence. A link whose gaps are shorter than the second the player watches
+     * over keeps all of its cushion.
+     */
+    @Test
+    public void catchingUpLeavesTheCushionForJitter() throws IOException {
+        for (Link link : new Link[] {BURSTY, JITTERY}) {
+            for (Strategy strategy : STRATEGIES) {
+                Result before = new LinkSimulation(Media.AUDIO).link(link)
+                        .transport(strategy.transport).pump(strategy.pump).catchUp(false).run();
+                Result after = run(Media.AUDIO, link, strategy.transport, strategy.pump);
+                assertEquals(after.row(), 0, after.skippedBytes);
+                assertEquals(after.row(), before.underrunBytes, after.underrunBytes);
+            }
+        }
     }
 
     /**

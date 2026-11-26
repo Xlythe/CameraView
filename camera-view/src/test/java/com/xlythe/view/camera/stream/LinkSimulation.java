@@ -3,6 +3,8 @@ package com.xlythe.view.camera.stream;
 import android.media.AudioFormat;
 import android.media.MediaCodec;
 
+import androidx.annotation.Nullable;
+
 import com.google.common.primitives.Ints;
 
 import java.io.ByteArrayInputStream;
@@ -241,6 +243,8 @@ final class LinkSimulation {
         int stallTimeoutMillis;
         /** The pipe's drop threshold, as milliseconds of the stream at its nominal rate. */
         int pipeBudgetMillis;
+        /** Whether the audio player discarded what waited too long, as AudioPlayer does. */
+        boolean catchUp;
 
         /** Bytes the producer offered the pipe. */
         long producedBytes;
@@ -248,6 +252,8 @@ final class LinkSimulation {
         long droppedBytes;
         /** Bytes of silence the audio player played for want of audio, once it had started. */
         long underrunBytes;
+        /** Bytes the audio player discarded to catch up. */
+        long skippedBytes;
         /** Whether the stream's header arrived first and intact. */
         boolean headerIntact;
         /** Records that arrived torn or out of order. Anything but zero is a desync. */
@@ -306,6 +312,10 @@ final class LinkSimulation {
             return underrunBytes / AUDIO_BYTES_PER_MS;
         }
 
+        long skippedMillis() {
+            return skippedBytes / AUDIO_BYTES_PER_MS;
+        }
+
         /** Frames a second the viewer could actually have seen. */
         double decodableFramesPerSecond() {
             return decodableFrames * 1000.0 / RUN_MILLIS;
@@ -331,21 +341,22 @@ final class LinkSimulation {
 
         static String header() {
             return String.format(Locale.US, "%-5s | %-6s | %-13s | %-5s | %5s | %5s | %5s | %5s"
-                            + " | %5s | %5s | %6s | %6s | %7s | %-21s | %s",
+                            + " | %5s | %5s | %6s | %6s | %7s | %7s | %-21s | %s",
                     "media", "link", "transport", "pump", "pipe", "stall", "p50", "p95", "max",
-                    "end", "drop", "gaps", "recover", "decodable", "intact");
+                    "end", "drop", "gaps", "skipped", "recover", "decodable", "intact");
         }
 
         String row() {
             long recovery = recovery();
             return String.format(Locale.US, "%-5s | %-6s | %-13s | %-5s | %5s | %5s | %5d | %5d"
-                            + " | %5d | %5d | %5.1f%% | %4dms | %7s | %-21s | %s",
+                            + " | %5d | %5d | %5.1f%% | %4dms | %7s | %7s | %-21s | %s",
                     media.name().toLowerCase(Locale.US), link, transport,
                     pump.name().toLowerCase(Locale.US),
                     pipeBudgetMillis + "ms",
                     stallTimeoutMillis == 0 ? "-" : stallTimeoutMillis + "ms",
                     percentile(0.5), percentile(0.95), maxLatency(), tailLatency(),
                     droppedPercent(), underrunMillis(),
+                    media == Media.VIDEO ? "-" : catchUp ? skippedMillis() + "ms" : "off",
                     link.outageEnd() < 0 ? "-" : recovery < 0 ? "never" : recovery + "ms",
                     media == Media.AUDIO ? "-" : String.format(Locale.US, "%.1f/s, %d broken",
                             decodableFramesPerSecond(), undecodableFrames),
@@ -373,6 +384,8 @@ final class LinkSimulation {
     private int mKeyFrameInterval = VIDEO_KEY_FRAME_INTERVAL;
     /** How long the pipe lets its reader go without reading before it drops anyway, or 0. */
     private int mStallTimeoutMillis;
+    /** Whether the audio player discards what waited too long, as AudioPlayer does. */
+    private boolean mCatchUp = true;
 
     LinkSimulation(Media media) {
         mMedia = media;
@@ -414,6 +427,12 @@ final class LinkSimulation {
         return this;
     }
 
+    /** Plays every byte of audio however late, as AudioPlayer did before it caught up. */
+    LinkSimulation catchUp(boolean catchUp) {
+        mCatchUp = catchUp;
+        return this;
+    }
+
     /** Runs the pipe as {@link StallAwarePipe}, which is the policy under question. */
     LinkSimulation stallTimeoutMillis(int millis) {
         mStallTimeoutMillis = millis;
@@ -429,6 +448,7 @@ final class LinkSimulation {
         result.transport = mTransport;
         result.pump = mPump;
         result.stallTimeoutMillis = mStallTimeoutMillis;
+        result.catchUp = mCatchUp;
 
         boolean audio = mMedia == Media.AUDIO;
         int bytesPerMs = audio ? AUDIO_BYTES_PER_MS : VIDEO_BYTES_PER_MS;
@@ -447,7 +467,8 @@ final class LinkSimulation {
         if (audio) {
             AudioProducer audioProducer = new AudioProducer(result);
             producer = audioProducer;
-            receiver = new AudioReceiver(result, audioProducer);
+            receiver = new AudioReceiver(result, audioProducer,
+                    mCatchUp ? new AudioCatchUp(AUDIO_SAMPLE_RATE, 1) : null);
         } else {
             producer = new VideoProducer(result, mVideoFill, mKeyFrameInterval);
             receiver = new VideoReceiver(result);
@@ -938,7 +959,8 @@ final class LinkSimulation {
      * rate it was recorded and blocks the writer while it is full.
      *
      * <p>That fixed rate is the difference from video. Audio that lands late is played late, and
-     * nothing plays the rest of it any faster, so whatever delay builds up stays.</p>
+     * nothing plays the rest of it any faster, so whatever delay builds up stays unless the
+     * player discards some of it, which is what {@link AudioCatchUp} decides.</p>
      */
     private static final class AudioReceiver extends Receiver {
         /** What AudioPlayer reads at a time: its AudioTrack's minimum buffer. */
@@ -946,6 +968,8 @@ final class LinkSimulation {
 
         /** Where the capture time of each byte is looked up. */
         private final AudioProducer mProducer;
+        /** Decides what to discard before each read, or null to play everything. */
+        @Nullable private final AudioCatchUp mCatchUp;
         /** Stream offsets of the bytes in the AudioTrack's buffer, as contiguous runs. */
         private final ArrayDeque<long[]> mTrack = new ArrayDeque<>();
         /** Bytes in the AudioTrack's buffer. */
@@ -963,9 +987,10 @@ final class LinkSimulation {
         /** The sequence number of the last chunk to arrive. */
         private int mLastSequence = -1;
 
-        AudioReceiver(Result result, AudioProducer producer) {
+        AudioReceiver(Result result, AudioProducer producer, @Nullable AudioCatchUp catchUp) {
             super(result);
             mProducer = producer;
+            mCatchUp = catchUp;
         }
 
         @Override
@@ -1033,6 +1058,9 @@ final class LinkSimulation {
                     mHeldOffset += moved;
                     mHeldBytes -= moved;
                     mTrackBytes += moved;
+                    if (mCatchUp != null) {
+                        mCatchUp.onPlayed(moved);
+                    }
                     continue;
                 }
                 if (!mHeaderRead) {
@@ -1046,6 +1074,14 @@ final class LinkSimulation {
                     continue;
                 }
                 int available = mInput.size();
+                int skip = mCatchUp == null ? 0 : mCatchUp.bytesToSkip(available);
+                if (skip > 0) {
+                    mInput.skip(skip);
+                    mRead += skip;
+                    mResult.skippedBytes += skip;
+                    available -= skip;
+                    channel.acknowledge(now, mRead);
+                }
                 if (available == 0) {
                     return;
                 }
