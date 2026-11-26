@@ -1,0 +1,163 @@
+package com.xlythe.view.camera;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
+
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * The zoom arithmetic every backend shares, so that a level, a pinch and a preset mean the same
+ * thing whichever camera API is underneath.
+ *
+ * <p>Zoom is a ratio in the camera's own terms: 1 is the main lens, below 1 is an ultra-wide the
+ * camera can switch to, and above 1 is a longer lens or a crop.</p>
+ */
+@RestrictTo(RestrictTo.Scope.LIBRARY)
+public final class ZoomMath {
+    /** The far end of the zoom level scale. See {@link CameraView#getMaxZoomLevel}. */
+    public static final int MAX_ZOOM_LEVEL = 100;
+
+    /**
+     * How far apart two stops have to be to each deserve a button, as a ratio between them.
+     *
+     * <p>Closer than any two lenses on one phone, and further apart than the rounding in the focal
+     * lengths and sensor sizes cameras publish.</p>
+     */
+    private static final float DISTINCT_STOP_RATIO = 1.1f;
+
+    /** The crop {@link #canCropTo2x} asks the main sensor about. */
+    private static final float CROP_STOP = 2f;
+
+    private ZoomMath() {}
+
+    /**
+     * Maps a zoom level onto a ratio, on a log scale.
+     *
+     * <p>Equal travel along a slider then multiplies the zoom by the same amount wherever it is. A
+     * linear mapping over a 0.6x to 10x range would spend only the first 4% of the slider below
+     * 1x.</p>
+     */
+    public static float ratioForLevel(int level, float minRatio, float maxRatio) {
+        if (!(maxRatio > minRatio) || minRatio <= 0f) {
+            return minRatio;
+        }
+        int clamped = Math.max(0, Math.min(level, MAX_ZOOM_LEVEL));
+        if (clamped == MAX_ZOOM_LEVEL) {
+            // Exactly the top, which the power below can miss by a rounding error.
+            return maxRatio;
+        }
+        return (float) (minRatio
+                * Math.pow(maxRatio / minRatio, (double) clamped / MAX_ZOOM_LEVEL));
+    }
+
+    /** The level {@link #ratioForLevel} maps onto a ratio, rounded to the nearest one. */
+    public static int levelForRatio(float ratio, float minRatio, float maxRatio) {
+        if (!(maxRatio > minRatio) || minRatio <= 0f || !(ratio > minRatio)) {
+            return 0;
+        }
+        if (ratio >= maxRatio) {
+            return MAX_ZOOM_LEVEL;
+        }
+        double fraction = Math.log(ratio / minRatio) / Math.log(maxRatio / minRatio);
+        return (int) Math.round(fraction * MAX_ZOOM_LEVEL);
+    }
+
+    /** Holds a ratio inside a camera's range. */
+    public static float clamp(float ratio, float minRatio, float maxRatio) {
+        return Math.max(minRatio, Math.min(ratio, maxRatio));
+    }
+
+    /**
+     * Where a lens sits on the zoom scale of the camera it belongs to.
+     *
+     * <p>Zoom is a ratio of fields of view, and a field of view follows from how long the lens is
+     * relative to how wide the sensor behind it is. Focal length alone is not enough, because an
+     * ultra-wide or a telephoto usually sits in front of a smaller sensor than the main lens.</p>
+     *
+     * @param referenceFocalLength the focal length that a ratio of 1 means
+     * @param referenceSensorWidth the width of the sensor behind that focal length
+     * @return the ratio, or 0 when either camera does not publish its optics
+     */
+    public static float lensStop(float focalLength, float sensorWidth,
+            float referenceFocalLength, float referenceSensorWidth) {
+        if (focalLength <= 0f || sensorWidth <= 0f
+                || referenceFocalLength <= 0f || referenceSensorWidth <= 0f) {
+            return 0f;
+        }
+        return (focalLength / sensorWidth) / (referenceFocalLength / referenceSensorWidth);
+    }
+
+    /**
+     * Whether a sensor can crop to 2x and still fill the largest picture the camera takes.
+     *
+     * <p>A phone with a high-resolution main sensor bins it down for ordinary pictures, so a 2x crop
+     * of the full sensor is as sharp as the uncropped picture. That makes 2x a stop worth offering
+     * where no lens sits.</p>
+     *
+     * @param sensorWidth the sensor's width in pixels, at its highest resolution
+     * @param largestPictureWidth the width of the largest JPEG the camera offers
+     */
+    public static boolean canCropTo2x(int sensorWidth, int largestPictureWidth) {
+        return largestPictureWidth > 0 && sensorWidth >= CROP_STOP * largestPictureWidth;
+    }
+
+    /**
+     * The stops worth a button, in increasing order.
+     *
+     * <p>Android publishes the lenses a camera can switch between, but not the stops its own camera
+     * app offers, so this assembles them: 1x always, the wide end when it is below 1x, a stop per
+     * lens, and 2x where the main sensor can crop to it and no lens is already there. Stops within
+     * ten percent of one another are one stop. 1x and the wide end win over a lens that lands near
+     * them, because the camera reaches those two exactly.</p>
+     *
+     * @param lensStops where each lens sits, from {@link #lensStop}; a 0 is a lens that did not
+     *     publish its optics, and is left out
+     * @param cropStop whether the main sensor can crop to 2x, from {@link #canCropTo2x}
+     */
+    @NonNull
+    public static float[] presets(float minRatio, float maxRatio, @NonNull float[] lensStops,
+            boolean cropStop) {
+        List<Float> stops = new ArrayList<>();
+        stops.add(clamp(1f, minRatio, maxRatio));
+        if (minRatio < 1f) {
+            addDistinct(stops, minRatio);
+        }
+
+        float[] lenses = lensStops.clone();
+        Arrays.sort(lenses);
+        boolean lensAtCropStop = false;
+        for (float lens : lenses) {
+            if (lens <= 0f) {
+                continue;
+            }
+            lensAtCropStop |= isSameStop(lens, CROP_STOP);
+            addDistinct(stops, clamp(lens, minRatio, maxRatio));
+        }
+        if (cropStop && !lensAtCropStop) {
+            addDistinct(stops, clamp(CROP_STOP, minRatio, maxRatio));
+        }
+
+        float[] presets = new float[stops.size()];
+        for (int i = 0; i < presets.length; i++) {
+            presets[i] = stops.get(i);
+        }
+        Arrays.sort(presets);
+        return presets;
+    }
+
+    /** Adds a stop unless one already there is close enough to stand for it. */
+    private static void addDistinct(@NonNull List<Float> stops, float stop) {
+        for (float existing : stops) {
+            if (isSameStop(existing, stop)) {
+                return;
+            }
+        }
+        stops.add(stop);
+    }
+
+    private static boolean isSameStop(float a, float b) {
+        return Math.max(a, b) < DISTINCT_STOP_RATIO * Math.min(a, b);
+    }
+}
