@@ -9,12 +9,14 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.os.Vibrator;
 import android.text.format.DateFormat;
+import android.util.Log;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.View;
@@ -25,6 +27,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.MediaStoreSaver;
 import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.R;
 
@@ -37,8 +40,11 @@ import java.util.Locale;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.UiThread;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
+
+import static com.xlythe.view.camera.ICameraModule.TAG;
 
 public abstract class CameraFragment extends Fragment implements CameraView.OnImageCapturedListener, CameraView.OnVideoCapturedListener, CameraView.OnCameraStateChangedListener {
     private static final String[] REQUIRED_PERMISSIONS;
@@ -259,6 +265,30 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     }
 
+    /**
+     * Called once a capture has been copied to where the gallery looks, with where it went, or
+     * null if it could not be. Every capture is filed without anything having to call for it.
+     */
+    @UiThread
+    public void onCaptureFiled(@Nullable Uri uri) {
+
+    }
+
+    /** Files a copy of a capture where the gallery looks, leaving the cache file alone. */
+    @UiThread
+    private void file(File capture, boolean isVideo) {
+        Context context = getContext();
+        if (context == null) {
+            return;
+        }
+        MediaStoreSaver.save(context, capture, isVideo, uri -> {
+            if (uri == null) {
+                Log.w(TAG, "Could not file " + capture + " where the gallery looks");
+            }
+            onCaptureFiled(uri);
+        });
+    }
+
     public void setEnabled(boolean enabled) {
         if (mCapture != null) {
             mCapture.setEnabled(enabled);
@@ -389,8 +419,42 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             return;
         }
 
-        mCamera.setOnImageCapturedListener(this);
-        mCamera.setOnVideoCapturedListener(this);
+        // Wrapped rather than passed as this, so a subclass that overrides onImageCaptured
+        // without calling super still has its captures filed.
+        mCamera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override
+            public void onImageConfirmation() {
+                CameraFragment.this.onImageConfirmation();
+            }
+
+            @Override
+            public void onImageCaptured(File file) {
+                CameraFragment.this.onImageCaptured(file);
+                file(file, false /* isVideo */);
+            }
+
+            @Override
+            public void onFailure() {
+                CameraFragment.this.onFailure();
+            }
+        });
+        mCamera.setOnVideoCapturedListener(new CameraView.OnVideoCapturedListener() {
+            @Override
+            public void onVideoConfirmation() {
+                CameraFragment.this.onVideoConfirmation();
+            }
+
+            @Override
+            public void onVideoCaptured(File file) {
+                CameraFragment.this.onVideoCaptured(file);
+                file(file, true /* isVideo */);
+            }
+
+            @Override
+            public void onFailure() {
+                CameraFragment.this.onFailure();
+            }
+        });
         mCamera.setOnCameraStateChangedListener(this);
 
         if (mCapture != null) {

@@ -2,6 +2,7 @@ package com.xlythe.sample.camera;
 
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -41,20 +42,14 @@ public class MainFragment extends CameraFragment {
         // Print out metadata (EXIF data) about the captured picture using the library's Exif
         // helper, while the capture is still the cache file we were handed.
         Log.d(TAG, Exif.describe(file));
-
-        CaptureSaver.save(requireContext(), file, false /* isVideo */, uri -> {
-            report(uri == null ? "Could not save the picture" : "Picture saved to " + uri);
-        });
     }
 
     /**
-     * Callback triggered by the library when a video recording successfully completes.
+     * Callback triggered once the library has copied a picture or video to the gallery.
      */
     @Override
-    public void onVideoCaptured(final File file) {
-        CaptureSaver.save(requireContext(), file, true /* isVideo */, uri -> {
-            report(uri == null ? "Could not save the video" : "Video saved to " + uri);
-        });
+    public void onCaptureFiled(@Nullable Uri uri) {
+        report(uri == null ? "Could not save the capture" : "Saved to " + uri);
     }
 
     /**

@@ -3,6 +3,7 @@ package com.xlythe.sample.camera;
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
 import android.os.Build;
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -51,15 +52,11 @@ public class ResizingFragment extends CameraFragment {
     @Override
     public void onImageCaptured(final File file) {
         Log.d(TAG, Exif.describe(file));
-
-        CaptureSaver.save(requireContext(), file, false /* isVideo */, uri ->
-                report(uri == null ? "Could not save the picture" : "Picture saved to " + uri));
     }
 
     @Override
-    public void onVideoCaptured(final File file) {
-        CaptureSaver.save(requireContext(), file, true /* isVideo */, uri ->
-                report(uri == null ? "Could not save the video" : "Video saved to " + uri));
+    public void onCaptureFiled(@Nullable Uri uri) {
+        report(uri == null ? "Could not save the capture" : "Saved to " + uri);
     }
 
     @Override

@@ -230,10 +230,12 @@ public class WearFragment extends CameraFragment {
 
     @Override
     public void onImageCaptured(File file) {
-        // Keep the sample's own behaviour: the picture is saved where the others are saved.
-        CaptureSaver.save(requireContext(), file, false /* isVideo */, uri ->
-                Log.d(TAG, uri == null ? "Could not save the picture" : "Saved to " + uri));
         sendToWatch(file);
+    }
+
+    @Override
+    public void onCaptureFiled(@Nullable Uri uri) {
+        Log.d(TAG, uri == null ? "Could not save the picture" : "Saved to " + uri);
     }
 
     /**
