@@ -109,7 +109,7 @@ public class CameraViewTest {
         assertEquals(CameraView.Extension.NIGHT, cameraView.getExtension());
         assertTrue(cameraView.isStabilizationEnabled());
         assertEquals(2, cameraView.getExposureCompensation());
-        assertTrue(cameraView.isTorchEnabled());
+        assertFalse("low-light boost turns the torch off", cameraView.isTorchEnabled());
         assertTrue(cameraView.isLowLightBoostEnabled());
         assertFalse(cameraView.isDynamicRangeSupported(CameraView.DynamicRange.HDR));
         assertFalse(cameraView.isExtensionSupported(CameraView.Extension.NIGHT));

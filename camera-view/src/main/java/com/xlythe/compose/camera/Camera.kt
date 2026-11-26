@@ -439,9 +439,8 @@ private fun Extension.toCameraView() = when (this) {
  * [CameraController.startRecording] and [CameraController.stream], which ask for it themselves,
  * and outputs are written to the [File] you pass in, so no storage permission is involved.
  *
- * Several of the settings below are read only by the CameraX backend, which is still opt-in; the
- * Camera2 backend that ships enabled logs and drops them. [CameraState] says which ones the
- * active camera will accept.
+ * Several of the settings below depend on what the camera can do. [CameraState] says which ones
+ * the active camera will accept.
  *
  * @param modifier Modifier for layout.
  * @param quality The quality for image and video outputs.
@@ -458,14 +457,15 @@ private fun Extension.toCameraView() = when (this) {
  *  states a level and allows the gesture would have the next recomposition undo the pinch.
  * @param exposureCompensation An index within the range [CameraState] reports, where 0 is the
  *  exposure the camera metered for itself.
- * @param torchEnabled Lights the flash continuously, rather than for a capture.
+ * @param torchEnabled Lights the flash continuously, rather than for a capture. It cannot be
+ *  combined with [lowLightBoostEnabled], which wins when both are asked for.
  * @param colorSpace The range of colours pictures are recorded in.
  * @param pictureFormat The file a picture is written as.
  * @param dynamicRange The dynamic range videos are recorded in.
  * @param extension An optional vendor photo-processing extension.
  * @param pictureQuality How hard a still capture is compressed, from 1 to 100.
  * @param stabilizationEnabled Steadies the preview and recorded video, where the camera can.
- * @param lowLightBoostEnabled Brightens the preview in the dark.
+ * @param lowLightBoostEnabled Brightens the preview and recordings in the dark.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.

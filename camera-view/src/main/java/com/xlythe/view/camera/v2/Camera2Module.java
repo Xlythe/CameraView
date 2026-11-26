@@ -1038,6 +1038,9 @@ public class Camera2Module extends ICameraModule {
      *
      * <p>Refused only while a camera without a flash is open. A request made before then is kept,
      * and lights the torch on whichever camera opens if it has one.</p>
+     *
+     * <p>Turns low-light boost off, as {@link ICameraModule#setTorchEnabled} does on every
+     * backend: it is an auto-exposure mode of its own, and the torch needs plain ON.</p>
      */
     @AnyThread
     @Override
@@ -1046,11 +1049,45 @@ public class Camera2Module extends ICameraModule {
             Log.w(TAG, "Ignoring torch request because the active camera has no flash unit");
             return;
         }
-        boolean changed = enabled != isTorchEnabled();
+        boolean changed = enabled != isTorchEnabled() || (enabled && isLowLightBoostEnabled());
         super.setTorchEnabled(enabled);
         if (changed) {
             reissueRepeatingRequest("the torch");
         }
+    }
+
+    /**
+     * Brightens the preview and recordings in the dark, through the auto-exposure mode
+     * CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY.
+     *
+     * <p>Refused only while a camera without the mode is open, as on CameraX, and turns the torch
+     * off. The camera itself falls back to plain ON for a session it cannot boost, which the
+     * platform documents as anything beyond a preview and one encoder.</p>
+     */
+    @AnyThread
+    @Override
+    public void setLowLightBoostEnabled(boolean enabled) {
+        if (enabled && mCameraDevice != null && !isLowLightBoostSupported()) {
+            Log.w(TAG, "Ignoring low-light boost because the active camera does not support it");
+            return;
+        }
+        boolean changed = enabled != isLowLightBoostEnabled() || (enabled && isTorchEnabled());
+        super.setLowLightBoostEnabled(enabled);
+        if (changed) {
+            reissueRepeatingRequest("low-light boost");
+        }
+    }
+
+    @Override
+    public boolean isLowLightBoostSupported() {
+        return offersLowLightBoost(getActiveCharacteristics());
+    }
+
+    /** Whether a camera lists the low-light boost auto-exposure mode. */
+    static boolean offersLowLightBoost(@Nullable CameraCharacteristics characteristics) {
+        return Build.VERSION.SDK_INT >= 35 && characteristics != null && contains(
+                characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES),
+                CameraCharacteristics.CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY);
     }
 
     /**

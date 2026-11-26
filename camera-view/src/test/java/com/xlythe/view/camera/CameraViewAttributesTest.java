@@ -164,19 +164,23 @@ public class CameraViewAttributesTest {
      * settings, and a layout is read before there is a camera to ask. They are kept as asked for
      * and offered when the session is built - which is what lets a layout request them at all,
      * and why a view that cannot honour one still inflates.</p>
+     *
+     * <p>The torch is read from a layout of its own, because it and low-light boost turn each other
+     * off.</p>
      */
     @Test
     public void theCapabilityAttributesAreReadAndHeld() {
         CameraView view = from(builder -> builder
                 .addAttribute(R.attr.stabilizationEnabled, "true")
-                .addAttribute(R.attr.torchEnabled, "true")
                 .addAttribute(R.attr.lowLightBoostEnabled, "true")
                 .addAttribute(R.attr.exposureCompensation, "2"));
+        CameraView torch = from(builder -> builder
+                .addAttribute(R.attr.torchEnabled, "true"));
 
         assertTrue(view.isStabilizationEnabled());
         assertTrue(view.isLowLightBoostEnabled());
-        assertTrue(view.isTorchEnabled());
         assertEquals(2, view.getExposureCompensation());
+        assertTrue(torch.isTorchEnabled());
     }
 
     /** Defaults, so the attribute tests above are known to be changing something. */

@@ -278,7 +278,6 @@ class CameraComposableTest {
                 extension = Extension.BOKEH,
                 pictureQuality = 60,
                 stabilizationEnabled = true,
-                lowLightBoostEnabled = true,
                 controller = controller,
             )
         }
@@ -292,7 +291,17 @@ class CameraComposableTest {
         assertEquals(CameraView.Extension.BOKEH, camera.extension)
         assertEquals(60, camera.pictureQuality)
         assertTrue(camera.isStabilizationEnabled)
-        assertTrue(camera.isLowLightBoostEnabled)
+    }
+
+    /** Low-light boost on its own, since it and the torch turn each other off. */
+    @Test
+    fun lowLightBoostReachesTheCamera() {
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent { Camera(lowLightBoostEnabled = true, controller = controller) }
+        compose.waitForIdle()
+
+        assertTrue(requireCameraView().isLowLightBoostEnabled)
     }
 
     /** And the ones left out keep the camera's own defaults rather than a zeroed version. */
@@ -354,6 +363,29 @@ class CameraComposableTest {
         assertFalse(published.isAnalyzingFrames)
         assertTrue("the fake camera publishes its optics",
                 published.horizontalFieldOfView > 0f && published.verticalFieldOfView > 0f)
+    }
+
+    /**
+     * And the optional controls, for a camera that offers them. Low-light boost needs API 35, so
+     * at the level this class composes at it is reported missing even though the camera lists it.
+     */
+    @Test
+    fun theStateReportsTheControlsTheCameraOffers() {
+        val application = RuntimeEnvironment.getApplication()
+        FakeCamera2.addExposureAndStabilization(application, FakeCamera2.BACK_ID)
+        FakeCamera2.addExposureAndStabilization(application, FakeCamera2.FRONT_ID)
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+
+        val published = requireNotNull(state.value) { "an open camera has answers to give" }
+        assertTrue(published.isExposureCompensationSupported)
+        assertEquals(-12, published.minExposureCompensation)
+        assertEquals(12, published.maxExposureCompensation)
+        assertTrue(published.isStabilizationSupported)
+        assertFalse(published.isLowLightBoostSupported)
     }
 
     /** A closed camera has nothing to report, which is not the same as reporting false. */

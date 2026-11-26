@@ -1707,7 +1707,11 @@ public class CameraView extends FrameLayout {
         return mCameraModule.isExposureCompensationSupported();
     }
 
-    /** Enables continuous torch illumination when supported. */
+    /**
+     * Lights the flash continuously, on a camera that has one ({@link #hasFlash}).
+     *
+     * <p>Turns low-light boost off, since the two cannot be used together.</p>
+     */
     public void setTorchEnabled(boolean enabled) {
         mCameraModule.setTorchEnabled(enabled);
     }
@@ -1717,7 +1721,12 @@ public class CameraView extends FrameLayout {
         return mCameraModule.isTorchEnabled();
     }
 
-    /** Enables CameraX low-light boost when supported. */
+    /**
+     * Brightens the preview and recordings in the dark, on a camera that can
+     * ({@link #isLowLightBoostSupported}).
+     *
+     * <p>Turns the torch off, since the two cannot be used together.</p>
+     */
     public void setLowLightBoostEnabled(boolean enabled) {
         mCameraModule.setLowLightBoostEnabled(enabled);
     }

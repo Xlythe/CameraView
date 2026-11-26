@@ -145,8 +145,14 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.isTorchEnabled() && hasFlash();
     }
 
+    /** Whether low-light boost should be asked for, which takes a camera that has it. */
+    boolean isLowLightBoostOn() {
+        return mCamera2Module.isLowLightBoostEnabled() && mCamera2Module.isLowLightBoostSupported();
+    }
+
     /**
-     * Chooses the auto-exposure mode, which the torch and the flash strategy share.
+     * Chooses the auto-exposure mode, which the torch, low-light boost and the flash strategy
+     * share.
      *
      * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
      * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
@@ -155,7 +161,9 @@ abstract class SessionImpl implements Camera2Module.Session {
      * reason.</p>
      *
      * <p>The torch is FLASH_MODE_TORCH under plain ON, and it goes on a still as well, so that a
-     * picture neither puts it out nor has the flash strategy fire over it.</p>
+     * picture neither puts it out nor has the flash strategy fire over it. Low-light boost is an
+     * auto-exposure mode of its own, so the flash strategy waits while it is on; the module never
+     * leaves the torch and low-light boost on together.</p>
      *
      * @param withFlashStrategy whether the flash strategy belongs on this request. A recording
      *     leaves it off, since there is no still for the flash to fire for.
@@ -166,9 +174,28 @@ abstract class SessionImpl implements Camera2Module.Session {
             builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
             return;
         }
+        if (Build.VERSION.SDK_INT >= 35 && isLowLightBoostOn()) {
+            builder.set(CaptureRequest.CONTROL_AE_MODE,
+                    CaptureRequest.CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY);
+            return;
+        }
         if (withFlashStrategy) {
             applyFlash(builder);
         }
+    }
+
+    /**
+     * Chooses the auto-exposure mode for a still: the preview's, except that a picture the flash
+     * was asked to fire for gets it. Low-light boost steps aside for that one capture, as CameraX
+     * suspends it for a flash capture.
+     */
+    void applyStillAeMode(@NonNull CaptureRequest.Builder builder) {
+        if (!isTorchLit() && isLowLightBoostOn() && hasFlash()
+                && getFlash() == CameraView.Flash.ON) {
+            applyFlash(builder);
+            return;
+        }
+        applyAeMode(builder, true /* withFlashStrategy */);
     }
 
     /**

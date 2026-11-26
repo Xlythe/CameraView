@@ -36,8 +36,8 @@ import org.robolectric.shadows.StreamConfigurationMapBuilder;
  * empty, and a SurfaceTexture, which a TextureView never produces without a hardware layer.</p>
  */
 public final class FakeCamera2 {
-    static final String BACK_ID = "0";
-    static final String FRONT_ID = "1";
+    public static final String BACK_ID = "0";
+    public static final String FRONT_ID = "1";
 
     static final Size SIZE_1080P = new Size(1920, 1080);
     static final Size SIZE_720P = new Size(1280, 720);
@@ -241,7 +241,7 @@ public final class FakeCamera2 {
      * <p>Separate from {@link #addCamera} rather than part of every fake, because the CameraX
      * harness drives these same cameras and is written around one that offers none of them.</p>
      */
-    static void addExposureAndStabilization(Context context, String id) {
+    public static void addExposureAndStabilization(Context context, String id) {
         setCharacteristic(context, id, CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES, aeModes());
         setCharacteristic(context, id,
                 CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, EXPOSURE_RANGE);
