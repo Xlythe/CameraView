@@ -56,7 +56,7 @@ public class VideoRecorder {
   private static final int DEFAULT_IFRAME_INTERVAL = 10;  // 10 seconds between I-frames
 
   /** How far behind the reader may fall, as a duration of video, before frames are dropped. */
-  private static final long TARGET_BACKLOG_MILLIS = 250;
+  static final long TARGET_BACKLOG_MILLIS = 250;
   /** Floor for the backlog budget, so a very low bit rate still leaves room for a frame. */
   private static final int MIN_BACKLOG_BYTES = 8 * 1024;
   /** Ceiling for the backlog budget, so a very high bit rate does not buffer without limit. */

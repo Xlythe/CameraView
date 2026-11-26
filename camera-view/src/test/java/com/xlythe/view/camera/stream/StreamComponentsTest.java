@@ -13,9 +13,11 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.PipedInputStream;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {29, 37})
@@ -73,6 +75,27 @@ public class StreamComponentsTest {
         videoRecorder.stop();
         videoRecorder.stop();
         Mockito.verify(videoOutput, Mockito.times(1)).close();
+    }
+
+    /**
+     * The recorder sets a lossy sink's threshold from the rate it settled on, before the header
+     * goes out, so not even the first chunk is held to the stream's starting guess.
+     */
+    @Test
+    public void audioRecorderSetsTheDropThresholdFromItsRate() throws Exception {
+        PipedInputStream pipe = new PipedInputStream(128 * 1024);
+        LossyPipedOutputStream lossy = new LossyPipedOutputStream(pipe, 16 * 1024);
+        AudioRecorder recorder = new AudioRecorder(lossy, 48000, 1);
+        recorder.start();
+        try {
+            AudioStreamHeader header = AudioStreamHeader.read(pipe).header;
+            assertNotNull(header);
+            assertEquals(AudioRecorder.backlogBytesFor(header.getSampleRate(),
+                    header.getChannelCount(), AudioRecorder.TARGET_BACKLOG_MILLIS),
+                    lossy.getMaxBufferedBytes());
+        } finally {
+            recorder.stop();
+        }
     }
 
     @Test

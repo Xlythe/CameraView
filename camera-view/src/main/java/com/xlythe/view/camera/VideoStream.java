@@ -39,9 +39,12 @@ public class VideoStream implements Closeable {
   private static final int VIDEO_PIPE_BYTES = 1024 * 1024;
   /** Backlog tolerated on the video pipe before droppable frames are discarded. */
   private static final int VIDEO_MAX_BUFFERED_BYTES = 256 * 1024;
-  /** Buffer for the PCM audio pipe, whose chunks are far smaller than a video frame. */
-  private static final int AUDIO_PIPE_BYTES = 64 * 1024;
-  /** Backlog tolerated on the audio pipe before chunks are discarded. */
+  /**
+   * Buffer for the PCM audio pipe. Room for the recorder's latency budget at the highest rate it
+   * can settle on, 48kHz stereo, with a chunk on top, so a write never blocks the recorder.
+   */
+  private static final int AUDIO_PIPE_BYTES = 128 * 1024;
+  /** Backlog tolerated on the audio pipe until the recorder sets it from its sample rate. */
   private static final int AUDIO_MAX_BUFFERED_BYTES = 16 * 1024;
 
   /** Ensures recorder and input resources are closed exactly once. */

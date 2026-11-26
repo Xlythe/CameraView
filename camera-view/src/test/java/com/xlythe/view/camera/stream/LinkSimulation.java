@@ -45,13 +45,14 @@ final class LinkSimulation {
     // ---------- Audio, as AudioRecorder and VideoStream produce it ----------
 
     /** VideoStream's audio pipe. */
-    static final int AUDIO_PIPE_BYTES = 64 * 1024;
-
-    /** VideoStream's audio drop threshold. */
-    static final int AUDIO_MAX_BUFFERED_BYTES = 16 * 1024;
+    static final int AUDIO_PIPE_BYTES = 128 * 1024;
 
     /** AudioBuffer's default rate. */
     static final int AUDIO_SAMPLE_RATE = 16_000;
+
+    /** The drop threshold AudioRecorder sets at that rate. */
+    static final int AUDIO_MAX_BUFFERED_BYTES = AudioRecorder.backlogBytesFor(
+            AUDIO_SAMPLE_RATE, 1, AudioRecorder.TARGET_BACKLOG_MILLIS);
 
     /** Mono, 16 bits a sample. */
     static final int AUDIO_BYTES_PER_MS = AUDIO_SAMPLE_RATE * 2 / 1000;
@@ -72,9 +73,6 @@ final class LinkSimulation {
 
     /** The Wear sample's bit rate. */
     static final int VIDEO_BIT_RATE = 1_000_000;
-
-    /** VideoRecorder's latency budget, which it turns into the drop threshold. */
-    static final int VIDEO_BACKLOG_MILLIS = 250;
 
     /** The Wear sample's frame rate. */
     static final int VIDEO_FRAME_RATE = 20;
@@ -434,8 +432,8 @@ final class LinkSimulation {
 
         boolean audio = mMedia == Media.AUDIO;
         int bytesPerMs = audio ? AUDIO_BYTES_PER_MS : VIDEO_BYTES_PER_MS;
-        int maxBufferedBytes = audio ? mAudioMaxBufferedBytes
-                : VideoRecorder.backlogBytesFor(VIDEO_BIT_RATE, VIDEO_BACKLOG_MILLIS);
+        int maxBufferedBytes = audio ? mAudioMaxBufferedBytes : VideoRecorder.backlogBytesFor(
+                VIDEO_BIT_RATE, VideoRecorder.TARGET_BACKLOG_MILLIS);
         result.pipeBudgetMillis = maxBufferedBytes / bytesPerMs;
 
         long[] clock = new long[1];

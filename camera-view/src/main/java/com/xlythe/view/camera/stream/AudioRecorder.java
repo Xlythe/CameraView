@@ -8,6 +8,7 @@ import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.WorkerThread;
 
 import com.xlythe.view.camera.VideoStream;
 
@@ -26,6 +27,15 @@ import static android.os.Process.setThreadPriority;
  */
 public class AudioRecorder {
   private static final String TAG = CameraView.class.getSimpleName();
+
+  /**
+   * How far behind the reader may fall, as a duration of audio, before chunks are dropped. The
+   * same budget VideoRecorder gives video, so neither half of a stream runs further behind.
+   */
+  static final long TARGET_BACKLOG_MILLIS = 250;
+
+  /** 16-bit PCM, which is the only encoding the recorder writes. */
+  private static final int BYTES_PER_SAMPLE = 2;
 
   /** The stream to write to. */
   private final OutputStream mOutputStream;
@@ -122,6 +132,7 @@ public class AudioRecorder {
 
                 record.startRecording();
                 Log.d(TAG, "Started recording audio");
+                applyBacklogBudget(buffer.getSampleRate(), buffer.getChannelCount());
 
                 // Tell the other end what it is about to receive, so it does not have to guess
                 // the sample rate from its own hardware and play the audio at the wrong pitch.
@@ -162,6 +173,27 @@ public class AudioRecorder {
               }
             };
     mThread.start();
+  }
+
+  /**
+   * Converts a latency budget into a backlog of bytes at the given rate.
+   *
+   * <p>A fixed byte count means a different delay at every rate the recorder can settle on: the
+   * 16KB VideoStream starts with is half a second at 16kHz mono, a second at 8kHz and a sixth of
+   * one at 48kHz stereo. On a link slower than the stream the backlog sits at the threshold, so
+   * the threshold is the delay.</p>
+   */
+  static int backlogBytesFor(int sampleRate, int channelCount, long latencyMillis) {
+    return (int) ((long) sampleRate * channelCount * BYTES_PER_SAMPLE * latencyMillis / 1000);
+  }
+
+  /** Applies the latency budget to a lossy sink, which cannot know the rate itself. */
+  @WorkerThread
+  private void applyBacklogBudget(int sampleRate, int channelCount) {
+    if (mOutputStream instanceof LossyPipedOutputStream) {
+      ((LossyPipedOutputStream) mOutputStream).setMaxBufferedBytes(
+              backlogBytesFor(sampleRate, channelCount, TARGET_BACKLOG_MILLIS));
+    }
   }
 
   private void stopInternal() {

@@ -173,6 +173,14 @@ public class LossyPipedOutputStreamTest {
         assertEquals(512 * 1024, VideoRecorder.backlogBytesFor(100_000_000, 250));
     }
 
+    /** The audio budget is a duration too, so it scales with every rate the recorder can pick. */
+    @Test
+    public void audioBacklogBudgetFollowsTheSampleRate() {
+        assertEquals(8_000, AudioRecorder.backlogBytesFor(16_000, 1, 250));
+        assertEquals(4_000, AudioRecorder.backlogBytesFor(8_000, 1, 250));
+        assertEquals(48_000, AudioRecorder.backlogBytesFor(48_000, 2, 250));
+    }
+
     @Test
     public void theBudgetCanBeRetunedAfterConstruction() throws IOException {
         PipedInputStream sink = new PipedInputStream(PIPE_BYTES);

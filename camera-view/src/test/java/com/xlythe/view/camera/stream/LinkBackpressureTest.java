@@ -35,8 +35,8 @@ public class LinkBackpressureTest {
     /** Twice the stream on average, delivered in bursts of 150ms out of every 250ms. */
     private static final Link BURSTY = Link.bursty("bursty", 2, 250, 150);
 
-    /** The audio drop threshold as a quarter second at 16kHz mono, the same budget video has. */
-    private static final int QUARTER_SECOND_OF_AUDIO = 250 * LinkSimulation.AUDIO_BYTES_PER_MS;
+    /** The fixed audio threshold VideoStream starts with: half a second at 16kHz mono. */
+    private static final int FIXED_AUDIO_THRESHOLD = 16 * 1024;
 
     /** A transport and the pump feeding it. */
     private static final class Strategy {
@@ -154,11 +154,11 @@ public class LinkBackpressureTest {
      *
      * <p>It cannot see an unbounded transport at all, since that pump never stops reading. Behind
      * a paced pump it only fires during an outage, and there the threshold has already filled:
-     * audio's 16KB threshold plus a quarter-second stall timeout ends up exactly where a
-     * quarter-second threshold alone does. The one place it differs is an encoder well under its
-     * bit rate, where the byte threshold holds more time than the budget; there it saves a few
-     * stale frames, which arrive in a burst after the outage and cost a few tens of milliseconds
-     * of recovery.</p>
+     * a fixed 16KB audio threshold plus a quarter-second stall timeout ends up exactly where
+     * AudioRecorder's quarter-second budget alone does. The one place it differs is an encoder
+     * well under its bit rate, where the byte threshold holds more time than the budget; there it
+     * saves a few stale frames, which arrive in a burst after the outage and cost a few tens of
+     * milliseconds of recovery.</p>
      */
     @Test
     public void aStallTimeoutAddsNothingToATimeBudget() throws IOException {
@@ -168,13 +168,11 @@ public class LinkBackpressureTest {
 
         Result bytesAndStall = new LinkSimulation(Media.AUDIO).link(OUTAGE)
                 .transport(Transport.acknowledged(200)).pump(Pump.PACED)
-                .stallTimeoutMillis(250).run();
-        Result budget = new LinkSimulation(Media.AUDIO).link(OUTAGE)
-                .transport(Transport.acknowledged(200)).pump(Pump.PACED)
-                .audioMaxBufferedBytes(QUARTER_SECOND_OF_AUDIO).run();
+                .audioMaxBufferedBytes(FIXED_AUDIO_THRESHOLD).stallTimeoutMillis(250).run();
+        Result budget = run(Media.AUDIO, OUTAGE, Transport.acknowledged(200), Pump.PACED);
         Result budgetAndStall = new LinkSimulation(Media.AUDIO).link(OUTAGE)
                 .transport(Transport.acknowledged(200)).pump(Pump.PACED)
-                .audioMaxBufferedBytes(QUARTER_SECOND_OF_AUDIO).stallTimeoutMillis(250).run();
+                .stallTimeoutMillis(250).run();
         assertEquals(bytesAndStall.row(), budget.tailLatency(), bytesAndStall.tailLatency());
         assertEquals(budgetAndStall.row(), budget.tailLatency(), budgetAndStall.tailLatency());
 
@@ -194,6 +192,22 @@ public class LinkBackpressureTest {
                 .stallTimeoutMillis(250).run();
         assertTrue(quiet.row() + "\n" + quietAndStall.row(),
                 quiet.recovery() - quietAndStall.recovery() < 100);
+    }
+
+    /**
+     * On a link slower than the stream the pipe sits at its threshold, so the threshold is the
+     * delay. AudioRecorder sets it from a quarter-second budget; the fixed 16KB it replaces is
+     * twice that at the default 16kHz mono, and four times at 8kHz.
+     */
+    @Test
+    public void theAudioThresholdIsTheDelayOnASlowLink() throws IOException {
+        Result fixed = new LinkSimulation(Media.AUDIO).link(SLOW)
+                .transport(Transport.acknowledged(200)).pump(Pump.PACED)
+                .audioMaxBufferedBytes(FIXED_AUDIO_THRESHOLD).run();
+        Result budget = run(Media.AUDIO, SLOW, Transport.acknowledged(200), Pump.PACED);
+        assertTrue(fixed.row() + "\n" + budget.row(),
+                budget.tailLatency() < fixed.tailLatency() - 250);
+        assertEquals(250, budget.pipeBudgetMillis);
     }
 
     /**
