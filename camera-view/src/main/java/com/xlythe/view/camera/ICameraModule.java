@@ -1,10 +1,15 @@
 package com.xlythe.view.camera;
 
+import android.Manifest.permission;
+import android.annotation.SuppressLint;
 import android.content.Context;
+import android.content.pm.PackageManager;
+import android.location.Location;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
@@ -12,10 +17,14 @@ import android.util.Log;
 
 import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
 
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -25,6 +34,9 @@ public abstract class ICameraModule {
     public static final boolean DEBUG = CameraView.DEBUG;
     /** Maximum wait for a backend to detach a custom encoder surface on the main thread. */
     private static final long SURFACE_DETACH_TIMEOUT_SECONDS = 2;
+
+    /** How old a fix may be and still say where a video that just finished was taken. */
+    private static final long STALE_VIDEO_LOCATION_MILLIS = 60 * 1000;
 
     /** Owning CameraView used for view state and callbacks. */
     private final CameraView mView;
@@ -201,7 +213,42 @@ public abstract class ICameraModule {
      * Informs the CameraView to pause and show the taken video
      */
     public void showVideoConfirmation(File file) {
+        attachVideoMetadata(file);
         mView.showVideoConfirmation(file);
+    }
+
+    /**
+     * Writes which device recorded the video, when, and where if the app may know, which
+     * MediaRecorder leaves out. Done before the caller is told, so it is handed a finished file.
+     */
+    // The location is read only behind the ACCESS_FINE_LOCATION check below, which lint does not
+    // accept as a guard.
+    @SuppressLint("MissingPermission")
+    private void attachVideoMetadata(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        VideoMetadata.Builder metadata = new VideoMetadata.Builder()
+                .set(VideoMetadata.Tag.MAKE, Build.MANUFACTURER)
+                .set(VideoMetadata.Tag.MODEL, Build.MODEL)
+                .set(VideoMetadata.Tag.SOFTWARE, Exif.softwareName(getContext()))
+                .set(VideoMetadata.Tag.CREATION_DATE, isoDate(System.currentTimeMillis()));
+        if (ContextCompat.checkSelfPermission(getContext(), permission.ACCESS_FINE_LOCATION)
+                == PackageManager.PERMISSION_GRANTED) {
+            Location location = LocationProvider.getLastKnownGPSLocation(
+                    getContext(), STALE_VIDEO_LOCATION_MILLIS);
+            if (location != null) {
+                metadata.setLocation(location.getLatitude(), location.getLongitude());
+            }
+        }
+        VideoMetadata.write(file, metadata);
+    }
+
+    /** ISO 8601, which is what a reader expects to find in the creation-date box. */
+    private static String isoDate(long timestamp) {
+        SimpleDateFormat format =
+                new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US);
+        return format.format(new Date(timestamp));
     }
 
     public void onVideoFailed() {
