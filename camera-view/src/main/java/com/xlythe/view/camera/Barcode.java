@@ -4,6 +4,8 @@ import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -25,6 +27,7 @@ public class Barcode {
           Format.PDF417,
           Format.AZTEC
   })
+  @Retention(RetentionPolicy.SOURCE)
   public @interface Format {
     int UNKNOWN = com.google.mlkit.vision.barcode.common.Barcode.FORMAT_UNKNOWN;
     int ALL_FORMATS = com.google.mlkit.vision.barcode.common.Barcode.FORMAT_ALL_FORMATS;
@@ -58,6 +61,7 @@ public class Barcode {
           Type.CALENDAR_EVENT,
           Type.DRIVER_LICENSE
   })
+  @Retention(RetentionPolicy.SOURCE)
   public @interface Type {
     int UNKNOWN = com.google.mlkit.vision.barcode.common.Barcode.TYPE_UNKNOWN;
     int CONTACT_INFO = com.google.mlkit.vision.barcode.common.Barcode.TYPE_CONTACT_INFO;
@@ -80,6 +84,7 @@ public class Barcode {
             EncryptionType.WPA,
             EncryptionType.WEP
     })
+    @Retention(RetentionPolicy.SOURCE)
     public @interface EncryptionType {
       int OPEN = com.google.mlkit.vision.barcode.common.Barcode.WiFi.TYPE_OPEN;
       int WPA = com.google.mlkit.vision.barcode.common.Barcode.WiFi.TYPE_WPA;
@@ -221,6 +226,7 @@ public class Barcode {
             Type.WORK,
             Type.HOME
     })
+    @Retention(RetentionPolicy.SOURCE)
     public @interface Type {
       int UNKNOWN = com.google.mlkit.vision.barcode.common.Barcode.Email.TYPE_UNKNOWN;
       int WORK = com.google.mlkit.vision.barcode.common.Barcode.Email.TYPE_WORK;
@@ -262,6 +268,7 @@ public class Barcode {
             Type.FAX,
             Type.MOBILE
     })
+    @Retention(RetentionPolicy.SOURCE)
     public @interface Type {
       int UNKNOWN = com.google.mlkit.vision.barcode.common.Barcode.Phone.TYPE_UNKNOWN;
       int WORK = com.google.mlkit.vision.barcode.common.Barcode.Phone.TYPE_WORK;
@@ -498,6 +505,7 @@ public class Barcode {
             Type.WORK,
             Type.HOME
     })
+    @Retention(RetentionPolicy.SOURCE)
     public @interface Type {
       int UNKNOWN = com.google.mlkit.vision.barcode.common.Barcode.Phone.TYPE_UNKNOWN;
       int WORK = com.google.mlkit.vision.barcode.common.Barcode.Phone.TYPE_WORK;

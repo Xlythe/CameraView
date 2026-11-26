@@ -13,6 +13,7 @@ import android.util.Size;
 import android.view.Surface;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
@@ -54,25 +55,25 @@ class PreviewSession extends SessionImpl {
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+        applyFlash(builder);
         if (mMeteringRectangle != null) {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
-        if (mCropRegion != null) {
-            builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
-        }
+        applyZoom(builder);
+        applyFaceDetection(builder);
         builder.addTarget(mPreviewSurface.getSurface());
         return builder.build();
     }
 
     @Override
     public void onAvailable(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
-        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getHandler());
+        session.setRepeatingRequest(createCaptureRequest(device), repeatingCallback(), getHandler());
     }
 
     @Override
     public void onInvalidate(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {
-        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getHandler());
+        session.setRepeatingRequest(createCaptureRequest(device), repeatingCallback(), getHandler());
     }
 
     @NonNull
@@ -94,6 +95,9 @@ class PreviewSession extends SessionImpl {
         private Size chooseOptimalSize(List<Size> choices, int viewWidth, int viewHeight) {
             if (DEBUG) {
                 Log.d(TAG, "Choosing from sizes " + choices);
+            }
+            if (choices.isEmpty()) {
+                throw new IllegalStateException("Camera reports no preview sizes");
             }
 
             // These sizes are all larger than our view port, so we won't have to scale the image up.
@@ -117,7 +121,8 @@ class PreviewSession extends SessionImpl {
         }
 
         private List<Size> getSizes(StreamConfigurationMap map) {
-            return filter(map.getOutputSizes(SurfaceTexture.class));
+            Size[] supported = map.getOutputSizes(SurfaceTexture.class);
+            return filter(supported, mCameraView.getPreviewSizeCap(Arrays.asList(supported)));
         }
 
         private Surface mSurface;

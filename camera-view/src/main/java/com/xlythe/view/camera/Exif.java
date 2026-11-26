@@ -21,9 +21,27 @@ import androidx.exifinterface.media.ExifInterface;
 public class Exif {
     private static final String TAG = Exif.class.getSimpleName();
 
-    private static final SimpleDateFormat DATE_FORMAT = new SimpleDateFormat("yyyy:MM:dd", Locale.ENGLISH);
-    private static final SimpleDateFormat TIME_FORMAT = new SimpleDateFormat("HH:mm:ss", Locale.ENGLISH);
-    private static final SimpleDateFormat DATETIME_FORMAT = new SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.ENGLISH);
+    // SimpleDateFormat keeps mutable parsing state, so a shared instance cannot be used from more
+    // than one thread. Pictures are saved on AsyncTask's thread pool, so two captures finishing
+    // together were formatting and parsing through the same objects: the usual result is a
+    // corrupted timestamp, and the unlucky one is an exception thrown from inside the formatter.
+    private static final ThreadLocal<SimpleDateFormat> DATE_FORMAT = formatter("yyyy:MM:dd");
+    private static final ThreadLocal<SimpleDateFormat> TIME_FORMAT = formatter("HH:mm:ss");
+    private static final ThreadLocal<SimpleDateFormat> DATETIME_FORMAT =
+            formatter("yyyy:MM:dd HH:mm:ss");
+
+    /** One formatter per thread, built lazily. */
+    private static ThreadLocal<SimpleDateFormat> formatter(String pattern) {
+        return new ThreadLocal<SimpleDateFormat>() {
+            @Override
+            protected SimpleDateFormat initialValue() {
+                return new SimpleDateFormat(pattern, Locale.ENGLISH);
+            }
+        };
+    }
+
+    /** Thousandths, which is finer than any GPS reports and well inside a rational's range. */
+    private static final long RATIONAL_SCALE = 1000;
 
     private static final String KILOMETERS_PER_HOUR = "K";
     private static final String MILES_PER_HOUR = "M";
@@ -33,6 +51,23 @@ public class Exif {
 
     // When true, avoid saving any time. This is a privacy issue.
     private boolean mRemoveTimestamp = false;
+
+    /**
+     * What a file's metadata says, as one line, or why it could not be read.
+     *
+     * <p>For logging, which is the only thing a caller wants the whole of this for. Reading
+     * metadata means opening the file, and doing that for a log line costs four lines of
+     * ceremony around one of interest - which is a tempting place to swallow the failure
+     * silently. This never throws: a file whose metadata cannot be read says so.</p>
+     */
+    @NonNull
+    public static String describe(@NonNull File file) {
+        try {
+            return new Exif(file).toString();
+        } catch (IOException | RuntimeException error) {
+            return file + ": metadata could not be read (" + error + ")";
+        }
+    }
 
     public Exif(File file) throws IOException {
         this(file.toString());
@@ -352,10 +387,10 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, datetime);
 
         try {
-            String subsec = Long.toString(now - convertFromExifDateTime(datetime).getTime());
-            mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, subsec);
+            long millis = now - convertFromExifDateTime(datetime).getTime();
+            mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, formatSubSecond(millis));
         } catch (ParseException e) {
-            e.printStackTrace();
+            Log.w(TAG, "Unable to record the sub-second timestamp", e);
         }
     }
 
@@ -368,20 +403,49 @@ public class Exif {
             return -1;
         }
 
-        String subSecs = mExifInterface.getAttribute(ExifInterface.TAG_SUBSEC_TIME);
-        if (subSecs != null) {
-            try {
-                long sub = Long.parseLong(subSecs);
-                while (sub > 1000) {
-                    sub /= 10;
-                }
-                timestamp += sub;
-            } catch (NumberFormatException e) {
-                e.printStackTrace();
-            }
-        }
+        return timestamp
+                + parseSubSecond(mExifInterface.getAttribute(ExifInterface.TAG_SUBSEC_TIME));
+    }
 
-        return timestamp;
+    /**
+     * Writes a sub-second count as EXIF expects it.
+     *
+     * <p>SubSecTime is the digits after the decimal point, so 50 milliseconds is "050" and not
+     * "50", which any other reader would take for half a second.</p>
+     */
+    static String formatSubSecond(long millis) {
+        long clamped = Math.max(0, Math.min(millis, 999));
+        return String.format(Locale.ENGLISH, "%03d", clamped);
+    }
+
+    /**
+     * Reads an EXIF sub-second string as milliseconds.
+     *
+     * <p>The digit count sets the scale, because the value is a fraction of a second rather than
+     * a count of anything: "5" is half a second, "05" is fifty milliseconds, and "005" is five.
+     * Treating the digits as milliseconds, as this used to, under-read every value with fewer
+     * than three digits by a factor of ten or a hundred.</p>
+     */
+    static long parseSubSecond(@Nullable String subSeconds) {
+        if (subSeconds == null) {
+            return 0;
+        }
+        StringBuilder digits = new StringBuilder();
+        for (int i = 0; i < subSeconds.length() && digits.length() < 3; i++) {
+            char character = subSeconds.charAt(i);
+            if (character < '0' || character > '9') {
+                break;
+            }
+            digits.append(character);
+        }
+        if (digits.length() == 0) {
+            return 0;
+        }
+        long value = Long.parseLong(digits.toString());
+        for (int i = digits.length(); i < 3; i++) {
+            value *= 10;
+        }
+        return value;
     }
 
     /**
@@ -393,20 +457,8 @@ public class Exif {
             return -1;
         }
 
-        String subSecs = mExifInterface.getAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL);
-        if (subSecs != null) {
-            try {
-                long sub = Long.parseLong(subSecs);
-                while (sub > 1000) {
-                    sub /= 10;
-                }
-                timestamp += sub;
-            } catch (NumberFormatException e) {
-                // Ignored
-            }
-        }
-
-        return timestamp;
+        return timestamp + parseSubSecond(
+                mExifInterface.getAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL));
     }
 
     /**
@@ -495,7 +547,7 @@ public class Exif {
                     orientation = ExifInterface.ORIENTATION_FLIP_HORIZONTAL;
                     break;
                 case ExifInterface.ORIENTATION_ROTATE_270:
-                    orientation = ExifInterface.ORIENTATION_ROTATE_90;
+                    orientation = ExifInterface.ORIENTATION_ROTATE_180;
                     break;
                 case ExifInterface.ORIENTATION_NORMAL:
                     // Fall-through
@@ -630,11 +682,11 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, datetime);
 
         try {
-            String subsec = Long.toString(now - convertFromExifDateTime(datetime).getTime());
+            String subsec = formatSubSecond(now - convertFromExifDateTime(datetime).getTime());
             mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subsec);
             mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, subsec);
         } catch (ParseException e) {
-            e.printStackTrace();
+            Log.w(TAG, "Unable to record the sub-second timestamp", e);
         }
 
         mRemoveTimestamp = false;
@@ -661,11 +713,13 @@ public class Exif {
         mExifInterface.setLatLong(location.getLatitude(), location.getLongitude());
         if (location.hasAltitude()) {
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, Integer.toString(0));
-            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, Double.toString(location.getAltitude()) + "/1");
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE,
+                    rational(location.getAltitude()));
         }
         if (location.hasSpeed()) {
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, KILOMETERS_PER_HOUR);
-            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, Double.toString(Speed.fromMetersPerSecond(location.getSpeed()).toKilometersPerHour()) + "/1");
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, rational(
+                    Speed.fromMetersPerSecond(location.getSpeed()).toKilometersPerHour()));
         }
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, convertToExifDate(location.getTime()));
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, convertToExifTime(location.getTime()));
@@ -726,28 +780,39 @@ public class Exif {
         }
     }
 
+    /**
+     * A decimal as the rational EXIF stores.
+     *
+     * <p>Both halves of an EXIF rational are integers, so writing the decimal itself over a
+     * denominator of one - which is what this used to do - leaves a numerator the reader has to
+     * truncate. A speed of 48.28 km/h came back as 48, and an altitude of 5.7m as 5.</p>
+     */
+    private static String rational(double value) {
+        return Math.round(value * RATIONAL_SCALE) + "/" + RATIONAL_SCALE;
+    }
+
     private static String convertToExifDateTime(long timestamp) {
-        return DATETIME_FORMAT.format(new Date(timestamp));
+        return DATETIME_FORMAT.get().format(new Date(timestamp));
     }
 
     private static Date convertFromExifDateTime(String dateTime) throws ParseException {
-        return DATETIME_FORMAT.parse(dateTime);
+        return DATETIME_FORMAT.get().parse(dateTime);
     }
 
     private static String convertToExifDate(long timestamp) {
-        return DATE_FORMAT.format(new Date(timestamp));
+        return DATE_FORMAT.get().format(new Date(timestamp));
     }
 
     private static Date convertFromExifDate(String date) throws ParseException {
-        return DATE_FORMAT.parse(date);
+        return DATE_FORMAT.get().parse(date);
     }
 
     private static String convertToExifTime(long timestamp) {
-        return TIME_FORMAT.format(new Date(timestamp));
+        return TIME_FORMAT.get().format(new Date(timestamp));
     }
 
     private static Date convertFromExifTime(String time) throws ParseException {
-        return TIME_FORMAT.parse(time);
+        return TIME_FORMAT.get().parse(time);
     }
 
     private static class Speed {

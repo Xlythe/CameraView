@@ -2,7 +2,7 @@ Camera View
 ====================
 
 CameraView provides a simple wrapper around the Android camera APIs, with backwards compatibility
-to API 14. Rather than directly manipulating the camera, here you have an Android View that can be
+to API 21. Rather than directly manipulating the camera, here you have an Android View that can be
 placed within your app. This View displays a preview and has the methods takePicture(File),
 startRecording(File) and stopRecording(). For simple use cases, CameraFragment exists as well.
 If you inflate a CameraFragment with Views that have the correct ids (eg. @id/capture),
@@ -16,6 +16,11 @@ dependencies {
   implementation 'com.xlythe:camera-view:2.0.8'
 }
 ```
+
+If your minSdk is below 24, build with `-Pcameraview.core=true`, which leaves out the parts that
+cannot reach that far back and covers API 21 and up. This is not hypothetical: `camera-camera2`
+pulls in `camera-camera2-pipe`, which declares a minSdk of 24, and a dependency's floor becomes
+your app's floor whatever this library declares.
 
 Permissions
 -----------------
@@ -38,7 +43,7 @@ Camera
 Camera is a Composable that simplifies the Android Camera APIs.
 
 Camera includes the optional attributes quality [max, high, medium, low],
-maxVideoDuration [milliseconds], and maxVideoSize [bytes].
+lensFacing [back, front], maxVideoDuration [milliseconds], and maxVideoSize [bytes].
 ```kotlin
 val cameraController = remember { mutableStateOf<CameraController?>(null) }
 Camera(
@@ -47,7 +52,6 @@ Camera(
     lensFacing = Camera.LensFacing.BACK,
     maxVideoDuration = 10000,
     maxVideoSize = 10000000,
-    controller = cameraController,
     controller = cameraController
 )
 ```
@@ -168,7 +172,12 @@ CameraFragment, then this will happen for free.
 
 
 CameraView includes the optional attributes quality [max, high, medium, low],
-maxVideoDuration [milliseconds], and maxVideoSize [bytes].
+flash [auto, on, off], lensFacing [back, front], maxVideoDuration [milliseconds],
+maxVideoSize [bytes], confirmImages [boolean], confirmVideos [boolean],
+pinchToZoomEnabled [boolean], matchPreviewAspectRatio [boolean],
+dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
+frontVideoMirroringEnabled [boolean], stabilizationEnabled [boolean],
+exposureCompensation [integer], torchEnabled [boolean] and lowLightBoostEnabled [boolean].
 ```xml
 <com.xlythe.view.camera.CameraView
     xmlns:camera="http://schemas.android.com/apk/res-auto"
@@ -180,6 +189,11 @@ maxVideoDuration [milliseconds], and maxVideoSize [bytes].
     camera:maxVideoDuration="10000"
     camera:maxVideoSize="10000000" />
 ```
+
+Each attribute has a matching setter. The last seven describe things not every camera can do, so
+each also has a companion that reports whether the camera now open supports it, for example
+isDynamicRangeSupported(DynamicRange) or isLowLightBoostSupported(). Ask before relying on one; an
+unsupported request is logged and dropped rather than applied.
 
 CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
 handle binding the Views to the appropriate methods on CameraView.
@@ -204,6 +218,82 @@ Toggles between the various cameras on the device (typically the front and back 
 ```java
 mCameraView.toggleCamera();
 ```
+Reports when the camera opens and closes. CameraFragment already implements this.
+```java
+mCameraView.setOnCameraStateChangedListener(listener);
+```
+With confirmation enabled, a capture is shown in CameraView's own preview and onImageConfirmation()
+or onVideoConfirmation() fires instead of onImageCaptured(File) or onVideoCaptured(File). Accept or
+discard it to continue; rejecting also deletes the file. Enable matchPreviewAspectRatio alongside
+this so the capture and the preview are framed the same.
+```java
+mCameraView.setImageConfirmationEnabled(true);
+mCameraView.confirmPicture(); // or rejectPicture()
+mCameraView.confirmVideo();   // or rejectVideo()
+```
+Scans the preview for barcodes while the camera is open, reporting each batch of results to the
+listener. Formats come from Barcode.Format, and the camera must already be open.
+```java
+mCameraView.enterBarcodeScanner(listener, Barcode.Format.QR_CODE);
+mCameraView.exitBarcodeScanner();
+```
+
+
+Video snapshot
+-----------------
+takePicture works during a recording, where the camera can hold a preview, a recording and a still
+at once - which is most of them, but not a LEGACY camera2 device. Ask before showing the button;
+where it is false the picture is refused and the recording carries on.
+```java
+if (mCameraView.isSnapshotWhileRecordingSupported()) {
+  mCameraView.takePicture(file);
+}
+```
+
+Faces
+-----------------
+The camera finds faces on its own, to decide what to focus and expose for. setFaceDetectionListener
+reports them, with a matrix that maps a face's bounds onto the view so you can draw over the
+preview. It returns false on a camera that cannot report faces.
+```java
+mCameraView.setFaceDetectionListener((faces, faceToView) -> {
+  for (Face face : faces) {
+    RectF onScreen = new RectF(face.getBounds());
+    faceToView.mapRect(onScreen);
+  }
+});
+mCameraView.setFaceDetectionListener(null);
+```
+
+Frames
+-----------------
+startFrameAnalysis hands every frame to your own analyzer, on a background thread, for detection
+CameraView does not do itself. Only the newest frame is kept, so a slow analyzer drops frames
+rather than falling behind, and the image is recycled when onFrame returns. Params.setMaxSize asks
+for smaller frames than the preview, which most detectors are no worse at.
+```java
+mCameraView.startFrameAnalysis(frame -> {
+  InputImage image = InputImage.fromMediaImage(frame.getImage(), frame.getRotationDegrees());
+  // ... and frame.getFrameToViewTransform() maps a result onto the view
+}, new FrameStream.Params().setMaxSize(new Size(640, 480)));
+mCameraView.stopFrameAnalysis();
+```
+
+Streaming
+-----------------
+stream() takes parameters when the defaults do not suit the link you are sending over. A stream
+can only be joined at a key frame, so a short interval is what makes one playable soon after it
+is opened.
+```java
+mCameraView.stream(new VideoStream.Params.Builder()
+    .setAudioEnabled(false)
+    .setMaxSize(new Size(640, 480))
+    .setBitRate(1_000_000)
+    .setIFrameInterval(1)
+    .setIsLossy(true)
+    .build());
+```
+
 
 Exif
 -----------------

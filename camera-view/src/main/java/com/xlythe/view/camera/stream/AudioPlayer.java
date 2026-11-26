@@ -11,6 +11,7 @@ import com.xlythe.view.camera.CameraView;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static android.os.Process.THREAD_PRIORITY_AUDIO;
 import static android.os.Process.setThreadPriority;
@@ -34,9 +35,11 @@ public class AudioPlayer {
    * will shut down.
    */
   private volatile boolean mIsAlive;
+  /** Ensures the input stream is closed exactly once. */
+  private final AtomicBoolean mStopped = new AtomicBoolean();
 
   /** The background thread playing audio for us. */
-  private Thread mThread;
+  private volatile Thread mThread;
 
   /**
    * A simple audio player.
@@ -57,8 +60,8 @@ public class AudioPlayer {
   }
 
   /** Starts playing the stream. */
-  public void start() {
-    if (mThread != null) {
+  public synchronized void start() {
+    if (mThread != null || mStopped.get()) {
       Log.w(TAG, "AudioPlayer cannot be started more than once");
       return;
     }
@@ -71,20 +74,42 @@ public class AudioPlayer {
                 setThreadPriority(THREAD_PRIORITY_AUDIO);
 
                 Buffer buffer = new Buffer();
+                InputStream audio = mInputStream;
+                int sampleRate = buffer.getSampleRate();
+                int channels = AudioFormat.CHANNEL_OUT_MONO;
+                try {
+                  AudioStreamHeader.Read read = AudioStreamHeader.read(mInputStream);
+                  audio = read.stream;
+                  if (read.header != null) {
+                    // The recorder said what it is sending, which beats guessing from this
+                    // device's hardware: the two are not the same device.
+                    sampleRate = read.header.getSampleRate();
+                    channels = read.header.getChannelCount() > 1
+                            ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO;
+                  }
+                } catch (IOException error) {
+                  Log.e(TAG, "Failed to read the audio stream's description", error);
+                }
+
+                int size = AudioTrack.getMinBufferSize(
+                        sampleRate, channels, AudioFormat.ENCODING_PCM_16BIT);
+                if (size <= 0) {
+                  size = buffer.getSize();
+                }
                 AudioTrack audioTrack =
                         new AudioTrack(
                                 AudioManager.STREAM_VOICE_CALL,
-                                buffer.getSampleRate(),
-                                AudioFormat.CHANNEL_OUT_MONO,
+                                sampleRate,
+                                channels,
                                 AudioFormat.ENCODING_PCM_16BIT,
-                                buffer.getSize(),
+                                size,
                                 AudioTrack.MODE_STREAM);
                 audioTrack.play();
-                Log.d(TAG, "Started playing audio");
+                Log.d(TAG, "Started playing audio at " + sampleRate + "Hz");
 
                 int len;
                 try {
-                  while (isPlaying() && (len = mInputStream.read(buffer.data())) > 0) {
+                  while (isPlaying() && (len = audio.read(buffer.data())) > 0) {
                     audioTrack.write(buffer.data(), 0, len);
                   }
                 } catch (IOException e) {
@@ -105,24 +130,25 @@ public class AudioPlayer {
 
   private void stopInternal() {
     mIsAlive = false;
-    try {
-      mInputStream.close();
-    } catch (IOException e) {
-      Log.e(TAG, "Failed to close audio input stream", e);
+    if (mStopped.compareAndSet(false, true)) {
+      try {
+        mInputStream.close();
+      } catch (IOException e) {
+        Log.e(TAG, "Failed to close audio input stream", e);
+      }
+      Log.d(TAG, "Stopped playing audio");
     }
-    Log.d(TAG, "Stopped playing audio");
   }
 
   /** Stops playing the stream. */
   public void stop() {
-    if (mThread == null) {
-      Log.w(TAG, "AudioPlayer not started");
+    stopInternal();
+    Thread thread = mThread;
+    if (thread == null || thread == Thread.currentThread()) {
       return;
     }
-
-    stopInternal();
     try {
-      mThread.join(300);
+      thread.join(300);
     } catch (InterruptedException e) {
       Log.e(TAG, "Interrupted while joining AudioPlayer thread", e);
       Thread.currentThread().interrupt();

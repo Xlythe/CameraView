@@ -1,11 +1,10 @@
 plugins {
     id 'com.android.application'
-    id 'org.jetbrains.kotlin.android'
     id 'org.jetbrains.kotlin.plugin.compose' version '2.3.21'
 }
 
 android {
-    namespace 'com.xlythe.sample.camera'
+    namespace = 'com.xlythe.sample.camera'
     compileSdk 37
 
     defaultConfig {
@@ -25,14 +24,15 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_11
-        targetCompatibility JavaVersion.VERSION_11
-    }
-    kotlinOptions {
-        jvmTarget = '11'
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
     }
     buildFeatures {
-        compose true
+        compose = true
+    }
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = true
     }
     testOptions {
         unitTests.includeAndroidResources = true
@@ -47,7 +47,11 @@ dependencies {
     implementation 'androidx.core:core-ktx:+'
     implementation 'androidx.lifecycle:lifecycle-runtime-ktx:+'
     implementation 'androidx.activity:activity-compose:+'
-    implementation platform('androidx.compose:compose-bom:+')
+    // The one version here that is not open. A Compose BOM encodes the compileSdk its
+    // artifacts require, so letting it float means a Compose release can raise this
+    // project's compile target without anyone changing a line - which is how it ended up
+    // asking for android-37.1. It moves when we move the compileSdk with it.
+    implementation platform('androidx.compose:compose-bom:2026.06.01')
     implementation 'androidx.compose.ui:ui'
     implementation 'androidx.compose.ui:ui-graphics'
     implementation 'androidx.compose.ui:ui-tooling-preview'
@@ -57,7 +61,7 @@ dependencies {
     testImplementation 'org.robolectric:robolectric:+'
     androidTestImplementation 'androidx.test.ext:junit:+'
     androidTestImplementation 'androidx.test.espresso:espresso-core:+'
-    androidTestImplementation platform('androidx.compose:compose-bom:+')
+    androidTestImplementation platform('androidx.compose:compose-bom:2026.06.01')
     androidTestImplementation 'androidx.compose.ui:ui-test-junit4'
     debugImplementation 'androidx.compose.ui:ui-tooling'
     debugImplementation 'androidx.compose.ui:ui-test-manifest'

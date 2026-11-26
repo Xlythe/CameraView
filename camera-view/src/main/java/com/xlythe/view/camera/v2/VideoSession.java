@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.v2;
 
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -16,18 +17,21 @@ import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 
+import com.xlythe.view.camera.CameraView;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
-class VideoSession extends PreviewSession {
+class VideoSession extends PictureSession {
     /**
      * The VideoSurface must always check CamcorderProfile to see if the outputs supported by the
      * camera are also supported by MediaRecorder. Bizarre as it sounds,
@@ -35,16 +39,48 @@ class VideoSession extends PreviewSession {
      * sizes it gives back. Because MediaRecorder is always (at most) limited to 4k recording, that
      * is our max video size.
      */
+    /** Floor for a rescaled bit rate, below which even a small frame looks broken. */
+    private static final int MIN_VIDEO_BIT_RATE = 64_000;
+    /** Ceiling for a rescaled bit rate, so a 4K profile cannot run away on an odd device. */
+    private static final int MAX_VIDEO_BIT_RATE = 100_000_000;
+
     private final VideoSurface mVideoSurface;
+
+    /** Whether this session carries a still output alongside the recording. */
+    private final boolean mSnapshotSupported;
 
     VideoSession(Camera2Module camera2Module, File file) {
         super(camera2Module);
         mVideoSurface = new VideoSurface(camera2Module, file, getPreviewSurface());
+        mSnapshotSupported = camera2Module.isRecordingSnapshotSupported();
+    }
+
+    /**
+     * Whether a picture can be taken while this session is recording.
+     *
+     * <p>Camera2 guarantees a preview, a recording and a still together from LIMITED hardware
+     * upwards - it is the combination every camera app's video-snapshot button uses - but only
+     * with the still no larger than the recording, which is what {@link #maxPictureSize} says.
+     * A LEGACY camera has no such guarantee, so it records without one rather than risking a
+     * session it cannot configure.</p>
+     */
+    @Override
+    protected boolean hasStillCapture() {
+        return mSnapshotSupported;
+    }
+
+    @Nullable
+    @Override
+    protected Size maxPictureSize() {
+        return mVideoSurface.mIsInitialized
+                ? new Size(mVideoSurface.getWidth(), mVideoSurface.getHeight())
+                : null;
     }
 
     @Override
-    public void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException {
-        super.initialize(map);
+    @SuppressLint({"WrongThread", "ThreadConstraint"})
+    protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
+            throws CameraAccessException {
         mVideoSurface.initialize(map);
         if (!mVideoSurface.mIsInitialized) {
             onVideoFailed();
@@ -59,9 +95,8 @@ class VideoSession extends PreviewSession {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
-        if (mCropRegion != null) {
-            builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
-        }
+        applyZoom(builder);
+        applyFaceDetection(builder);
         builder.addTarget(getPreviewSurface().getSurface());
         builder.addTarget(mVideoSurface.getSurface());
         return builder.build();
@@ -82,6 +117,11 @@ class VideoSession extends PreviewSession {
                     mVideoSurface.mAwaitingRecording = false;
                     mVideoSurface.startRecording();
                 }
+                // Recording does not stop whoever is watching for faces.
+                CameraCaptureSession.CaptureCallback faces = repeatingCallback();
+                if (faces != null) {
+                    faces.onCaptureCompleted(session, request, result);
+                }
             }
         }, getHandler());
     }
@@ -98,7 +138,7 @@ class VideoSession extends PreviewSession {
             return;
         }
 
-        session.setRepeatingRequest(createCaptureRequest(device), null /* callback */, getHandler());
+        session.setRepeatingRequest(createCaptureRequest(device), repeatingCallback(), getHandler());
     }
 
     @Override
@@ -124,7 +164,57 @@ class VideoSession extends PreviewSession {
         return mVideoSurface.isRecording();
     }
 
-    private static final class VideoSurface extends CameraSurface {
+    static final class VideoSurface extends CameraSurface {
+        /**
+         * The best profile the camera actually has for a requested quality, stepping down until
+         * one exists. QUALITY_LOW is guaranteed on every camera, so it is the floor.
+         */
+        private static CamcorderProfile chooseProfile(int cameraId, CameraView.Quality quality) {
+            int[] preferences;
+            switch (quality) {
+                case MAX:
+                    preferences = new int[] {CamcorderProfile.QUALITY_2160P,
+                            CamcorderProfile.QUALITY_1080P, CamcorderProfile.QUALITY_720P,
+                            CamcorderProfile.QUALITY_480P};
+                    break;
+                case HIGH:
+                    preferences = new int[] {CamcorderProfile.QUALITY_1080P,
+                            CamcorderProfile.QUALITY_720P, CamcorderProfile.QUALITY_480P};
+                    break;
+                case MEDIUM:
+                    preferences = new int[] {CamcorderProfile.QUALITY_720P,
+                            CamcorderProfile.QUALITY_480P};
+                    break;
+                case LOW:
+                default:
+                    preferences = new int[] {CamcorderProfile.QUALITY_480P};
+                    break;
+            }
+            for (int preference : preferences) {
+                if (CamcorderProfile.hasProfile(cameraId, preference)) {
+                    return CamcorderProfile.get(cameraId, preference);
+                }
+            }
+            return CamcorderProfile.get(cameraId, CamcorderProfile.QUALITY_LOW);
+        }
+
+        /**
+         * Rescales a profile's bit rate for the frame size actually being recorded.
+         *
+         * <p>Bit rate requirements track pixel count closely enough for this, and the result is
+         * clamped so an odd profile cannot produce an unusable rate.</p>
+         */
+        static int scaleBitRate(int profileBitRate, int profileWidth, int profileHeight,
+                int width, int height) {
+            long profilePixels = (long) profileWidth * profileHeight;
+            long pixels = (long) width * height;
+            if (profileBitRate <= 0 || profilePixels <= 0 || pixels <= 0) {
+                return Math.max(MIN_VIDEO_BIT_RATE, profileBitRate);
+            }
+            long scaled = (long) profileBitRate * pixels / profilePixels;
+            return (int) Math.max(MIN_VIDEO_BIT_RATE, Math.min(scaled, MAX_VIDEO_BIT_RATE));
+        }
+
         private int getIntCameraId() {
             try {
                 return Integer.parseInt(getCameraId());
@@ -195,35 +285,8 @@ class VideoSession extends PreviewSession {
                 mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
                 mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
                 int intCameraId = getIntCameraId();
-                switch (getQuality()) {
-                    case MAX:
-                        if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_2160P)) {
-                            mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_2160P));
-                            break;
-                        }
-                        // Fall-through
-                    case HIGH:
-                        if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_1080P)) {
-                            mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_1080P));
-                            break;
-                        }
-                        // Fall-through
-                    case MEDIUM:
-                        if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_720P)) {
-                            mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_720P));
-                            break;
-                        }
-                        // Fall-through
-                    case LOW:
-                        if (CamcorderProfile.hasProfile(intCameraId, CamcorderProfile.QUALITY_480P)) {
-                            mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_480P));
-                            break;
-                        }
-                        // Fall-through
-                    default:
-                        mMediaRecorder.setProfile(CamcorderProfile.get(intCameraId, CamcorderProfile.QUALITY_LOW));
-                        break;
-                }
+                CamcorderProfile profile = chooseProfile(intCameraId, getQuality());
+                mMediaRecorder.setProfile(profile);
                 mMediaRecorder.setOutputFile(mFile.getAbsolutePath());
                 mMediaRecorder.setMaxDuration((int) mCameraView.getMaxVideoDuration());
                 mMediaRecorder.setMaxFileSize(mCameraView.getMaxVideoSize());
@@ -231,13 +294,22 @@ class VideoSession extends PreviewSession {
                     switch (what) {
                         case MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED:
                             Log.w(TAG, "Max duration for recording reached");
+                            finishLimitedRecording();
                             break;
                         case MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED:
                             Log.w(TAG, "Max filesize for recording reached");
+                            finishLimitedRecording();
                             break;
                     }
                 });
                 mMediaRecorder.setVideoSize(getWidth(), getHeight());
+                // setProfile fixed the bit rate to the profile's own resolution, but the size
+                // above is chosen separately, from what the camera supports at this quality and
+                // at the preview's aspect ratio, so the two routinely disagree. Left alone, a
+                // smaller frame is written at a wastefully high rate and a larger one is starved.
+                mMediaRecorder.setVideoEncodingBitRate(scaleBitRate(
+                        profile.videoBitRate, profile.videoFrameWidth, profile.videoFrameHeight,
+                        getWidth(), getHeight()));
                 mMediaRecorder.setOrientationHint(mCameraView.getRelativeCameraOrientation());
 
                 Location location = getLocation(getContext());
@@ -278,6 +350,20 @@ class VideoSession extends PreviewSession {
                 Log.e(TAG, "Let me guess. 'start failed.'?", e);
                 onVideoFailed();
             }
+        }
+
+        /**
+         * Delivers a recording that MediaRecorder ended on its own because the duration or file
+         * size limit was reached. MediaRecorder has stopped capturing by this point but the file
+         * is only finalized by stop(), so hand the session back to the module as an explicit
+         * stopRecording() would and let it tear the VideoSession down.
+         */
+        private void finishLimitedRecording() {
+            mCameraView.getHandler().post(() -> {
+                if (mIsRecordingVideo && mCameraView.isRecording()) {
+                    mCameraView.stopRecording();
+                }
+            });
         }
 
         void stopRecording() {

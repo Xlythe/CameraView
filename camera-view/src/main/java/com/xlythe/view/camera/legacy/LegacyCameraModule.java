@@ -9,18 +9,23 @@ import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.YuvImage;
 import android.hardware.Camera;
 import android.location.Location;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
 import android.os.Build;
+import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.LocationProvider;
 import com.xlythe.view.camera.PermissionChecker;
+import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.ByteArrayOutputStream;
@@ -32,6 +37,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
@@ -39,18 +45,46 @@ import androidx.collection.ArrayMap;
 
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LegacyCameraModule extends ICameraModule {
+    /** No camera chosen yet, which is not the same as camera zero. */
     private static final int INVALID_CAMERA_ID = -1;
 
+    /** The zoom scale CameraView publishes, matching the Camera2 and CameraX backends. */
+    private static final int MAX_ZOOM_LEVEL = 100;
+
+    /**
+     * How old a location may be and still describe where a picture was taken.
+     *
+     * <p>Two hours, because what is wanted is the place rather than the moment, and a fix from
+     * earlier in the same outing names the place correctly. Starting a live scan when the camera
+     * opens would be more accurate and would cost a radio running for as long as the camera is
+     * on, for a field most viewers read to the nearest town.</p>
+     */
     private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
+
+    /**
+     * How long to wait for the GPS to answer, which is deliberately almost no time at all.
+     *
+     * <p>The point is to take whatever fix is already there, not to hold a capture while the
+     * radio warms up. A picture is never delayed for its metadata.</p>
+     */
     private static final long GPS_TIMEOUT_MILLIS = 10;
 
+    /** Which of the device's cameras is selected, as an index into Camera.getNumberOfCameras. */
     private int mActiveCamera = INVALID_CAMERA_ID;
+
+    /** The open camera, or null when none is open - including after a failed open. */
     private Camera mCamera;
+
+    /** The preview size chosen for the open camera, or null when no camera is open. */
     @Nullable private Camera.Size mPreviewSize;
 
+    /** The recorder for a recording in progress, or null when nothing is being recorded. */
     private MediaRecorder mVideoRecorder;
+
+    /** Where the recording in progress is being written. */
     private File mVideoFile;
 
+    /** The surfaces handed out for streaming, each with the holder that feeds it. */
     private final Map<VideoRecorder.SurfaceProvider, LegacySurfaceHolder> mSurfaceProviders = new ArrayMap<>();
 
     public LegacyCameraModule(CameraView view) {
@@ -76,18 +110,37 @@ public class LegacyCameraModule extends ICameraModule {
             mPreviewSize = chooseOptimalPreviewSize(mCamera.getParameters().getSupportedPreviewSizes(), getWidth(), getHeight());
             parameters.setPreviewSize(getPreviewWidth(), getPreviewHeight());
             parameters.setPictureFormat(ImageFormat.JPEG);
+            parameters.setJpegQuality(getPictureQuality());
             mCamera.setParameters(parameters);
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
             mCamera.startPreview();
-        } catch (IOException e) {
+        } catch (IOException | RuntimeException e) {
+            // A camera opened but never started is worse than no camera: close() would release
+            // it, but takePicture() and startRecording() would both act on one configured by
+            // halves. Put the module back where a failed Camera.open leaves it. RuntimeException
+            // is caught with it because setParameters and startPreview throw that, not IOException,
+            // on a camera that will not take what it was given.
             Log.e(TAG, "Failed to properly initialize camera", e);
+            try {
+                mCamera.release();
+            } catch (RuntimeException released) {
+                Log.w(TAG, "Camera would not release after a failed open", released);
+            }
+            mCamera = null;
+            mPreviewSize = null;
         }
     }
 
     @Override
     public void close() {
         Log.d(TAG, "onClose() activeCamera="+getActiveCamera());
+        if (isRecording()) {
+            // The recorder holds the camera, so releasing the camera under a running recording
+            // leaves an encoder writing to a file nothing will ever finish, and isRecording()
+            // answering yes for a camera that no longer exists.
+            stopRecording();
+        }
         if (mCamera != null) {
             mCamera.stopPreview();
             mCamera.release();
@@ -147,12 +200,25 @@ public class LegacyCameraModule extends ICameraModule {
 
     @Override
     public void takePicture(File file) {
+        if (mCamera == null) {
+            // Nothing is holding a caller to the camera's lifecycle - a button is pressed when it
+            // is pressed - so this is a state an app reaches rather than a programming error, and
+            // the answer is the failure callback it is already listening to.
+            Log.w(TAG, "Cannot take a picture before the camera is open");
+            onImageFailed();
+            return;
+        }
         mCamera.takePicture(null, null, new LegacyPictureListener(
                 file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(), this));
     }
 
     @Override
     public void startRecording(File file) {
+        if (mCamera == null) {
+            Log.w(TAG, "Cannot record before the camera is open");
+            onVideoFailed();
+            return;
+        }
         mVideoFile = file;
         mVideoRecorder = new MediaRecorder();
 
@@ -192,7 +258,6 @@ public class LegacyCameraModule extends ICameraModule {
         }
         mVideoRecorder.setOutputFile(file.getAbsolutePath());
         mVideoRecorder.setMaxDuration((int) getMaxVideoDuration());
-        mVideoRecorder.setMaxFileSize(getMaxVideoSize());
         mVideoRecorder.setMaxDuration((int) getMaxVideoDuration());
         mVideoRecorder.setMaxFileSize(getMaxVideoSize());
         mVideoRecorder.setOrientationHint(getRelativeCameraOrientation(false /* isPreview */));
@@ -200,9 +265,11 @@ public class LegacyCameraModule extends ICameraModule {
             switch (what) {
                 case MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED:
                     Log.w(TAG, "Max duration for recording reached");
+                    finishLimitedRecording();
                     break;
                 case MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED:
                     Log.w(TAG, "Max filesize for recording reached");
+                    finishLimitedRecording();
                     break;
             }
         });
@@ -220,6 +287,21 @@ public class LegacyCameraModule extends ICameraModule {
             mVideoRecorder = null;
             onVideoFailed();
         }
+    }
+
+    /**
+     * Delivers a recording MediaRecorder ended on its own at a duration or size limit.
+     *
+     * <p>Capturing has already stopped by this point, but the file is only finalized by stop(),
+     * so finish it the way an explicit stopRecording() would. Posted because the callback arrives
+     * on MediaRecorder's own thread.</p>
+     */
+    private void finishLimitedRecording() {
+        new Handler(Looper.getMainLooper()).post(() -> {
+            if (isRecording()) {
+                stopRecording();
+            }
+        });
     }
 
     @Override
@@ -280,28 +362,126 @@ public class LegacyCameraModule extends ICameraModule {
 
     @Override
     public void setZoomLevel(int zoomLevel) {
-        if (mCamera != null) {
-            Camera.Parameters parameters = mCamera.getParameters();
-            parameters.setZoom(zoomLevel);
-            mCamera.setParameters(parameters);
-        } else {
+        if (mCamera == null) {
             Log.w(TAG, "Attempted to set zoom level to " + zoomLevel + " but no camera found");
+            return;
         }
+        Camera.Parameters parameters = mCamera.getParameters();
+        if (!parameters.isZoomSupported()) {
+            Log.w(TAG, "Zoom not supported");
+            return;
+        }
+        // The level is a position in the camera's range, as it is on the other backends, while
+        // this API takes an index into the camera's own zoom table. Passing the level straight
+        // through meant the scale differed per device and an out-of-range value reached the
+        // camera unchecked.
+        parameters.setZoom(toZoomIndex(zoomLevel, parameters.getMaxZoom()));
+        mCamera.setParameters(parameters);
+    }
+
+    /** Maps a 0..MAX_ZOOM_LEVEL position onto an index into the camera's zoom table. */
+    static int toZoomIndex(int zoomLevel, int maxZoomIndex) {
+        int clamped = Math.max(0, Math.min(zoomLevel, MAX_ZOOM_LEVEL));
+        if (maxZoomIndex <= 0) {
+            return 0;
+        }
+        return Math.round((float) clamped * maxZoomIndex / MAX_ZOOM_LEVEL);
+    }
+
+    /** Maps an index into the camera's zoom table back onto a 0..MAX_ZOOM_LEVEL position. */
+    static int toZoomLevel(int zoomIndex, int maxZoomIndex) {
+        if (maxZoomIndex <= 0) {
+            return 0;
+        }
+        int clamped = Math.max(0, Math.min(zoomIndex, maxZoomIndex));
+        return Math.round((float) clamped * MAX_ZOOM_LEVEL / maxZoomIndex);
     }
 
     @Override
     public int getZoomLevel() {
-        return mCamera.getParameters().getZoom();
+        if (mCamera == null) {
+            return 0;
+        }
+        Camera.Parameters parameters = mCamera.getParameters();
+        return toZoomLevel(parameters.getZoom(), parameters.getMaxZoom());
     }
 
     @Override
     public int getMaxZoomLevel() {
-        return mCamera.getParameters().getMaxZoom();
+        // Fixed, so one zoom control works across every backend.
+        return MAX_ZOOM_LEVEL;
     }
 
     @Override
     public boolean isZoomSupported() {
-        return mCamera.getParameters().isZoomSupported();
+        return mCamera != null && mCamera.getParameters().isZoomSupported();
+    }
+
+    @Override
+    public boolean isFaceDetectionSupported() {
+        return mCamera != null
+                && mCamera.getParameters().getMaxNumDetectedFaces() > 0;
+    }
+
+    @Override
+    protected boolean setFaceDetectionEnabled(boolean enabled) {
+        if (mCamera == null) {
+            return !enabled;
+        }
+        if (!enabled) {
+            try {
+                mCamera.setFaceDetectionListener(null);
+                mCamera.stopFaceDetection();
+            } catch (RuntimeException error) {
+                // Throws if detection was never started, which is not a failure to stop.
+                if (DEBUG) Log.d(TAG, "Face detection was not running", error);
+            }
+            return true;
+        }
+        if (!isFaceDetectionSupported()) {
+            return false;
+        }
+        mCamera.setFaceDetectionListener((faces, camera) -> onFacesDetected(
+                translate(faces), faceToViewTransform()));
+        try {
+            mCamera.startFaceDetection();
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Camera refused to start face detection", error);
+            mCamera.setFaceDetectionListener(null);
+            return false;
+        }
+        return true;
+    }
+
+    @NonNull
+    private static List<Face> translate(@Nullable Camera.Face[] faces) {
+        if (faces == null) {
+            return Collections.emptyList();
+        }
+        List<Face> translated = new ArrayList<>(faces.length);
+        for (Camera.Face face : faces) {
+            if (face == null || face.rect == null) {
+                continue;
+            }
+            translated.add(Face.create(face.rect, face.score, face.id,
+                    face.leftEye, face.rightEye, face.mouth));
+        }
+        return translated;
+    }
+
+    /**
+     * Maps face bounds onto the view.
+     *
+     * <p>The old API reports faces in a fixed square from -1000 to 1000 that covers the field of
+     * view as it is currently displayed, so the rotation the preview needed has already been
+     * applied and only the scale into the view is left.</p>
+     */
+    @NonNull
+    private Matrix faceToViewTransform() {
+        return TransformMath.centerCrop(new RectF(-1000f, -1000f, 1000f, 1000f),
+                0 /* already in display orientation */,
+                false /* and already mirrored if the lens is */,
+                getView().getWidth(), getView().getHeight());
     }
 
     @Override

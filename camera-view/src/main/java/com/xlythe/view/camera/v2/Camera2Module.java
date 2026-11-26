@@ -1,34 +1,51 @@
 package com.xlythe.view.camera.v2;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.content.Context;
+import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
+import android.graphics.RectF;
+import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
+import android.hardware.camera2.CameraMetadata;
+import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
+import android.hardware.camera2.params.OutputConfiguration;
+import android.hardware.camera2.params.SessionConfiguration;
 import android.hardware.camera2.params.StreamConfigurationMap;
+import android.media.ImageReader;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
+import android.util.DisplayMetrics;
 import android.util.Log;
+import android.util.Range;
 import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
@@ -43,7 +60,10 @@ import static java.lang.String.format;
 @TargetApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class Camera2Module extends ICameraModule {
-    private static final int ZOOM_NOT_SUPPORTED = 1;
+    /** The zoom scale CameraView publishes, matching the CameraX backend so the two agree. */
+    private static final int MAX_ZOOM_LEVEL = 100;
+    /** Maximum automatic reopen attempts before reporting a terminal Camera2 failure. */
+    private static final int MAX_REOPEN_ATTEMPTS = 1;
 
     private static final String EXTRA_DEVICE_ID = "device_id";
 
@@ -53,6 +73,153 @@ public class Camera2Module extends ICameraModule {
     // Whichever is smaller." To go past 1080p requires limiting another column on the table. As a
     // general rule, we don't go past 1080p unless we test on a wide range of devices.
     static final Size MAX_SUPPORTED_SIZE = new Size(1920, 1080);
+
+    /**
+     * The largest preview the camera is guaranteed to manage alongside a full-size still capture.
+     *
+     * <p>Camera2's guaranteed stream combinations define PREVIEW as the largest output at most
+     * 1920x1080 and at most the display size, and every level of that table is written in terms
+     * of it, so exceeding either half leaves guaranteed territory. We only ever applied the 1080p
+     * half, which over-asks on a device whose panel is smaller.</p>
+     *
+     * <p>When the device can be asked directly, through isSessionConfigurationSupported from API
+     * 29, a larger preview is used if it says yes. Anything else, including an older API, a
+     * refusal or a failure to answer, keeps the guaranteed size: the worst case is exactly the
+     * behavior that shipped.</p>
+     */
+    @NonNull
+    Size getPreviewSizeCap(@NonNull List<Size> candidates) {
+        Size guaranteed = guaranteedPreviewCap(displaySize());
+        if (largestWithin(candidates, guaranteed) == null) {
+            // Every output this camera offers is larger than the panel, which happens on a small
+            // screen paired with a normal sensor. Admit the smallest one rather than nothing.
+            Size smallest = smallestOf(candidates);
+            return smallest == null ? guaranteed : smallest;
+        }
+
+        Size largest = largestWithin(candidates, null);
+        if (largest == null || !exceeds(largest, guaranteed)) {
+            return guaranteed;
+        }
+        if (isPreviewSizeSupported(largest)) {
+            if (DEBUG) Log.d(TAG, "Camera confirmed a preview larger than the guaranteed size");
+            return largest;
+        }
+        return guaranteed;
+    }
+
+    /** The smallest candidate by area, or null when there are none. */
+    @Nullable
+    static Size smallestOf(@NonNull List<Size> candidates) {
+        Size best = null;
+        for (Size size : candidates) {
+            if (best == null
+                    || (long) size.getWidth() * size.getHeight()
+                    < (long) best.getWidth() * best.getHeight()) {
+                best = size;
+            }
+        }
+        return best;
+    }
+
+    /** Intersects the two halves of the table's PREVIEW definition. */
+    @NonNull
+    static Size guaranteedPreviewCap(@Nullable Size displaySize) {
+        if (displaySize == null) {
+            return MAX_SUPPORTED_SIZE;
+        }
+        // The display is reported in its current orientation, and camera sizes are always
+        // landscape, so compare against its long and short edges rather than width and height.
+        int longEdge = Math.max(displaySize.getWidth(), displaySize.getHeight());
+        int shortEdge = Math.min(displaySize.getWidth(), displaySize.getHeight());
+        return new Size(
+                Math.min(MAX_SUPPORTED_SIZE.getWidth(), longEdge),
+                Math.min(MAX_SUPPORTED_SIZE.getHeight(), shortEdge));
+    }
+
+    /** True when either dimension of a size is past the cap. */
+    static boolean exceeds(@NonNull Size size, @NonNull Size cap) {
+        return size.getWidth() > cap.getWidth() || size.getHeight() > cap.getHeight();
+    }
+
+    /** The largest candidate within an optional cap, by area. */
+    @Nullable
+    static Size largestWithin(@NonNull List<Size> candidates, @Nullable Size cap) {
+        Size best = null;
+        for (Size size : candidates) {
+            if (cap != null && exceeds(size, cap)) {
+                continue;
+            }
+            if (best == null
+                    || (long) size.getWidth() * size.getHeight()
+                    > (long) best.getWidth() * best.getHeight()) {
+                best = size;
+            }
+        }
+        return best;
+    }
+
+    @Nullable
+    private Size displaySize() {
+        try {
+            DisplayMetrics metrics = getContext().getResources().getDisplayMetrics();
+            if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0) {
+                return null;
+            }
+            return new Size(metrics.widthPixels, metrics.heightPixels);
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to read the display size", error);
+            return null;
+        }
+    }
+
+    /**
+     * Asks the camera whether it would configure a preview of this size next to a full-size
+     * still capture. Returns false whenever the answer is anything but a clear yes.
+     */
+    private boolean isPreviewSizeSupported(@NonNull Size previewSize) {
+        CameraDevice device = mCameraDevice;
+        if (device == null || Build.VERSION.SDK_INT < 29) {
+            return false;
+        }
+
+        ImageReader probeReader = null;
+        try {
+            CameraCharacteristics characteristics =
+                    mCameraManager.getCameraCharacteristics(getActiveCamera());
+            StreamConfigurationMap map =
+                    characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            Size stillSize = map == null ? null
+                    : largestWithin(Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)), null);
+            if (stillSize == null) {
+                return false;
+            }
+
+            // A throwaway reader stands in for the still-capture stream, so the combination can
+            // be checked without building, and then tearing down, the real session.
+            probeReader = ImageReader.newInstance(stillSize.getWidth(), stillSize.getHeight(),
+                    ImageFormat.JPEG, 1);
+            List<OutputConfiguration> outputs = Arrays.asList(
+                    new OutputConfiguration(previewSize, SurfaceTexture.class),
+                    new OutputConfiguration(probeReader.getSurface()));
+            SessionConfiguration configuration = new SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR, outputs, mHandler::post,
+                    new CameraCaptureSession.StateCallback() {
+                        @Override public void onConfigured(@NonNull CameraCaptureSession session) {}
+                        @Override public void onConfigureFailed(@NonNull CameraCaptureSession session) {}
+                    });
+            return device.isSessionConfigurationSupported(configuration);
+        } catch (CameraAccessException | RuntimeException error) {
+            // Anything but a clear yes keeps the guaranteed size, including a device that cannot
+            // answer the question at all.
+            if (DEBUG) Log.d(TAG, "Camera could not confirm the preview size", error);
+            return false;
+        } finally {
+            if (probeReader != null) {
+                probeReader.close();
+            }
+        }
+    }
 
     /**
      * This is how we'll talk to the camera.
@@ -96,6 +263,13 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     private Session mActiveSession;
 
+    /** The face detection mode the repeating request carries, or null when faces are not wanted. */
+    @Nullable
+    private Integer mFaceDetectMode;
+
+    /** How many faces the last report had, so an empty camera is not reported every frame. */
+    private int mLastFaceCount;
+
     /**
      * The current zoom level, from 0 to {@link #getMaxZoomLevel()}.
      */
@@ -117,59 +291,103 @@ public class Camera2Module extends ICameraModule {
     private boolean mIsRecording = false;
 
     /**
-     *
+     * Incremented for every open/close cycle so callbacks from an obsolete camera request can be
+     * rejected without disturbing the current device.
      */
-    private boolean mIsAttemptingToReopen = false;
+    private int mGeneration;
+
+    /** Number of consecutive reopen attempts since the last usable capture session. */
+    private int mReopenAttempts;
 
     /**
-     * Callbacks for when the camera is available / unavailable
+     * Generation to open after the previous Camera2 device reports that it has fully closed, or
+     * zero when no lens switch is waiting for device release.
      */
-    private final CameraDevice.StateCallback mStateCallback = new CameraDevice.StateCallback() {
-        @Override
-        public void onOpened(@NonNull CameraDevice cameraDevice) {
-            if (!mIsOpen) {
-                Log.w(TAG, "Camera was opened after CameraView was closed. Disconnecting from the camera.");
-                close();
-                return;
+    private int mPendingOpenGeneration;
+
+    /** Camera2 device whose onClosed callback is allowed to complete a pending lens switch. */
+    @Nullable
+    private CameraDevice mPendingCloseDevice;
+
+    private CameraDevice.StateCallback createStateCallback(final int generation) {
+        return new CameraDevice.StateCallback() {
+            @Override
+            public void onOpened(@NonNull CameraDevice cameraDevice) {
+                if (!mIsOpen || generation != mGeneration) {
+                    Log.w(TAG, "Ignoring a stale Camera2 open callback");
+                    cameraDevice.close();
+                    return;
+                }
+
+                mCameraDevice = cameraDevice;
+                setSession(new PictureSession(Camera2Module.this));
             }
 
-            // The camera has opened. Start the preview now.
-            mCameraDevice = cameraDevice;
-            setSession(new PictureSession(Camera2Module.this));
-
-            // Once we've successfully opened, we clean up any flags.
-            mIsAttemptingToReopen = false;
-        }
-
-        @Override
-        public void onDisconnected(@NonNull CameraDevice cameraDevice) {
-            Log.w(TAG, "Camera disconnected");
-
-            // The camera has disconnected or errored out and we need to close ourselves to reset state.
-            // We'll try one time to reconnect before accepting defeat.
-
-            // Cache if the CameraView wants us to be open. We could have disconnected because
-            // we were closed.
-            boolean isCameraViewOpen = mIsOpen;
-
-            // Close to clean up our state.
-            close();
-
-            // If we should be open, and if we haven't attempted to reopen before, try opening again now.
-            if (isCameraViewOpen && !mIsAttemptingToReopen) {
-                mIsAttemptingToReopen = true;
-                open();
+            @Override
+            public void onDisconnected(@NonNull CameraDevice cameraDevice) {
+                handleCameraFailure(cameraDevice, generation, "Camera disconnected");
             }
+
+            @Override
+            public void onError(@NonNull CameraDevice cameraDevice, int error) {
+                handleCameraFailure(cameraDevice, generation,
+                        "Camera device error: " + Camera2Module.toString(error));
+            }
+
+            @Override
+            public void onClosed(@NonNull CameraDevice cameraDevice) {
+                int pendingGeneration = mPendingOpenGeneration;
+                if (pendingGeneration == 0 || cameraDevice != mPendingCloseDevice) {
+                    return;
+                }
+                mPendingOpenGeneration = 0;
+                mPendingCloseDevice = null;
+                if (mIsOpen && pendingGeneration == mGeneration) {
+                    openCamera(pendingGeneration);
+                }
+            }
+        };
+    }
+
+    @SuppressLint("MissingPermission")
+    private void openCamera(int generation) {
+        try {
+            mActiveCamera = getActiveCamera();
+            if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
+            mCameraManager.openCamera(mActiveCamera, createStateCallback(generation), mHandler);
+        } catch (CameraAccessException | RuntimeException e) {
+            mIsOpen = false;
+            closeCameraResources();
+            onCameraError(new IllegalStateException("Failed to open Camera2 device", e));
+        }
+    }
+
+    private void handleCameraFailure(@NonNull CameraDevice cameraDevice, int generation,
+            String message) {
+        Log.e(TAG, message);
+        cameraDevice.close();
+        if (generation != mGeneration) {
+            Log.w(TAG, "Ignoring a stale Camera2 failure callback");
+            return;
         }
 
-        @Override
-        public void onError(@NonNull CameraDevice cameraDevice, int error) {
-            Log.e(TAG, "Camera crashed: " + Camera2Module.toString(error));
-            onDisconnected(cameraDevice);
+        boolean shouldReopen = mIsOpen && mReopenAttempts < MAX_REOPEN_ATTEMPTS;
+        closeCameraResources();
+        if (shouldReopen) {
+            mReopenAttempts++;
+            int retryGeneration = ++mGeneration;
+            mHandler.post(() -> {
+                if (mIsOpen && retryGeneration == mGeneration) {
+                    openCamera(retryGeneration);
+                }
+            });
+        } else if (mIsOpen) {
+            mIsOpen = false;
+            onCameraError(new IllegalStateException(message));
         }
-    };
+    }
 
-    private static String toString(int error) {
+    static String toString(int error) {
         switch (error) {
             case CameraDevice.StateCallback.ERROR_CAMERA_DEVICE:
                 return "ERROR_CAMERA_DEVICE";
@@ -192,8 +410,9 @@ public class Camera2Module extends ICameraModule {
     }
 
     private void setSession(final Session session) {
-        if (mCameraDevice == null) {
-            if (DEBUG) Log.w(TAG, "Cannot start a session without a CameraDevice");
+        if (!mIsOpen || mCameraDevice == null) {
+            if (DEBUG) Log.w(TAG, "Cannot start a session without an open CameraDevice");
+            closeSession(session);
             return;
         }
 
@@ -204,7 +423,7 @@ public class Camera2Module extends ICameraModule {
                 mCaptureSession.stopRepeating();
                 try {
                     mCaptureSession.abortCaptures();
-                } catch (CameraAccessException e) {
+                } catch (CameraAccessException | RuntimeException e) {
                     Log.e(TAG, "Failed to abort captures", e);
                 }
                 mCaptureSession.close();
@@ -236,18 +455,22 @@ public class Camera2Module extends ICameraModule {
                 return;
             }
 
-            // Assume this is a brand new session that's never been set up. Initialize it so that
-            // it can decide what size to set its surfaces to.
+            // Assume this is a brand new session that's never been set up. Claim ownership before
+            // initialization so any failure can clean up this exact session.
+            mRegisteringSession = session;
             CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(getActiveCamera());
             StreamConfigurationMap map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            if (map == null) {
+                throw new IllegalStateException("Camera has no stream configuration map");
+            }
             session.initialize(map);
 
             // Now, with all of our surfaces, we'll ask for a new session
-            mRegisteringSession = session;
-            mCameraDevice.createCaptureSession(session.getSurfaces(), new CameraCaptureSession.StateCallback() {
+            createCaptureSession(session.getSurfaces(), new CameraCaptureSession.StateCallback() {
                 @Override
                 public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
-                    if (mCameraDevice == null) {
+                    if (!mIsOpen || mCameraDevice == null || mRegisteringSession != session) {
+                        cameraCaptureSession.close();
                         return;
                     }
 
@@ -257,64 +480,167 @@ public class Camera2Module extends ICameraModule {
                         if (mRegisteringSession == session) {
                             mRegisteringSession = null;
                         }
+                        mReopenAttempts = 0;
                         if (!mIsPaused) {
                             session.onAvailable(mCameraDevice, mCaptureSession);
                         }
+                        // The session is configured and targeted, which is the first moment a
+                        // capture can succeed.
+                        onCameraReady();
                         if (mZoomLevel != 0) {
                             setZoomLevel(mZoomLevel);
                         }
-                    } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
-                        Log.e(TAG, "Failed to start session " + session.getClass().getSimpleName(), e);
+                    } catch (CameraAccessException | RuntimeException e) {
+                        failSession(session, cameraCaptureSession,
+                                "Failed to start " + session.getClass().getSimpleName(), e);
                     }
                 }
 
                 @Override
                 public void onConfigureFailed(@NonNull CameraCaptureSession cameraCaptureSession) {
-                    Log.e(TAG, "Configure failed");
+                    if (!mIsOpen || mRegisteringSession != session) {
+                        cameraCaptureSession.close();
+                        return;
+                    }
+                    failSession(session, cameraCaptureSession,
+                            "Failed to configure " + session.getClass().getSimpleName(), null);
                 }
-            }, mHandler);
-        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
-            // Crashes if the Camera is interacted with while still loading
-            Log.e(TAG, "Failed to create capture session", e);
+            });
+        } catch (CameraAccessException | RuntimeException e) {
+            failSession(session, null, "Failed to create capture session", e);
         }
+    }
+
+    /**
+     * Asks the device for a session, naming a colour space when one was asked for.
+     *
+     * <p>A colour space belongs to the session configuration, which means the newer
+     * SessionConfiguration form of createCaptureSession and API 34. The older call is kept for
+     * everything else rather than replaced: it is the path every device this library has ever run
+     * on uses, and it has nothing to gain from being rewritten for a feature that is not in
+     * play.</p>
+     */
+    private void createCaptureSession(@NonNull List<Surface> surfaces,
+            @NonNull CameraCaptureSession.StateCallback callback) throws CameraAccessException {
+        CameraDevice device = mCameraDevice;
+        if (device == null) {
+            throw new IllegalStateException("Camera has no device to configure");
+        }
+        if (Build.VERSION.SDK_INT < 34 || getColorSpace() == CameraView.ColorSpace.SRGB) {
+            device.createCaptureSession(surfaces, callback, mHandler);
+            return;
+        }
+        android.graphics.ColorSpace.Named named = namedColorSpace(getColorSpace());
+        if (named == null) {
+            device.createCaptureSession(surfaces, callback, mHandler);
+            return;
+        }
+
+        List<OutputConfiguration> outputs = new ArrayList<>(surfaces.size());
+        for (Surface surface : surfaces) {
+            outputs.add(new OutputConfiguration(surface));
+        }
+        SessionConfiguration configuration = new SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR, outputs, mHandler::post, callback);
+        configuration.setColorSpace(named);
+        device.createCaptureSession(configuration);
+    }
+
+    private void failSession(Session session, @Nullable CameraCaptureSession captureSession,
+            String message, @Nullable Throwable cause) {
+        Log.e(TAG, message, cause);
+        boolean ownsSession = mRegisteringSession == session || mActiveSession == session
+                || (captureSession != null && mCaptureSession == captureSession);
+        if (captureSession != null) {
+            captureSession.close();
+        }
+        if (!ownsSession) {
+            closeSession(session);
+            return;
+        }
+        if (mCaptureSession == captureSession) {
+            mCaptureSession = null;
+        }
+        if (mRegisteringSession == session) {
+            mRegisteringSession = null;
+        }
+        if (mActiveSession == session) {
+            mActiveSession = null;
+        }
+        closeSession(session);
+        if (mIsOpen) {
+            mIsOpen = false;
+            mGeneration++;
+            closeCameraResources();
+            onCameraError(new IllegalStateException(message, cause));
+        }
+    }
+
+    private void closeSession(@Nullable Session session) {
+        if (session == null) {
+            return;
+        }
+        try {
+            session.close();
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Failed to close Camera2 session resources", e);
+        }
+    }
+
+    private void closeCameraResources() {
+        CameraCaptureSession captureSession = mCaptureSession;
+        Session registeringSession = mRegisteringSession;
+        Session activeSession = mActiveSession;
+        CameraDevice cameraDevice = mCameraDevice;
+        mCaptureSession = null;
+        mRegisteringSession = null;
+        mActiveSession = null;
+        mCameraDevice = null;
+
+        if (captureSession != null) {
+            try {
+                captureSession.close();
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Failed to close Camera2 capture session", e);
+            }
+        }
+        closeSession(registeringSession);
+        if (activeSession != registeringSession) {
+            closeSession(activeSession);
+        }
+        if (cameraDevice != null) {
+            try {
+                cameraDevice.close();
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Failed to close Camera2 device", e);
+            }
+        }
+        mIsPaused = false;
+        mIsRecording = false;
     }
 
     @RequiresPermission(Manifest.permission.CAMERA)
     @Override
     public void open() {
-        mIsOpen = true;
-        try {
-            mActiveCamera = getActiveCamera();
-            if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
-            mCameraManager.openCamera(mActiveCamera, mStateCallback, mHandler);
-        } catch (CameraAccessException | IllegalArgumentException e) {
-            Log.e(TAG, "Failed to open camera", e);
+        if (mIsOpen) {
+            return;
         }
+        closeCameraResources();
+        mIsOpen = true;
+        mReopenAttempts = 0;
+        mPendingOpenGeneration = 0;
+        mPendingCloseDevice = null;
+        openCamera(++mGeneration);
     }
 
     @Override
     public void close() {
-        if (mCaptureSession != null) {
-            try {
-                mCaptureSession.close();
-            } catch (Exception e) {
-                // Instance of CameraAccessException (although not declared).
-                // Nothing we can do but swallow it.
-                Log.e(TAG, "Failed to close camera", e);
-            }
-            mCaptureSession = null;
-        }
-        if (mActiveSession != null) {
-            mActiveSession.close();
-            mActiveSession = null;
-        }
-        if (mCameraDevice != null) {
-            mCameraDevice.close();
-            mCameraDevice = null;
-        }
-        mIsPaused = false;
         mIsOpen = false;
-        mIsRecording = false;
+        mReopenAttempts = 0;
+        mPendingOpenGeneration = 0;
+        mPendingCloseDevice = null;
+        mGeneration++;
+        closeCameraResources();
     }
 
     @Override
@@ -323,7 +649,7 @@ public class Camera2Module extends ICameraModule {
             for (String cameraId : mCameraManager.getCameraIdList()) {
                 if (isFrontFacing(cameraId)) return true;
             }
-        } catch (CameraAccessException e) {
+        } catch (CameraAccessException | RuntimeException e) {
             Log.e(TAG, "Failed to query camera", e);
         }
         return false;
@@ -333,7 +659,7 @@ public class Camera2Module extends ICameraModule {
     public boolean isUsingFrontFacingCamera() {
         try {
             return isFrontFacing(getActiveCamera());
-        } catch (CameraAccessException e) {
+        } catch (CameraAccessException | RuntimeException e) {
             Log.e(TAG, "Failed to query camera", e);
         }
         return false;
@@ -342,53 +668,67 @@ public class Camera2Module extends ICameraModule {
     @RequiresPermission(Manifest.permission.CAMERA)
     @Override
     public void toggleCamera() {
-        int position = 0;
-
         try {
-            for (String cameraId : mCameraManager.getCameraIdList()) {
-                if (cameraId.equals(getActiveCamera())) {
-                    break;
-                }
+            String[] cameraIds = getAvailableCameraIds();
+            if (cameraIds.length < 2) {
+                Log.w(TAG, "Cannot toggle camera: only one camera is available");
+                return;
+            }
+
+            String activeCamera = getActiveCamera();
+            int position = 0;
+            while (position < cameraIds.length && !cameraIds[position].equals(activeCamera)) {
                 position++;
             }
 
-            // Close the old camera and open with the new camera id, but only if it was already
-            // open before toggle was requested.
-            boolean shouldOpen = mIsOpen;
-            close();
-            mActiveCamera = mCameraManager.getCameraIdList()[(position + 1) % mCameraManager.getCameraIdList().length];
-            if (shouldOpen) {
-                open();
-            }
-        } catch (CameraAccessException e) {
-            Log.e(TAG, "Failed to query camera", e);
+            switchCamera(cameraIds[(position + 1) % cameraIds.length]);
+        } catch (CameraAccessException | RuntimeException e) {
+            Log.e(TAG, "Failed to toggle camera", e);
         }
     }
 
     @Override
+    @SuppressLint("MissingPermission")
     public void setLensFacing(CameraView.LensFacing lensFacing) {
-        int position = 0;
-
         try {
-            for (String cameraId : mCameraManager.getCameraIdList()) {
-                boolean isFrontFacing = isFrontFacing(cameraId);
-                if ((isFrontFacing && lensFacing.equals(CameraView.LensFacing.FRONT))
-                    || (!isFrontFacing && lensFacing.equals(CameraView.LensFacing.BACK))) {
-                    break;
-                }
-                position++;
+            String matchingCamera = preferredCamera(getAvailableCameraIds(),
+                    lensFacing == CameraView.LensFacing.FRONT
+                            ? CameraCharacteristics.LENS_FACING_FRONT
+                            : CameraCharacteristics.LENS_FACING_BACK);
+            if (matchingCamera == null) {
+                Log.w(TAG, "No camera found for lens facing " + lensFacing);
+                return;
+            }
+            if (matchingCamera.equals(getActiveCamera())) {
+                return;
             }
 
-            // Close the old camera and open with the new camera id, but only if it was already
-            // open before toggle was requested.
-            boolean shouldOpen = mIsOpen;
-            close();
-            mActiveCamera = mCameraManager.getCameraIdList()[position % mCameraManager.getCameraIdList().length];
-            if (shouldOpen) {
-                open();
+            switchCamera(matchingCamera);
+        } catch (CameraAccessException | RuntimeException e) {
+            Log.e(TAG, "Failed to change lens facing", e);
+        }
+    }
+
+    private void switchCamera(String cameraId) {
+        boolean shouldReopen = mIsOpen;
+        CameraDevice deviceToClose = mCameraDevice;
+        boolean mustAwaitDeviceClose = deviceToClose != null;
+        mIsOpen = false;
+        mReopenAttempts = 0;
+        mPendingOpenGeneration = 0;
+        mPendingCloseDevice = null;
+        mGeneration++;
+        closeCameraResources();
+        mActiveCamera = cameraId;
+        if (shouldReopen) {
+            mIsOpen = true;
+            int nextGeneration = ++mGeneration;
+            if (mustAwaitDeviceClose) {
+                mPendingOpenGeneration = nextGeneration;
+                mPendingCloseDevice = deviceToClose;
+            } else {
+                openCamera(nextGeneration);
             }
-        } catch (CameraAccessException e) {
-            Log.e(TAG, "Failed to query camera", e);
         }
     }
 
@@ -434,7 +774,7 @@ public class Camera2Module extends ICameraModule {
             if (!mIsPaused) {
                 mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
             }
-        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+        } catch (CameraAccessException | RuntimeException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to focus", e);
         }
@@ -461,43 +801,85 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public void setZoomLevel(int zoomLevel) {
-        mZoomLevel = zoomLevel;
+        mZoomLevel = rangeLimit(zoomLevel);
 
         if (mCameraDevice == null || mCaptureSession == null || mActiveSession == null) {
-            Log.w(TAG, "No active session available");
+            if (DEBUG) Log.w(TAG, "No active session available");
             return;
         }
 
         try {
             CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(getActiveCamera());
-            Rect m = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
-            if (m == null) {
-                Log.w(TAG, "Zoom not supported");
-                return;
+            Range<Float> ratioRange = zoomRatioRange(characteristics);
+            if (ratioRange != null) {
+                // The whole optical range, so the low end can reach an ultra-wide lens and the
+                // high end a telephoto, with the camera switching between them as it crosses the
+                // thresholds. A crop region could only ever zoom within one lens.
+                mActiveSession.setZoomRatio(
+                        zoomRatioFor(ratioRange.getLower(), ratioRange.getUpper(), mZoomLevel));
+                mActiveSession.setCropRegion(null);
+            } else {
+                Rect activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+                Float maxDigitalZoom = characteristics.get(
+                        CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
+                if (activeArray == null || maxDigitalZoom == null || maxDigitalZoom <= 1f) {
+                    mZoomLevel = 0;
+                    Log.w(TAG, "Zoom not supported");
+                    return;
+                }
+                mActiveSession.setZoomRatio(null);
+                mActiveSession.setCropRegion(
+                        calculateCropRegion(activeArray, maxDigitalZoom, mZoomLevel));
             }
-
-            int maxZoom = getMaxZoomLevel();
-
-            int minW = m.width() / maxZoom;
-            int minH = m.height() / maxZoom;
-            int difW = m.width() - minW;
-            int difH = m.height() - minH;
-            int cropW = difW * zoomLevel / maxZoom;
-            int cropH = difH * zoomLevel / maxZoom;
-            Rect cropRegion = new Rect(cropW, cropH, m.width() - cropW, m.height() - cropH);
-
-            if (cropRegion.left > cropRegion.right || cropRegion.top > cropRegion.bottom) {
-                Log.w(TAG, "Crop Region has inverted, ignoring further zoom levels");
-                return;
-            }
-            mActiveSession.setCropRegion(cropRegion);
             if (!mIsPaused) {
                 mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
             }
-        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
-            // Crashes if the Camera is interacted with while still loading
+        } catch (CameraAccessException | RuntimeException e) {
             Log.e(TAG, "Failed to zoom", e);
         }
+    }
+
+    /**
+     * The camera's usable zoom ratio range, or null when the control is unavailable.
+     *
+     * <p>CONTROL_ZOOM_RATIO_RANGE arrives in API 30. A lower bound below one means the logical
+     * camera has a wider physical lens to switch to.</p>
+     */
+    @Nullable
+    private static Range<Float> zoomRatioRange(@NonNull CameraCharacteristics characteristics) {
+        if (Build.VERSION.SDK_INT < 30) {
+            return null;
+        }
+        Range<Float> range = characteristics.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE);
+        if (range == null || range.getUpper() <= range.getLower()) {
+            return null;
+        }
+        return range;
+    }
+
+    /** Maps a zoom level onto a ratio range, linearly from the widest lens to the longest. */
+    static float zoomRatioFor(float minRatio, float maxRatio, int zoomLevel) {
+        float fraction = (float) rangeLimit(zoomLevel) / MAX_ZOOM_LEVEL;
+        return minRatio + (maxRatio - minRatio) * fraction;
+    }
+
+    static Rect calculateCropRegion(Rect activeArray, float maxDigitalZoom, int zoomLevel) {
+        float fraction = (float) rangeLimit(zoomLevel) / MAX_ZOOM_LEVEL;
+        float zoom = 1f + (Math.max(1f, maxDigitalZoom) - 1f) * fraction;
+        int cropWidth = Math.max(1, (int) (activeArray.width() / zoom));
+        int cropHeight = Math.max(1, (int) (activeArray.height() / zoom));
+        int cropLeft = (activeArray.width() - cropWidth) / 2;
+        int cropTop = (activeArray.height() - cropHeight) / 2;
+        return new Rect(
+                activeArray.left + cropLeft,
+                activeArray.top + cropTop,
+                activeArray.left + cropLeft + cropWidth,
+                activeArray.top + cropTop + cropHeight);
+    }
+
+    /** Clamps a caller's zoom level into the range this backend publishes. */
+    private static int rangeLimit(int zoomLevel) {
+        return Math.max(0, Math.min(zoomLevel, MAX_ZOOM_LEVEL));
     }
 
     @Override
@@ -505,27 +887,17 @@ public class Camera2Module extends ICameraModule {
         return mZoomLevel;
     }
 
+    /**
+     * The zoom scale, which is fixed rather than derived from the camera.
+     *
+     * <p>A device-dependent maximum made the scale mean something different on every phone, and
+     * something different again from the CameraX backend, so a caller could not drive one zoom
+     * control across both. The level is a position in the camera's range instead: 0 is the widest
+     * lens it has and {@link #MAX_ZOOM_LEVEL} the longest.</p>
+     */
     @Override
     public int getMaxZoomLevel() {
-        try {
-            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(getActiveCamera());
-            Float maxZoom = (characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM));
-            if (maxZoom == null) {
-                return ZOOM_NOT_SUPPORTED;
-            }
-
-            // We scale the max zoom (which is a float) by 10 so that we can use ints. However,
-            // there's no need to do that if we can't even zoom.
-            if (maxZoom == ZOOM_NOT_SUPPORTED) {
-                return ZOOM_NOT_SUPPORTED;
-            }
-
-            return (int) (maxZoom * 10);
-        } catch (CameraAccessException e) {
-            Log.e(TAG, "Failed to query camera", e);
-        }
-
-        return ZOOM_NOT_SUPPORTED;
+        return MAX_ZOOM_LEVEL;
     }
 
     @Override
@@ -537,7 +909,7 @@ public class Camera2Module extends ICameraModule {
                 return false;
             }
             return hasFlash;
-        } catch (CameraAccessException e) {
+        } catch (CameraAccessException | RuntimeException e) {
             Log.e(TAG, "Failed to query camera", e);
         }
 
@@ -546,7 +918,19 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public boolean isZoomSupported() {
-        return getMaxZoomLevel() != ZOOM_NOT_SUPPORTED;
+        try {
+            CameraCharacteristics characteristics =
+                    mCameraManager.getCameraCharacteristics(getActiveCamera());
+            if (zoomRatioRange(characteristics) != null) {
+                return true;
+            }
+            Float maxDigitalZoom =
+                    characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
+            return maxDigitalZoom != null && maxDigitalZoom > 1f;
+        } catch (CameraAccessException | RuntimeException e) {
+            Log.e(TAG, "Failed to query camera", e);
+        }
+        return false;
     }
 
     @Override
@@ -559,7 +943,7 @@ public class Camera2Module extends ICameraModule {
         if (!mIsPaused) {
             try {
                 mCaptureSession.stopRepeating();
-            } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+            } catch (CameraAccessException | RuntimeException e) {
                 Log.e(TAG, "Failed to pause the camera", e);
             }
             mIsPaused = true;
@@ -589,7 +973,7 @@ public class Camera2Module extends ICameraModule {
             if (mIsPaused) {
                 try {
                     mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
-                } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+                } catch (CameraAccessException | RuntimeException e) {
                     Log.e(TAG, "Failed to resume the camera", e);
                 }
             } else {
@@ -624,19 +1008,268 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
+    public void setFlash(CameraView.Flash flash) {
+        super.setFlash(flash);
+
+        // The strategy is carried by the repeating request, so the preview has to be reissued for
+        // auto-exposure to converge under the new mode before the next capture.
+        reissueRepeatingRequest("the flash strategy");
+    }
+
+    /** Rebuilds the repeating request, for a setting the request itself carries. */
+    private void reissueRepeatingRequest(String what) {
+        mHandler.post(() -> {
+            if (mCameraDevice == null || mCaptureSession == null || mActiveSession == null
+                    || mIsPaused) {
+                return;
+            }
+            try {
+                mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+            } catch (CameraAccessException | RuntimeException e) {
+                Log.e(TAG, "Failed to apply " + what, e);
+            }
+        });
+    }
+
+    /**
+     * Whether a picture can be taken while recording.
+     *
+     * <p>Camera2's mandatory stream combinations guarantee a preview, a recording and a still
+     * together from LIMITED hardware upwards - that combination is what a camera app's
+     * video-snapshot button uses - with the still no larger than the recording. LEGACY hardware
+     * guarantees nothing of the sort, and a session it cannot configure costs the recording as
+     * well as the picture, so there it records without one.</p>
+     */
+    @Override
+    public boolean isCameraReady() {
+        return mCaptureSession != null && mActiveSession != null && mCameraDevice != null;
+    }
+
+    @Override
+    public boolean isColorSpaceSupported(CameraView.ColorSpace colorSpace) {
+        if (colorSpace == CameraView.ColorSpace.SRGB) {
+            return true;
+        }
+        if (Build.VERSION.SDK_INT < 34) {
+            // The session could not be told about a colour space before API 34, so asking for one
+            // would silently produce sRGB anyway.
+            return false;
+        }
+        android.graphics.ColorSpace.Named named = namedColorSpace(colorSpace);
+        if (named == null) {
+            return false;
+        }
+        try {
+            android.hardware.camera2.params.ColorSpaceProfiles profiles =
+                    mCameraManager.getCameraCharacteristics(getActiveCamera())
+                            .get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES);
+            return profiles != null
+                    && profiles.getSupportedColorSpaces(ImageFormat.JPEG).contains(named);
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its colour space profiles", error);
+            return false;
+        }
+    }
+
+    @Override
+    public void setColorSpace(CameraView.ColorSpace colorSpace) {
+        CameraView.ColorSpace before = getColorSpace();
+        super.setColorSpace(colorSpace);
+        if (getColorSpace() != before) {
+            // The colour space belongs to the session, not to a request, so it only takes hold
+            // when the session is built again.
+            restartActiveSession();
+        }
+    }
+
+    /**
+     * The platform's name for a colour space, or null for one it does not have.
+     *
+     * <p>Only callable once the platform is known to be new enough: the return type itself only
+     * exists from API 26, so a caller that has not checked risks failing to load rather than
+     * getting a null.</p>
+     */
+    @RequiresApi(34)
+    @Nullable
+    private static android.graphics.ColorSpace.Named namedColorSpace(
+            CameraView.ColorSpace colorSpace) {
+        switch (colorSpace) {
+            case DISPLAY_P3:
+                return android.graphics.ColorSpace.Named.DISPLAY_P3;
+            case SRGB:
+                return android.graphics.ColorSpace.Named.SRGB;
+            default:
+                return null;
+        }
+    }
+
+    /** Rebuilds the session, for a setting the session itself carries. */
+    private void restartActiveSession() {
+        mHandler.post(() -> {
+            Session session = mActiveSession;
+            if (mCameraDevice == null || session == null || mIsPaused) {
+                return;
+            }
+            setSession(session instanceof PictureSession && !(session instanceof VideoSession)
+                    ? new PictureSession(this) : session);
+        });
+    }
+
+    @Override
+    public boolean isSnapshotWhileRecordingSupported() {
+        return isRecordingSnapshotSupported();
+    }
+
+    boolean isRecordingSnapshotSupported() {
+        try {
+            Integer level = mCameraManager.getCameraCharacteristics(getActiveCamera())
+                    .get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+            return level != null
+                    && level != CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY;
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its hardware level", error);
+            return false;
+        }
+    }
+
+    @Override
+    public boolean isFaceDetectionSupported() {
+        return faceDetectMode() != null;
+    }
+
+    @Override
+    protected boolean setFaceDetectionEnabled(boolean enabled) {
+        if (!enabled) {
+            boolean wasEnabled = mFaceDetectMode != null;
+            mFaceDetectMode = null;
+            if (wasEnabled) {
+                reissueRepeatingRequest("the end of face detection");
+            }
+            return true;
+        }
+        Integer mode = faceDetectMode();
+        if (mode == null) {
+            return false;
+        }
+        mFaceDetectMode = mode;
+        reissueRepeatingRequest("face detection");
+        return true;
+    }
+
+    /**
+     * The face detection mode the repeating request should ask for, or null for none.
+     *
+     * <p>FULL adds eye and mouth positions and an identity that persists while a face is tracked;
+     * SIMPLE gives only the bounds and a score. Both are computed by hardware that is already
+     * finding faces to focus and expose for, so the richer mode is preferred where it exists.</p>
+     */
+    @Nullable
+    private Integer faceDetectMode() {
+        try {
+            CameraCharacteristics characteristics =
+                    mCameraManager.getCameraCharacteristics(getActiveCamera());
+            int[] modes = characteristics.get(
+                    CameraCharacteristics.STATISTICS_INFO_AVAILABLE_FACE_DETECT_MODES);
+            Integer maxFaces =
+                    characteristics.get(CameraCharacteristics.STATISTICS_INFO_MAX_FACE_COUNT);
+            if (modes == null || maxFaces == null || maxFaces <= 0) {
+                return null;
+            }
+            boolean simple = false;
+            for (int mode : modes) {
+                if (mode == CameraCharacteristics.STATISTICS_FACE_DETECT_MODE_FULL) {
+                    return CameraCharacteristics.STATISTICS_FACE_DETECT_MODE_FULL;
+                }
+                if (mode == CameraCharacteristics.STATISTICS_FACE_DETECT_MODE_SIMPLE) {
+                    simple = true;
+                }
+            }
+            return simple ? CameraCharacteristics.STATISTICS_FACE_DETECT_MODE_SIMPLE : null;
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its face detection modes", error);
+            return null;
+        }
+    }
+
+    /** The mode the repeating request is carrying, read by the sessions that build it. */
+    @Nullable
+    Integer getFaceDetectMode() {
+        return mFaceDetectMode;
+    }
+
+    /**
+     * Translates a capture result's faces and hands them to the view, on the main thread.
+     *
+     * <p>Called for every completed preview frame while face detection is on, so a camera that
+     * sees nothing is not reported over and over: an empty result is passed on once, to clear
+     * whatever was drawn, and then skipped until a face comes back.</p>
+     */
+    void onFacesCaptured(@NonNull CaptureResult result) {
+        android.hardware.camera2.params.Face[] detected =
+                result.get(CaptureResult.STATISTICS_FACES);
+        if (detected == null) {
+            detected = new android.hardware.camera2.params.Face[0];
+        }
+        if (detected.length == 0 && mLastFaceCount == 0) {
+            return;
+        }
+        mLastFaceCount = detected.length;
+
+        List<Face> faces = new ArrayList<>(detected.length);
+        for (android.hardware.camera2.params.Face face : detected) {
+            Rect bounds = face.getBounds();
+            if (bounds == null) {
+                continue;
+            }
+            faces.add(Face.create(bounds, face.getScore(), face.getId(),
+                    face.getLeftEyePosition(), face.getRightEyePosition(),
+                    face.getMouthPosition()));
+        }
+        onFacesDetected(faces, faceToViewTransform());
+    }
+
+    /**
+     * Maps face bounds onto the view.
+     *
+     * <p>Faces are reported in active-array coordinates, so the region the preview is actually
+     * showing is the crop region when zoom is being done by cropping, and the whole array when the
+     * camera is handling zoom itself through CONTROL_ZOOM_RATIO. Rotation is the sensor's own
+     * orientation less the display's, which is what the preview transform applies.</p>
+     */
+    @NonNull
+    private Matrix faceToViewTransform() {
+        Rect region = mActiveSession == null ? null : mActiveSession.getCropRegion();
+        if (region == null) {
+            region = activeArraySize();
+        }
+        if (region == null) {
+            return new Matrix();
+        }
+        return TransformMath.centerCrop(new RectF(region),
+                TransformMath.within360(getSensorOrientation() - getDisplayRotation()),
+                false /* the Camera2 preview is not mirrored */,
+                getView().getWidth(), getView().getHeight());
+    }
+
+    @Nullable
+    private Rect activeArraySize() {
+        try {
+            return mCameraManager.getCameraCharacteristics(getActiveCamera())
+                    .get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its active array", error);
+            return null;
+        }
+    }
+
+    @Override
     public void takePicture(File file) {
-        if (mCaptureSession == null) {
-            if (DEBUG) Log.w(TAG, "Cannot take picture. No capture session.");
-            return;
+        if (file == null) {
+            throw new IllegalArgumentException("Picture destination cannot be null");
         }
-
-        if (mActiveSession == null) {
-            if (DEBUG) Log.w(TAG, "Cannot take picture. No active session.");
-            return;
-        }
-
-        if (mCameraDevice == null) {
-            if (DEBUG) Log.w(TAG, "Cannot take picture. No camera device.");
+        if (mCaptureSession == null || mActiveSession == null || mCameraDevice == null) {
+            Log.w(TAG, "Cannot take picture before Camera2 preview is ready");
+            onImageFailed();
             return;
         }
 
@@ -651,9 +1284,15 @@ public class Camera2Module extends ICameraModule {
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
     public void startRecording(File file) {
-        // Quick fail if the CameraDevice was never created.
-        if (mCameraDevice == null) {
+        if (file == null) {
+            throw new IllegalArgumentException("Video destination cannot be null");
+        }
+        if (mCameraDevice == null || !mIsOpen) {
             onVideoFailed();
+            return;
+        }
+        if (mIsRecording) {
+            Log.w(TAG, "Ignoring duplicate Camera2 recording request");
             return;
         }
 
@@ -697,6 +1336,10 @@ public class Camera2Module extends ICameraModule {
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {
         int viewWidth = getWidth();
         int viewHeight = getHeight();
+        if (previewWidth <= 0 || previewHeight <= 0 || viewWidth <= 0 || viewHeight <= 0) {
+            if (DEBUG) Log.w(TAG, "Skipping preview transform for zero-sized surface");
+            return;
+        }
         int displayOrientation = getDisplayRotation();
         int cameraOrientation = getSensorOrientation(getActiveCamera());
 
@@ -792,7 +1435,7 @@ public class Camera2Module extends ICameraModule {
     protected int getRelativeCameraOrientation() {
         try {
             return getRelativeImageOrientation(getDisplayRotation(), getSensorOrientation(getActiveCamera()), isUsingFrontFacingCamera(), false);
-        } catch (CameraAccessException e) {
+        } catch (CameraAccessException | RuntimeException e) {
             Log.e(TAG, "Failed to query camera", e);
             return 0;
         }
@@ -800,16 +1443,93 @@ public class Camera2Module extends ICameraModule {
 
     @NonNull
     String getActiveCamera() throws CameraAccessException {
-        return mActiveCamera == null ? getDefaultCamera() : mActiveCamera;
+        String[] cameraIds = getAvailableCameraIds();
+        if (mActiveCamera != null) {
+            for (String cameraId : cameraIds) {
+                if (cameraId.equals(mActiveCamera)) {
+                    return cameraId;
+                }
+            }
+            Log.w(TAG, "Previously selected camera is no longer available: " + mActiveCamera);
+            mActiveCamera = null;
+        }
+        String backFacing = preferredCamera(cameraIds, CameraCharacteristics.LENS_FACING_BACK);
+        if (backFacing != null) {
+            return backFacing;
+        }
+        String anyCamera = preferredCamera(cameraIds, null);
+        return anyCamera == null ? cameraIds[0] : anyCamera;
     }
 
-    private String getDefaultCamera() throws CameraAccessException {
-        for (String cameraId : mCameraManager.getCameraIdList()) {
-            if (isBackFacing(cameraId)) {
-                return cameraId;
+    /**
+     * The camera we would rather open, among those matching a lens facing.
+     *
+     * <p>Ranked by {@link #devicePreference}, so a built-in sensor wins over a USB webcam or a
+     * virtual camera that happens to be listed first or to report the same lens facing.</p>
+     *
+     * @param lensFacing the facing to match, or null for any
+     */
+    @Nullable
+    private String preferredCamera(@NonNull String[] cameraIds, @Nullable Integer lensFacing) {
+        String best = null;
+        int bestPreference = Integer.MAX_VALUE;
+        for (String cameraId : cameraIds) {
+            try {
+                if (lensFacing != null) {
+                    Integer facing = mCameraManager.getCameraCharacteristics(cameraId)
+                            .get(CameraCharacteristics.LENS_FACING);
+                    if (facing == null || !facing.equals(lensFacing)) {
+                        continue;
+                    }
+                }
+                int preference = devicePreference(cameraId);
+                if (preference < bestPreference) {
+                    best = cameraId;
+                    bestPreference = preference;
+                }
+            } catch (CameraAccessException | RuntimeException error) {
+                Log.w(TAG, "Unable to inspect camera " + cameraId, error);
             }
         }
-        return mCameraManager.getCameraIdList()[0];
+        return best;
+    }
+
+    /**
+     * How much we prefer a camera when nothing has been chosen yet, lowest first.
+     *
+     * <p>INFO_DEVICE_TYPE arrives in API 37 and is the first way to tell a built-in sensor from a
+     * USB webcam or a virtual camera. Before it, every entry in the list looked alike, so a
+     * plugged-in webcam reporting itself as back-facing could become the default camera. External
+     * and virtual cameras stay in the list for {@link #toggleCamera()} to reach; they just stop
+     * being picked by default.</p>
+     */
+    private int devicePreference(@NonNull String cameraId) throws CameraAccessException {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.CINNAMON_BUN) {
+            return 0;
+        }
+        Integer deviceType = mCameraManager.getCameraCharacteristics(cameraId)
+                .get(CameraCharacteristics.INFO_DEVICE_TYPE);
+        if (deviceType == null) {
+            return 1;
+        }
+        switch (deviceType) {
+            case CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN:
+                return 0;
+            case CameraMetadata.INFO_DEVICE_TYPE_UNKNOWN:
+                return 1;
+            case CameraMetadata.INFO_DEVICE_TYPE_EXTERNAL:
+            case CameraMetadata.INFO_DEVICE_TYPE_VIRTUAL:
+            default:
+                return 2;
+        }
+    }
+
+    private String[] getAvailableCameraIds() throws CameraAccessException {
+        String[] cameraIds = mCameraManager.getCameraIdList();
+        if (cameraIds.length == 0) {
+            throw new IllegalStateException("No cameras are available on this device");
+        }
+        return cameraIds;
     }
 
     private boolean supportsFocus(String cameraId) throws CameraAccessException {
@@ -839,7 +1559,7 @@ public class Camera2Module extends ICameraModule {
     protected int getSensorOrientation() {
         try {
             return getSensorOrientation(getActiveCamera());
-        } catch (CameraAccessException e) {
+        } catch (CameraAccessException | RuntimeException e) {
             return 0;
         }
     }
@@ -857,7 +1577,9 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public void onRestoreInstanceState(Parcelable state) {
-        mActiveCamera = ((Bundle) state).getString(EXTRA_DEVICE_ID);
+        if (state instanceof Bundle) {
+            mActiveCamera = ((Bundle) state).getString(EXTRA_DEVICE_ID);
+        }
     }
 
     @Override
@@ -865,7 +1587,7 @@ public class Camera2Module extends ICameraModule {
         if (mActiveSession != null) {
             try {
                 mActiveSession.onLayoutChanged();
-            } catch (CameraAccessException e) {
+            } catch (CameraAccessException | RuntimeException e) {
                 Log.e(TAG, "Failed to adjust the camera after a layout change", e);
             }
         }
@@ -882,6 +1604,8 @@ public class Camera2Module extends ICameraModule {
         @Nullable MeteringRectangle getMeteringRectangle();
         void setCropRegion(@Nullable Rect region);
         @Nullable Rect getCropRegion();
+        void setZoomRatio(@Nullable Float zoomRatio);
+        @Nullable Float getZoomRatio();
         void onAvailable(@NonNull CameraDevice cameraDevice, @NonNull CameraCaptureSession session) throws CameraAccessException;
         void onInvalidate(@NonNull CameraDevice cameraDevice, @NonNull CameraCaptureSession session) throws CameraAccessException;
         void close();

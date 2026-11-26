@@ -1,5 +1,6 @@
 package com.xlythe.sample.camera
 
+import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
@@ -11,6 +12,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.annotation.RequiresPermission
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -200,6 +202,7 @@ private fun createImageFile(context: Context): File {
     return File.createTempFile("JPEG_${timeStamp}_", ".jpg", storageDir)
 }
 
+@RequiresPermission(Manifest.permission.CAMERA)
 @Composable
 fun SimpleDemoScreen() {
     val context = LocalContext.current
@@ -303,7 +306,7 @@ fun SimpleDemoScreen() {
     }
 }
 
-@SuppressLint("MissingPermission")
+@RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
 @Composable
 fun StreamDemoScreen() {
     val context = LocalContext.current
@@ -363,6 +366,7 @@ fun StreamDemoScreen() {
     }
 }
 
+@RequiresPermission(Manifest.permission.CAMERA)
 @Composable
 fun ResizingDemoScreen() {
     val cameraController = remember { mutableStateOf<CameraController?>(null) }
@@ -417,6 +421,7 @@ fun ResizingDemoScreen() {
     }
 }
 
+@RequiresPermission(Manifest.permission.CAMERA)
 @Composable
 fun QrCodeDemoScreen() {
     val context = LocalContext.current
