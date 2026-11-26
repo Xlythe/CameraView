@@ -231,6 +231,12 @@ public class Camera2Module extends ICameraModule {
     @NonNull
     private final CameraManager mCameraManager;
 
+    /** The camera service, for a subclass that has to ask about a camera it chose itself. */
+    @NonNull
+    CameraManager getCameraManager() {
+        return mCameraManager;
+    }
+
     /**
      * This is the id of the camera (eg. front or back facing) that we're currently using.
      */
@@ -327,7 +333,7 @@ public class Camera2Module extends ICameraModule {
                 }
 
                 mCameraDevice = cameraDevice;
-                setSession(new PictureSession(Camera2Module.this));
+                setSession(createIdleSession());
             }
 
             @Override
@@ -361,12 +367,44 @@ public class Camera2Module extends ICameraModule {
         try {
             mActiveCamera = getActiveCamera();
             if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
-            mCameraManager.openCamera(mActiveCamera, createStateCallback(generation), mHandler);
+            mCameraManager.openCamera(mActiveCamera,
+                    onOpeningCamera(createStateCallback(generation)), mHandler);
         } catch (CameraAccessException | RuntimeException e) {
             mIsOpen = false;
             closeCameraResources();
             onCameraError(new IllegalStateException("Failed to open Camera2 device", e));
         }
+    }
+
+    /**
+     * The session to run when nothing in particular is being captured.
+     *
+     * <p>A seam rather than a constructor call, because what idling means depends on the backend:
+     * a still camera idles with the still session configured so that a capture needs no new
+     * session, and {@link ArCameraModule} idles with the one session ARCore will tolerate.</p>
+     */
+    @NonNull
+    Session createIdleSession() {
+        return new PictureSession(this);
+    }
+
+    /**
+     * Wraps the callback the camera is opened with, for a backend that needs to see it too.
+     *
+     * <p>ARCore insists on this: a shared-camera session has to know when the device opens so it
+     * can create the readers it then hands back as surfaces, and the only way it is told is by
+     * the app opening the camera with a callback of its own wrapped around ours.</p>
+     */
+    @NonNull
+    CameraDevice.StateCallback onOpeningCamera(@NonNull CameraDevice.StateCallback callback) {
+        return callback;
+    }
+
+    /** Wraps the capture session callback, which ARCore needs for the same reason. */
+    @NonNull
+    CameraCaptureSession.StateCallback onConfiguringSession(
+            @NonNull CameraCaptureSession.StateCallback callback) {
+        return callback;
     }
 
     private void handleCameraFailure(@NonNull CameraDevice cameraDevice, int generation,
@@ -473,7 +511,7 @@ public class Camera2Module extends ICameraModule {
             session.initialize(map);
 
             // Now, with all of our surfaces, we'll ask for a new session
-            createCaptureSession(session, session.getSurfaces(), new CameraCaptureSession.StateCallback() {
+            createCaptureSession(session, session.getSurfaces(), onConfiguringSession(new CameraCaptureSession.StateCallback() {
                 @Override
                 public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
                     if (!mIsOpen || mCameraDevice == null || mRegisteringSession != session) {
@@ -517,7 +555,7 @@ public class Camera2Module extends ICameraModule {
                     failSession(session, cameraCaptureSession,
                             "Failed to configure " + session.getClass().getSimpleName(), null);
                 }
-            });
+            }));
         } catch (CameraAccessException | RuntimeException e) {
             failSession(session, null, "Failed to create capture session", e);
         }
@@ -1027,7 +1065,7 @@ public class Camera2Module extends ICameraModule {
         // When quality changes, we need to update our session with the new dimensions
         if (mActiveSession != null) {
             if (mActiveSession instanceof PictureSession) {
-                setSession(new PictureSession(this));
+                setSession(createIdleSession());
             } else if (mActiveSession instanceof VideoSession) {
                 setSession(new VideoSession(this, ((VideoSession) mActiveSession).getFile(),
                         getHighSpeedProfile()));
@@ -1393,7 +1431,7 @@ public class Camera2Module extends ICameraModule {
                 return;
             }
             setSession(session instanceof PictureSession && !(session instanceof VideoSession)
-                    ? new PictureSession(this) : session);
+                    ? createIdleSession() : session);
         });
     }
 
@@ -1695,7 +1733,7 @@ public class Camera2Module extends ICameraModule {
     @Override
     public void stopRecording() {
         mIsRecording = false;
-        setSession(new PictureSession(this));
+        setSession(createIdleSession());
     }
 
     @Override
@@ -1722,7 +1760,7 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-        setSession(new PictureSession(this));
+        setSession(createIdleSession());
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {

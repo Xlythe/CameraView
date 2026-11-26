@@ -7,6 +7,17 @@
     <string name="app_name_qr_code">QR Code Demo</string>
     <string name="app_name_wear">Wear Companion</string>
     <string name="app_name_effect">Effect Demo</string>
+    <string name="app_name_ar">AR Demo</string>
+    <string name="ar_status_unavailable">AR is not available on this device, so the camera is running without it</string>
+    <string name="ar_status_looking">Move the phone slowly to let it work out where it is</string>
+    <string name="ar_status_tap">Tap the floor to stand a pillar of light on it</string>
+    <string name="ar_status_placing">Looking for a surface where you tapped…</string>
+    <string name="ar_status_placed">Walk around it. Anything in front hides it.</string>
+    <string name="ar_status_dark">Too dark to track. Turn a light on.</string>
+    <string name="ar_status_featureless">Nothing to track. Point at something with more detail.</string>
+    <string name="ar_status_fast">Moving too fast to follow. Slow down.</string>
+    <string name="ar_status_no_camera">The camera went away, so tracking stopped</string>
+    <string name="ar_status_lost">Tracking stopped</string>
     <string name="wear_status_idle">Open the companion app on your watch</string>
     <string name="wear_status_opening">Connecting to the watch…</string>
     <string name="wear_status_streaming">Streaming to the watch</string>

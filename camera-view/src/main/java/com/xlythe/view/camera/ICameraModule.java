@@ -18,6 +18,7 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
+import com.xlythe.view.camera.ar.ArFrameListener;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.stream.VideoRecorder;
@@ -649,6 +650,33 @@ public abstract class ICameraModule {
      */
     public boolean isFrameAnalysisSupported() {
         return true;
+    }
+
+    /**
+     * Which backend this is, as {@link CameraView#getBackend()} reports it.
+     *
+     * <p>Asked of the module rather than decided from its type, because a module is allowed to
+     * be a different backend from the one its class suggests: the AR backend is a Camera2
+     * module and answers Camera2 whenever it could not start a session.</p>
+     */
+    @NonNull
+    public CameraView.Backend getBackend() {
+        return CameraView.Backend.CAMERA2;
+    }
+
+    /**
+     * Where to send the pose of every tracked frame.
+     *
+     * <p>Ignored by every backend but AR, which is why it is here rather than only there: a
+     * listener set on a view that fell back to Camera2 is not an error, it just never fires,
+     * and an app can offer AR without first knowing whether it got it.</p>
+     */
+    public void setArFrameListener(@Nullable ArFrameListener listener) {}
+
+    /** @see #setArFrameListener */
+    @Nullable
+    public ArFrameListener getArFrameListener() {
+        return null;
     }
 
     /** What draws each camera frame on its way out, or null to leave the frames alone. */

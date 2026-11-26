@@ -26,6 +26,15 @@
         android:largeHeap="true"
         android:theme="@style/AppTheme">
 
+        <!--
+          Required by ARCore before it will report whether this device supports AR at all. Set
+          to optional so the Play Store still offers this app to devices that cannot do AR;
+          "required" would hide it from them, which only suits an app that is nothing but AR.
+        -->
+        <meta-data
+            android:name="com.google.ar.core"
+            android:value="optional" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

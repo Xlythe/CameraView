@@ -33,6 +33,7 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
 
+import com.xlythe.view.camera.ar.ArFrameListener;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.BackgroundReplacer;
 import com.xlythe.view.camera.gl.FrameRenderer;
@@ -79,7 +80,21 @@ public class CameraView extends FrameLayout {
          */
         CAMERA_X(2),
         /** {@code android.hardware.Camera}, for devices that predate camera2. */
-        LEGACY(3);
+        LEGACY(3),
+        /**
+         * {@code android.hardware.camera2}, with ARCore tracking the world through it.
+         *
+         * <p>Needs com.google.ar:core on the classpath, API 24, and a device Google has
+         * certified for AR with ARCore installed - so this is the one backend that can be
+         * asked for and not got, whatever the app was built with. It falls back to
+         * {@link #CAMERA2} rather than failing, and {@link CameraView#getBackend()} reports
+         * which it ended up with.</p>
+         *
+         * <p>A still or a recording is not available while it is tracking, because both need a
+         * capture session that a shared-camera session cannot be swapped for. See
+         * {@link #setArFrameListener}.</p>
+         */
+        AR(4);
 
         final int id;
 
@@ -493,10 +508,10 @@ public class CameraView extends FrameLayout {
     /**
      * Builds the backend, falling back when the one asked for cannot run here.
      *
-     * <p>CameraX is created reflectively so that androidx.camera is a dependency an app can
-     * exclude: a build that never selects CameraX never loads the class, and one that excluded
-     * the dependency and asks for it anyway gets Camera2 and a warning rather than a
-     * NoClassDefFoundError out of a constructor.</p>
+     * <p>CameraX and AR are created reflectively so that androidx.camera and com.google.ar:core
+     * are dependencies an app can exclude: a build that never selects one never loads the class,
+     * and one that excluded the dependency and asks for it anyway gets Camera2 and a warning
+     * rather than a NoClassDefFoundError out of a constructor.</p>
      */
     @NonNull
     private ICameraModule createModule(@NonNull Backend backend) {
@@ -507,11 +522,19 @@ public class CameraView extends FrameLayout {
             case LEGACY:
                 return new LegacyCameraModule(this);
             case CAMERA_X:
-                ICameraModule cameraX = createCameraXModule();
+                ICameraModule cameraX = createOptionalModule("com.xlythe.view.camera.x.CameraXModule");
                 if (cameraX != null) {
                     return cameraX;
                 }
                 Log.w(TAG, "androidx.camera is not on the classpath; using Camera2 instead");
+                return new Camera2Module(this);
+            case AR:
+                ICameraModule ar = Build.VERSION.SDK_INT >= 24
+                        ? createOptionalModule("com.xlythe.view.camera.v2.ArCameraModule") : null;
+                if (ar != null) {
+                    return ar;
+                }
+                Log.w(TAG, "ARCore is not available here; using Camera2 instead");
                 return new Camera2Module(this);
             case AUTO:
             case CAMERA2:
@@ -520,28 +543,48 @@ public class CameraView extends FrameLayout {
         }
     }
 
+    /** Builds a module whose dependency an app is allowed not to have. */
     @Nullable
-    private ICameraModule createCameraXModule() {
+    private ICameraModule createOptionalModule(@NonNull String className) {
         try {
-            return (ICameraModule) Class.forName("com.xlythe.view.camera.x.CameraXModule")
+            return (ICameraModule) Class.forName(className)
                     .getConstructor(CameraView.class)
                     .newInstance(this);
         } catch (ReflectiveOperationException | LinkageError | RuntimeException error) {
-            if (DEBUG) Log.d(TAG, "CameraX is unavailable", error);
+            if (DEBUG) Log.d(TAG, className + " is unavailable", error);
             return null;
         }
     }
 
-    /** Which implementation this view ended up driving. */
+    /**
+     * Which implementation this view ended up driving.
+     *
+     * <p>Asked of the backend rather than worked out from its type, because the answer is not
+     * always the type: the AR backend is a Camera2 one, and reports Camera2 when it could not
+     * start a session, which is the thing an app actually wants to know.</p>
+     */
     @NonNull
     public Backend getBackend() {
-        if (mCameraModule instanceof LegacyCameraModule) {
-            return Backend.LEGACY;
-        }
-        if (mCameraModule instanceof Camera2Module) {
-            return Backend.CAMERA2;
-        }
-        return Backend.CAMERA_X;
+        return mCameraModule.getBackend();
+    }
+
+    /**
+     * Where to send the pose of every tracked frame, for an app drawing onto the world.
+     *
+     * <p>Does nothing unless the {@link Backend#AR} backend is running - including when AR was
+     * asked for and fell back - so an app that wants to know should check
+     * {@link #getBackend()}.</p>
+     *
+     * <p>The listener is called on the GL render thread. See {@link ArFrameListener}.</p>
+     */
+    public void setArFrameListener(@Nullable ArFrameListener listener) {
+        mCameraModule.setArFrameListener(listener);
+    }
+
+    /** @see #setArFrameListener */
+    @Nullable
+    public ArFrameListener getArFrameListener() {
+        return mCameraModule.getArFrameListener();
     }
 
     private void init(Context context, @Nullable AttributeSet attrs) {

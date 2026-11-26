@@ -10,6 +10,15 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <application>
+        <!--
+          ARCore will not even answer whether this device supports AR until the application
+          declares whether it needs it. Optional, because all but one of these tests have
+          nothing to do with AR and must still run on a device that cannot do it.
+        -->
+        <meta-data
+            android:name="com.google.ar.core"
+            android:value="optional" />
+
         <activity
             android:name="com.xlythe.view.camera.test.CameraTestActivity"
             android:exported="false"

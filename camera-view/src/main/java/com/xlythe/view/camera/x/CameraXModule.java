@@ -122,6 +122,12 @@ import java.util.concurrent.Executor;
 /** A CameraView backend implemented with CameraX. */
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class CameraXModule extends ICameraModule implements LifecycleOwner {
+    @NonNull
+    @Override
+    public CameraView.Backend getBackend() {
+        return CameraView.Backend.CAMERA_X;
+    }
+
     /** The time for which a cached GPS location remains useful. */
     private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
     /** A short timeout used only to refresh and read the last known GPS location. */

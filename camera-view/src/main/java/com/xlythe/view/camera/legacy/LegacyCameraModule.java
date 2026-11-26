@@ -45,6 +45,12 @@ import androidx.collection.ArrayMap;
 
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LegacyCameraModule extends ICameraModule {
+    @NonNull
+    @Override
+    public CameraView.Backend getBackend() {
+        return CameraView.Backend.LEGACY;
+    }
+
     /** No camera chosen yet, which is not the same as camera zero. */
     private static final int INVALID_CAMERA_ID = -1;
 

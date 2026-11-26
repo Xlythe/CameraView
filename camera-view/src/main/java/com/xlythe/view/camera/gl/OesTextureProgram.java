@@ -105,6 +105,18 @@ public final class OesTextureProgram {
      * and repeating it is meaningless.</p>
      */
     public int createExternalTexture() {
+        return newExternalTexture();
+    }
+
+    /**
+     * Creates a camera texture without a program to hang it on.
+     *
+     * <p>Static because a {@link CameraTextureProvider} has to make the texture itself and has
+     * no program to borrow one from - it runs before the renderer has drawn anything. The
+     * parameters are the ones a camera texture needs rather than the GL defaults, which repeat
+     * and use mipmaps that an external texture does not have.</p>
+     */
+    public static int newExternalTexture() {
         int[] names = new int[1];
         GLES20.glGenTextures(1, names, 0);
         if (names[0] == 0) {
