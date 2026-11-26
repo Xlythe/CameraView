@@ -1110,15 +1110,6 @@ public class Camera2Module extends ICameraModule {
         });
     }
 
-    /**
-     * Whether a picture can be taken while recording.
-     *
-     * <p>Camera2's mandatory stream combinations guarantee a preview, a recording and a still
-     * together from LIMITED hardware upwards - that combination is what a camera app's
-     * video-snapshot button uses - with the still no larger than the recording. LEGACY hardware
-     * guarantees nothing of the sort, and a session it cannot configure costs the recording as
-     * well as the picture, so there it records without one.</p>
-     */
     @Override
     public boolean isCameraReady() {
         return mCaptureSession != null && mActiveSession != null && mCameraDevice != null;
@@ -1245,6 +1236,15 @@ public class Camera2Module extends ICameraModule {
         });
     }
 
+    /**
+     * Whether a picture can be taken while recording.
+     *
+     * <p>Camera2's mandatory stream combinations guarantee a preview, a recording and a still
+     * together from LIMITED hardware upwards - that combination is what a camera app's
+     * video-snapshot button uses - with the still no larger than the recording. LEGACY hardware
+     * guarantees nothing of the sort, and a session it cannot configure costs the recording as
+     * well as the picture, so there it records without one.</p>
+     */
     @Override
     public boolean isSnapshotWhileRecordingSupported() {
         return isRecordingSnapshotSupported();

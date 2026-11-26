@@ -79,21 +79,6 @@ abstract class SessionImpl implements Camera2Module.Session {
     }
 
     /**
-     * Applies the requested flash strategy to a capture request.
-     *
-     * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
-     * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
-     * on the repeating preview request, because that is the only stream auto-exposure can converge
-     * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
-     * reason.</p>
-     */
-    /**
-     * Asks the camera for the faces it is tracking, when something wants them.
-     *
-     * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
-     * the repeating preview request; the results then arrive with each completed frame.</p>
-     */
-    /**
      * The sizes that fit inside a bound, or all of them when none do.
      *
      * <p>Falling back to all of them rather than to nothing matters: a bound no size fits is a
@@ -113,6 +98,12 @@ abstract class SessionImpl implements Camera2Module.Session {
         return fitting.isEmpty() ? sizes : fitting;
     }
 
+    /**
+     * Asks the camera for the faces it is tracking, when something wants them.
+     *
+     * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
+     * the repeating preview request; the results then arrive with each completed frame.</p>
+     */
     void applyFaceDetection(@NonNull CaptureRequest.Builder builder) {
         Integer mode = mCamera2Module.getFaceDetectMode();
         if (mode != null) {
@@ -147,6 +138,15 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getPictureQuality();
     }
 
+    /**
+     * Applies the requested flash strategy to a capture request.
+     *
+     * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
+     * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
+     * on the repeating preview request, because that is the only stream auto-exposure can converge
+     * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
+     * reason.</p>
+     */
     void applyFlash(@NonNull CaptureRequest.Builder builder) {
         if (!hasFlash()) {
             return;

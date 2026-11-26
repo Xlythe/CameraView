@@ -985,9 +985,6 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Gets the current quality for image and video outputs.
-     */
-    /**
      * How hard a still capture is compressed, from 1 to 100, 95 by default.
      *
      * <p>Without this every device picks its own number, which is not the same on any two phones.
@@ -1001,6 +998,9 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getPictureQuality();
     }
 
+    /**
+     * Gets the current quality for image and video outputs.
+     */
     public Quality getQuality() {
         return mCameraModule.getQuality();
     }
