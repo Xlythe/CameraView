@@ -143,9 +143,12 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_SUPER = "super";
     private static final String EXTRA_MODULE = "module";
     private static final String EXTRA_QUALITY = "quality";
-    private static final String EXTRA_ZOOM_LEVEL = "zoom_level";
+    /**
+     * Saved-state key for the zoom. A ratio rather than a level, because a level is only a zoom
+     * once the camera's range is known, and on restore the camera may not be open yet.
+     */
+    private static final String EXTRA_ZOOM_RATIO = "zoom_ratio";
     private static final String EXTRA_PINCH_TO_ZOOM_ENABLED = "pinch_to_zoom_enabled";
-    private static final String EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR = "pinch_to_zoom_scale_factor";
     private static final String EXTRA_FLASH = "flash";
     private static final String EXTRA_LENS_FACING = "lens_facing";
     private static final String EXTRA_MAX_VIDEO_DURATION = "max_video_duration";
@@ -602,9 +605,8 @@ public class CameraView extends FrameLayout {
         state.putParcelable(EXTRA_SUPER, super.onSaveInstanceState());
         state.putParcelable(EXTRA_MODULE, mCameraModule.onSaveInstanceState());
         state.putInt(EXTRA_QUALITY, getQuality().id);
-        state.putInt(EXTRA_ZOOM_LEVEL, getZoomLevel());
+        state.putFloat(EXTRA_ZOOM_RATIO, getZoomRatio());
         state.putBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED, isPinchToZoomEnabled());
-        state.putFloat(EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR, mScaleDetector.getCumulativeScaleFactor());
         state.putInt(EXTRA_FLASH, getFlash().id);
         state.putInt(EXTRA_LENS_FACING, getLensFacing().id);
         state.putLong(EXTRA_MAX_VIDEO_DURATION, getMaxVideoDuration());
@@ -635,9 +637,8 @@ public class CameraView extends FrameLayout {
             super.onRestoreInstanceState(state.getParcelable(EXTRA_SUPER));
             mCameraModule.onRestoreInstanceState(state.getParcelable(EXTRA_MODULE));
             setQuality(Quality.fromId(state.getInt(EXTRA_QUALITY)));
-            setZoomLevel(state.getInt(EXTRA_ZOOM_LEVEL));
+            setZoomRatio(state.getFloat(EXTRA_ZOOM_RATIO, 1f));
             setPinchToZoomEnabled(state.getBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED));
-            mScaleDetector.setCumulativeScaleFactor(state.getFloat(EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR, mScaleDetector.getCumulativeScaleFactor()));
             setFlash(Flash.fromId(state.getInt(EXTRA_FLASH)));
             setLensFacing(LensFacing.fromId(state.getInt(EXTRA_LENS_FACING)));
             setMaxVideoDuration(state.getLong(EXTRA_MAX_VIDEO_DURATION));
@@ -1852,26 +1853,6 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Maps a cumulative pinch scale onto a zoom level.
-     *
-     * <p>The scale starts at 1 rather than 0, so the usable range of a pinch is maxScale - 1. A
-     * fully spread pinch has to land on the camera's maximum zoom; dividing by maxScale instead
-     * stopped at four fifths of it and left the last of the range unreachable.</p>
-     *
-     * @param scaleFactor the cumulative scale, between 1 and maxScale
-     * @param maxScale the scale a fully spread pinch reaches
-     * @param maxZoomLevel the zoom level that scale maps to
-     */
-    static int zoomLevelForScale(float scaleFactor, float maxScale, int maxZoomLevel) {
-        if (maxScale <= 1f || maxZoomLevel <= 0) {
-            return 0;
-        }
-        float clamped = Math.max(1f, Math.min(scaleFactor, maxScale));
-        int zoomLevel = (int) ((clamped - 1f) * maxZoomLevel / (maxScale - 1f));
-        return Math.min(Math.max(zoomLevel, 0), maxZoomLevel);
-    }
-
-    /**
      * When enabled, the user can pinch the camera to zoom in/out.
      */
     public void setPinchToZoomEnabled(boolean enabled) {
@@ -2037,8 +2018,18 @@ public class CameraView extends FrameLayout {
     }
 
     private class PinchToZoomGestureDetector extends ScaleGestureDetector implements ScaleGestureDetector.OnScaleGestureListener {
-        final float MAX_SCALE = 5f;
-        float mScaleFactor = 1f;
+        /**
+         * The zoom the pinch has reached, which each step of it multiplies.
+         *
+         * <p>Kept here rather than read back from the camera each step: the old camera API snaps
+         * to the nearest entry of its zoom table, and the small steps of a pinch multiplied onto a
+         * snapped zoom would never leave it.</p>
+         */
+        private float mZoomRatio = 1f;
+        /** The bottom of the range the pinch is held to, read once as it starts. */
+        private float mMinZoomRatio = 1f;
+        /** The top of the range the pinch is held to, read once as it starts. */
+        private float mMaxZoomRatio = 1f;
 
         PinchToZoomGestureDetector(Context context) {
             this(context, new S());
@@ -2049,28 +2040,26 @@ public class CameraView extends FrameLayout {
             s.setRealGestureDetector(this);
         }
 
-        float getCumulativeScaleFactor() {
-            return mScaleFactor;
-        }
-
-        void setCumulativeScaleFactor(float scaleFactor) {
-            mScaleFactor = scaleFactor;
-        }
-
         @Override
-        public boolean onScale(ScaleGestureDetector detector) {
-            mScaleFactor *= detector.getScaleFactor();
-
-            // Don't let the object get too small or too large.
-            mScaleFactor = Math.max(1f, Math.min(mScaleFactor, MAX_SCALE));
-
-            setZoomLevel(zoomLevelForScale(mScaleFactor, MAX_SCALE, getMaxZoomLevel()));
+        public boolean onScaleBegin(ScaleGestureDetector detector) {
+            if (!isPinchToZoomEnabled() || !isZoomSupported()) {
+                return false;
+            }
+            mZoomRatio = getZoomRatio();
+            mMinZoomRatio = getMinZoomRatio();
+            mMaxZoomRatio = getMaxZoomRatio();
             return true;
         }
 
         @Override
-        public boolean onScaleBegin(ScaleGestureDetector detector) {
-            return false;
+        public boolean onScale(ScaleGestureDetector detector) {
+            // Multiplied, so spreading the fingers twice as far apart zooms in twice as far from
+            // wherever the zoom started. Held to the range at every step rather than once at the
+            // end, so a pinch that overshoots turns around as soon as the fingers do.
+            mZoomRatio = ZoomMath.clamp(
+                    mZoomRatio * detector.getScaleFactor(), mMinZoomRatio, mMaxZoomRatio);
+            setZoomRatio(mZoomRatio);
+            return true;
         }
 
         @Override
@@ -2082,6 +2071,11 @@ public class CameraView extends FrameLayout {
 
         void setRealGestureDetector(ScaleGestureDetector.OnScaleGestureListener l) {
             listener = l;
+        }
+
+        @Override
+        public boolean onScaleBegin(ScaleGestureDetector detector) {
+            return listener.onScaleBegin(detector);
         }
 
         @Override
