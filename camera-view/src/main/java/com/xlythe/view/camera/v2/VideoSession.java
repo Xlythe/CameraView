@@ -26,6 +26,7 @@ import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
@@ -170,6 +171,54 @@ class VideoSession extends PictureSession {
     }
 
     static final class VideoSurface extends CameraSurface {
+        /**
+         * The audio rate to record at, given the profile and the size actually being recorded.
+         *
+         * <p>The size is chosen apart from the profile, so a recording can be larger than its
+         * profile and its audio then too thin. That is raised to the best rate the device
+         * publishes, never further and never down.</p>
+         *
+         * @return the rate to set, or 0 to leave the profile's alone
+         */
+        @VisibleForTesting
+        static int audioBitRateFor(@NonNull CamcorderProfile profile,
+                @Nullable CamcorderProfile best, int width, int height) {
+            if (best == null || best.audioBitRate <= profile.audioBitRate) {
+                return 0;
+            }
+            long recorded = (long) width * height;
+            long inProfile = (long) profile.videoFrameWidth * profile.videoFrameHeight;
+            if (recorded <= inProfile) {
+                return 0;
+            }
+            return best.audioBitRate;
+        }
+
+        /**
+         * The richest profile this camera publishes, for the settings that are not about size.
+         *
+         * @return the profile, or null for a camera that publishes none
+         */
+        @Nullable
+        private static CamcorderProfile highestProfile(int cameraId) {
+            int[] qualities = new int[] {
+                    CamcorderProfile.QUALITY_2160P,
+                    CamcorderProfile.QUALITY_1080P,
+                    CamcorderProfile.QUALITY_720P,
+                    CamcorderProfile.QUALITY_480P,
+            };
+            for (int quality : qualities) {
+                try {
+                    if (CamcorderProfile.hasProfile(cameraId, quality)) {
+                        return CamcorderProfile.get(cameraId, quality);
+                    }
+                } catch (RuntimeException error) {
+                    if (DEBUG) Log.d(TAG, "No profile for quality " + quality, error);
+                }
+            }
+            return null;
+        }
+
         /**
          * The best profile the camera actually has for a requested quality, stepping down until
          * one exists. QUALITY_LOW is guaranteed on every camera, so it is the floor.
@@ -320,6 +369,13 @@ class VideoSession extends PictureSession {
                 mMediaRecorder.setVideoEncodingBitRate(scaleBitRate(
                         profile.videoBitRate, profile.videoFrameWidth, profile.videoFrameHeight,
                         getWidth(), getHeight()));
+                // setProfile set the audio rate from the profile too, and it falls short in the
+                // same way.
+                int audioBitRate = audioBitRateFor(
+                        profile, highestProfile(intCameraId), getWidth(), getHeight());
+                if (audioBitRate > 0) {
+                    mMediaRecorder.setAudioEncodingBitRate(audioBitRate);
+                }
                 mMediaRecorder.setOrientationHint(mCameraView.getRelativeCameraOrientation());
 
                 Location location = getLocation(getContext());
