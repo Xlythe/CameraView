@@ -72,27 +72,6 @@ public final class SpeechTranscriber {
     /** How long to wait for one window to come back before giving up on it. */
     private static final long RECOGNITION_TIMEOUT_SECONDS = 30;
 
-    /** Told how a transcription went. Called on the main thread. */
-    public interface Listener {
-        /**
-         * How far through the recording the transcription has got, 0 to 1.
-         *
-         * <p>Worth reporting because this is not quick: it decodes the audio and runs
-         * recognition over all of it, which for a long recording is many seconds.</p>
-         */
-        default void onTranscriptionProgress(float progress) {}
-
-        /**
-         * The recording was transcribed and the captions written beside it.
-         *
-         * @param sidecar the subtitle file, which sits next to the recording
-         */
-        void onTranscribed(@NonNull Captions captions, @NonNull File sidecar);
-
-        /** Nothing could be transcribed, and this is why. */
-        void onTranscriptionFailed(@NonNull String reason);
-    }
-
     private final Context mContext;
     private final Handler mMainHandler = new Handler(Looper.getMainLooper());
     private final AtomicBoolean mCancelled = new AtomicBoolean();
@@ -135,8 +114,8 @@ public final class SpeechTranscriber {
      * @param video the recording, which must have an audio track
      * @param format what to write, as {@link Captions} understands it
      */
-    public void transcribe(@NonNull File video, @NonNull Format format,
-            @NonNull Listener listener) {
+    public void transcribe(@NonNull File video, @NonNull CaptionFormat format,
+            @NonNull TranscriptionListener listener) {
         if (Looper.myLooper() == Looper.getMainLooper()) {
             throw new IllegalStateException(
                     "transcribe decodes audio and blocks; it cannot run on the main thread");
@@ -176,9 +155,9 @@ public final class SpeechTranscriber {
             return;
         }
         Captions captions = transcript.toCaptions();
-        File sidecar = Captions.sidecarFor(video, format.mExtension);
+        File sidecar = Captions.sidecarFor(video, format.getExtension());
         try {
-            if (format == Format.WEB_VTT) {
+            if (format == CaptionFormat.WEB_VTT) {
                 captions.writeWebVtt(sidecar);
             } else {
                 captions.writeSubRip(sidecar);
@@ -189,20 +168,6 @@ public final class SpeechTranscriber {
             return;
         }
         mMainHandler.post(() -> listener.onTranscribed(captions, sidecar));
-    }
-
-    /** Which subtitle format to write. */
-    public enum Format {
-        /** SubRip, which nearly every player reads. */
-        SUB_RIP("srt"),
-        /** WebVTT, which is what a browser reads. */
-        WEB_VTT("vtt");
-
-        private final String mExtension;
-
-        Format(@NonNull String extension) {
-            mExtension = extension;
-        }
     }
 
     /** What came back for one window. */
@@ -390,7 +355,7 @@ public final class SpeechTranscriber {
         }
     }
 
-    private void fail(@NonNull Listener listener, @NonNull String reason) {
+    private void fail(@NonNull TranscriptionListener listener, @NonNull String reason) {
         Log.w(TAG, reason);
         mMainHandler.post(() -> listener.onTranscriptionFailed(reason));
     }

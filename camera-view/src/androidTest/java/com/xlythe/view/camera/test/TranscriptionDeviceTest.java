@@ -17,7 +17,9 @@ import androidx.test.rule.GrantPermissionRule;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Captions;
+import com.xlythe.view.camera.caption.CaptionFormat;
 import com.xlythe.view.camera.caption.SpeechTranscriber;
+import com.xlythe.view.camera.caption.TranscriptionListener;
 
 import org.junit.After;
 import org.junit.Assume;
@@ -76,7 +78,7 @@ public final class TranscriptionDeviceTest {
         CameraView.setDefaultBackend(CameraView.Backend.AUTO);
     }
 
-    private static final class Transcription implements SpeechTranscriber.Listener {
+    private static final class Transcription implements TranscriptionListener {
         private final CountDownLatch mFinished = new CountDownLatch(1);
         private final AtomicReference<Captions> mCaptions = new AtomicReference<>();
         private final AtomicReference<File> mSidecar = new AtomicReference<>();
@@ -124,7 +126,7 @@ public final class TranscriptionDeviceTest {
                 CameraView camera = activity.getCameraView();
                 Assume.assumeTrue("this build reports no transcription support",
                         camera.isTranscriptionSupported());
-                camera.transcribe(video, SpeechTranscriber.Format.SUB_RIP, transcription);
+                camera.transcribe(video, CaptionFormat.SUB_RIP, transcription);
             });
 
             assertTrue("the transcriber never reported an outcome, which is a hang rather than"
@@ -172,7 +174,7 @@ public final class TranscriptionDeviceTest {
         // On a background thread, which the transcriber insists on, and the point here is only
         // that it gets as far as reading the audio rather than what it hears.
         Thread worker = new Thread(() -> transcriber.transcribe(
-                video, SpeechTranscriber.Format.WEB_VTT, transcription));
+                video, CaptionFormat.WEB_VTT, transcription));
         worker.start();
         assertTrue(transcription.mFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
         worker.join(TimeUnit.SECONDS.toMillis(5));
@@ -193,7 +195,7 @@ public final class TranscriptionDeviceTest {
                 () -> {
                     try {
                         transcriber.transcribe(new File("/does/not/exist.mp4"),
-                                SpeechTranscriber.Format.SUB_RIP, new Transcription());
+                                CaptionFormat.SUB_RIP, new Transcription());
                     } catch (Throwable error) {
                         thrown[0] = error;
                     }
