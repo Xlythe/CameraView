@@ -52,6 +52,23 @@ public class Exif {
     // When true, avoid saving any time. This is a privacy issue.
     private boolean mRemoveTimestamp = false;
 
+    /**
+     * What a file's metadata says, as one line, or why it could not be read.
+     *
+     * <p>For logging, which is the only thing a caller wants the whole of this for. Reading
+     * metadata means opening the file, and doing that for a log line costs four lines of
+     * ceremony around one of interest - which is a tempting place to swallow the failure
+     * silently. This never throws: a file whose metadata cannot be read says so.</p>
+     */
+    @NonNull
+    public static String describe(@NonNull File file) {
+        try {
+            return new Exif(file).toString();
+        } catch (IOException | RuntimeException error) {
+            return file + ": metadata could not be read (" + error + ")";
+        }
+    }
+
     public Exif(File file) throws IOException {
         this(file.toString());
     }

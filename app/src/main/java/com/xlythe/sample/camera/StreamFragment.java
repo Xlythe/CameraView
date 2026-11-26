@@ -20,7 +20,6 @@ import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.VideoView;
 
 import java.io.File;
-import java.io.IOException;
 import java.util.Objects;
 
 /**
@@ -89,11 +88,7 @@ public class StreamFragment extends CameraFragment {
 
     @Override
     public void onImageCaptured(final File file) {
-        try {
-            Log.d(TAG, new Exif(file).toString());
-        } catch (IOException e) {
-            // Metadata is only logged here, so a failure to read it is not worth reporting.
-        }
+        Log.d(TAG, Exif.describe(file));
 
         CaptureSaver.save(requireContext(), file, false /* isVideo */, uri ->
                 report(uri == null ? "Could not save the picture" : "Picture saved to " + uri));

@@ -14,7 +14,6 @@ import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.Exif;
 
 import java.io.File;
-import java.io.IOException;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -41,11 +40,7 @@ public class MainFragment extends CameraFragment {
     public void onImageCaptured(final File file) {
         // Print out metadata (EXIF data) about the captured picture using the library's Exif
         // helper, while the capture is still the cache file we were handed.
-        try {
-            Log.d(TAG, new Exif(file).toString());
-        } catch (IOException e) {
-            Log.w(TAG, "Could not read EXIF from " + file, e);
-        }
+        Log.d(TAG, Exif.describe(file));
 
         CaptureSaver.save(requireContext(), file, false /* isVideo */, uri -> {
             report(uri == null ? "Could not save the picture" : "Picture saved to " + uri);

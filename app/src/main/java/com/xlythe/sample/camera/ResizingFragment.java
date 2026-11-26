@@ -18,7 +18,6 @@ import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.Exif;
 
 import java.io.File;
-import java.io.IOException;
 
 /**
  * ResizingFragment demonstrates CameraView's robust support for dynamic layout animations.
@@ -31,7 +30,11 @@ public class ResizingFragment extends CameraFragment {
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_resizing, container, false);
-        MotionLayout motionLayout = view.findViewById(com.xlythe.view.camera.R.id.layout_camera);
+        // CameraFragment binds to @id/layout_camera, which is declared by the library, and
+        // library resources are not re-exported into an app's own R class. Hence the name in
+        // full here rather than a plain R.id.
+        MotionLayout motionLayout =
+                view.findViewById(com.xlythe.view.camera.R.id.layout_camera);
 
         // Clicking the resize button animates CameraView between full screen and thumbnail dimensions.
         view.findViewById(R.id.resize).setOnClickListener(v -> {
@@ -47,11 +50,7 @@ public class ResizingFragment extends CameraFragment {
 
     @Override
     public void onImageCaptured(final File file) {
-        try {
-            Log.d(TAG, new Exif(file).toString());
-        } catch (IOException ignored) {
-            // Metadata is only logged here, so a failure to read it is not worth reporting.
-        }
+        Log.d(TAG, Exif.describe(file));
 
         CaptureSaver.save(requireContext(), file, false /* isVideo */, uri ->
                 report(uri == null ? "Could not save the picture" : "Picture saved to " + uri));
