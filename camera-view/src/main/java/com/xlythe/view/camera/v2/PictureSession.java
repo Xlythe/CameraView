@@ -7,8 +7,12 @@ import android.graphics.Rect;
 import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.location.Location;
@@ -20,16 +24,21 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.PendingPicture;
+import com.xlythe.view.camera.RawCapturePairer;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
@@ -58,11 +67,22 @@ class PictureSession extends PreviewSession {
      */
     private static final int IMAGE_FORMAT_MAX = IMAGE_FORMAT_DEFAULT;
 
+    /** The JPEG (or JPEG_R) output, which every format but RAW writes to. */
     private final PictureSurface mPictureSurface;
+
+    /** The RAW_SENSOR output, configured only for a RAW format on a camera that has one. */
+    private final RawPictureSurface mRawSurface;
 
     PictureSession(Camera2Module camera2Module) {
         super(camera2Module);
         mPictureSurface = new PictureSurface(camera2Module, getPreviewSurface());
+        mRawSurface = new RawPictureSurface(camera2Module);
+    }
+
+    /** Whether a format writes a DNG, with or without a JPEG beside it. */
+    static boolean writesRaw(@NonNull CameraView.PictureFormat format) {
+        return format == CameraView.PictureFormat.RAW
+                || format == CameraView.PictureFormat.RAW_JPEG;
     }
 
     @Override
@@ -74,6 +94,13 @@ class PictureSession extends PreviewSession {
         onPreviewInitialized(map);
         if (hasStillCapture()) {
             mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr());
+            // Asked of the camera again rather than trusted from the request, because a lens
+            // change can leave a format accepted for the back camera in front of a front camera
+            // that cannot write it.
+            CameraView.PictureFormat format = getPictureFormat();
+            if (allowsRaw() && writesRaw(format) && isPictureFormatSupported(format)) {
+                mRawSurface.initialize(map);
+            }
         }
     }
 
@@ -109,12 +136,23 @@ class PictureSession extends PreviewSession {
         return true;
     }
 
+    /**
+     * Whether the session may carry a RAW output. A camera with the RAW capability guarantees a
+     * preview, a full-size JPEG and a full-size RAW together, and nothing with an encoder in it.
+     */
+    protected boolean allowsRaw() {
+        return true;
+    }
+
     @NonNull
     @Override
     public List<Surface> getSurfaces() {
         List<Surface> surfaces = super.getSurfaces();
         if (hasStillCapture()) {
             surfaces.add(mPictureSurface.getSurface());
+            if (mRawSurface.isInitialized()) {
+                surfaces.add(mRawSurface.getSurface());
+            }
         }
         return surfaces;
     }
@@ -123,6 +161,7 @@ class PictureSession extends PreviewSession {
     public void close() {
         super.close();
         mPictureSurface.close();
+        mRawSurface.close();
     }
 
     void takePicture(@NonNull File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
@@ -131,23 +170,67 @@ class PictureSession extends PreviewSession {
             onImageFailed();
             return;
         }
-        mPictureSurface.initializePicture(file);
+        CameraView.PictureFormat format = getPictureFormat();
+        boolean raw = writesRaw(format);
+        if (raw && !mRawSurface.isInitialized()) {
+            // Reached while recording, and on a camera that cannot write RAW. A caller who asked
+            // for a DNG and quietly got a JPEG would have no way to tell, so this refuses.
+            Log.w(TAG, "This session cannot capture " + format);
+            onImageFailed();
+            return;
+        }
+        boolean jpeg = format != CameraView.PictureFormat.RAW;
+        // RAW writes only the DNG, so it takes the file it was given whatever it is called.
+        File dng = jpeg ? DngWriter.dngBeside(file) : file;
+        List<File> files = new ArrayList<>(2);
+        if (jpeg) {
+            files.add(file);
+        }
+        if (raw) {
+            files.add(dng);
+        }
+        PendingPicture picture = new PendingPicture(file, files, new PendingPicture.Callback() {
+            @Override
+            public void onSaved(@NonNull File saved) {
+                showImageConfirmation(saved);
+            }
+
+            @Override
+            public void onFailed() {
+                onImageFailed();
+            }
+        });
+        if (jpeg) {
+            mPictureSurface.initializePicture(file, picture);
+        }
+        if (raw) {
+            mRawSurface.initializePicture(dng, picture);
+        }
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
             applyFlash(builder);
-            builder.addTarget(mPictureSurface.getSurface());
+            if (jpeg) {
+                builder.addTarget(mPictureSurface.getSurface());
+            }
+            if (raw) {
+                builder.addTarget(mRawSurface.getSurface());
+            }
             if (mMeteringRectangle != null) {
                 builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
                 builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             }
             applyZoom(builder);
             builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
-            session.capture(builder.build(), null /* callback */, getHandler());
+            // A DNG is written from the capture result as much as from the frame, so only a RAW
+            // capture asks for the callback.
+            session.capture(builder.build(),
+                    raw ? mRawSurface.captureCallback() : null, getHandler());
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to create capture request", e);
-            onImageFailed();
+            mPictureSurface.abandonPicture();
+            mRawSurface.abandonPicture();
         }
     }
 
@@ -344,10 +427,11 @@ class PictureSession extends PreviewSession {
                         SafeCloseImageReader.Frame frame = reader.acquireLatestImage();
                         if (frame == null) {
                             Log.w(TAG, "OnImageAvailable called but no image available");
-                            onImageFailed();
+                            abandonPicture();
                             return;
                         }
                         final File file = mFile;
+                        final PendingPicture picture = mPicture;
                         new ImageSaver(
                                 mCameraView.getContext(),
                                 frame,
@@ -357,21 +441,18 @@ class PictureSession extends PreviewSession {
                             @UiThread
                             @Override
                             protected void onPostExecute(Boolean saved) {
-                                if (Boolean.TRUE.equals(saved)) {
-                                    showImageConfirmation(file);
-                                } else {
-                                    onImageFailed();
-                                }
+                                picture.onWritten(file, Boolean.TRUE.equals(saved));
                             }
                         }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
                         mFile = null;
+                        mPicture = null;
                     } else {
                         Log.w(TAG, "OnImageAvailable called but no file to write to");
                         onImageFailed();
                     }
                 } catch (IllegalStateException e) {
                     Log.e(TAG, "Failed to save image", e);
-                    onImageFailed();
+                    abandonPicture();
                 }
             }
         };
@@ -379,6 +460,10 @@ class PictureSession extends PreviewSession {
         private final CameraSurface mPreviewSurface;
         private SafeCloseImageReader mImageReader;
         private File mFile;
+
+        /** The shutter press {@link #mFile} belongs to, told when it is written or lost. */
+        @Nullable
+        private PendingPicture mPicture;
 
         /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
         private int mImageFormat = IMAGE_FORMAT_DEFAULT;
@@ -422,13 +507,25 @@ class PictureSession extends PreviewSession {
             return getImageFormat(getQuality());
         }
 
-        void initializePicture(File file) {
+        void initializePicture(File file, @NonNull PendingPicture picture) {
             mFile = file;
+            mPicture = picture;
             if (mFile.exists()) {
                 Log.w(TAG, "File already exists. Deleting.");
                 if (!mFile.delete()) {
                     Log.w(TAG, "Failed to delete existing file.");
                 }
+            }
+        }
+
+        /** Reports the outstanding picture lost, if there is one. */
+        void abandonPicture() {
+            File file = mFile;
+            PendingPicture picture = mPicture;
+            mFile = null;
+            mPicture = null;
+            if (file != null && picture != null) {
+                picture.onWritten(file, false);
             }
         }
 
@@ -443,10 +540,192 @@ class PictureSession extends PreviewSession {
                 mImageReader.close();
                 mImageReader = null;
             }
-            if (mFile != null) {
-                onImageFailed();
-                mFile = null;
+            abandonPicture();
+        }
+    }
+
+    /**
+     * The RAW_SENSOR output a DNG is written from.
+     *
+     * <p>Beside the JPEG reader rather than instead of it, because RAW_JPEG needs both at once and
+     * a camera with the RAW capability guarantees them together. The capture request decides
+     * which of them a given shutter press writes.</p>
+     */
+    private static final class RawPictureSurface extends CameraSurface {
+        /**
+         * How many frames the reader holds, and how many frames and results may wait to be paired.
+         *
+         * <p>The same number for both, because a frame waiting for its result is a buffer the
+         * reader has handed out: one buffer would let a single unpaired frame starve the next
+         * capture, and a larger bound would promise frames the reader cannot produce.</p>
+         */
+        private static final int MAX_PENDING_CAPTURES = 2;
+
+        /** Matches each frame to its capture result, which arrive on different callbacks. */
+        private final RawCapturePairer<TotalCaptureResult> mPairer =
+                new RawCapturePairer<>(MAX_PENDING_CAPTURES);
+
+        /** The RAW_SENSOR reader, or null for a session that writes no DNG. */
+        @Nullable
+        private SafeCloseImageReader mImageReader;
+
+        /** Where the next DNG goes, or null when no capture is outstanding. */
+        @Nullable
+        private File mFile;
+
+        /** The shutter press {@link #mFile} belongs to, told when it is written or lost. */
+        @Nullable
+        private PendingPicture mPicture;
+
+        RawPictureSurface(Camera2Module camera2Module) {
+            super(camera2Module);
+        }
+
+        @MainThread
+        private void onImageAvailable(@NonNull SafeCloseImageReader reader) {
+            SafeCloseImageReader.Frame frame;
+            try {
+                // acquireNextImage rather than acquireLatestImage: a frame is claimed by the
+                // result with its timestamp, so dropping older frames could drop the one a
+                // waiting result is about to pair with.
+                frame = reader.acquireNextImage();
+            } catch (IllegalStateException e) {
+                Log.e(TAG, "Failed to acquire a raw frame", e);
+                return;
             }
+            if (frame == null) {
+                Log.w(TAG, "OnImageAvailable called but no raw frame available");
+                return;
+            }
+            RawCapturePairer.Pairing<TotalCaptureResult> pairing = mPairer.offerFrame(frame);
+            if (pairing != null) {
+                write(pairing);
+            }
+        }
+
+        @Override
+        void initialize(StreamConfigurationMap map) {
+            if (DEBUG) Log.d(TAG, "Initializing the RAW surface");
+            Size size = DngWriter.sensorSize(mCameraView.getCameraCharacteristics());
+            if (size == null) {
+                Log.w(TAG, "Camera offers no RAW size DngCreator will accept");
+                return;
+            }
+            super.initialize(size);
+            mPairer.clear();
+            if (mImageReader != null) {
+                mImageReader.close();
+            }
+            mImageReader = new SafeCloseImageReader(getWidth(), getHeight(),
+                    ImageFormat.RAW_SENSOR, MAX_PENDING_CAPTURES);
+            mImageReader.setOnImageAvailableListener(
+                    this::onImageAvailable, mCameraView.getHandler());
+        }
+
+        boolean isInitialized() {
+            return mImageReader != null;
+        }
+
+        void initializePicture(@NonNull File file, @NonNull PendingPicture picture) {
+            mFile = file;
+            mPicture = picture;
+            if (mFile.exists()) {
+                Log.w(TAG, "File already exists. Deleting.");
+                if (!mFile.delete()) {
+                    Log.w(TAG, "Failed to delete existing file.");
+                }
+            }
+        }
+
+        /** Reports the outstanding DNG lost, if there is one. */
+        void abandonPicture() {
+            File file = mFile;
+            PendingPicture picture = mPicture;
+            mFile = null;
+            mPicture = null;
+            if (file != null && picture != null) {
+                picture.onWritten(file, false);
+            }
+        }
+
+        /** Feeds capture results to the pairer, since they are the other half of every DNG. */
+        @NonNull
+        CameraCaptureSession.CaptureCallback captureCallback() {
+            return new CameraCaptureSession.CaptureCallback() {
+                @Override
+                public void onCaptureCompleted(@NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
+                    Long timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP);
+                    if (timestamp == null) {
+                        Log.w(TAG, "A capture result arrived with no sensor timestamp");
+                        return;
+                    }
+                    RawCapturePairer.Pairing<TotalCaptureResult> pairing =
+                            mPairer.offerMetadata(result, timestamp);
+                    if (pairing != null) {
+                        write(pairing);
+                    }
+                }
+
+                @Override
+                public void onCaptureFailed(@NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request, @NonNull CaptureFailure failure) {
+                    Log.e(TAG, "The camera dropped a RAW capture, reason " + failure.getReason());
+                    // Nothing is coming for this capture, so what is waiting would only be
+                    // paired with the next one.
+                    mPairer.clear();
+                    abandonPicture();
+                }
+            };
+        }
+
+        /** Hands a paired frame to the writer, or closes it if there is nowhere to write it. */
+        @MainThread
+        private void write(@NonNull RawCapturePairer.Pairing<TotalCaptureResult> pairing) {
+            File file = mFile;
+            PendingPicture picture = mPicture;
+            CameraCharacteristics characteristics = mCameraView.getCameraCharacteristics();
+            if (file == null || picture == null || characteristics == null) {
+                Log.w(TAG, "A raw frame arrived with nowhere to write it");
+                pairing.frame.close();
+                abandonPicture();
+                return;
+            }
+            mFile = null;
+            mPicture = null;
+            Context context = getContext().getApplicationContext();
+            new DngWriter(characteristics, pairing,
+                    DngWriter.exifOrientation(mCameraView.getRelativeCameraOrientation(),
+                            isUsingFrontFacingCamera()),
+                    file) {
+                @WorkerThread
+                @Nullable
+                @Override
+                protected Location getLocation() {
+                    return SessionImpl.CameraSurface.getLocation(context);
+                }
+
+                @UiThread
+                @Override
+                protected void onPostExecute(Boolean saved) {
+                    picture.onWritten(file, Boolean.TRUE.equals(saved));
+                }
+            }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        }
+
+        @Override
+        Surface getSurface() {
+            return mImageReader.getSurface();
+        }
+
+        @Override
+        void close() {
+            mPairer.clear();
+            if (mImageReader != null) {
+                mImageReader.close();
+                mImageReader = null;
+            }
+            abandonPicture();
         }
     }
 

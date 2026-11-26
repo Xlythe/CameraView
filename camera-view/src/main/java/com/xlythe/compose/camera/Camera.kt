@@ -64,7 +64,9 @@ enum class ColorSpace {
 /** The file a picture is written as. See [CameraState.supportedPictureFormats]. */
 enum class PictureFormat {
     JPEG,
-    ULTRA_HDR
+    ULTRA_HDR,
+    RAW,
+    RAW_JPEG
 }
 
 /** Standard or high dynamic range video. See [CameraState.supportedDynamicRanges]. */
@@ -412,6 +414,8 @@ private fun ColorSpace.toCameraView() = when (this) {
 private fun PictureFormat.toCameraView() = when (this) {
     PictureFormat.JPEG -> CameraView.PictureFormat.JPEG
     PictureFormat.ULTRA_HDR -> CameraView.PictureFormat.ULTRA_HDR
+    PictureFormat.RAW -> CameraView.PictureFormat.RAW
+    PictureFormat.RAW_JPEG -> CameraView.PictureFormat.RAW_JPEG
 }
 
 private fun DynamicRange.toCameraView() = when (this) {

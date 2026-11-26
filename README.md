@@ -59,8 +59,9 @@ Camera(
 ```
 
 Camera also accepts zoomLevel [0 to maxZoomLevel, or null to leave the zoom to pinchToZoom],
-pictureQuality [1 to 100], colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr],
-exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
+pictureQuality [1 to 100], colorSpace [srgb, displayP3],
+pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [integer],
+torchEnabled [boolean], dynamicRange [sdr, hdr],
 extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
 lowLightBoostEnabled [boolean]. Not every camera can do all of these, so CameraState below says
 which this one supports.

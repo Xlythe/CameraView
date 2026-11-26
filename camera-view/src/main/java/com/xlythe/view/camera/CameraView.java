@@ -324,11 +324,20 @@ public class CameraView extends FrameLayout {
      *
      * <p>{@link #ULTRA_HDR} is a JPEG carrying a gain map: an HDR display uses it to brighten the
      * highlights, and anything else shows the JPEG beneath.</p>
+     *
+     * <p>{@link #RAW} is a DNG of the sensor's own readings, before the camera has processed them.
+     * It is several times the size of a JPEG and needs an editor rather than a gallery to open,
+     * which is what {@link #RAW_JPEG} is for: the JPEG at the file given to
+     * {@link #takePicture(File)}, and the DNG beside it under the same name, so {@code IMG_1.jpg}
+     * gets {@code IMG_1.dng}. Either way the capture is reported once, after every file it writes
+     * is on disk.</p>
      */
     public enum PictureFormat {
         /** What every camera writes. */
         JPEG,
-        ULTRA_HDR
+        ULTRA_HDR,
+        RAW,
+        RAW_JPEG
     }
 
     /**

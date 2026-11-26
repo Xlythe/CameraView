@@ -147,6 +147,14 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getPictureQuality();
     }
 
+    CameraView.PictureFormat getPictureFormat() {
+        return mCamera2Module.getPictureFormat();
+    }
+
+    boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        return mCamera2Module.isPictureFormatSupported(format);
+    }
+
     void applyFlash(@NonNull CaptureRequest.Builder builder) {
         if (!hasFlash()) {
             return;
@@ -236,6 +244,10 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     @Override
     public void close() {}
+
+    void showImageConfirmation(File file) {
+        mCamera2Module.showImageConfirmation(file);
+    }
 
     void onImageFailed() {
         mCamera2Module.onImageFailed();
