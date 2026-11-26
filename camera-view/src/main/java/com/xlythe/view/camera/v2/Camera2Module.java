@@ -50,6 +50,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
@@ -249,6 +250,15 @@ public class Camera2Module extends ICameraModule {
     private boolean mGlUnavailable;
 
     /**
+     * Whether the recording being made, or the last one made, is mirrored in the file.
+     *
+     * <p>Decided by each recording rather than once for the camera, because a front recording
+     * is only mirrored when it went through GL. It outlives the recording on purpose: the
+     * confirmation that plays the file back asks after the recording has stopped.</p>
+     */
+    private boolean mRecordingMirrored;
+
+    /**
      * Whether frames can be put through GL on the way out.
      *
      * <p>True, which it was not: the frames of a Camera2 session go to the surfaces in that
@@ -321,6 +331,49 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     FrameRenderThread getEffect() {
         return mEffect;
+    }
+
+    /** Whether GL is still worth trying here, which it is until it has failed once. */
+    @MainThread
+    boolean isGlAvailable() {
+        return !mGlUnavailable;
+    }
+
+    /**
+     * Brings up a renderer for a recording to have to itself, while no effect is running.
+     *
+     * <p>A failure here counts against GL as a failed effect does, so neither a later recording
+     * nor an effect tries it again.</p>
+     *
+     * @return the renderer, running, or null when GL will not run here
+     */
+    @MainThread
+    @Nullable
+    FrameRenderThread startRecordingRenderer() {
+        if (mGlUnavailable) {
+            return null;
+        }
+        FrameRenderThread renderer = new FrameRenderThread("CameraViewCamera2Recorder");
+        if (!renderer.start()) {
+            mGlUnavailable = true;
+            return null;
+        }
+        return renderer;
+    }
+
+    /** Called by a recording once it knows whether its file is mirrored. */
+    @MainThread
+    void setRecordingMirrored(boolean mirrored) {
+        mRecordingMirrored = mirrored;
+    }
+
+    /**
+     * True for a front recording that went through GL, which mirrors it as its preview is
+     * mirrored, and false for one that could not, which is left for the confirmation to flip.
+     */
+    @Override
+    public boolean isFrontVideoMirrored() {
+        return mRecordingMirrored;
     }
 
     @Override

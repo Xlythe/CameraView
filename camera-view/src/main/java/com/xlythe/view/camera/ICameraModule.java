@@ -326,8 +326,9 @@ public abstract class ICameraModule {
     }
 
     /**
-     * Whether a recording from the user-facing lens is written mirrored, as its preview shows it.
-     * False where the backend cannot yet flip the frames it encodes.
+     * Whether the recording just made from the user-facing lens is written mirrored, as its
+     * preview shows it. False where its frames could not be flipped, which leaves the
+     * confirmation to flip it for display.
      */
     public boolean isFrontVideoMirrored() {
         return false;

@@ -5,8 +5,10 @@ import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.app.Application;
+import android.view.View;
 
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
+import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader;
 import com.xlythe.view.camera.v2.FakeCamera2;
 
@@ -57,7 +59,7 @@ public class FrontVideoConfirmationTest {
         ShadowLooper.idleMainLooper();
     }
 
-    /** Camera2 cannot flip the frames it encodes, so the confirmation flips the file for it. */
+    /** A front file that was not written mirrored, as none has been here, is flipped to show. */
     @Test
     public void aFrontRecordingIsShownMirrored() throws IOException {
         cameraView.toggleCamera();
@@ -67,6 +69,28 @@ public class FrontVideoConfirmationTest {
         cameraView.showVideoConfirmation(recording("front.mp4"));
 
         assertTrue(videoPreview().isMirrored());
+    }
+
+    /**
+     * A front recording on Camera2 is drawn mirrored on its way to the file, so its confirmation
+     * shows the file as it is. Robolectric's EGL starts and draws nothing, which is all this needs:
+     * it is the module's answer about the file that decides the flip, not the pixels.
+     */
+    @Test
+    @Config(shadows = {ShadowCallbackCameraCaptureSession.class})
+    public void aFrontRecordingWrittenMirroredIsShownAsItIs() {
+        cameraView.toggleCamera();
+        ShadowLooper.idleMainLooper();
+        assertTrue(cameraView.isUsingFrontFacingCamera());
+
+        cameraView.startRecording(new File(context.getCacheDir(), "drawn.mp4"));
+        ShadowLooper.idleMainLooper();
+        assertTrue("the recording never started", cameraView.isRecording());
+        cameraView.stopRecording();
+        ShadowLooper.idleMainLooper();
+
+        assertTrue("the confirmation never opened", videoPreview().getVisibility() == View.VISIBLE);
+        assertFalse(videoPreview().isMirrored());
     }
 
     @Test

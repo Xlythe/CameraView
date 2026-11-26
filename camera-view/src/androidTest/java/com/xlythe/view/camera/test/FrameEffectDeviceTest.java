@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.test;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -40,6 +41,10 @@ import org.junit.runner.RunWith;
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.FloatBuffer;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -114,6 +119,138 @@ public final class FrameEffectDeviceTest {
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
             frames.incrementAndGet();
             return true;
+        }
+    }
+
+    /**
+     * Paints each quarter of the camera's buffer a colour of its own, so every frame carries a mark
+     * that turns and mirrors exactly as the scene does, whatever the camera is pointed at.
+     *
+     * <p>The colour is chosen by where the frame's matrix reads the camera texture, not by where
+     * the pixel is in the output. Every output then shows the same four quarters, each turned and
+     * mirrored by its own matrix - so an output that shows them differently from the preview is
+     * one whose matrix is wrong. Red marks the right half of the buffer and green the half the
+     * texture coordinate counts up to; blue is there so that no quarter is black, which is what a
+     * frame that drew nothing looks like.</p>
+     */
+    private static final class Quarters implements FrameRenderer {
+        private static final String VERTEX_SHADER =
+                "uniform mat4 uTextureMatrix;\n"
+                + "attribute vec4 aPosition;\n"
+                + "attribute vec4 aTextureCoordinate;\n"
+                + "varying vec2 vCameraCoordinate;\n"
+                + "void main() {\n"
+                + "  gl_Position = aPosition;\n"
+                + "  vCameraCoordinate = (uTextureMatrix * aTextureCoordinate).xy;\n"
+                + "}\n";
+
+        private static final String FRAGMENT_SHADER =
+                "precision mediump float;\n"
+                + "varying vec2 vCameraCoordinate;\n"
+                + "void main() {\n"
+                + "  gl_FragColor = vec4(step(0.5, vCameraCoordinate.x),"
+                + " step(0.5, vCameraCoordinate.y), 1.0, 1.0);\n"
+                + "}\n";
+
+        /** All of clip space, read across the whole texture, as x, y, s, t. */
+        private static final float[] QUAD = {
+                -1f, -1f, 0f, 0f,
+                1f, -1f, 1f, 0f,
+                -1f, 1f, 0f, 1f,
+                1f, 1f, 1f, 1f,
+        };
+
+        private final FloatBuffer vertices = ByteBuffer.allocateDirect(QUAD.length * 4)
+                .order(ByteOrder.nativeOrder()).asFloatBuffer();
+        private int program;
+
+        @Override public void onRendererStarted() {
+            program = GLES20.glCreateProgram();
+            GLES20.glAttachShader(program, compile(GLES20.GL_VERTEX_SHADER, VERTEX_SHADER));
+            GLES20.glAttachShader(program, compile(GLES20.GL_FRAGMENT_SHADER, FRAGMENT_SHADER));
+            GLES20.glLinkProgram(program);
+            vertices.put(QUAD).position(0);
+        }
+
+        @Override public boolean onDrawFrame(@NonNull GlFrame frame) {
+            GLES20.glUseProgram(program);
+            GLES20.glUniformMatrix4fv(GLES20.glGetUniformLocation(program, "uTextureMatrix"),
+                    1, false, frame.getTextureMatrix(), 0);
+            int position = GLES20.glGetAttribLocation(program, "aPosition");
+            int coordinate = GLES20.glGetAttribLocation(program, "aTextureCoordinate");
+            vertices.position(0);
+            GLES20.glVertexAttribPointer(position, 2, GLES20.GL_FLOAT, false, 16, vertices);
+            GLES20.glEnableVertexAttribArray(position);
+            vertices.position(2);
+            GLES20.glVertexAttribPointer(coordinate, 2, GLES20.GL_FLOAT, false, 16, vertices);
+            GLES20.glEnableVertexAttribArray(coordinate);
+            GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4);
+            GLES20.glDisableVertexAttribArray(position);
+            GLES20.glDisableVertexAttribArray(coordinate);
+            GLES20.glUseProgram(0);
+            return true;
+        }
+
+        @Override public void onRendererStopped() {
+            GLES20.glDeleteProgram(program);
+        }
+
+        private static int compile(int type, @NonNull String source) {
+            int shader = GLES20.glCreateShader(type);
+            GLES20.glShaderSource(shader, source);
+            GLES20.glCompileShader(shader);
+            return shader;
+        }
+    }
+
+    /**
+     * A recording drawn through an effect is shown the way its preview was, from either lens: the
+     * same way up, and mirrored at the front.
+     *
+     * <p>The recording is stored in the sensor's orientation and tagged with the turn that shows
+     * it upright, while the preview is drawn upright, so the two are drawn with different matrices
+     * - and a recording drawn with the preview's matrix is turned twice. {@link Quarters} makes
+     * that visible on any scene.</p>
+     */
+    @Test
+    public void aRecordingThroughAnEffectIsShownAsItsPreviewWas() throws Exception {
+        for (CameraView.LensFacing lensFacing : CameraView.LensFacing.values()) {
+            File file = temporaryFile(".mp4");
+            CountDownLatch finished = new CountDownLatch(1);
+            AtomicReference<File> recorded = new AtomicReference<>();
+            AtomicReference<Bitmap> preview = new AtomicReference<>();
+
+            boolean opened = withOpenCamera(new Quarters(), lensFacing, camera -> {
+                camera.setOnVideoCapturedListener(new CameraView.OnVideoCapturedListener() {
+                    @Override public void onVideoConfirmation() {}
+
+                    @Override public void onVideoCaptured(File saved) {
+                        recorded.set(saved);
+                        finished.countDown();
+                    }
+
+                    @Override public void onFailure() {
+                        finished.countDown();
+                    }
+                });
+                camera.startRecording(file);
+                Thread.sleep(1_500);
+                preview.set(ShownFrames.onScreen(camera));
+                Thread.sleep(1_500);
+                camera.stopRecording();
+                assertTrue("the recording never reported",
+                        finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            });
+            if (!opened) {
+                continue;
+            }
+
+            Assume.assumeTrue("this device's encoder produced no video",
+                    recorded.get() != null && recorded.get().length() > 0);
+            Bitmap frame = ShownFrames.ofRecording(recorded.get(), 1_500_000);
+            Assume.assumeTrue("no frame could be decoded from the recording", frame != null);
+            assertSameQuarters(lensFacing + " recording", preview.get(), frame);
+            Log.i(FILTER_TAG, backend + " " + lensFacing + " recording shows the preview's quarters");
         }
     }
 
@@ -478,11 +615,57 @@ public final class FrameEffectDeviceTest {
                         && Math.abs(Color.blue(pixel) - 255) <= TOLERANCE);
     }
 
+    /**
+     * Asserts two frames as shown have the same {@link Quarters} colour in each quarter.
+     *
+     * <p>Read a quarter of the way in from each edge, which is inside the same quarter of the
+     * camera's buffer however much of the frame a preview crops away: every crop here is centred,
+     * and the quarters meet at the centre.</p>
+     */
+    private static void assertSameQuarters(@NonNull String what, @NonNull Bitmap preview,
+            @NonNull Bitmap shown) {
+        int[] expected = quarters(preview);
+        Set<Integer> different = new HashSet<>();
+        for (int quarter : expected) {
+            different.add(quarter);
+        }
+        assertEquals("the preview should show four different quarters, and showed "
+                + Arrays.toString(expected), 4, different.size());
+        assertArrayEquals("the " + what + " should show the quarters where the preview did",
+                expected, quarters(shown));
+    }
+
+    /** The {@link Quarters} colour in each quarter, top left first, as red + 2 * green. */
+    @NonNull
+    private static int[] quarters(@NonNull Bitmap bitmap) {
+        float[][] points = {{0.25f, 0.25f}, {0.75f, 0.25f}, {0.25f, 0.75f}, {0.75f, 0.75f}};
+        int[] quarters = new int[points.length];
+        for (int i = 0; i < points.length; i++) {
+            int pixel = bitmap.getPixel((int) (points[i][0] * bitmap.getWidth()),
+                    (int) (points[i][1] * bitmap.getHeight()));
+            assertTrue("a quarter should be lit blue, and was "
+                    + String.format("#%06X", pixel & 0xFFFFFF), Color.blue(pixel) > 128);
+            quarters[i] = (Color.red(pixel) > 128 ? 1 : 0) + (Color.green(pixel) > 128 ? 2 : 0);
+        }
+        return quarters;
+    }
+
     private interface CameraAction {
         void run(CameraView camera) throws Exception;
     }
 
     private void withOpenCamera(@Nullable FrameRenderer renderer, @NonNull CameraAction action)
+            throws Exception {
+        withOpenCamera(renderer, null, action);
+    }
+
+    /**
+     * Opens the camera with a renderer set, on a lens if one is named, and runs the action.
+     *
+     * @return false, having run nothing, when there is no camera facing that way
+     */
+    private boolean withOpenCamera(@Nullable FrameRenderer renderer,
+            @Nullable CameraView.LensFacing lensFacing, @NonNull CameraAction action)
             throws Exception {
         try (ActivityScenario<CameraTestActivity> scenario =
                      ActivityScenario.launch(CameraTestActivity.class)) {
@@ -493,6 +676,9 @@ public final class FrameEffectDeviceTest {
                 CameraView camera = activity.getCameraView();
                 held.set(camera);
                 effects.set(camera.isFrameEffectSupported());
+                if (lensFacing != null) {
+                    camera.setLensFacing(lensFacing);
+                }
                 // Set before opening: the renderer is installed with the use cases, and this test
                 // is about the pipeline the camera is built with, not about swapping one later.
                 camera.setFrameRenderer(renderer);
@@ -516,6 +702,16 @@ public final class FrameEffectDeviceTest {
                     opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             CameraView camera = held.get();
             assertNotNull(camera);
+            // Asked once the camera is open, because CameraX knows its lenses only then.
+            AtomicReference<CameraView.LensFacing> opensOn = new AtomicReference<>();
+            scenario.onActivity(activity -> opensOn.set(activity.getCameraView().getLensFacing()));
+            if (lensFacing != null && opensOn.get() != lensFacing) {
+                scenario.onActivity(activity -> {
+                    activity.getCameraView().setFrameRenderer(null);
+                    activity.getCameraView().close();
+                });
+                return false;
+            }
             DeviceState.turnTheFlashOff(camera);
             try {
                 action.run(camera);
@@ -525,6 +721,7 @@ public final class FrameEffectDeviceTest {
                     activity.getCameraView().close();
                 });
             }
+            return true;
         }
     }
 

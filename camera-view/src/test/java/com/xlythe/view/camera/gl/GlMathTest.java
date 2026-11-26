@@ -8,6 +8,10 @@ import static org.junit.Assert.assertTrue;
 
 import android.util.Size;
 
+import androidx.annotation.NonNull;
+
+import com.xlythe.view.camera.ICameraModule;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
@@ -200,6 +204,125 @@ public final class GlMathTest {
         assertEquals(-1f, GlMath.fullFrameQuad()[0], 0f);
     }
 
+    /** The vertical flip a SurfaceTexture puts in front of every matrix it reports. */
+    private static final float[] FLIP_T = {
+            1f, 0f, 0f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, 1f, 0f, 1f,
+    };
+
+    /** A SurfaceTexture's quarter turn, as it composes one for a rotated buffer. */
+    private static final float[] ROTATE_90 = {
+            0f, 1f, 0f, 0f,
+            -1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            1f, 0f, 0f, 1f,
+    };
+
+    /**
+     * The half-texel crop a SurfaceTexture applies to a filtered 1280 by 720 buffer. It scales
+     * each axis about the centre by a positive amount, which is the only thing the camera's
+     * request is read back through.
+     */
+    private static final float[] HALF_TEXEL_CROP = {
+            1f - 1f / 1280f, 0f, 0f, 0f,
+            0f, 1f - 1f / 720f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0.5f / 1280f, 0.5f / 720f, 0f, 1f,
+    };
+
+    /** How far a point read through {@link #HALF_TEXEL_CROP} may land from one read without it. */
+    private static final float CROP_TOLERANCE = 1f / 700f;
+
+    /** Points in a frame as it is shown, none of them on an axis a mirror or a turn would fix. */
+    private static final float[][] SHOWN_POINTS = {
+            {0.1f, 0.2f}, {0.8f, 0.15f}, {0.3f, 0.9f}, {0.65f, 0.55f},
+    };
+
+    /**
+     * Every request a camera can make of a SurfaceTexture is removed, leaving the flip and the
+     * crop the SurfaceTexture adds - which draws the buffer exactly as the camera wrote it.
+     */
+    @Test
+    public void everyCameraRequestComesBackOut() {
+        float[] expected = GlMath.multiply(FLIP_T, HALF_TEXEL_CROP);
+        for (int flags = 0; flags < 8; flags++) {
+            float[] reported = surfaceTextureMatrix(flags);
+            assertArrayEquals("for request flags " + flags, expected,
+                    GlMath.withoutCameraTransform(reported), 1e-6f);
+        }
+    }
+
+    @Test
+    public void readingTheRequestLeavesTheMatrixAlone() {
+        float[] reported = surfaceTextureMatrix(cameraRequest(90, true));
+        float[] copy = reported.clone();
+        GlMath.withoutCameraTransform(reported);
+        assertArrayEquals(copy, reported, 0f);
+    }
+
+    @Test
+    public void readingTheRequestRefusesAMatrixThatIsNotFourByFour() {
+        assertThrows(IllegalArgumentException.class,
+                () -> GlMath.withoutCameraTransform(new float[9]));
+    }
+
+    /** Across what is shown, which is across the stored frame's rows once it is turned to show. */
+    @Test
+    public void theDisplayMirrorFlipsWhicheverAxisIsShownLeftToRight() {
+        float[] acrossColumns = {
+                -1f, 0f, 0f, 0f,
+                0f, 1f, 0f, 0f,
+                0f, 0f, 1f, 0f,
+                1f, 0f, 0f, 1f,
+        };
+        assertArrayEquals(acrossColumns, GlMath.displayMirror(0), 0f);
+        assertArrayEquals(acrossColumns, GlMath.displayMirror(180), 0f);
+        assertArrayEquals(FLIP_T, GlMath.displayMirror(90), 0f);
+        assertArrayEquals(FLIP_T, GlMath.displayMirror(270), 0f);
+        assertArrayEquals(FLIP_T, GlMath.displayMirror(-90), 0f);
+    }
+
+    /**
+     * The claim the recording rests on, for every sensor orientation, display rotation and lens:
+     * a back recording drawn through GL shows every point where the camera's own recording would
+     * have, and a front one shows it mirrored left to right, as its preview does.
+     *
+     * <p>The camera's own recording is the reference because it is what an encoder has always
+     * been given: the buffer as the sensor wrote it, tagged with the turn that shows it upright.
+     * Its preview differs from it by the mirror alone.</p>
+     */
+    @Test
+    public void aRecordingIsShownAsTheCameraWroteItMirroredOnlyAtTheFront() {
+        int[] angles = {0, 90, 180, 270};
+        for (boolean front : new boolean[] {false, true}) {
+            for (int sensor : angles) {
+                for (int display : angles) {
+                    int tag = ICameraModule.getRelativeImageOrientation(
+                            display, sensor, front, false);
+                    float[] drawn = GlMath.recordingMatrix(
+                            surfaceTextureMatrix(cameraRequest(sensor, front)), tag, front);
+                    for (float[] shown : SHOWN_POINTS) {
+                        float[] expected = unturn(front ? mirror(shown) : shown, tag);
+                        float[] actual = readThrough(drawn, unturn(shown, tag));
+                        String where = (front ? "front" : "back") + " sensor " + sensor
+                                + " display " + display + " at " + shown[0] + "," + shown[1];
+                        assertEquals(where, expected[0], actual[0], CROP_TOLERANCE);
+                        assertEquals(where, expected[1], actual[1], CROP_TOLERANCE);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    public void anUnmirroredRecordingIsDrawnAsTheCameraWroteIt() {
+        float[] reported = surfaceTextureMatrix(cameraRequest(270, false));
+        assertArrayEquals(GlMath.withoutCameraTransform(reported),
+                GlMath.recordingMatrix(reported, 90, false), 0f);
+    }
+
     /** A frame a moment old on a phone that has slept for fifteen minutes since it booted. */
     @Test
     public void aTimestampIsOnWhicheverClockItIsNearer() {
@@ -213,5 +336,83 @@ public final class GlMathTest {
     @Test
     public void clocksThatAgreeAreTakenAsMonotonic() {
         assertFalse(GlMath.isOnRealtimeClock(4_990_000_000L, 5_000_000_000L, 5_000_000_000L));
+    }
+
+    /**
+     * The request a camera makes of an output for its sensor orientation and lens, as the camera
+     * service composes it: a turn for the sensor, and a flip before it at the front.
+     *
+     * @return the flags, as 1 for a horizontal flip, 2 for a vertical one and 4 for a quarter turn
+     */
+    private static int cameraRequest(int sensorOrientation, boolean front) {
+        int flipH = 1;
+        int rotate180 = 3;
+        int rotate90 = 4;
+        int rotate270 = rotate180 | rotate90;
+        int turn;
+        switch (sensorOrientation) {
+            case 90:
+                turn = front ? rotate270 : rotate90;
+                break;
+            case 180:
+                turn = rotate180;
+                break;
+            case 270:
+                turn = front ? rotate90 : rotate270;
+                break;
+            default:
+                turn = 0;
+                break;
+        }
+        return front ? flipH ^ turn : turn;
+    }
+
+    /**
+     * What a SurfaceTexture reports for a buffer carrying these request flags, composed the way
+     * it composes them: the request, then the crop, then its own vertical flip.
+     */
+    @NonNull
+    private static float[] surfaceTextureMatrix(int flags) {
+        float[] request = GlMath.identity();
+        if ((flags & 1) != 0) {
+            request = GlMath.multiply(request, FLIP_S);
+        }
+        if ((flags & 2) != 0) {
+            request = GlMath.multiply(request, FLIP_T);
+        }
+        if ((flags & 4) != 0) {
+            request = GlMath.multiply(request, ROTATE_90);
+        }
+        return GlMath.multiply(FLIP_T, GlMath.multiply(HALF_TEXEL_CROP, request));
+    }
+
+    /**
+     * Where in the camera's buffer the encoder's frame shows a point, given the matrix it was
+     * drawn with. Both frames are rows from the top; the output's GL coordinate counts from the
+     * bottom, and a camera texture's from its first row.
+     */
+    @NonNull
+    private static float[] readThrough(@NonNull float[] matrix, @NonNull float[] stored) {
+        float s = stored[0];
+        float t = 1f - stored[1];
+        return new float[] {
+                matrix[0] * s + matrix[4] * t + matrix[12],
+                matrix[1] * s + matrix[5] * t + matrix[13],
+        };
+    }
+
+    /** Where a point that is shown here is stored, in a frame turned clockwise to be shown. */
+    @NonNull
+    private static float[] unturn(@NonNull float[] shown, int clockwiseDegrees) {
+        float[] point = shown;
+        for (int turned = 0; turned < clockwiseDegrees; turned += 90) {
+            point = new float[] {point[1], 1f - point[0]};
+        }
+        return point;
+    }
+
+    @NonNull
+    private static float[] mirror(@NonNull float[] shown) {
+        return new float[] {1f - shown[0], shown[1]};
     }
 }

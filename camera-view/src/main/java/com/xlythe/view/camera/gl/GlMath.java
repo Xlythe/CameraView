@@ -74,6 +74,75 @@ public final class GlMath {
     }
 
     /**
+     * The matrix that draws a camera frame the way the camera wrote it, from the one its
+     * SurfaceTexture reported.
+     *
+     * <p>A camera asks every output for the turn and the mirror that make its frame upright on
+     * the device's natural screen, and a SurfaceTexture folds that request into its matrix. A view
+     * wants it. An encoder ignores it when the camera writes to it directly, so a recording or a
+     * still is in the sensor's orientation and tagged with how to turn it - and a frame drawn for
+     * one has to match, or the tag turns it a second time.</p>
+     *
+     * <p>The request is read back out of the matrix rather than worked out from the sensor
+     * orientation and the lens, because the matrix is what the camera actually asked for. A
+     * SurfaceTexture builds it as a vertical flip, then a crop, then the request. The crop only
+     * scales each axis by a positive amount, so the signs of the matrix give the request away,
+     * and multiplying by its inverse leaves the flip and the crop.</p>
+     *
+     * @param surfaceTextureMatrix what {@link android.graphics.SurfaceTexture#getTransformMatrix}
+     *     reported
+     */
+    @NonNull
+    public static float[] withoutCameraTransform(@NonNull float[] surfaceTextureMatrix) {
+        checkMatrix(surfaceTextureMatrix);
+        float a = surfaceTextureMatrix[0];
+        float b = surfaceTextureMatrix[MATRIX_SIDE];
+        float c = surfaceTextureMatrix[1];
+        float d = surfaceTextureMatrix[MATRIX_SIDE + 1];
+        // The request as a signed permutation, row by row: {s from s, s from t, t from s, t from t}.
+        // The matrix's second row is negated by the flip in front of it.
+        float[] request;
+        if (Math.abs(a) + Math.abs(d) >= Math.abs(b) + Math.abs(c)) {
+            request = new float[] {Math.signum(a), 0f, 0f, -Math.signum(d)};
+        } else {
+            request = new float[] {0f, Math.signum(b), -Math.signum(c), 0f};
+        }
+        return multiply(surfaceTextureMatrix, unitSquareSymmetry(transpose(request)));
+    }
+
+    /**
+     * Mirrors a frame left to right as it is shown, for a frame that is turned to be shown.
+     *
+     * <p>Applied before the matrix that reads the camera texture, so it flips the output rather
+     * than the camera frame. A frame shown a quarter turn round has its columns shown as rows, so
+     * mirroring what is shown flips it top to bottom.</p>
+     *
+     * @param rotationDegrees how far the output is turned clockwise to be shown, which for a
+     *     recording is the orientation it is tagged with
+     */
+    @NonNull
+    public static float[] displayMirror(int rotationDegrees) {
+        boolean quarterTurned = (rotationDegrees / 90) % 2 != 0;
+        return unitSquareSymmetry(quarterTurned
+                ? new float[] {1f, 0f, 0f, -1f}
+                : new float[] {-1f, 0f, 0f, 1f});
+    }
+
+    /**
+     * The matrix to draw a recording with: the frame as the camera wrote it, mirrored as it is
+     * shown when it is mirrored at all.
+     *
+     * @see #withoutCameraTransform
+     * @see #displayMirror
+     */
+    @NonNull
+    public static float[] recordingMatrix(@NonNull float[] surfaceTextureMatrix,
+            int rotationDegrees, boolean mirrored) {
+        float[] asWritten = withoutCameraTransform(surfaceTextureMatrix);
+        return mirrored ? multiply(asWritten, displayMirror(rotationDegrees)) : asWritten;
+    }
+
+    /**
      * Whether a frame's timestamp is on the clock that keeps counting through sleep, rather than
      * the monotonic one an encoder lines video up with audio on.
      *
@@ -139,6 +208,29 @@ public final class GlMath {
                 -1f, 1f, 0f, 1f,
                 1f, 1f, 1f, 1f,
         };
+    }
+
+    /**
+     * A turn or flip of the unit square onto itself, from its 2x2 part as {s from s, s from t,
+     * t from s, t from t}. Every one of them keeps the centre where it is, which fixes the
+     * translation.
+     */
+    @NonNull
+    private static float[] unitSquareSymmetry(@NonNull float[] linear) {
+        float[] matrix = identity();
+        matrix[0] = linear[0];
+        matrix[MATRIX_SIDE] = linear[1];
+        matrix[1] = linear[2];
+        matrix[MATRIX_SIDE + 1] = linear[3];
+        matrix[3 * MATRIX_SIDE] = 0.5f - 0.5f * (linear[0] + linear[1]);
+        matrix[3 * MATRIX_SIDE + 1] = 0.5f - 0.5f * (linear[2] + linear[3]);
+        return matrix;
+    }
+
+    /** The transpose of a 2x2, which for a turn or a flip is also its inverse. */
+    @NonNull
+    private static float[] transpose(@NonNull float[] linear) {
+        return new float[] {linear[0], linear[2], linear[1], linear[3]};
     }
 
     private static void checkMatrix(@NonNull float[] matrix) {
