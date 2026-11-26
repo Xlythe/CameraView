@@ -147,6 +147,12 @@ class VideoSession extends PictureSession {
         session.setRepeatingRequest(createCaptureRequest(device), repeatingCallback(), getHandler());
     }
 
+    /** A pre-flash would light the recording, so a snapshot is taken as the moment stands. */
+    @Override
+    protected boolean metersForFlash() {
+        return false;
+    }
+
     @Override
     public void close() {
         super.close();

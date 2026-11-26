@@ -15,6 +15,7 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
+import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.OutputConfiguration;
@@ -929,6 +930,23 @@ public class Camera2Module extends ICameraModule {
         }
 
         return false;
+    }
+
+    /**
+     * Whether the camera can hand back a frame it already has for a picture, rather than
+     * exposing a new one after the request arrives.
+     */
+    boolean isZeroShutterLagSupported() {
+        if (Build.VERSION.SDK_INT < 26) {
+            return false;
+        }
+        try {
+            return mCameraManager.getCameraCharacteristics(getActiveCamera())
+                    .getAvailableCaptureRequestKeys().contains(CaptureRequest.CONTROL_ENABLE_ZSL);
+        } catch (CameraAccessException | RuntimeException e) {
+            Log.w(TAG, "Failed to ask whether the camera has zero shutter lag", e);
+            return false;
+        }
     }
 
     @Override

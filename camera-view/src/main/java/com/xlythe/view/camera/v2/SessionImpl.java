@@ -7,6 +7,7 @@ import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
@@ -57,6 +58,13 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Nullable
     Float mZoomRatio;
 
+    /**
+     * The auto-exposure state the preview last reported, which says whether auto flash will
+     * fire. Written on the camera's thread, read on whichever takes the picture.
+     */
+    @Nullable
+    private volatile Integer mAeState;
+
     SessionImpl(Camera2Module camera2Module) {
         mCamera2Module = camera2Module;
     }
@@ -76,6 +84,15 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     CameraView.Flash getFlash() {
         return mCamera2Module.getFlash();
+    }
+
+    boolean isZeroShutterLagSupported() {
+        return mCamera2Module.isZeroShutterLagSupported();
+    }
+
+    @Nullable
+    Integer getAeState() {
+        return mAeState;
     }
 
     /**
@@ -119,7 +136,8 @@ abstract class SessionImpl implements Camera2Module.Session {
      */
     @Nullable
     CameraCaptureSession.CaptureCallback repeatingCallback() {
-        if (mCamera2Module.getFaceDetectMode() == null && !mCamera2Module.isFocusPending()) {
+        if (mCamera2Module.getFaceDetectMode() == null && !mCamera2Module.isFocusPending()
+                && !tracksExposure()) {
             return null;
         }
         return new CameraCaptureSession.CaptureCallback() {
@@ -130,8 +148,22 @@ abstract class SessionImpl implements Camera2Module.Session {
                     mCamera2Module.onFacesCaptured(result);
                 }
                 mCamera2Module.onFocusCaptured(result);
+                onPreviewCaptured(result);
             }
         };
+    }
+
+    /**
+     * Whether the preview's exposure has to be watched: to know whether auto flash will fire,
+     * and to follow the metering a flash picture waits on.
+     */
+    private boolean tracksExposure() {
+        return hasFlash() && getFlash() != CameraView.Flash.OFF;
+    }
+
+    /** Hears each preview frame's result, while anything is listening for them. */
+    void onPreviewCaptured(@NonNull CaptureResult result) {
+        mAeState = result.get(CaptureResult.CONTROL_AE_STATE);
     }
 
     int getPictureQuality() {

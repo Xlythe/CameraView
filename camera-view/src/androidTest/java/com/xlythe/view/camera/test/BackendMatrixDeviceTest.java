@@ -73,6 +73,11 @@ public final class BackendMatrixDeviceTest {
      * something it should not.
      */
     private static final long MAX_SHUTTER_MILLIS = 1_000;
+    /**
+     * Comfortably under the three seconds a flash picture may wait for metering, so a picture
+     * inside it was metered rather than timed out.
+     */
+    private static final long MAX_FLASH_PICTURE_MILLIS = 2_500;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<CameraView.Backend> backends() {
@@ -211,6 +216,28 @@ public final class BackendMatrixDeviceTest {
         assertTrue("the shutter comes before the picture is saved",
                 exposedAt.get() <= savedAt.get());
         return new long[] {exposedAt.get() - pressedAt, savedAt.get() - pressedAt};
+    }
+
+    /**
+     * A flash picture is metered with a pre-flash first, and that has to finish on a real
+     * camera: one that waited out the timeout instead would still produce a file, late.
+     */
+    @Test
+    public void aFlashPictureIsMeteredAndTaken() throws Exception {
+        DeviceState.assumeTheLampMayBeLit();
+        AtomicLong millis = new AtomicLong();
+
+        withOpenCamera(camera -> {
+            Assume.assumeTrue("this camera has no flash", camera.hasFlash());
+            camera.setShutterSoundEnabled(false);
+            camera.setFlash(CameraView.Flash.ON);
+            sleep(SETTLE_MILLIS);
+            millis.set(takeTimedPicture(camera)[1]);
+        });
+
+        Log.i(TAG, backend + " took a flash picture in " + millis.get() + "ms");
+        assertTrue(backend + " took " + millis.get() + "ms over a flash picture",
+                millis.get() < MAX_FLASH_PICTURE_MILLIS);
     }
 
     /** The median and range of some timings, in milliseconds. */

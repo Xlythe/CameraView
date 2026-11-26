@@ -45,6 +45,8 @@ public class VideoRecordingTest {
         module = new Camera2Module(cameraView);
         output = new File(context.getCacheDir(), "recording-test.mp4");
         CameraSoundsTest.resetSounds();
+        // Robolectric runs no resetter for a shadow a test declares itself.
+        ShadowCallbackCameraCaptureSession.reset();
     }
 
     @After
@@ -59,10 +61,13 @@ public class VideoRecordingTest {
 
     @Test
     public void captureCallbacksReachTheSessionDuringRecording() {
+        // With the flash off the preview registers no callback, so only a recording asks to be
+        // told about frames.
+        module.setFlash(CameraView.Flash.OFF);
         module.open();
         FakeCamera2.idleMainLooper();
+        assertEquals(0, ShadowCallbackCameraCaptureSession.getCompletedCaptureCount());
 
-        // The preview registers no callback, so only a recording asks to be told about frames.
         module.startRecording(output);
         FakeCamera2.idleMainLooper();
 
