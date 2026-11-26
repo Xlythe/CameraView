@@ -17,6 +17,7 @@ import androidx.test.rule.GrantPermissionRule;
 import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.test.CameraTestActivity;
+import com.xlythe.view.camera.test.DeviceState;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import org.junit.Assume;
@@ -78,13 +79,16 @@ public final class CameraXDeviceSmokeTest {
             assertTrue("CameraX did not produce a non-empty JPEG", imageSucceeded.get());
             assertTrue(imageFile.get().isFile());
 
-            scenario.onActivity(activity -> moduleReference.get().startBarcodeScanner(
-                    barcodes -> {}, Barcode.Format.QR_CODE));
-            assertTrue("CameraX ImageAnalysis did not bind for barcode scanning",
-                    waitForBoundState(scenario, moduleReference, true));
-            scenario.onActivity(activity -> moduleReference.get().stopBarcodeScanner());
-            assertTrue("CameraX did not restore ImageCapture after barcode scanning",
-                    waitForBoundState(scenario, moduleReference, true));
+            // Scanning reads YUV frames, which some emulators cannot survive.
+            if (DeviceState.canFillYuvBuffers()) {
+                scenario.onActivity(activity -> moduleReference.get().startBarcodeScanner(
+                        barcodes -> {}, Barcode.Format.QR_CODE));
+                assertTrue("CameraX ImageAnalysis did not bind for barcode scanning",
+                        waitForBoundState(scenario, moduleReference, true));
+                scenario.onActivity(activity -> moduleReference.get().stopBarcodeScanner());
+                assertTrue("CameraX did not restore ImageCapture after barcode scanning",
+                        waitForBoundState(scenario, moduleReference, true));
+            }
 
             scenario.onActivity(activity -> {
                 CameraXModule module = moduleReference.get();
