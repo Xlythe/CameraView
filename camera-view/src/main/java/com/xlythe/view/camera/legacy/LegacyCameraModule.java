@@ -542,6 +542,18 @@ public class LegacyCameraModule extends ICameraModule {
         return getRelativeCameraOrientation(true /* isPreview */);
     }
 
+    /**
+     * False: this backend paints frames onto a surface rather than handing them over.
+     *
+     * <p>An analyzer reads YUV planes from an ImageReader surface. The old Camera API delivers
+     * preview bytes to a callback, which {@link #attachSurface} draws through a Canvas, and a
+     * surface that only accepts pixels cannot be read back.</p>
+     */
+    @Override
+    public boolean isFrameAnalysisSupported() {
+        return false;
+    }
+
     @RequiresApi(18)
     @Override
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {

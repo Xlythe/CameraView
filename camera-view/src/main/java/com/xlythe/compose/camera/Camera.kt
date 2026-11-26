@@ -133,14 +133,23 @@ private class CameraControllerImpl(
     @SuppressLint("WrongConstant")
     @RequiresPermission(Manifest.permission.CAMERA)
     override fun enterBarcodeScanner(listener: (List<Barcode>) -> Unit, @Barcode.Format vararg formats: Int) {
-        if (formats.isNotEmpty()) {
-            val first = formats[0]
-            val rest = if (formats.size > 1) formats.sliceArray(1 until formats.size) else IntArray(0)
-            getView()?.enterBarcodeScanner({ barcodes -> listener(barcodes) }, first, *rest)
-                ?: Log.e(TAG, "View not available for enterBarcodeScanner")
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for enterBarcodeScanner")
+            return
+        }
+        val requested = if (formats.isNotEmpty()) {
+            formats
         } else {
-            getView()?.enterBarcodeScanner({ barcodes -> listener(barcodes) }, com.xlythe.view.camera.Barcode.Format.QR_CODE)
-                ?: Log.e(TAG, "View not available for enterBarcodeScanner")
+            intArrayOf(com.xlythe.view.camera.Barcode.Format.QR_CODE)
+        }
+        val rest = if (requested.size > 1) {
+            requested.sliceArray(1 until requested.size)
+        } else {
+            IntArray(0)
+        }
+        if (!view.enterBarcodeScanner({ barcodes -> listener(barcodes) }, requested[0], *rest)) {
+            Log.w(TAG, "Barcode scanning is unavailable on this device")
         }
     }
 

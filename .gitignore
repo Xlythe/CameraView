@@ -9,6 +9,8 @@
 # Build tooling, not code. Gradle itself is provisioned rather than carried: the wrapper's
 # jar is a binary and its scripts are generated, so none of them belong in a source tree.
 # CI installs the version it needs; a checkout gets it the same way.
+# The Kotlin compiler writes session files here while it runs. Build state, not code.
+/.kotlin/
 /gradlew
 /gradlew.bat
 /gradle/wrapper/

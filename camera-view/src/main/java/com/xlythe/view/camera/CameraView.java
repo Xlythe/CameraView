@@ -1171,9 +1171,15 @@ public class CameraView extends FrameLayout {
         void onBarcodeFound(List<Barcode> barcodes);
     }
 
+    /**
+     * Starts reporting the barcodes the camera can see.
+     *
+     * @return whether scanning started. False when ML Kit's barcode model is not available on
+     *     this device.
+     */
     @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
-    public void enterBarcodeScanner(BarcodeDetectorListener listener, @Barcode.Format int format, @Barcode.Format int... formats) {
+    public boolean enterBarcodeScanner(BarcodeDetectorListener listener, @Barcode.Format int format, @Barcode.Format int... formats) {
         if (!isOpen()) {
             throw new IllegalStateException("Camera must be open before scanning for barcodes");
         }
@@ -1183,11 +1189,21 @@ public class CameraView extends FrameLayout {
         }
 
         mUsingModuleBarcodeScanner = mCameraModule.startBarcodeScanner(listener, format, formats);
-        if (!mUsingModuleBarcodeScanner) {
+        if (mUsingModuleBarcodeScanner) {
+            return true;
+        }
+        try {
             mBarcodeScanner = new BarcodeScanner(
                     mCameraModule.getCanvas(), this, listener, format, formats);
-            mBarcodeScanner.start();
+        } catch (RuntimeException | LinkageError error) {
+            // Building the client is what reaches for the model, and it throws rather than
+            // returning anything when ML Kit was never initialised.
+            Log.w(TAG, "Barcode scanning is unavailable on this device", error);
+            mBarcodeScanner = null;
+            return false;
         }
+        mBarcodeScanner.start();
+        return true;
     }
 
     @RequiresApi(19)
@@ -1213,12 +1229,13 @@ public class CameraView extends FrameLayout {
      * <p>This runs alongside the preview and recording, and stays attached across a lens switch.
      * Call {@link #stopFrameAnalysis()} to let the camera give the buffers back.</p>
      *
+     * @return whether analysis started. False on a backend that cannot produce frames to read.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
      */
     @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
-    public void startFrameAnalysis(@NonNull FrameStream.Analyzer analyzer) {
-        startFrameAnalysis(analyzer, new FrameStream.Params());
+    public boolean startFrameAnalysis(@NonNull FrameStream.Analyzer analyzer) {
+        return startFrameAnalysis(analyzer, new FrameStream.Params());
     }
 
     /**
@@ -1228,7 +1245,7 @@ public class CameraView extends FrameLayout {
      */
     @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
-    public void startFrameAnalysis(
+    public boolean startFrameAnalysis(
             @NonNull FrameStream.Analyzer analyzer, @NonNull FrameStream.Params params) {
         if (!isOpen()) {
             throw new IllegalStateException("Camera must be open before analyzing frames");
@@ -1236,8 +1253,13 @@ public class CameraView extends FrameLayout {
         if (mFrameStream != null) {
             throw new IllegalStateException("Frame analysis cannot be started twice");
         }
+        if (!mCameraModule.isFrameAnalysisSupported()) {
+            Log.w(TAG, "The " + getBackend() + " backend cannot analyze frames");
+            return false;
+        }
         mFrameStream = new FrameStream(mCameraModule.getCanvas(), this, params, analyzer);
         mFrameStream.start();
+        return true;
     }
 
     /** Stops the analyzer started by {@link #startFrameAnalysis}. */

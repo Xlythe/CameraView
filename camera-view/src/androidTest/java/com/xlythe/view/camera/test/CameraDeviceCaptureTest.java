@@ -59,9 +59,7 @@ public final class CameraDeviceCaptureTest {
 
     @Before
     public void requireACamera() {
-        Assume.assumeTrue("no camera on this device",
-                ApplicationProvider.getApplicationContext().getPackageManager()
-                        .hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY));
+        DeviceState.assumeATestableCamera();
     }
 
     /** A capture produces a file with bytes in it, which is the whole point of the library. */
@@ -347,7 +345,8 @@ public final class CameraDeviceCaptureTest {
                 }
             });
 
-            assertTrue("the camera never opened", opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            assertTrue("the camera never opened " + DeviceState.whyTheCameraMightNotOpen(),
+                    opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
             CameraView camera = held.get();
             assertNotNull(camera);
             try {

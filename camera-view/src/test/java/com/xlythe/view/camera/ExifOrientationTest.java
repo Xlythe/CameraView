@@ -34,7 +34,7 @@ import java.io.IOException;
  * </p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class ExifOrientationTest {
     /** Every orientation EXIF defines, plus the undefined one a file may carry. */
     private static final int[] ORIENTATIONS = {

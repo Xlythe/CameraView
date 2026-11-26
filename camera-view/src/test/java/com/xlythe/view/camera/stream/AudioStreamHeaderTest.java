@@ -25,7 +25,7 @@ import java.io.InputStream;
  * first bytes eaten by a header that was not there.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class AudioStreamHeaderTest {
     @Test
     public void aDescribedStreamReadsBackWhatWasWritten() throws IOException {

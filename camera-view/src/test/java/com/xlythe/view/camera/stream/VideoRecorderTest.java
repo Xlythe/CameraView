@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * library's own framing and bookkeeping rather than H.264.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class VideoRecorderTest {
     private static final String MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC;
 

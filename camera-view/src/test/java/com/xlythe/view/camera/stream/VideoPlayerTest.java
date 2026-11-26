@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * nothing, and that the end of a stream is reported once.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class VideoPlayerTest {
     private static final String MIME_TYPE = MediaFormat.MIMETYPE_VIDEO_AVC;
 

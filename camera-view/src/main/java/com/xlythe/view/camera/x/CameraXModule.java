@@ -1209,6 +1209,19 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mImageTimeoutTask = null;
     }
 
+    /**
+     * Where the device already knows it is, for the paths that run on the main thread.
+     *
+     * <p>{@link #getLocation} waits for a fix, briefly, which is fine from a background thread
+     * and not from this one. Starting a recording happens on the main thread because CameraX
+     * binds there, so it takes what is already known or nothing at all.</p>
+     */
+    @SuppressLint("MissingPermission")
+    @Nullable private Location getLastKnownLocation() {
+        if (!PermissionChecker.hasPermissions(getContext(), Manifest.permission.ACCESS_FINE_LOCATION)) return null;
+        return LocationProvider.getLastKnownGPSLocation(getContext(), STALE_LOCATION_MILLIS);
+    }
+
     @SuppressLint("MissingPermission")
     @Nullable private Location getLocation() {
         if (!PermissionChecker.hasPermissions(getContext(), Manifest.permission.ACCESS_FINE_LOCATION)) return null;
@@ -1254,6 +1267,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         try {
             FileOutputOptions.Builder output = new FileOutputOptions.Builder(file);
             if (getMaxVideoSize() != CameraView.INDEFINITE_VIDEO_SIZE) output.setFileSizeLimit(getMaxVideoSize());
+            Location where = getLastKnownLocation();
+            if (where != null) {
+                output.setLocation(where);
+            }
             PendingRecording pending = recorder.prepareRecording(getContext(), output.build());
             if (PermissionChecker.hasPermissions(getContext(), Manifest.permission.RECORD_AUDIO)) pending = pending.withAudioEnabled();
             mVideoFile = file;

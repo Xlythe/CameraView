@@ -7,7 +7,9 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.graphics.Matrix;
 import android.media.MediaMetadataRetriever;
+import android.view.TextureView;
 
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 
@@ -43,7 +45,7 @@ import java.io.InputStream;
  * reachable without it.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {ShadowAvailableTextureView.class})
+@Config(sdk = {29, 37}, shadows = {ShadowAvailableTextureView.class})
 public class VideoViewLifecycleTest {
     /** The one name every file descriptor is mapped onto, so the fakes can be told about it. */
     private static final String VIDEO = "video";
@@ -93,6 +95,107 @@ public class VideoViewLifecycleTest {
         idle();
         DataSource.reset();
         ShadowMediaMetadataRetriever.reset();
+    }
+
+    /**
+     * A video is fitted to the view through the same centre-crop as every camera preview.
+     *
+     * <p>The view used to hand-roll the arithmetic, in two near-copies, and got a different
+     * answer from the previews it sat beside. These assert the wiring rather than the matrix -
+     * TransformMathTest owns the matrix - so that a video arriving rotated or mirrored is still
+     * put through it.</p>
+     */
+    @Test
+    public void anUprightVideoIsStretchedToCoverTheView() {
+        givenAVideoToShow();
+        videoView.transformPreview(640, 480);
+
+        Matrix transform = transformOfTheTextureView();
+        // A 4:3 video in a 4:3 view already covers it, so the texture needs no adjustment.
+        assertTrue("an exactly-fitting video should need no transform: " + transform,
+                transform.isIdentity());
+    }
+
+    @Test
+    public void aVideoOfTheWrongShapeIsCroppedRatherThanSquashed() {
+        givenAVideoToShow();
+        videoView.transformPreview(480, 640);
+
+        Matrix transform = transformOfTheTextureView();
+        assertFalse("a portrait video in a landscape view has to be transformed",
+                transform.isIdentity());
+        // Covering a 4:3 view with a 3:4 video means overflowing top and bottom, and a
+        // TextureView has already stretched the video over its bounds - so the transform has to
+        // put the shape back, which is a scale of more than one on one axis.
+        float[] values = new float[9];
+        transform.getValues(values);
+        assertTrue("expected to scale up to cover, got " + transform,
+                Math.abs(values[Matrix.MSCALE_X]) > 1f
+                        || Math.abs(values[Matrix.MSCALE_Y]) > 1f);
+    }
+
+    @Test
+    public void aRotatedVideoIsRotatedBack() {
+        givenAVideoToShow();
+        videoView.transformPreview(480, 640, 90, false);
+        Matrix rotated = transformOfTheTextureView();
+
+        videoView.transformPreview(480, 640, 0, false);
+        Matrix upright = transformOfTheTextureView();
+
+        assertFalse("a video recorded sideways cannot be shown the same way as an upright one",
+                rotated.equals(upright));
+    }
+
+    /** Mirroring the view and a mirrored recording cancel, which is how a selfie looks right. */
+    @Test
+    public void mirroringTwiceIsNotMirroring() {
+        givenAVideoToShow();
+        videoView.transformPreview(640, 480, 0, false);
+        Matrix plain = transformOfTheTextureView();
+
+        videoView.transformPreview(640, 480, 0, true);
+        Matrix flippedOnce = transformOfTheTextureView();
+        assertFalse("a mirrored recording should not be shown unmirrored",
+                flippedOnce.equals(plain));
+
+        videoView.setShouldMirror(true);
+        videoView.transformPreview(640, 480, 0, true);
+        assertEquals("asking for a mirror of a mirrored recording is the original",
+                plain, transformOfTheTextureView());
+    }
+
+    /** Nothing is asked of the TextureView until there is a video and a view to fit it to. */
+    @Test
+    public void anEmptyVideoOrViewIsLeftAlone() {
+        givenAVideoToShow();
+        videoView.transformPreview(480, 640);
+        Matrix before = transformOfTheTextureView();
+
+        // Left as it was rather than reset: a video with no size yet says nothing about how the
+        // one already on screen should be shown.
+        videoView.transformPreview(0, 0);
+        assertEquals(before, transformOfTheTextureView());
+
+        videoView.layout(0, 0, 0, 0);
+        videoView.transformPreview(640, 480);
+        assertEquals(before, transformOfTheTextureView());
+    }
+
+    /** Gives the view something to show, which is what makes it build a TextureView. */
+    private void givenAVideoToShow() {
+        videoView.setFile(file);
+        idle();
+    }
+
+    /** The transform the view actually handed to its TextureView. */
+    private Matrix transformOfTheTextureView() {
+        for (int i = 0; i < videoView.getChildCount(); i++) {
+            if (videoView.getChildAt(i) instanceof TextureView) {
+                return ((TextureView) videoView.getChildAt(i)).getTransform(new Matrix());
+            }
+        }
+        throw new AssertionError("the view never created a TextureView");
     }
 
     /** A file really is prepared and played, which is most of what the class does. */

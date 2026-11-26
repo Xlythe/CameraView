@@ -5,6 +5,7 @@ import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.media.MediaMetadataRetriever;
 import android.media.AudioAttributes;
@@ -14,6 +15,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.util.Size;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.Surface;
@@ -727,57 +729,6 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         Objects.requireNonNull(mMediaPlayer).setVolume(clampedVolume, clampedVolume);
     }
 
-    void transformPreview(int videoWidth, int videoHeight) {
-        mVideoWidth = videoWidth;
-        mVideoHeight = videoHeight;
-        mVideoOrientation = 0;
-        mVideoMirrored = false;
-
-        int viewWidth = getWidth();
-        int viewHeight = getHeight();
-        if (videoWidth <= 0 || videoHeight <= 0 || viewWidth <= 0 || viewHeight <= 0
-                || mTextureView == null) {
-            return;
-        }
-
-        Matrix matrix = new Matrix();
-
-        float aspectRatio = (float) videoHeight / (float) videoWidth;
-        int newWidth, newHeight;
-        if (viewHeight > viewWidth * aspectRatio) {
-            newWidth = (int) (viewHeight / aspectRatio);
-            newHeight = viewHeight;
-        } else {
-            newWidth = viewWidth;
-            newHeight = (int) (viewWidth * aspectRatio);
-        }
-
-        float scaleX = (float) newWidth / (float) viewWidth;
-        float scaleY = (float) newHeight / (float) viewHeight;
-
-        int translateX = (viewWidth - newWidth) / 2;
-        int translateY = (viewHeight - newHeight) / 2;
-
-        matrix.setScale(scaleX, scaleY);
-        matrix.postTranslate(translateX, translateY);
-
-        if (isMirrored()) {
-            matrix.postScale(-1, 1);
-            matrix.postTranslate(viewWidth, 0);
-        }
-
-        if (DEBUG) {
-            Log.d(TAG, String.format("Result: viewAspectRatio=%s, videoAspectRatio=%s, "
-                            + "viewWidth=%s, viewHeight=%s, videoWidth=%s, videoHeight=%s, "
-                            + "newWidth=%s, newHeight=%s, scaleX=%s, scaleY=%s, translateX=%s, "
-                            + "translateY=%s",
-                    ((float) viewHeight / (float) viewWidth), aspectRatio, viewWidth, viewHeight,
-                    videoWidth, videoHeight, newWidth, newHeight, scaleX, scaleY, translateX, translateY));
-        }
-
-        mTextureView.setTransform(matrix);
-    }
-
     private void createTextureView() {
         // Destroy the TextureView we used for the previous round of video activity. This is
         // because the TextureView will continue to show a bitmap of the old view until the video
@@ -828,112 +779,45 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         return true;
     }
 
-    private void transformPreview(int previewWidth, int previewHeight, int cameraOrientation, boolean flipped) {
-        mVideoWidth = previewWidth;
-        mVideoHeight = previewHeight;
+    void transformPreview(int videoWidth, int videoHeight) {
+        transformPreview(videoWidth, videoHeight, 0 /* orientation */, false /* flipped */);
+    }
+
+    /**
+     * Fits the video to the view, upright and filling it.
+     *
+     * <p>The same centre-crop every camera preview in this library goes through, rather than a
+     * second copy of the arithmetic: this method used to hand-roll the scale, the translation and
+     * the rotation, down to a one-pixel correction for the difference between 90 and 270 degrees,
+     * and it got a different answer from the previews it sat next to.</p>
+     *
+     * @param cameraOrientation how far the video has to be rotated to be upright
+     * @param flipped whether the video was recorded mirrored, as a front camera records it
+     */
+    void transformPreview(
+            int videoWidth, int videoHeight, int cameraOrientation, boolean flipped) {
+        mVideoWidth = videoWidth;
+        mVideoHeight = videoHeight;
         mVideoOrientation = cameraOrientation;
         mVideoMirrored = flipped;
 
         int viewWidth = getWidth();
         int viewHeight = getHeight();
-        if (previewWidth <= 0 || previewHeight <= 0 || viewWidth <= 0 || viewHeight <= 0
+        if (videoWidth <= 0 || videoHeight <= 0 || viewWidth <= 0 || viewHeight <= 0
                 || mTextureView == null) {
             return;
         }
-        int displayOrientation = getDisplayRotation();
-        if (isMirrored()) {
-            flipped = !flipped;
-        }
 
-        // Camera2 rotates the preview to always face in portrait mode, even if the phone is
-        // currently in landscape. This is great for portrait mode, because there's less work to be done.
-        // It's less great for landscape, because we have to undo it. Without any matrix modifications,
-        // the preview will be smushed into the aspect ratio of the view.
-        Matrix matrix = new Matrix();
-
-        // Camera2 reverses the preview width/height.
-        if (cameraOrientation != 0 && cameraOrientation != 180) {
-            int temp = previewWidth;
-            previewWidth = previewHeight;
-            previewHeight = temp;
-        }
-
-        // We want to find the aspect ratio of the preview. Our goal is to stretch the image in
-        // our SurfaceView to match this ratio, so that the image doesn't looked smushed.
-        // This means the edges of the preview will be cut off.
-        float aspectRatio = (float) previewHeight / (float) previewWidth;
-        int newWidth, newHeight;
-        if (viewHeight > viewWidth * aspectRatio) {
-            newWidth = (int) Math.ceil(viewHeight / aspectRatio);
-            newHeight = viewHeight;
-        } else {
-            newWidth = viewWidth;
-            newHeight = (int) Math.ceil(viewWidth * aspectRatio);
-        }
-
-        // For portrait, we've already been mostly stretched. For landscape, our image is rotated 90 degrees.
-        // Think of it as a sideways squished photo. We want to first streeeetch the height of the photo
-        // until it matches the aspect ratio we originally expected. Now we're no longer stretched
-        // (although we're wildly off screen, with only the far left sliver of the photo still
-        // visible on the screen, and our picture is still sideways).
-        float scaleX = (float) newWidth / (float) viewWidth;
-        float scaleY = (float) newHeight / (float) viewHeight;
-
-        // However, we've actually stretched too much. The height of the picture is currently the
-        // width of our screen. When we rotate the picture, it'll be too large and we'll end up
-        // cropping a lot of the picture. That's what this step is for. We scale down the image so
-        // that the height of the photo (currently the width of the phone) becomes the height we
-        // want (the height of the phone, or slightly bigger, depending on aspect ratio).
-        float scale = 1f;
-        if (cameraOrientation == 90 || cameraOrientation == 270) {
-            boolean cropHeight = viewWidth > newHeight * viewHeight / newWidth;
-            if (cropHeight) {
-                // If we're cropping the top/bottom, then we want the widths to be exact
-                scale = (float) viewWidth / newHeight;
-            } else {
-                // If we're cropping the left/right, then we want the heights to be exact
-                scale = (float) viewHeight / newWidth;
-            }
-            newWidth = (int) Math.ceil(newWidth * scale);
-            newHeight = (int) Math.ceil(newHeight * scale);
-            scaleX *= scale;
-            scaleY *= scale;
-        }
-
-        // Because we scaled the preview beyond the bounds of the view, we need to crop some of it.
-        // By translating the photo over, we'll move it into the center.
-        int translateX = (int) Math.ceil((viewWidth - newWidth) / 2d);
-        int translateY = (int) Math.ceil((viewHeight - newHeight) / 2d);
-
-        // Due to the direction of rotation (90 vs 270), a 1 pixel offset can either put us
-        // exactly where we want to be, or it can put us 1px lower than we wanted. This is error
-        // correction for that.
-        if (cameraOrientation == 270) {
-            translateX = (int) Math.floor((viewWidth - newWidth) / 2d);
-            translateY = (int) Math.floor((viewHeight - newHeight) / 2d);
-        }
-
-        // Finally, with our photo scaled and centered, we apply a rotation.
-        int rotation = cameraOrientation;
-
-        matrix.setScale(scaleX, scaleY);
-        matrix.postTranslate(translateX, translateY);
-        matrix.postRotate(rotation, (int) Math.ceil(viewWidth / 2d), (int) Math.ceil(viewHeight / 2d));
-        if (flipped) {
-            matrix.postScale(-1, 1, (int) Math.ceil(viewWidth / 2d), (int) Math.ceil(viewHeight / 2d));
-        }
-
-        if (DEBUG) {
-            Log.d(TAG, String.format("transformPreview: displayOrientation=%s, cameraOrientation=%s, "
-                            + "viewWidth=%s, viewHeight=%s, viewAspectRatio=%s, previewWidth=%s, previewHeight=%s, previewAspectRatio=%s, "
-                            + "newWidth=%s, newHeight=%s, scaleX=%s, scaleY=%s, scale=%s, "
-                            + "translateX=%s, translateY=%s, rotation=%s",
-                    displayOrientation, cameraOrientation, viewWidth, viewHeight,
-                    ((float) viewHeight / (float) viewWidth), previewWidth, previewHeight, aspectRatio,
-                    newWidth, newHeight, scaleX, scaleY, scale, translateX, translateY, rotation));
-        }
-
-        mTextureView.setTransform(matrix);
+        // Asking for a mirrored view of a mirrored recording shows it the way round it was
+        // taken, so the two cancel.
+        boolean mirrored = flipped != isMirrored();
+        Size frame = new Size(videoWidth, videoHeight);
+        mTextureView.setTransform(TransformMath.asTextureTransform(
+                TransformMath.centerCrop(
+                        new RectF(0f, 0f, videoWidth, videoHeight),
+                        TransformMath.within360(cameraOrientation),
+                        mirrored, viewWidth, viewHeight),
+                frame, viewWidth, viewHeight));
     }
 
     /**

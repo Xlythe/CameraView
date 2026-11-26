@@ -39,7 +39,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * not be written before.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37,
+@Config(sdk = {29, 37},
         shadows = {ShadowAvailableTextureView.class, ShadowInjectableImageReader.class})
 public class CameraViewLifecycleTest {
     private Context context;

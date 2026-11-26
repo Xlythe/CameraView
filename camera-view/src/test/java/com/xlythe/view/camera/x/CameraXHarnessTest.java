@@ -33,9 +33,14 @@ import org.robolectric.annotation.Config;
  * off a device: {@code GLUtils.getGlVersionNumber} reads a version string that comes back null and
  * fails before any of this library's code runs. Both are covered against the Camera2 backend
  * instead.</p>
+ *
+ * <p>That rules out {@code startRecording}, {@code attachSurface} and {@code detachSurface} from
+ * this harness specifically - each one binds a second output and dies in the GL initializer
+ * before reaching anything worth asserting. They are exercised on hardware by the device
+ * matrix, which runs all three backends.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, qualifiers = "w360dp-h800dp-xxxhdpi",
+@Config(sdk = {29, 37}, qualifiers = "w360dp-h800dp-xxxhdpi",
         shadows = {ShadowAnnouncingCameraManager.class, ShadowListingCamcorderProfile.class})
 public class CameraXHarnessTest {
     @Test
@@ -79,9 +84,11 @@ public class CameraXHarnessTest {
             assertTrue(module.isUsingFrontFacingCamera());
 
             exerciseControls(module);
+            exerciseQueries(module);
             exerciseAnalysis(module);
             exerciseRebinds(module);
             exerciseCapture(module);
+            exerciseLensToggle(module);
             exercisePausedOperations(module);
 
             module.onLayoutChanged();
@@ -204,6 +211,67 @@ public class CameraXHarnessTest {
     }
 
 
+
+    /**
+     * Everything the backend can be asked about the camera it bound.
+     *
+     * <p>Queries rather than commands, so the property under test is that each one answers from
+     * the camera that was actually bound instead of guessing or throwing - which is what a
+     * capability query did before it learned to decline.</p>
+     */
+    private static void exerciseQueries(CameraXModule module) {
+        assertTrue("a bound camera is a ready camera", module.isCameraReady());
+
+        // The fake camera publishes a zoom range, so this is supported even though applying it
+        // is declined by a control that cannot execute.
+        module.isZoomSupported();
+
+        // An exposure range this camera does not publish, so the bounds collapse rather than
+        // coming back as something a caller could act on.
+        assertEquals("no exposure range means no room above zero",
+                0, module.getMaxExposureCompensation());
+        assertEquals("and none below", 0, module.getMinExposureCompensation());
+
+        int orientation = module.getRelativeCameraOrientation();
+        assertTrue("a camera orientation is one of four right angles: " + orientation,
+                orientation == 0 || orientation == 90 || orientation == 180 || orientation == 270);
+
+        // Both are hardware questions this camera answers no to, and both have to answer rather
+        // than throw: an app asks them to decide whether to show a button.
+        module.isSnapshotWhileRecordingSupported();
+
+        // The contract is that the return value says whether the camera is now in the state that
+        // was asked for, so it has to agree with what the camera says it can do - and turning it
+        // off has to succeed either way, since a camera that cannot track faces is already not
+        // tracking any.
+        boolean tracksFaces = module.isFaceDetectionSupported();
+        assertEquals("starting face detection must agree with what the camera can do",
+                tracksFaces, module.setFaceDetectionEnabled(true));
+        FakeCameraXHost.idle();
+        assertTrue("stopping face detection always succeeds",
+                module.setFaceDetectionEnabled(false));
+        FakeCameraXHost.idle();
+
+        // The torch is plain state the camera can hold, and no light exists to turn on here.
+        module.setTorchEnabled(true);
+        FakeCameraXHost.idle();
+        module.setTorchEnabled(false);
+        FakeCameraXHost.idle();
+    }
+
+    /** Toggling is the shorthand an app's flip button calls, and it has to rebind. */
+    private static void exerciseLensToggle(CameraXModule module) {
+        boolean wasFront = module.isUsingFrontFacingCamera();
+
+        module.toggleCamera();
+        assertTrue("a toggle has to rebind", FakeCameraXHost.awaitBind(module));
+        assertEquals("a toggle swaps the lens", !wasFront, module.isUsingFrontFacingCamera());
+
+        module.toggleCamera();
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertEquals("and twice is where it started",
+                wasFront, module.isUsingFrontFacingCamera());
+    }
 
     /** Nothing that needs the camera may run while it is paused. */
     private static void exercisePausedOperations(CameraXModule module) throws Exception {

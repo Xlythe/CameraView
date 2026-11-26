@@ -45,7 +45,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * is the only bound that does not drift.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37, shadows = {
+@Config(sdk = {29, 37}, shadows = {
         ShadowAvailableTextureView.class,
         ShadowInjectableImageReader.class,
         ShadowListingCamcorderProfile.class,
@@ -85,6 +85,110 @@ public class ApiSurfaceResourceTest {
     public void tearDown() {
         cameraView.close();
         idle();
+    }
+
+    /**
+     * A stream is opened and closed as often as a call starts and stops.
+     *
+     * <p>Streams are the most expensive thing the library hands out - an encoder, a reader, a
+     * pair of pipes and a thread each - and the one a caller is most likely to open repeatedly,
+     * since every reconnection is a new one. Anything kept back here is kept back for the life
+     * of the app.</p>
+     */
+    @Test
+    public void openingAndClosingTenStreamsHoldsNothing() {
+        cameraView.open();
+        idle();
+        int readersWhileOpen = ShadowInjectableImageReader.openReaderCount();
+
+        for (int round = 0; round < ROUNDS; round++) {
+            VideoStream stream = cameraView.stream(new VideoStream.Params.Builder()
+                    .setAudioEnabled(false)
+                    .setMaxSize(new Size(640, 480))
+                    .setBitRate(1_000_000)
+                    .setIFrameInterval(1)
+                    .setIsLossy(true)
+                    .build());
+            idle();
+            stream.close();
+            idle();
+        }
+
+        assertEquals("a stream held per call is a stream held forever",
+                readersWhileOpen, ShadowInjectableImageReader.openReaderCount());
+    }
+
+    /** And one left open at close time still has to be given back. */
+    @Test
+    public void closingTheCameraReleasesAnOpenStream() {
+        cameraView.open();
+        idle();
+        int readersWhileOpen = ShadowInjectableImageReader.openReaderCount();
+
+        VideoStream stream = cameraView.stream(new VideoStream.Params.Builder()
+                .setAudioEnabled(false)
+                .setMaxSize(new Size(640, 480))
+                .setIsLossy(true)
+                .build());
+        idle();
+
+        cameraView.close();
+        idle();
+
+        assertEquals("closing the camera has to take the stream with it",
+                readersBefore, ShadowInjectableImageReader.openReaderCount());
+        // Closing twice is what a caller does when it cannot tell whether the camera went first.
+        stream.close();
+        idle();
+        assertEquals(readersBefore, ShadowInjectableImageReader.openReaderCount());
+        assertTrue("the stream's reader count should not go below where it started",
+                ShadowInjectableImageReader.openReaderCount() >= 0);
+    }
+
+    /**
+     * Entering and leaving the barcode scanner is a mode switch, not a new camera.
+     *
+     * <p>It is the one entry point that attaches a detector to the running session, so a detector
+     * or an analysis reader left behind shows up as a session that grows every time the user opens
+     * and closes the scanner.</p>
+     */
+    @Test
+    public void enteringAndLeavingTheBarcodeScannerTenTimesHoldsNothing() {
+        cameraView.open();
+        idle();
+        int readersWhileOpen = ShadowInjectableImageReader.openReaderCount();
+        AtomicInteger batches = new AtomicInteger();
+
+        for (int round = 0; round < ROUNDS; round++) {
+            // ML Kit is not initialised under test, so this declines rather than scanning. That
+            // is the path worth holding: a declined scanner must still hold nothing, and must
+            // not throw an ML Kit exception out of a camera library.
+            boolean started = cameraView.enterBarcodeScanner(
+                    barcodes -> batches.incrementAndGet(), Barcode.Format.QR_CODE);
+            idle();
+            cameraView.exitBarcodeScanner();
+            idle();
+            assertFalse("a scanner that could not start should say so", started);
+        }
+
+        assertEquals("a scanner held per entry is a scanner held forever",
+                readersWhileOpen, ShadowInjectableImageReader.openReaderCount());
+        assertEquals("a scanner that never started cannot have found anything", 0, batches.get());
+    }
+
+    /** Leaving a scanner that was never entered is a no-op rather than a crash. */
+    @Test
+    public void leavingAScannerThatWasNeverEnteredIsHarmless() {
+        cameraView.open();
+        idle();
+        int readersWhileOpen = ShadowInjectableImageReader.openReaderCount();
+
+        cameraView.exitBarcodeScanner();
+        cameraView.exitBarcodeScanner();
+        idle();
+
+        assertEquals(readersWhileOpen, ShadowInjectableImageReader.openReaderCount());
+        assertTrue(cameraView.isOpen());
     }
 
     @Test

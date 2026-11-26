@@ -2,6 +2,12 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!--
+      Declared so the tests can be granted it. The library's own manifest asks for nothing - what
+      a camera app needs is the app's decision - but a test that checks a recording carries where
+      it was taken has to be able to hold the permission that supplies it.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
 
     <application>
         <activity

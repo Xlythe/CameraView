@@ -40,7 +40,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * finding anything.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(sdk = {29, 37})
 public class FaceDetectionTest {
     private Context context;
     private FakeCamera2.TestCameraView cameraView;
