@@ -185,21 +185,29 @@ signing {
 }
 
 dependencies {
+    // A floor and no ceiling, for everything this library exposes. An exact version in a
+    // published library is a version the consuming app has to agree to, and an app that
+    // wants a newer androidx than we happened to build against should not have to override
+    // us to get it. The floors are the versions whose APIs the code actually uses.
     api fileTree(include: ['*.jar'], dir: 'libs')
-    api 'androidx.legacy:legacy-support-v4:1.0.0'
-    api 'androidx.exifinterface:exifinterface:1.4.2'
-    api 'androidx.concurrent:concurrent-futures:1.3.0'
-    api 'com.google.guava:guava:33.8.0-android'
-    api 'com.google.mlkit:barcode-scanning:17.3.0'
+    api 'androidx.legacy:legacy-support-v4:[1.0.0,)'
+    api 'androidx.exifinterface:exifinterface:[1.4.1,)'
+    api 'androidx.concurrent:concurrent-futures:[1.3.0,)'
+    api 'com.google.guava:guava:[31.1-android,)'
+    api 'com.google.mlkit:barcode-scanning:[17.3.0,)'
     if (!coreOnly) {
-        api 'androidx.camera:camera-core:1.7.0'
-        api 'androidx.camera:camera-camera2:1.7.0'
-        api 'androidx.camera:camera-lifecycle:1.7.0'
-        api 'androidx.camera:camera-extensions:1.7.0'
-        api 'androidx.camera:camera-video:1.7.0'
-        api 'androidx.activity:activity-compose:1.13.0'
-        api 'androidx.lifecycle:lifecycle-runtime-ktx:2.11.1'
+        // 1.7.0 rather than the older floor the rest keep: the slow-motion and frame-effect
+        // paths call SessionConfig and CameraEffect, which arrived in it.
+        api 'androidx.camera:camera-core:[1.7.0,)'
+        api 'androidx.camera:camera-camera2:[1.7.0,)'
+        api 'androidx.camera:camera-lifecycle:[1.7.0,)'
+        api 'androidx.camera:camera-extensions:[1.7.0,)'
+        api 'androidx.camera:camera-video:[1.7.0,)'
+        api 'androidx.activity:activity-compose:[1.10.1,)'
+        api 'androidx.lifecycle:lifecycle-runtime-ktx:[2.8.7,)'
     }
+    // The test dependencies stay exact. They reach no consumer, and a suite that silently
+    // changed runner underneath a failure is a worse trade than one that needs bumping.
     testImplementation 'org.robolectric:robolectric:4.18.1'
     testImplementation 'androidx.compose.ui:ui-test-junit4-android:1.9.2'
     debugImplementation 'androidx.compose.ui:ui-test-manifest:1.9.2'

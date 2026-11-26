@@ -42,13 +42,13 @@ android {
 dependencies {
     implementation fileTree(include: ['*.jar'], dir: 'libs')
     implementation project(':camera-view')
-    implementation 'androidx.constraintlayout:constraintlayout:2.2.2'
-    implementation 'androidx.appcompat:appcompat:1.7.1'
-    implementation 'androidx.legacy:legacy-support-v4:1.0.0'
-    implementation 'androidx.navigation:navigation-fragment:2.9.8'
-    implementation 'androidx.navigation:navigation-ui:2.9.8'
-    implementation 'com.google.android.material:material:1.14.0'
-    implementation 'com.google.android.gms:play-services-wearable:19.0.0'
+    implementation 'androidx.constraintlayout:constraintlayout:+'
+    implementation 'androidx.appcompat:appcompat:+'
+    implementation 'androidx.legacy:legacy-support-v4:+'
+    implementation 'androidx.navigation:navigation-fragment:+'
+    implementation 'androidx.navigation:navigation-ui:+'
+    implementation 'com.google.android.material:material:+'
+    implementation 'com.google.android.gms:play-services-wearable:+'
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.robolectric:robolectric:4.18.1'
 }

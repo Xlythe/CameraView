@@ -19,13 +19,6 @@ allprojects {
         google()
     }
 
-    configurations.configureEach {
-        resolutionStrategy {
-            failOnDynamicVersions()
-            failOnChangingVersions()
-        }
-    }
-
     tasks.withType(Test).configureEach {
         javaLauncher = javaToolchains.launcherFor {
             languageVersion = JavaLanguageVersion.of(21)
