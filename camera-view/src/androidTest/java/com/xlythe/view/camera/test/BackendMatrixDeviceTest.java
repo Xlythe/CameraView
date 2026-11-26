@@ -1,12 +1,14 @@
 package com.xlythe.view.camera.test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
 import android.os.Build;
+import android.util.Log;
 import android.util.Size;
 import android.view.ViewGroup;
 
@@ -51,7 +53,16 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @RunWith(Parameterized.class)
 public final class BackendMatrixDeviceTest {
+    private static final String TAG = "BackendMatrixDeviceTest";
     private static final long TIMEOUT_SECONDS = 30;
+
+    /**
+     * How far a zoom may read back from the one asked for.
+     *
+     * <p>The old camera API zooms in steps of its own table, so it lands on the nearest entry
+     * rather than on the ratio; the other two land on it exactly.</p>
+     */
+    private static final float ZOOM_TOLERANCE = 0.05f;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<CameraView.Backend> backends() {
@@ -306,6 +317,71 @@ public final class BackendMatrixDeviceTest {
                 CameraView.Flash.ON, flash.get());
         assertEquals("and it has to change back on " + backend,
                 CameraView.Flash.OFF, flashAfterOff.get());
+    }
+
+    /**
+     * Zoom answers in the camera's own terms on every backend: 1x is inside the range, the
+     * presets are inside it too, and a ratio reads back as the one asked for.
+     *
+     * <p>The presets are logged, since what each backend makes of the lenses is the part only a
+     * real phone can show.</p>
+     */
+    @Test
+    public void theZoomAnswersInRatios() throws Exception {
+        AtomicReference<float[]> range = new AtomicReference<>();
+        AtomicReference<float[]> presets = new AtomicReference<>();
+        AtomicReference<Float> target = new AtomicReference<>();
+        AtomicReference<Float> zoomed = new AtomicReference<>();
+
+        withOpenCamera(camera -> {
+            CountDownLatch changed = new CountDownLatch(1);
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                range.set(new float[] {camera.getMinZoomRatio(), camera.getMaxZoomRatio()});
+                presets.set(camera.getZoomPresets());
+                // The longest preset reaches a telephoto where there is one, which is the switch
+                // most worth seeing happen; a camera with a single stop is asked for 2x instead.
+                float[] stops = presets.get();
+                target.set(stops.length > 1
+                        ? stops[stops.length - 1] : Math.min(2f, camera.getMaxZoomRatio()));
+                camera.setOnZoomChangedListener(ratio -> {
+                    if (Math.abs(ratio - target.get()) <= ZOOM_TOLERANCE * target.get()) {
+                        changed.countDown();
+                    }
+                });
+            });
+            Log.i(TAG, backend + " zooms " + range.get()[0] + "x to " + range.get()[1]
+                    + "x with presets " + Arrays.toString(presets.get()));
+            if (target.get() <= camera.getZoomRatio()) {
+                return;
+            }
+
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(
+                    () -> camera.setZoomRatio(target.get()));
+            assertTrue("the zoom never reported reaching " + target.get() + "x on " + backend,
+                    changed.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            zoomed.set(camera.getZoomRatio());
+            Log.i(TAG, backend + " asked for " + target.get() + "x and reads "
+                    + zoomed.get() + "x");
+        });
+
+        float min = range.get()[0];
+        float max = range.get()[1];
+        assertTrue("1x has to be inside " + min + "-" + max + " on " + backend,
+                min <= 1f && 1f <= max);
+        float[] stops = presets.get();
+        assertFalse("there is always a preset on " + backend, stops.length == 0);
+        boolean hasOne = false;
+        for (int i = 0; i < stops.length; i++) {
+            assertTrue(stops[i] + "x is outside " + min + "-" + max + " on " + backend,
+                    min <= stops[i] && stops[i] <= max);
+            assertTrue("presets increase on " + backend, i == 0 || stops[i] > stops[i - 1]);
+            hasOne |= stops[i] == 1f;
+        }
+        assertTrue("1x is always a preset on " + backend, hasOne);
+        if (zoomed.get() != null) {
+            assertEquals("the zoom reads back as asked on " + backend,
+                    target.get(), zoomed.get(), ZOOM_TOLERANCE * target.get());
+        }
     }
 
     /** What a test does with an open camera. */

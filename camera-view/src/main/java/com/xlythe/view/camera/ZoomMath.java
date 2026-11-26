@@ -92,9 +92,9 @@ public final class ZoomMath {
     /**
      * Whether a sensor can crop to 2x and still fill the largest picture the camera takes.
      *
-     * <p>A phone with a high-resolution main sensor bins it down for ordinary pictures, so a 2x crop
-     * of the full sensor is as sharp as the uncropped picture. That makes 2x a stop worth offering
-     * where no lens sits.</p>
+     * <p>A phone with a high-resolution main sensor bins it down for ordinary pictures, so a 2x
+     * crop of the full sensor is as sharp as the uncropped picture. That makes 2x a stop worth
+     * offering where no lens sits.</p>
      *
      * @param sensorWidth the sensor's width in pixels, at its highest resolution
      * @param largestPictureWidth the width of the largest JPEG the camera offers
@@ -112,36 +112,36 @@ public final class ZoomMath {
      * ten percent of one another are one stop. 1x and the wide end win over a lens that lands near
      * them, because the camera reaches those two exactly.</p>
      *
-     * @param lensStops where each lens sits, from {@link #lensStop}; a 0 is a lens that did not
-     *     publish its optics, and is left out
+     * @param stops the other ratios the camera has a reason to stop at, usually each lens from
+     *     {@link #lensStop}, where a lens that did not publish its optics gives 0 and is left out
      * @param cropStop whether the main sensor can crop to 2x, from {@link #canCropTo2x}
      */
     @NonNull
-    public static float[] presets(float minRatio, float maxRatio, @NonNull float[] lensStops,
+    public static float[] presets(float minRatio, float maxRatio, @NonNull float[] stops,
             boolean cropStop) {
-        List<Float> stops = new ArrayList<>();
-        stops.add(clamp(1f, minRatio, maxRatio));
+        List<Float> presetList = new ArrayList<>();
+        presetList.add(clamp(1f, minRatio, maxRatio));
         if (minRatio < 1f) {
-            addDistinct(stops, minRatio);
+            addDistinct(presetList, minRatio);
         }
 
-        float[] lenses = lensStops.clone();
-        Arrays.sort(lenses);
-        boolean lensAtCropStop = false;
-        for (float lens : lenses) {
-            if (lens <= 0f) {
+        float[] sorted = stops.clone();
+        Arrays.sort(sorted);
+        boolean stopAtCrop = false;
+        for (float stop : sorted) {
+            if (stop <= 0f) {
                 continue;
             }
-            lensAtCropStop |= isSameStop(lens, CROP_STOP);
-            addDistinct(stops, clamp(lens, minRatio, maxRatio));
+            stopAtCrop |= isSameStop(stop, CROP_STOP);
+            addDistinct(presetList, clamp(stop, minRatio, maxRatio));
         }
-        if (cropStop && !lensAtCropStop) {
-            addDistinct(stops, clamp(CROP_STOP, minRatio, maxRatio));
+        if (cropStop && !stopAtCrop) {
+            addDistinct(presetList, clamp(CROP_STOP, minRatio, maxRatio));
         }
 
-        float[] presets = new float[stops.size()];
+        float[] presets = new float[presetList.size()];
         for (int i = 0; i < presets.length; i++) {
-            presets[i] = stops.get(i);
+            presets[i] = presetList.get(i);
         }
         Arrays.sort(presets);
         return presets;

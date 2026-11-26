@@ -405,6 +405,15 @@ public class CameraView extends FrameLayout {
     private PinchToZoomGestureDetector mScaleDetector;
     private boolean mIsPinchToZoomEnabled = true;
 
+    /** Told of every zoom change. See {@link #setOnZoomChangedListener}. */
+    @Nullable
+    private OnZoomChangedListener mOnZoomChangedListener;
+    /**
+     * The ratio the zoom listener was last told about, so a backend reporting a ratio twice is
+     * passed on once. Kept with no listener too, so one set later hears only real changes.
+     */
+    private float mLastReportedZoomRatio = Float.NaN;
+
     private ICameraModule mCameraModule;
 
     /** Lets a burst of layout passes finish before the camera is reconfigured for the last one. */
@@ -1877,22 +1886,65 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Sets the current zoom level, from 0 to {@link #getMaxZoomLevel()}.
+     * Zooms to a ratio in the camera's own terms, where 1 is the main lens.
+     *
+     * <p>Held to {@link #getMinZoomRatio()} and {@link #getMaxZoomRatio()}. On a phone with
+     * several lenses the camera switches between them as the ratio crosses from one to the next,
+     * so the whole range is one smooth zoom.</p>
+     */
+    public void setZoomRatio(float zoomRatio) {
+        if (!(zoomRatio > 0f) || Float.isInfinite(zoomRatio)) {
+            Log.w(TAG, "Ignoring a zoom ratio of " + zoomRatio);
+            return;
+        }
+        mCameraModule.setZoomRatio(zoomRatio);
+    }
+
+    /** The current zoom. See {@link #setZoomRatio}. */
+    public float getZoomRatio() {
+        return mCameraModule.getZoomRatio();
+    }
+
+    /** The widest the camera can see: below 1 on a phone with an ultra-wide lens, otherwise 1. */
+    public float getMinZoomRatio() {
+        return mCameraModule.getMinZoomRatio();
+    }
+
+    /** The furthest the camera can zoom in, or 1 if it cannot zoom. */
+    public float getMaxZoomRatio() {
+        return mCameraModule.getMaxZoomRatio();
+    }
+
+    /**
+     * The zoom ratios worth a button each, in increasing order, such as {0.6, 1, 2, 5}.
+     *
+     * <p>Android does not publish the stops a phone's own camera app offers, so these are worked
+     * out from its lenses: always 1, the wide end when it is below 1, one stop per lens, and 2
+     * where the main sensor can crop to it without upscaling. They belong to the lens in use, so
+     * read them again after switching.</p>
+     */
+    @NonNull
+    public float[] getZoomPresets() {
+        return mCameraModule.getZoomPresets();
+    }
+
+    /**
+     * Zooms to a position from 0 to {@link #getMaxZoomLevel()}, for a slider.
+     *
+     * <p>The levels span the same range as {@link #setZoomRatio}, from the minimum ratio at 0 to
+     * the maximum at the top, on a log scale so that equal travel multiplies the zoom by the same
+     * amount.</p>
      */
     public void setZoomLevel(int zoomLevel) {
         mCameraModule.setZoomLevel(zoomLevel);
     }
 
-    /**
-     * @return The current zoom level.
-     */
+    /** The current zoom, as a level. See {@link #setZoomLevel}. */
     public int getZoomLevel() {
         return mCameraModule.getZoomLevel();
     }
 
-    /**
-     * @return The maximum zoom level.
-     */
+    /** The top of the zoom level scale, which is the same on every camera. */
     public int getMaxZoomLevel() {
         return mCameraModule.getMaxZoomLevel();
     }
@@ -1902,6 +1954,27 @@ public class CameraView extends FrameLayout {
      */
     public boolean isZoomSupported() {
         return mCameraModule.isZoomSupported();
+    }
+
+    /**
+     * Reports every change of zoom, however it came about: {@link #setZoomRatio},
+     * {@link #setZoomLevel}, a pinch, or a lens switch to a camera that cannot reach the old zoom.
+     * This is what keeps preset buttons in step with a pinch.
+     */
+    public void setOnZoomChangedListener(@Nullable OnZoomChangedListener listener) {
+        mOnZoomChangedListener = listener;
+    }
+
+    /** Passes a zoom change on to the listener, unless it is the ratio last passed on. */
+    @UiThread
+    void onZoomChanged(float zoomRatio) {
+        if (zoomRatio == mLastReportedZoomRatio) {
+            return;
+        }
+        mLastReportedZoomRatio = zoomRatio;
+        if (mOnZoomChangedListener != null) {
+            mOnZoomChangedListener.onZoomChanged(zoomRatio);
+        }
     }
 
     /**
@@ -1954,6 +2027,13 @@ public class CameraView extends FrameLayout {
     public interface OnCameraStateChangedListener {
         void onCameraOpened();
         void onCameraClosed();
+    }
+
+    /** Hears every change of zoom. See {@link #setOnZoomChangedListener}. */
+    public interface OnZoomChangedListener {
+        /** Called on the main thread, once per change. */
+        @UiThread
+        void onZoomChanged(float zoomRatio);
     }
 
     private class PinchToZoomGestureDetector extends ScaleGestureDetector implements ScaleGestureDetector.OnScaleGestureListener {

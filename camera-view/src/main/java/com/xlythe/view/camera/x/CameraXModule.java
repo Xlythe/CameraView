@@ -7,8 +7,10 @@ import android.app.Application;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.content.Intent;
+import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
@@ -34,6 +36,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
 import androidx.camera.core.Camera;
+import androidx.camera.core.CameraControl;
 import androidx.camera.camera2.interop.Camera2CameraInfo;
 import androidx.camera.camera2.interop.Camera2Interop;
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop;
@@ -92,6 +95,8 @@ import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.LocationProvider;
 import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.TransformMath;
+import com.xlythe.view.camera.ZoomMath;
+import com.xlythe.view.camera.v2.Camera2Module;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
@@ -116,8 +121,6 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
     /** A short timeout used only to refresh and read the last known GPS location. */
     private static final long GPS_TIMEOUT_MILLIS = 10;
-    /** The public CameraView zoom range is represented as one hundred linear steps. */
-    private static final int MAX_ZOOM_LEVEL = 100;
     /** Maximum time CameraX may take to report a still-image terminal callback. */
     private static final long IMAGE_CAPTURE_TIMEOUT_MILLIS = 15_000;
     /** Maximum time CameraX may take to emit the recording Start event. */
@@ -257,8 +260,18 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private boolean mFrontFacing;
     /** Sensor orientation for the requested lens, available before CameraX finishes binding. */
     private int mSensorOrientation;
-    /** Last accepted public zoom level in the range 0..100. */
-    private int mZoomLevel;
+    /**
+     * The zoom asked for, held to the bound camera's range, which is what getZoomRatio reports.
+     * Applied again on every bind and whenever the camera opens, since CameraX starts both at 1x
+     * and turns away a request made before the camera is running.
+     */
+    private float mZoomRatio = 1f;
+    /** The last zoom the camera confirmed, which a request it fails goes back to. */
+    private float mConfirmedZoomRatio = 1f;
+    /** The camera, and the range, {@link #mZoomPresets} was worked out for. */
+    @Nullable private String mZoomPresetsKey;
+    /** The bound camera's zoom presets, kept because each lens they come from costs a lookup. */
+    @NonNull private float[] mZoomPresets = {1f};
     /** Last non-zero CameraView layout width used to choose resolutions and ViewPort. */
     private int mLastWidth;
     /** Last non-zero CameraView layout height used to choose resolutions and ViewPort. */
@@ -289,14 +302,18 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private boolean mSnapshotPaused;
     /** Snapshot of recording state guarded by mSnapshotLock. */
     private boolean mSnapshotRecording;
-    /** Snapshot of accepted zoom level guarded by mSnapshotLock. */
-    private int mSnapshotZoomLevel;
+    /** Snapshot of the zoom ratio guarded by mSnapshotLock. */
+    private float mSnapshotZoomRatio = 1f;
+    /** Snapshot of the bound camera's minimum zoom ratio guarded by mSnapshotLock. */
+    private float mSnapshotMinZoomRatio = 1f;
+    /** Snapshot of the bound camera's maximum zoom ratio guarded by mSnapshotLock. */
+    private float mSnapshotMaxZoomRatio = 1f;
+    /** Snapshot of the bound camera's zoom presets guarded by mSnapshotLock. */
+    @NonNull private float[] mSnapshotZoomPresets = {1f};
     /** Snapshot of front-camera availability guarded by mSnapshotLock. */
     private boolean mSnapshotHasFrontCamera;
     /** Snapshot of flash availability guarded by mSnapshotLock. */
     private boolean mSnapshotHasFlash;
-    /** Snapshot of zoom availability guarded by mSnapshotLock. */
-    private boolean mSnapshotZoomSupported;
     /** Snapshot of HDR capture availability guarded by mSnapshotLock. */
     private boolean mSnapshotHdrSupported;
     /** Snapshot of preview stabilization availability guarded by mSnapshotLock. */
@@ -357,7 +374,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         Camera camera = mActiveCamera;
         CameraInfo cameraInfo = camera == null ? null : camera.getCameraInfo();
         boolean hasFlash = cameraInfo != null && cameraInfo.hasFlashUnit();
-        boolean zoomSupported = false;
+        float minZoomRatio = 1f;
+        float maxZoomRatio = 1f;
+        float[] zoomPresets = {1f};
         boolean hdrSupported = false;
         boolean previewStabilizationSupported = false;
         boolean videoStabilizationSupported = false;
@@ -372,10 +391,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // callbacks and from CameraX's own listeners, so an escaping exception takes the host
             // down. Ask each question on its own and treat a failure as unsupported, which is
             // what an unanswerable capability means anyway.
-            zoomSupported = query(cameraInfo, "zoom", info -> {
-                ZoomState zoom = info.getZoomState().getValue();
-                return zoom != null && zoom.getMaxZoomRatio() > zoom.getMinZoomRatio();
-            }, false);
+            ZoomState zoom = query(cameraInfo, "zoom",
+                    info -> info.getZoomState().getValue(), null);
+            if (zoom != null && zoom.getMaxZoomRatio() > zoom.getMinZoomRatio()) {
+                minZoomRatio = zoom.getMinZoomRatio();
+                maxZoomRatio = zoom.getMaxZoomRatio();
+            }
+            float min = minZoomRatio;
+            float max = maxZoomRatio;
+            zoomPresets = query(cameraInfo, "zoom presets",
+                    info -> zoomPresets(info, min, max), zoomPresets);
             hdrSupported = query(cameraInfo, "HDR", CameraXModule::supportsHdr, false);
             previewStabilizationSupported = query(cameraInfo, "preview stabilization",
                     info -> Preview.getPreviewCapabilities(info).isStabilizationSupported(), false);
@@ -394,10 +419,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mSnapshotFrontFacing = mFrontFacing;
             mSnapshotPaused = mPaused;
             mSnapshotRecording = mVideoRecording != null;
-            mSnapshotZoomLevel = mZoomLevel;
+            mSnapshotZoomRatio = mZoomRatio;
+            mSnapshotMinZoomRatio = minZoomRatio;
+            mSnapshotMaxZoomRatio = maxZoomRatio;
+            mSnapshotZoomPresets = zoomPresets;
             mSnapshotHasFrontCamera = hasFrontCamera;
             mSnapshotHasFlash = hasFlash;
-            mSnapshotZoomSupported = zoomSupported;
             mSnapshotHdrSupported = hdrSupported;
             mSnapshotPreviewStabilizationSupported = previewStabilizationSupported;
             mSnapshotVideoStabilizationSupported = videoStabilizationSupported;
@@ -650,6 +677,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         CameraState.StateError error = cameraState.getError();
         if (error == null) {
             mLastCriticalCameraError = null;
+            if (cameraState.getType() == CameraState.Type.OPEN) {
+                // The first moment the camera takes a zoom, so one asked for while it was opening
+                // is asked for again.
+                applyZoomOnMainThread();
+            }
             return;
         }
         if (error.getType() == CameraState.ErrorType.RECOVERABLE) {
@@ -785,26 +817,49 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 new FocusMeteringAction.Builder(center, FocusMeteringAction.FLAG_AF).build());
     }
 
-    @Override public void setZoomLevel(int zoomLevel) {
-        runOnMainThread(() -> setZoomOnMainThread(zoomLevel));
+    @Override public void setZoomRatio(float zoomRatio) {
+        runOnMainThread(() -> {
+            mZoomRatio = zoomRatio;
+            applyZoomOnMainThread();
+        });
     }
 
-    private void setZoomOnMainThread(int zoomLevel) {
-        int clamped = Math.max(0, Math.min(zoomLevel, MAX_ZOOM_LEVEL));
+    /**
+     * Asks the bound camera for the zoom.
+     *
+     * <p>Reported straight away, as the other backends report it, rather than once the camera
+     * confirms it: CameraX cancels every request a newer one replaces, which during a pinch is
+     * every step but the last. A cancelled request is left for the next one, or for the camera
+     * opening, to carry. Only one the camera fails goes back to the last zoom it confirmed.</p>
+     */
+    private void applyZoomOnMainThread() {
         Camera camera = mActiveCamera;
-        if (camera == null) {
-            mZoomLevel = clamped;
-            publishSnapshot();
+        ZoomState zoom = camera == null ? null : camera.getCameraInfo().getZoomState().getValue();
+        if (zoom != null) {
+            mZoomRatio = ZoomMath.clamp(
+                    mZoomRatio, zoom.getMinZoomRatio(), zoom.getMaxZoomRatio());
+        }
+        reportZoomRatio(mZoomRatio);
+        if (camera == null || zoom == null) {
+            // Nothing bound to ask, so the next bind applies it.
             return;
         }
-        ListenableFuture<Void> result = camera.getCameraControl().setLinearZoom(clamped / (float) MAX_ZOOM_LEVEL);
+
+        float requested = mZoomRatio;
+        ListenableFuture<Void> result = camera.getCameraControl().setZoomRatio(requested);
         result.addListener(() -> {
             try {
                 result.get();
-                mZoomLevel = clamped;
-                publishSnapshot();
+                mConfirmedZoomRatio = requested;
             } catch (ExecutionException e) {
+                if (e.getCause() instanceof CameraControl.OperationCanceledException) {
+                    return;
+                }
                 Log.w(TAG, "Zoom request failed", e.getCause());
+                if (mZoomRatio == requested) {
+                    mZoomRatio = mConfirmedZoomRatio;
+                    reportZoomRatio(mZoomRatio);
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 Log.w(TAG, "Zoom request interrupted", e);
@@ -812,18 +867,62 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }, mMainExecutor);
     }
 
-    @Override public int getZoomLevel() {
+    private void reportZoomRatio(float zoomRatio) {
+        // Only the ratio, rather than a whole snapshot: a pinch asks for one every frame.
         synchronized (mSnapshotLock) {
-            return mSnapshotZoomLevel;
+            mSnapshotZoomRatio = zoomRatio;
+        }
+        onZoomChanged(zoomRatio);
+    }
+
+    @Override public float getZoomRatio() {
+        synchronized (mSnapshotLock) {
+            return mSnapshotZoomRatio;
         }
     }
 
-    @Override public int getMaxZoomLevel() { return MAX_ZOOM_LEVEL; }
-
-    @Override public boolean isZoomSupported() {
+    @Override public float getMinZoomRatio() {
         synchronized (mSnapshotLock) {
-            return mSnapshotZoomSupported;
+            return mSnapshotMinZoomRatio;
         }
+    }
+
+    @Override public float getMaxZoomRatio() {
+        synchronized (mSnapshotLock) {
+            return mSnapshotMaxZoomRatio;
+        }
+    }
+
+    @NonNull @Override public float[] getZoomPresets() {
+        synchronized (mSnapshotLock) {
+            return mSnapshotZoomPresets.clone();
+        }
+    }
+
+    /**
+     * The zoom stops a camera's lenses suggest, read as the camera2 backend reads them.
+     *
+     * <p>Worked out again only when the camera or its range changes: each lens costs a lookup,
+     * and a snapshot is published far more often than that.</p>
+     */
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    @NonNull
+    private float[] zoomPresets(@NonNull CameraInfo cameraInfo, float minRatio, float maxRatio) {
+        String cameraId = Camera2CameraInfo.from(cameraInfo).getCameraId();
+        String key = cameraId + ':' + minRatio + ':' + maxRatio;
+        if (!key.equals(mZoomPresetsKey)) {
+            try {
+                CameraManager cameraManager =
+                        (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
+                mZoomPresets = Camera2Module.zoomPresets(
+                        cameraManager, cameraId, minRatio, maxRatio);
+            } catch (CameraAccessException error) {
+                Log.w(TAG, "Unable to read the lenses of camera " + cameraId, error);
+                mZoomPresets = ZoomMath.presets(minRatio, maxRatio, new float[0], false);
+            }
+            mZoomPresetsKey = key;
+        }
+        return mZoomPresets;
     }
 
     @Override public boolean hasFlash() {
@@ -1644,7 +1743,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             publishSnapshot();
             // Bound, which is the first moment a capture can succeed.
             onCameraReady();
-            if (mZoomLevel > 0) setZoomOnMainThread(mZoomLevel);
+            // A new bind starts at 1x, and a new lens may not reach the zoom asked for.
+            mConfirmedZoomRatio = 1f;
+            applyZoomOnMainThread();
             if (getExposureCompensation() != 0) {
                 setExposureCompensationOnMainThread(getExposureCompensation());
             }
