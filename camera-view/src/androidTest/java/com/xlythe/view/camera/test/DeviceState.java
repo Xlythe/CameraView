@@ -64,7 +64,7 @@ public final class DeviceState {
      * <p>Only worth asking where an emulator is known to behave differently from every device,
      * and the difference is the emulator's rather than the library's.</p>
      */
-    static boolean isEmulator() {
+    public static boolean isEmulator() {
         return Build.FINGERPRINT.startsWith("generic")
                 || Build.FINGERPRINT.startsWith("unknown")
                 || Build.FINGERPRINT.contains("emulator")
