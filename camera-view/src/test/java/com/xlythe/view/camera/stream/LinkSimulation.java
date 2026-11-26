@@ -386,6 +386,8 @@ final class LinkSimulation {
     private int mStallTimeoutMillis;
     /** Whether the audio player discards what waited too long, as AudioPlayer does. */
     private boolean mCatchUp = true;
+    /** Bytes the receiver reads between acknowledgements; 1 acknowledges every read. */
+    private int mAckEveryBytes = 1;
 
     LinkSimulation(Media media) {
         mMedia = media;
@@ -424,6 +426,12 @@ final class LinkSimulation {
 
     LinkSimulation keyFrameInterval(int frames) {
         mKeyFrameInterval = frames;
+        return this;
+    }
+
+    /** Acknowledges only once this much more has been read, as the Wear sample's watch does. */
+    LinkSimulation ackEveryBytes(int bytes) {
+        mAckEveryBytes = bytes;
         return this;
     }
 
@@ -467,11 +475,11 @@ final class LinkSimulation {
         if (audio) {
             AudioProducer audioProducer = new AudioProducer(result);
             producer = audioProducer;
-            receiver = new AudioReceiver(result, audioProducer,
+            receiver = new AudioReceiver(result, mAckEveryBytes, audioProducer,
                     mCatchUp ? new AudioCatchUp(AUDIO_SAMPLE_RATE, 1) : null);
         } else {
             producer = new VideoProducer(result, mVideoFill, mKeyFrameInterval);
-            receiver = new VideoReceiver(result);
+            receiver = new VideoReceiver(result, mAckEveryBytes);
         }
         Channel channel = new Channel(mTransport, mLink, bytesPerMs, mOneWayMillis);
 
@@ -847,9 +855,22 @@ final class LinkSimulation {
         final ByteQueue mArrived = new ByteQueue();
         /** Bytes the app has read, which is also the stream offset of the next one. */
         long mRead;
+        /** Bytes the app reads between acknowledgements. */
+        private final int mAckEveryBytes;
+        /** {@link #mRead} as of the last acknowledgement. */
+        private long mAcknowledged;
 
-        Receiver(Result result) {
+        Receiver(Result result, int ackEveryBytes) {
             mResult = result;
+            mAckEveryBytes = ackEveryBytes;
+        }
+
+        /** Tells the sender how much has been read, once enough has been since it was last told. */
+        void acknowledge(long now, Channel channel) {
+            if (mRead - mAcknowledged >= mAckEveryBytes) {
+                channel.acknowledge(now, mRead);
+                mAcknowledged = mRead;
+            }
         }
 
         void arrive(long now, byte[] bytes) {
@@ -879,8 +900,8 @@ final class LinkSimulation {
         /** The index of the last frame to arrive. */
         private int mLastIndex = -1;
 
-        VideoReceiver(Result result) {
-            super(result);
+        VideoReceiver(Result result, int ackEveryBytes) {
+            super(result, ackEveryBytes);
         }
 
         @Override
@@ -949,7 +970,7 @@ final class LinkSimulation {
             if (available > 0) {
                 mInput.skip(available);
                 mRead += available;
-                channel.acknowledge(now, mRead);
+                acknowledge(now, channel);
             }
         }
     }
@@ -987,8 +1008,9 @@ final class LinkSimulation {
         /** The sequence number of the last chunk to arrive. */
         private int mLastSequence = -1;
 
-        AudioReceiver(Result result, AudioProducer producer, @Nullable AudioCatchUp catchUp) {
-            super(result);
+        AudioReceiver(Result result, int ackEveryBytes, AudioProducer producer,
+                @Nullable AudioCatchUp catchUp) {
+            super(result, ackEveryBytes);
             mProducer = producer;
             mCatchUp = catchUp;
         }
@@ -1070,7 +1092,7 @@ final class LinkSimulation {
                     mInput.skip(AudioStreamHeader.LENGTH);
                     mRead += AudioStreamHeader.LENGTH;
                     mHeaderRead = true;
-                    channel.acknowledge(now, mRead);
+                    acknowledge(now, channel);
                     continue;
                 }
                 int available = mInput.size();
@@ -1080,7 +1102,7 @@ final class LinkSimulation {
                     mRead += skip;
                     mResult.skippedBytes += skip;
                     available -= skip;
-                    channel.acknowledge(now, mRead);
+                    acknowledge(now, channel);
                 }
                 if (available == 0) {
                     return;
@@ -1090,7 +1112,7 @@ final class LinkSimulation {
                 mHeldOffset = mRead;
                 mHeldBytes = read;
                 mRead += read;
-                channel.acknowledge(now, mRead);
+                acknowledge(now, channel);
             }
         }
     }

@@ -156,6 +156,30 @@ public class LinkBackpressureTest {
     }
 
     /**
+     * The Wear sample's numbers, from its WearProtocol: a quarter second of its 1Mbps preview in
+     * flight, acknowledged every 4KB the watch reads. That leaves room for round trips well past
+     * what a Data Layer channel over Bluetooth takes, and still holds a slow link to about half a
+     * second behind, where the same link without acknowledgements runs away by seconds.
+     */
+    @Test
+    public void theWearSamplesWindowCoversTheRoundTrip() throws IOException {
+        List<String> rows = new ArrayList<>();
+        for (int oneWay : new int[] {15, 30, 75}) {
+            Result roomy = new LinkSimulation(Media.VIDEO).link(Link.steady("2x", 2))
+                    .transport(Transport.acknowledged(250)).pump(Pump.PACED)
+                    .ackEveryBytes(4 * 1024).oneWayMillis(oneWay).run();
+            rows.add("one way " + oneWay + "ms: " + roomy.row());
+            assertEquals(roomy.row(), 0, roomy.droppedBytes);
+        }
+        Result slow = new LinkSimulation(Media.VIDEO).link(SLOW)
+                .transport(Transport.acknowledged(250)).pump(Pump.PACED)
+                .ackEveryBytes(4 * 1024).run();
+        rows.add(slow.row());
+        assertTrue(slow.row(), slow.tailLatency() < 700);
+        System.out.println(String.join("\n", rows));
+    }
+
+    /**
      * Treating "nothing read for a while" as back-pressure, the policy {@link
      * LinkSimulation.StallAwarePipe} adds, buys nothing a drop threshold set from a latency budget
      * does not already give.
