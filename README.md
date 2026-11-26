@@ -444,6 +444,76 @@ mCameraView.transcribe(recording, CaptionFormat.SUB_RIP, new TranscriptionListen
 A recording of a quiet room has nothing to transcribe and reports that through onTranscriptionFailed
 rather than as a fault, which is the commonest reason it is called.
 
+For a conversation rather than a recording, LiveCaptions captions what is being said as it is said,
+and translates it. Both halves are the platform's - the recogniser reports partial results as
+somebody talks, and Android 12 added an on-device translator - so this needs no dependency and no
+model. It is not part of CameraView, because it needs no camera and because a call needs two of
+them: one listening to the microphone for the near side, one listening to the audio arriving over
+the network for the far side.
+```java
+LiveCaptions live = new LiveCaptions(context);
+live.start(Locale.FRENCH, Locale.ENGLISH, new LiveCaptionListener() {
+    public void onLiveCaption(LiveCaption caption) {
+        // Replace what is on screen with this. The same line arrives again as more of the
+        // sentence is heard, and again once its translation turns up.
+        spoken.setText(caption.getText());
+        translated.setText(caption.getTranslation());
+    }
+    public void onLiveCaptionFailed(String reason) {}
+    public void onTranslationAvailable(boolean available) {}
+});
+live.stop();
+```
+For the far side, write the audio in instead of using the microphone. Needs Android 13, where the
+recogniser first accepted a descriptor; the samples are signed 16-bit, which is what a voice stream
+is.
+```java
+OutputStream audio = live.startListeningToAudio(16_000, 1, Locale.FRENCH, Locale.ENGLISH, listener);
+audio.write(samples);
+```
+Translation degrades rather than failing: the service downloads languages on demand, so a device
+that has never translated anything has none and the captions arrive with getTranslation() null.
+isTranslationSupported asks before you offer it - off the main thread, because the platform warns
+the question takes seconds - and getTranslationSettingsIntent is the screen somebody downloads the
+languages from, without which saying "no translation" is a dead end.
+
+Filters and masks
+-----------------
+setFrameRenderer puts your own drawing between the camera and everything it writes to - the
+preview, the recording and the photograph. Both camera backends can do it; the original Camera API
+cannot, and isFrameEffectSupported says which you have. The renderer is called on the GL thread
+with the frame already on a texture, so a filter is a shader and nothing is re-encoded.
+```java
+if (mCameraView.isFrameEffectSupported()) {
+    mCameraView.setFrameRenderer(new ColorFilter(ColorMatrix.sepia()));
+}
+mCameraView.setFrameRenderer(null); // back to the camera's own frames
+```
+ColorMatrix has the usual ones - grayscale, sepia, invert, saturation, contrast, brightness and
+tint - and ColorFilter takes any 4x5 matrix of your own. A renderer that returns false from
+onDrawFrame passes the frame through, so one renderer can filter some frames and leave others
+alone.
+
+For a mask rather than a filter, enterBackgroundReplacement segments the subject out of each frame
+and composites it over something else. It takes the frames an analyzer would, so it cannot run at
+the same time as startFrameAnalysis or the barcode scanner, and that is refused rather than left to
+break quietly.
+```java
+BackgroundReplacer replacer = new BackgroundReplacer();
+replacer.setBackgroundImage(bitmap); // or setBackgroundColor(Color.BLUE)
+mCameraView.enterBackgroundReplacement(replacer);
+mCameraView.exitBackgroundReplacement();
+```
+The two halves work apart: a caller with their own model drives BackgroundReplacer.setMask itself,
+and a caller who only wants to know where the subject is takes the masks and draws nothing.
+
+What reaches the photograph is worth knowing. On Camera2 the still is taken through a second input
+at the camera's own resolution rather than off the preview, so a filtered photograph is the full
+size - but it is encoded from what the renderer drew rather than by the camera's own encoder, and a
+DNG is left alone entirely, because a RAW frame is the sensor's own grid with nothing to draw into
+it. A high-speed recording is also left alone: a burst at 240fps is not something a GL pass keeps
+up with.
+
 Frames
 -----------------
 startFrameAnalysis hands every frame to your own analyzer, on a background thread, for detection
