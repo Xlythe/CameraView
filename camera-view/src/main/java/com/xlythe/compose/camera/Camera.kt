@@ -106,6 +106,15 @@ data class CameraState(
     val isZoomSupported: Boolean = false,
     /** The far end of the range [Camera]'s zoomLevel accepts; 0 is the widest lens there is. */
     val maxZoomLevel: Int = 0,
+    /** The widest [Camera]'s zoomRatio reaches: below 1 on a phone with an ultra-wide lens. */
+    val minZoomRatio: Float = 1f,
+    /** The furthest [Camera]'s zoomRatio reaches, or 1 on a camera that cannot zoom. */
+    val maxZoomRatio: Float = 1f,
+    /**
+     * The zoom ratios worth a button each, in increasing order. Always holds 1, the main lens, and
+     * otherwise one stop per lens and 2 where the main sensor can crop to it without upscaling.
+     */
+    val zoomPresets: List<Float> = emptyList(),
     val isExposureCompensationSupported: Boolean = false,
     val minExposureCompensation: Int = 0,
     val maxExposureCompensation: Int = 0,
@@ -360,6 +369,9 @@ private fun CameraView.readCameraState(): CameraState {
         isUsingFrontFacingCamera = isUsingFrontFacingCamera,
         isZoomSupported = isZoomSupported,
         maxZoomLevel = maxZoomLevel,
+        minZoomRatio = minZoomRatio,
+        maxZoomRatio = maxZoomRatio,
+        zoomPresets = zoomPresets.toList(),
         isExposureCompensationSupported = isExposureCompensationSupported,
         minExposureCompensation = minExposureCompensation,
         maxExposureCompensation = maxExposureCompensation,
@@ -453,9 +465,13 @@ private fun Extension.toCameraView() = when (this) {
  * @param imageConfirmationEnabled Requires images to be confirmed via {@link CameraController#confirmPicture()} before saved. A preview of the image will be displayed.
  * @param videoConfirmationEnabled Requires videos to be confirmed via {@link CameraController#confirmVideo()} before saved. A preview of the video will be displayed.
  * @param matchPreviewAspectRatioEnabled Attempts to match image and video outputs to the preview aspect ratio.
- * @param zoomLevel A position in the camera's zoom range, from 0 to [CameraState.maxZoomLevel].
- *  Null leaves the zoom to the camera, which is what [pinchToZoom] drives: a caller that both
- *  states a level and allows the gesture would have the next recomposition undo the pinch.
+ * @param zoomLevel A position in the camera's zoom range, from 0 to [CameraState.maxZoomLevel],
+ *  on a log scale. Null leaves the zoom to the camera, which is what [pinchToZoom] drives: a
+ *  caller that both states a level and allows the gesture would have the next recomposition undo
+ *  the pinch.
+ * @param zoomRatio The zoom in the camera's own terms, where 1 is the main lens, from
+ *  [CameraState.minZoomRatio] to [CameraState.maxZoomRatio]. Null leaves the zoom to the camera,
+ *  as for zoomLevel. Given both, zoomRatio wins, since it names the zoom exactly.
  * @param exposureCompensation An index within the range [CameraState] reports, where 0 is the
  *  exposure the camera metered for itself.
  * @param torchEnabled Lights the flash continuously, rather than for a capture.
@@ -469,6 +485,8 @@ private fun Extension.toCameraView() = when (this) {
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
+ * @param onZoomChanged Called with the zoom ratio whenever it changes, a pinch included, which is
+ *  what keeps buttons for [CameraState.zoomPresets] in step with the gesture.
  */
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
@@ -484,6 +502,7 @@ fun Camera(
     videoConfirmationEnabled: Boolean = false,
     matchPreviewAspectRatioEnabled: Boolean = true,
     zoomLevel: Int? = null,
+    zoomRatio: Float? = null,
     exposureCompensation: Int = 0,
     torchEnabled: Boolean = false,
     colorSpace: ColorSpace = ColorSpace.SRGB,
@@ -503,6 +522,7 @@ fun Camera(
     onVideoCaptureFailed: () -> Unit = {},
     onCameraOpened: () -> Unit = {},
     onCameraClosed: () -> Unit = {},
+    onZoomChanged: (ratio: Float) -> Unit = {},
 ) {
     // Grab system variables
     val context = LocalContext.current
@@ -520,6 +540,7 @@ fun Camera(
     val currentOnVideoCaptureFailed by rememberUpdatedState(onVideoCaptureFailed)
     val currentOnCameraOpened by rememberUpdatedState(onCameraOpened)
     val currentOnCameraClosed by rememberUpdatedState(onCameraClosed)
+    val currentOnZoomChanged by rememberUpdatedState(onZoomChanged)
     val currentState by rememberUpdatedState(state)
 
     // Takes the camera as an argument rather than closing over it, because it is declared ahead of
@@ -582,6 +603,8 @@ fun Camera(
                     currentOnCameraClosed()
                 }
             })
+
+            this.setOnZoomChangedListener { ratio -> currentOnZoomChanged(ratio) }
         }
     }
 
@@ -666,6 +689,7 @@ fun Camera(
             cameraView.setOnImageCapturedListener(null)
             cameraView.setOnVideoCapturedListener(null)
             cameraView.setOnCameraStateChangedListener(null)
+            cameraView.setOnZoomChangedListener(null)
         }
     }
 
@@ -688,7 +712,9 @@ fun Camera(
         view.isImageConfirmationEnabled = imageConfirmationEnabled
         view.isVideoConfirmationEnabled = videoConfirmationEnabled
         view.setMatchPreviewAspectRatio(matchPreviewAspectRatioEnabled)
-        if (zoomLevel != null) {
+        if (zoomRatio != null) {
+            view.zoomRatio = zoomRatio
+        } else if (zoomLevel != null) {
             view.zoomLevel = zoomLevel
         }
         view.exposureCompensation = exposureCompensation

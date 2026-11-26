@@ -295,6 +295,47 @@ class CameraComposableTest {
         assertTrue(camera.isLowLightBoostEnabled)
     }
 
+    /** A ratio reaches the camera, and wins over a level given alongside it. */
+    @Test
+    fun theZoomRatioReachesTheCameraAndWinsOverALevel() {
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent { Camera(zoomLevel = 100, zoomRatio = 2f, controller = controller) }
+        compose.waitForIdle()
+
+        assertEquals(2f, requireCameraView().zoomRatio, 0f)
+    }
+
+    /**
+     * Each zoom change reaches the callback, and the published state carries the range and the
+     * presets to offer within it.
+     */
+    @Test
+    fun zoomChangesReachTheCallback() {
+        val zoom = mutableStateOf(1.5f)
+        val heard = mutableListOf<Float>()
+        val state = mutableStateOf<CameraState?>(null)
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent {
+            Camera(
+                zoomRatio = zoom.value,
+                controller = controller,
+                state = state,
+                onZoomChanged = { heard.add(it) },
+            )
+        }
+        compose.waitForIdle()
+        zoom.value = 3f
+        compose.waitForIdle()
+
+        assertEquals(listOf(1.5f, 3f), heard)
+        val published = requireNotNull(state.value) { "an open camera has answers to give" }
+        assertEquals(1f, published.minZoomRatio, 0f)
+        assertEquals("the fake camera crops to 4x at most", 4f, published.maxZoomRatio, 0f)
+        assertEquals(listOf(1f), published.zoomPresets)
+    }
+
     /** And the ones left out keep the camera's own defaults rather than a zeroed version. */
     @Test
     fun theBackendSettingsDefaultToTheCamerasOwn() {
