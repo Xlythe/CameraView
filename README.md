@@ -411,8 +411,7 @@ VideoEditor
 VideoEditor changes a video that has already been recorded - trimming it, cropping, scaling and
 rotating the frames, and removing or replacing the audio - and writes the result to a second file,
 leaving the recording alone. Describe the changes with VideoEdits, in which a crop is a fraction of
-the recorded frame and a rotation is clockwise, as the camera reports it. Needs API 23, the floor
-androidx.media3 is built against, and is left out of a -Pcameraview.core=true build.
+the recorded frame and a rotation is clockwise, as the camera reports it.
 ```java
 VideoEditor editor = new VideoEditor(context, recording, clip, new VideoEdits.Builder()
     .setTimeRangeMs(1000, 4000)

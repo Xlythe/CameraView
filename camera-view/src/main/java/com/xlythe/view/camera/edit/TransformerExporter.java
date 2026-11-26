@@ -32,10 +32,8 @@ final class TransformerExporter implements VideoEditor.Exporter, Transformer.Lis
     @Nullable private Callback mCallback;
 
     TransformerExporter(Context context) {
-        // A Transformer belongs to one looper: it has to be started and cancelled on that looper
-        // and it reports back on it. Left alone it adopts whichever thread built it, so an editor
-        // constructed on a background thread could never be started from the main one. Naming the
-        // main looper makes that the thread an export is driven from, whoever built the editor.
+        // A Transformer is driven from, and reports on, one looper. Left alone it takes the
+        // building thread's, so the main one is named for an editor built anywhere else.
         mTransformer = new Transformer.Builder(context)
                 .setLooper(Looper.getMainLooper())
                 .addListener(this)

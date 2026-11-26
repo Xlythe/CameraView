@@ -49,9 +49,6 @@ import java.io.File;
  * editor.setOnVideoEditedListener(listener);
  * editor.start();
  * }</pre>
- *
- * <p>Requires API 23, the floor androidx.media3 is built against, while the library's own floor
- * is 21. Both this class and media3 are left out of a {@code -Pcameraview.core=true} build.</p>
  */
 @RequiresApi(23)
 @OptIn(markerClass = UnstableApi.class)
@@ -218,8 +215,8 @@ public class VideoEditor {
             mediaItem.setClippingConfiguration(clipping.build());
         }
 
-        // Only an explicit removal is expressed here. Replacing the audio instead restricts this
-        // sequence to its video track, which keeps the item a plain reading of the edits.
+        // Only an explicit removal is expressed here; a replacement restricts the sequence to its
+        // video track instead.
         return new EditedMediaItem.Builder(mediaItem.build())
                 .setRemoveAudio(edits.isAudioRemoved())
                 .setEffects(new Effects(ImmutableList.of(), toVideoEffects(edits)))

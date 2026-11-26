@@ -2,6 +2,7 @@ package com.xlythe.view.camera.edit;
 
 import android.graphics.RectF;
 
+import androidx.annotation.IntRange;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -11,12 +12,6 @@ import java.io.File;
 
 /**
  * The changes to make to a video that has already been recorded. {@link VideoEditor} applies one.
- *
- * <p>An edit says what the caller wants, not how it is carried out. Each one reaches a different
- * part of the exporter - a trim becomes a clipping configuration, a crop becomes a video effect,
- * a replacement soundtrack becomes a second track - so an edit that is neither a pixel nor an
- * audio transform, such as a metadata track written beside the video, can join this list without
- * the API changing shape.</p>
  */
 public final class VideoEdits {
     /** The value of {@link #getEndMs()} when the clip is to run to the end of the recording. */
@@ -122,19 +117,13 @@ public final class VideoEdits {
          * @param startMs where the clip starts, in milliseconds from the start of the recording
          * @param endMs where the clip ends, or {@link VideoEdits#UNSET_TIME_MS} to run to the end
          */
-        public Builder setTimeRangeMs(long startMs, long endMs) {
+        public Builder setTimeRangeMs(@IntRange(from = 0) long startMs, long endMs) {
             mStartMs = startMs;
             mEndMs = endMs;
             return this;
         }
 
-        /**
-         * Keeps only part of each frame.
-         *
-         * <p>The rectangle is a fraction of the recorded frame rather than a pixel count, with
-         * (0, 0) at its top left corner, so a caller that cropped a preview can pass the same
-         * numbers without knowing what the camera recorded at.</p>
-         */
+        /** Keeps only part of each frame, given as a fraction of it with (0, 0) at the top left. */
         public Builder setCrop(@Nullable RectF crop) {
             mCrop = crop == null ? null : new RectF(crop);
             return this;
@@ -147,12 +136,7 @@ public final class VideoEdits {
             return this;
         }
 
-        /**
-         * Scales each frame to a height, keeping its aspect ratio.
-         *
-         * <p>Useful for cutting a 4k recording down to something that will upload, which is the
-         * one edit here that is about the size of the file rather than what is in it.</p>
-         */
+        /** Scales each frame to a height, keeping its aspect ratio. */
         public Builder setOutputHeight(int outputHeight) {
             mOutputHeight = outputHeight;
             return this;
