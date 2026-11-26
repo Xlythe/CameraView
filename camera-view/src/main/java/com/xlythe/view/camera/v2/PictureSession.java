@@ -13,7 +13,6 @@ import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.location.Location;
 import android.media.Image;
-import android.media.ImageReader;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.util.Log;
@@ -160,8 +159,8 @@ class PictureSession extends PreviewSession {
     static class ImageSaver extends AsyncTask<Void, Void, Boolean> {
         private final Context mContext;
 
-        // The image that was captured
-        private final Image mImage;
+        // The frame that was captured, closed as soon as its bytes are copied out
+        private final SafeCloseImageReader.Frame mFrame;
 
         // The orientation of the image
         private final int mOrientation;
@@ -173,9 +172,10 @@ class PictureSession extends PreviewSession {
         // The file to save the image to
         private final File mFile;
 
-        ImageSaver(Context context, Image image, int orientation, boolean reversed, File file) {
+        ImageSaver(Context context, SafeCloseImageReader.Frame frame, int orientation,
+                boolean reversed, File file) {
             mContext = context.getApplicationContext();
-            mImage = image;
+            mFrame = frame;
             mOrientation = orientation;
             mIsReversed = reversed;
             mFile = file;
@@ -190,7 +190,7 @@ class PictureSession extends PreviewSession {
             try {
                 bytes = getBytes();
             } finally {
-                mImage.close();
+                mFrame.close();
             }
             if (bytes == null) {
                 Log.e(TAG, "Failed to get bytes from image");
@@ -227,7 +227,7 @@ class PictureSession extends PreviewSession {
         }
 
         private byte[] getBytes() {
-            return toByteArray(mImage);
+            return toByteArray(mFrame.getImage());
         }
 
         private static byte[] toByteArray(Image image) {
@@ -335,13 +335,14 @@ class PictureSession extends PreviewSession {
             return Arrays.asList(sizes);
         }
 
-        private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
+        private final SafeCloseImageReader.OnImageAvailableListener mOnImageAvailableListener =
+                new SafeCloseImageReader.OnImageAvailableListener() {
             @Override
-            public void onImageAvailable(final ImageReader reader) {
+            public void onImageAvailable(@NonNull SafeCloseImageReader reader) {
                 try {
                     if (mFile != null) {
-                        Image image = reader.acquireLatestImage();
-                        if (image == null) {
+                        SafeCloseImageReader.Frame frame = reader.acquireLatestImage();
+                        if (frame == null) {
                             Log.w(TAG, "OnImageAvailable called but no image available");
                             onImageFailed();
                             return;
@@ -349,7 +350,7 @@ class PictureSession extends PreviewSession {
                         final File file = mFile;
                         new ImageSaver(
                                 mCameraView.getContext(),
-                                image,
+                                frame,
                                 mCameraView.getRelativeCameraOrientation(),
                                 isUsingFrontFacingCamera(),
                                 mFile) {
@@ -376,7 +377,7 @@ class PictureSession extends PreviewSession {
         };
 
         private final CameraSurface mPreviewSurface;
-        private ImageReader mImageReader;
+        private SafeCloseImageReader mImageReader;
         private File mFile;
 
         /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
@@ -403,7 +404,7 @@ class PictureSession extends PreviewSession {
                 // replaced has to be handed back rather than dropped.
                 mImageReader.close();
             }
-            mImageReader = ImageReader.newInstance(
+            mImageReader = new SafeCloseImageReader(
                     getWidth(), getHeight(), mImageFormat, 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getHandler());
         }
