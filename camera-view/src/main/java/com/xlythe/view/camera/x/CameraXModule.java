@@ -19,6 +19,7 @@ import android.graphics.SurfaceTexture;
 import android.location.Location;
 import android.os.Bundle;
 import android.os.Handler;
+import android.os.AsyncTask;
 import android.os.Looper;
 import android.util.Log;
 import android.util.Range;
@@ -85,6 +86,7 @@ import androidx.lifecycle.ViewTreeLifecycleOwner;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
@@ -95,6 +97,7 @@ import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -1188,13 +1191,34 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         imageCapture.takePicture(options, mMainExecutor, new ImageCapture.OnImageSavedCallback() {
             @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
                 if (!completePendingImage(operationId)) return;
-                showImageConfirmation(file);
+                finishExif(file, () -> showImageConfirmation(file));
             }
             @Override public void onError(@NonNull ImageCaptureException error) {
                 if (!completePendingImage(operationId)) return;
                 Log.w(TAG, "Image capture failed", error);
                 onImageFailed();
             }
+        });
+    }
+
+    /**
+     * Writes the Exif CameraX leaves out (timezone offsets, sub-second times, pixel dimensions and
+     * a thumbnail), as the other two backends do, then runs {@code then} on the main thread. The
+     * caller is told only after, so it never reads a file being rewritten.
+     */
+    private void finishExif(@NonNull File file, @NonNull Runnable then) {
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+            try {
+                Exif exif = new Exif(file);
+                exif.attachTimestamp();
+                exif.attachCaptureDevice(getContext());
+                exif.save();
+                // After save, because saveAttributes rewrites the block this appends to.
+                exif.attachThumbnail();
+            } catch (IOException | RuntimeException error) {
+                Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
+            }
+            mMainHandler.post(then);
         });
     }
 
