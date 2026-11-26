@@ -106,7 +106,7 @@ class ComposeControllersTest {
             override fun startFrameAnalysis(
                 analyzer: (frame: FrameStream.Frame) -> Unit,
                 params: FrameStream.Params
-            ) {}
+            ): Boolean = false
 
             override fun stopFrameAnalysis() {}
 

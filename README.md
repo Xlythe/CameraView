@@ -59,14 +59,11 @@ Camera(
 ```
 
 Camera also accepts zoomLevel [0 to maxZoomLevel, or null to leave the zoom to pinchToZoom],
-pictureQuality [1 to 100] and colorSpace [srgb, displayP3].
-
-The following attributes are accepted as well, but the Camera2 backend that ships enabled ignores
-all of them. They are read by the CameraX backend, which is still opt-in:
-exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
-extension [none, bokeh, hdr, night, faceRetouch, auto], previewStabilizationEnabled [boolean],
-videoStabilizationEnabled [boolean], lowLightBoostEnabled [boolean] and
-frontVideoMirroringEnabled [boolean].
+pictureQuality [1 to 100], colorSpace [srgb, displayP3], exposureCompensation [integer],
+torchEnabled [boolean], dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch,
+auto], stabilizationEnabled [boolean], lowLightBoostEnabled [boolean] and
+frontVideoMirroringEnabled [boolean]. Not every camera can do all of these, so CameraState below
+says which this one supports.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
 opens, and is republished when the camera reconfigures, so ask it before offering a control: a
@@ -88,9 +85,8 @@ if (camera != null && camera.hasFlash) {
 
 CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, isZoomSupported,
 maxZoomLevel, isExposureCompensationSupported, minExposureCompensation, maxExposureCompensation,
-supportedColorSpaces, supportedDynamicRanges, supportedExtensions,
-isPreviewStabilizationSupported, isVideoStabilizationSupported, isLowLightBoostSupported,
-isSnapshotWhileRecordingSupported, isFaceDetectionSupported, isFrameAnalysisSupported,
+supportedColorSpaces, supportedDynamicRanges, supportedExtensions, isStabilizationSupported,
+isLowLightBoostSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
 horizontalFieldOfView, verticalFieldOfView, isRecording and isAnalyzingFrames.
 
 Camera's methods are rather straight forward.

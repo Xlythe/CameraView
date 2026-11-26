@@ -277,8 +277,7 @@ class CameraComposableTest {
                 dynamicRange = DynamicRange.HDR,
                 extension = Extension.BOKEH,
                 pictureQuality = 60,
-                previewStabilizationEnabled = true,
-                videoStabilizationEnabled = true,
+                stabilizationEnabled = true,
                 lowLightBoostEnabled = true,
                 frontVideoMirroringEnabled = false,
                 controller = controller,
@@ -293,8 +292,7 @@ class CameraComposableTest {
         assertEquals(CameraView.DynamicRange.HDR, camera.dynamicRange)
         assertEquals(CameraView.Extension.BOKEH, camera.extension)
         assertEquals(60, camera.pictureQuality)
-        assertTrue(camera.isPreviewStabilizationEnabled)
-        assertTrue(camera.isVideoStabilizationEnabled)
+        assertTrue(camera.isStabilizationEnabled)
         assertTrue(camera.isLowLightBoostEnabled)
         assertFalse(camera.isFrontVideoMirroringEnabled)
     }
@@ -351,7 +349,6 @@ class CameraComposableTest {
         assertTrue(published.isZoomSupported)
         assertEquals(100, published.maxZoomLevel)
         assertTrue(published.isFaceDetectionSupported)
-        assertTrue(published.isFrameAnalysisSupported)
         assertTrue("a FULL camera2 device can hold a still alongside a recording",
                 published.isSnapshotWhileRecordingSupported)
         assertEquals(setOf(DynamicRange.SDR), published.supportedDynamicRanges)

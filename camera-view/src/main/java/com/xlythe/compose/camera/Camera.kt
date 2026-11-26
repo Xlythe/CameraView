@@ -107,13 +107,11 @@ data class CameraState(
     val supportedColorSpaces: Set<ColorSpace> = emptySet(),
     val supportedDynamicRanges: Set<DynamicRange> = emptySet(),
     val supportedExtensions: Set<Extension> = emptySet(),
-    val isPreviewStabilizationSupported: Boolean = false,
-    val isVideoStabilizationSupported: Boolean = false,
+    val isStabilizationSupported: Boolean = false,
     val isLowLightBoostSupported: Boolean = false,
     /** Whether [CameraController.takePicture] works while a recording is running. */
     val isSnapshotWhileRecordingSupported: Boolean = false,
     val isFaceDetectionSupported: Boolean = false,
-    val isFrameAnalysisSupported: Boolean = false,
     /**
      * The angle of view in degrees, which turns a bearing in the world into a position on the
      * preview. It narrows as the camera zooms in, so the snapshot taken after a zoom is the one to
@@ -166,14 +164,14 @@ interface CameraController {
      * The frame's image belongs to the camera and is recycled as soon as the call returns, so
      * anything that outlives it has to be copied out.
      *
+     * @return whether analysis started. False on a camera that cannot produce frames to read.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
-     * @throws UnsupportedOperationException if [CameraState.isFrameAnalysisSupported] is false
      */
     @RequiresPermission(Manifest.permission.CAMERA)
     fun startFrameAnalysis(
         analyzer: (frame: FrameStream.Frame) -> Unit,
         params: FrameStream.Params = FrameStream.Params()
-    )
+    ): Boolean
 
     fun stopFrameAnalysis()
 
@@ -302,14 +300,15 @@ private class CameraControllerImpl(
     override fun startFrameAnalysis(
         analyzer: (frame: FrameStream.Frame) -> Unit,
         params: FrameStream.Params
-    ) {
+    ): Boolean {
         val view = getView()
         if (view == null) {
             Log.e(TAG, "View not available for startFrameAnalysis")
-            return
+            return false
         }
-        view.startFrameAnalysis(FrameStream.Analyzer { frame -> analyzer(frame) }, params)
+        val started = view.startFrameAnalysis(FrameStream.Analyzer { frame -> analyzer(frame) }, params)
         onCameraStateChanged()
+        return started
     }
 
     override fun stopFrameAnalysis() {
@@ -365,12 +364,10 @@ private fun CameraView.readCameraState(): CameraState {
         supportedExtensions = supported(Extension.entries) {
             isExtensionSupported(it.toCameraView())
         },
-        isPreviewStabilizationSupported = isPreviewStabilizationSupported,
-        isVideoStabilizationSupported = isVideoStabilizationSupported,
+        isStabilizationSupported = isStabilizationSupported,
         isLowLightBoostSupported = isLowLightBoostSupported,
         isSnapshotWhileRecordingSupported = isSnapshotWhileRecordingSupported,
         isFaceDetectionSupported = isFaceDetectionSupported,
-        isFrameAnalysisSupported = isFrameAnalysisSupported,
         horizontalFieldOfView = horizontalFieldOfView,
         verticalFieldOfView = verticalFieldOfView,
         isRecording = isRecording,
@@ -450,13 +447,12 @@ private fun Extension.toCameraView() = when (this) {
  * @param dynamicRange The dynamic range videos are recorded in.
  * @param extension An optional vendor photo-processing extension.
  * @param pictureQuality How hard a still capture is compressed, from 1 to 100.
- * @param previewStabilizationEnabled Stabilizes the preview.
- * @param videoStabilizationEnabled Stabilizes recorded video.
+ * @param stabilizationEnabled Steadies the preview and recorded video, where the camera can.
  * @param lowLightBoostEnabled Brightens the preview in the dark.
  * @param frontVideoMirroringEnabled Mirrors front-camera video files, so a recording matches the
  *  preview it was framed in.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
- *  * {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
+ *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
  */
 @RequiresPermission(Manifest.permission.CAMERA)
@@ -479,8 +475,7 @@ fun Camera(
     dynamicRange: DynamicRange = DynamicRange.SDR,
     extension: Extension = Extension.NONE,
     pictureQuality: Int = ICameraModule.DEFAULT_PICTURE_QUALITY,
-    previewStabilizationEnabled: Boolean = false,
-    videoStabilizationEnabled: Boolean = false,
+    stabilizationEnabled: Boolean = false,
     lowLightBoostEnabled: Boolean = false,
     frontVideoMirroringEnabled: Boolean = true,
     controller: MutableState<CameraController?>,
@@ -687,8 +682,7 @@ fun Camera(
         view.dynamicRange = dynamicRange.toCameraView()
         view.extension = extension.toCameraView()
         view.pictureQuality = pictureQuality
-        view.isPreviewStabilizationEnabled = previewStabilizationEnabled
-        view.isVideoStabilizationEnabled = videoStabilizationEnabled
+        view.isStabilizationEnabled = stabilizationEnabled
         view.isLowLightBoostEnabled = lowLightBoostEnabled
         view.isFrontVideoMirroringEnabled = frontVideoMirroringEnabled
         // What the camera can do depends on what it has just been asked for - a lens, an extension
