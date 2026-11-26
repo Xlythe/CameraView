@@ -17,6 +17,11 @@ dependencies {
 }
 ```
 
+If your minSdk is below 24, build with `-Pcameraview.core=true`, which leaves out the parts that
+cannot reach that far back and covers API 21 and up. This is not hypothetical: `camera-camera2`
+pulls in `camera-camera2-pipe`, which declares a minSdk of 24, and a dependency's floor becomes
+your app's floor whatever this library declares.
+
 Permissions
 -----------------
 The following permissions are required in your AndroidManfiest.xml
@@ -169,7 +174,10 @@ CameraFragment, then this will happen for free.
 CameraView includes the optional attributes quality [max, high, medium, low],
 flash [auto, on, off], lensFacing [back, front], maxVideoDuration [milliseconds],
 maxVideoSize [bytes], confirmImages [boolean], confirmVideos [boolean],
-pinchToZoomEnabled [boolean] and matchPreviewAspectRatio [boolean].
+pinchToZoomEnabled [boolean], matchPreviewAspectRatio [boolean],
+dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
+frontVideoMirroringEnabled [boolean], stabilizationEnabled [boolean],
+exposureCompensation [integer], torchEnabled [boolean] and lowLightBoostEnabled [boolean].
 ```xml
 <com.xlythe.view.camera.CameraView
     xmlns:camera="http://schemas.android.com/apk/res-auto"
@@ -182,15 +190,10 @@ pinchToZoomEnabled [boolean] and matchPreviewAspectRatio [boolean].
     camera:maxVideoSize="10000000" />
 ```
 
-The following attributes are also accepted, but the Camera2 backend that ships enabled today
-ignores all of them. They are read by the CameraX backend, which is still opt-in:
-dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
-frontVideoMirroringEnabled [boolean], previewStabilizationEnabled [boolean],
-videoStabilizationEnabled [boolean], exposureCompensation [integer], torchEnabled [boolean]
-and lowLightBoostEnabled [boolean]. Each has a matching setter, and a companion that reports
-whether the active camera supports it, for example isDynamicRangeSupported(DynamicRange) or
-isLowLightBoostSupported(). Query support before relying on one; an unsupported request is
-logged and dropped rather than applied.
+Each attribute has a matching setter. The last seven describe things not every camera can do, so
+each also has a companion that reports whether the camera now open supports it, for example
+isDynamicRangeSupported(DynamicRange) or isLowLightBoostSupported(). Ask before relying on one; an
+unsupported request is logged and dropped rather than applied.
 
 CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
 handle binding the Views to the appropriate methods on CameraView.
@@ -235,17 +238,6 @@ mCameraView.enterBarcodeScanner(listener, Barcode.Format.QR_CODE);
 mCameraView.exitBarcodeScanner();
 ```
 
-Wide gamut
------------------
-Pictures are sRGB unless you ask otherwise. A modern sensor sees more than sRGB can describe,
-which is why manufacturers' camera apps save wide-gamut stills, but a viewer that ignores the
-colour profile shows them oversaturated - so it is opt-in, and refused on a camera or a platform
-that cannot honour it rather than quietly producing sRGB.
-```java
-if (mCameraView.isColorSpaceSupported(CameraView.ColorSpace.DISPLAY_P3)) {
-  mCameraView.setColorSpace(CameraView.ColorSpace.DISPLAY_P3);
-}
-```
 
 Video snapshot
 -----------------
@@ -287,16 +279,11 @@ mCameraView.startFrameAnalysis(frame -> {
 mCameraView.stopFrameAnalysis();
 ```
 
-Wear companion
+Streaming
 -----------------
-The sample has a watch half, in `app-wear`: the phone streams its camera to the watch and the
-watch's button asks the phone for a picture. Both halves share one application id, which is how
-the Data Layer pairs them, so they have to be built and signed together.
-
-Nothing in the library is Wear-specific. The watch reads the phone's stream with the same
-VideoView.setStream the phone sample uses locally; what the sample adds is the transport, and the
-numbers that make it work over a watch link - 480p, a megabit, and a key frame every second,
-since a stream can only be joined at a key frame.
+stream() takes parameters when the defaults do not suit the link you are sending over. A stream
+can only be joined at a key frame, so a short interval is what makes one playable soon after it
+is opened.
 ```java
 mCameraView.stream(new VideoStream.Params.Builder()
     .setAudioEnabled(false)
@@ -307,25 +294,6 @@ mCameraView.stream(new VideoStream.Params.Builder()
     .build());
 ```
 
-Backends
------------------
-CameraView drives camera2 by default. CameraX is opt-in: it carries a database of per-device
-quirks and is the only backend that can reach a manufacturer's Extensions, but it has had less
-validation here. The legacy android.hardware.Camera backend is there for devices that predate
-camera2.
-```java
-CameraView.setDefaultBackend(CameraView.Backend.CAMERA_X);
-```
-```xml
-<com.xlythe.view.camera.CameraView
-    app:backend="cameraX" />
-```
-If your minSdk is older than androidx.camera supports, build with `-Pcameraview.core=true` to
-leave the CameraX backend, the Compose wrapper and their dependencies out. What is left covers
-API 21 and up. This is not hypothetical: `camera-camera2` pulls in `camera-camera2-pipe`, which
-declares a minSdk of 24, and a dependency's floor becomes your app's floor whatever this library
-declares. The sample reads the same flag, so `-Pcameraview.core=true :app:assembleDebug` builds
-it at 23.
 
 Exif
 -----------------
