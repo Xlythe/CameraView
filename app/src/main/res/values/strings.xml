@@ -9,6 +9,17 @@
     <string name="app_name_effect">Effect Demo</string>
     <string name="app_name_ar">AR Demo</string>
     <string name="app_name_panorama">Panorama Demo</string>
+    <string name="app_name_caption">Caption Demo</string>
+    <string name="caption_record">Record</string>
+    <string name="caption_stop">Stop and transcribe</string>
+    <string name="caption_status_unsupported">This device cannot transcribe a recording. It needs Android 13, where the recogniser first accepted a file, and a recogniser installed.</string>
+    <string name="caption_status_ready_timed">Record a few seconds and say something. This device reports when each word was said, so the cues will land on the words.</string>
+    <string name="caption_status_ready_windowed">Record a few seconds and say something. This device reports no word times, so each cue will be as precise as the six-second window it was heard in.</string>
+    <string name="caption_status_recording">Recording. Say something, then stop.</string>
+    <string name="caption_status_record_failed">The recording failed</string>
+    <string name="caption_status_transcribing">Transcribing\u2026</string>
+    <string name="caption_status_progress">Transcribing, %1$d%%</string>
+    <string name="caption_status_done">%1$d cues written to %2$s</string>
     <string name="panorama_arrow">&#8594;</string>
     <string name="panorama_preview_description">The panorama as it is swept</string>
     <string name="panorama_mode_flat">Mode: panorama</string>

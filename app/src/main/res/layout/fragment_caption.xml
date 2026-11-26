@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:camera="http://schemas.android.com/apk/res-auto"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <FrameLayout
+        android:id="@id/layout_permissions"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#121212">
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@id/request_permissions"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:paddingHorizontal="24dp"
+            android:paddingVertical="12dp"
+            android:text="@string/btn_request_permissions"
+            android:textColor="#FFFFFF"
+            app:cornerRadius="24dp"
+            app:elevation="4dp" />
+
+    </FrameLayout>
+
+    <RelativeLayout
+        android:id="@id/layout_camera"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent">
+
+        <com.xlythe.view.camera.CameraView
+            android:id="@id/camera"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            camera:quality="high" />
+
+        <!--
+          The cues are listed rather than drawn over the preview, because they are written
+          beside the recording as a subtitle file: something a viewer can turn off, which text
+          burned into the frames would not be.
+        -->
+        <ScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_above="@+id/caption_panel"
+            android:layout_alignParentTop="true"
+            android:background="#66000000">
+
+            <TextView
+                android:id="@+id/caption_cues"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="16dp"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp" />
+
+        </ScrollView>
+
+        <LinearLayout
+            android:id="@id/caption_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_alignParentBottom="true"
+            android:background="#99000000"
+            android:orientation="vertical"
+            android:padding="16dp">
+
+            <TextView
+                android:id="@+id/caption_status"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingBottom="12dp"
+                android:textColor="#FFFFFF"
+                android:textSize="15sp" />
+
+            <Button
+                android:id="@+id/caption_record"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:enabled="false"
+                android:text="@string/caption_record" />
+
+        </LinearLayout>
+
+    </RelativeLayout>
+
+</FrameLayout>

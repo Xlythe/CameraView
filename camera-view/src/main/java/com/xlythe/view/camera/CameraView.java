@@ -35,6 +35,9 @@ import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
 
 import com.xlythe.view.camera.ar.ArFrameListener;
+import com.xlythe.view.camera.caption.CaptionFormat;
+import com.xlythe.view.camera.caption.SpeechTranscriber;
+import com.xlythe.view.camera.caption.TranscriptionListener;
 import com.xlythe.view.camera.pano.PanoramaCoverage;
 import com.xlythe.view.camera.pano.PanoramaSession;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
@@ -1459,6 +1462,61 @@ public class CameraView extends FrameLayout {
         }
         mFrameStream = new FrameStream(mCameraModule.getCanvas(), this, params, analyzer);
         mFrameStream.start();
+    }
+
+    /**
+     * Whether a recording made by this view can be transcribed into captions.
+     *
+     * <p>Needs Android 13, where the platform recogniser first accepted a file rather than only
+     * the microphone, and a recogniser installed to accept it. Worth asking before offering
+     * captions, because there is nothing this library can do on a device without both - an app
+     * that needs them anyway has to bring its own model, and {@link Captions} will write
+     * whatever that produces.</p>
+     */
+    public boolean isTranscriptionSupported() {
+        return Build.VERSION.SDK_INT >= 33 && SpeechTranscriber.isSupported(getContext());
+    }
+
+    /**
+     * Whether captions will carry the time each word was said, rather than each window.
+     *
+     * <p>Android 14 and above. It transcribes without it - the cues are then as precise as the
+     * six-second window they were heard in - so this is worth asking only to say what to
+     * expect.</p>
+     */
+    public boolean isWordTimingSupported() {
+        return Build.VERSION.SDK_INT >= 34;
+    }
+
+    /**
+     * Writes captions for a recording, from what was said in it.
+     *
+     * <p>Beside the recording rather than burned into it: a subtitle file of the same name,
+     * which players pick up and viewers can turn off. Nothing is re-encoded, so the recording
+     * is not touched and adding captions costs no quality.</p>
+     *
+     * <p>Runs in the background and is not quick - it decodes the audio and recognises all of
+     * it - so the listener reports progress as well as the result. It is called on the main
+     * thread.</p>
+     *
+     * @param video a recording, which must have an audio track
+     */
+    public void transcribe(@NonNull File video, @NonNull CaptionFormat format,
+            @NonNull TranscriptionListener listener) {
+        if (!isTranscriptionSupported()) {
+            // Answered rather than refused at the call site. The caller has
+            // isTranscriptionSupported to ask first, and a method that cannot be called at all
+            // below Android 13 would make even the one place an app handles captions something
+            // it had to guard - so this reports the refusal the same way it reports a recording
+            // with nothing in it.
+            String reason = "This device cannot transcribe a recording: it needs Android 13 and"
+                    + " a speech recogniser";
+            Log.w(TAG, reason);
+            post(() -> listener.onTranscriptionFailed(reason));
+            return;
+        }
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() ->
+                new SpeechTranscriber(getContext()).transcribe(video, format, listener));
     }
 
     /**

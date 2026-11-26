@@ -53,4 +53,10 @@
         android:label="@string/app_name_panorama"
         tools:layout="@layout/fragment_panorama" />
 
+    <fragment
+        android:id="@+id/caption_fragment"
+        android:name="com.xlythe.sample.camera.CaptionFragment"
+        android:label="@string/app_name_caption"
+        tools:layout="@layout/fragment_caption" />
+
 </navigation>
