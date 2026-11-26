@@ -104,10 +104,16 @@ class VideoSession extends PictureSession {
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
         applyZoom(builder);
+        applyStabilization(builder);
         applyFaceDetection(builder);
         builder.addTarget(getPreviewSurface().getSurface());
         builder.addTarget(mVideoSurface.getSurface());
         return builder.build();
+    }
+
+    @Override
+    boolean feedsAnEncoder() {
+        return true;
     }
 
     @Override

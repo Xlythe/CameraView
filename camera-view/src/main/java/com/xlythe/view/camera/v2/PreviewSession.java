@@ -62,6 +62,7 @@ class PreviewSession extends SessionImpl {
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
         applyZoom(builder);
+        applyStabilization(builder);
         applyFaceDetection(builder);
         builder.addTarget(mPreviewSurface.getSurface());
         return builder.build();

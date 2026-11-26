@@ -6,6 +6,7 @@ import android.content.Context;
 import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
@@ -182,6 +183,41 @@ abstract class SessionImpl implements Camera2Module.Session {
         }
         builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,
                 range.clamp(mCamera2Module.getExposureCompensation()));
+    }
+
+    /**
+     * Steadies the picture, when stabilization is on.
+     *
+     * <p>Preview stabilization is preferred wherever the camera has it: it steadies every stream
+     * alike, a recording included, so what is recorded is what was shown. Video stabilization only
+     * steadies what goes to an encoder, so it is only asked for by a session that feeds one. OIS is
+     * the fallback where neither applies rather than an addition, since the platform recommends
+     * against running optical and digital stabilization together.</p>
+     *
+     * <p>A still carries the same mode as the repeating request, because the mode is a session
+     * parameter on many cameras and changing it for one capture would reconfigure the stream.</p>
+     */
+    void applyStabilization(@NonNull CaptureRequest.Builder builder) {
+        if (!mCamera2Module.isStabilizationEnabled()) {
+            return;
+        }
+        CameraCharacteristics characteristics = mCamera2Module.getActiveCharacteristics();
+        if (Build.VERSION.SDK_INT >= 33
+                && Camera2Module.offersPreviewStabilization(characteristics)) {
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION);
+        } else if (feedsAnEncoder() && Camera2Module.offersVideoStabilization(characteristics)) {
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON);
+        } else if (Camera2Module.offersOpticalStabilization(characteristics)) {
+            builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON);
+        }
+    }
+
+    /** Whether this session sends frames to an encoder, which video stabilization steadies. */
+    boolean feedsAnEncoder() {
+        return false;
     }
 
     private void applyFlash(@NonNull CaptureRequest.Builder builder) {

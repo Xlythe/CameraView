@@ -144,6 +144,7 @@ class PictureSession extends PreviewSession {
                 builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             }
             applyZoom(builder);
+            applyStabilization(builder);
             builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
             session.capture(builder.build(), null /* callback */, getHandler());
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {

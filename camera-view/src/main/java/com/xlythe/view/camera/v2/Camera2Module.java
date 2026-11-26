@@ -1128,6 +1128,85 @@ public class Camera2Module extends ICameraModule {
                 : characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
     }
 
+    /**
+     * Steadies the preview and a recording, each as far as the camera can.
+     *
+     * <p>Refused only while a camera that can steady neither is open. The mode is a session
+     * parameter on many cameras, so a change rebuilds the session rather than reissuing a request,
+     * except while recording or streaming: those keep the mode they started with, and the session
+     * after them is built with the new one.</p>
+     */
+    @AnyThread
+    @Override
+    public void setStabilizationEnabled(boolean enabled) {
+        if (enabled && mCameraDevice != null && !isStabilizationSupported()) {
+            Log.w(TAG, "Ignoring stabilization because the active camera does not support it");
+            return;
+        }
+        boolean changed = enabled != isStabilizationEnabled();
+        super.setStabilizationEnabled(enabled);
+        if (changed) {
+            restartPictureSession();
+        }
+    }
+
+    /**
+     * True when the camera can steady either the preview or a recording digitally.
+     *
+     * <p>Optical stabilization is used where a camera has it but does not count here, because the
+     * CameraX backend does not count it either, and a camera with only OIS would otherwise be
+     * supported on one backend and not the other.</p>
+     */
+    @Override
+    public boolean isStabilizationSupported() {
+        CameraCharacteristics characteristics = getActiveCharacteristics();
+        return offersPreviewStabilization(characteristics)
+                || offersVideoStabilization(characteristics);
+    }
+
+    /** Whether a camera can steady the preview, and with it every other stream it outputs. */
+    static boolean offersPreviewStabilization(@Nullable CameraCharacteristics characteristics) {
+        return Build.VERSION.SDK_INT >= 33 && characteristics != null && contains(
+                characteristics.get(
+                        CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES),
+                CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION);
+    }
+
+    /** Whether a camera can steady what it sends to an encoder. */
+    static boolean offersVideoStabilization(@Nullable CameraCharacteristics characteristics) {
+        return characteristics != null && contains(
+                characteristics.get(
+                        CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES),
+                CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_ON);
+    }
+
+    /** Whether a camera has a lens it can steady optically. */
+    static boolean offersOpticalStabilization(@Nullable CameraCharacteristics characteristics) {
+        return characteristics != null && contains(
+                characteristics.get(
+                        CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION),
+                CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON);
+    }
+
+    /**
+     * Whether a camera lists a mode.
+     *
+     * <p>The lists are searched rather than read as enumerations, because they need not hold only
+     * values the platform defines: Samsung's front cameras list auto-exposure modes 101, 102 and
+     * 104 beside the standard ones.</p>
+     */
+    static boolean contains(@Nullable int[] modes, int mode) {
+        if (modes == null) {
+            return false;
+        }
+        for (int candidate : modes) {
+            if (candidate == mode) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** The active camera's characteristics, or null when it cannot be asked. */
     @Nullable
     CameraCharacteristics getActiveCharacteristics() {
@@ -1350,6 +1429,18 @@ public class Camera2Module extends ICameraModule {
             }
             setSession(session instanceof PictureSession && !(session instanceof VideoSession)
                     ? new PictureSession(this) : session);
+        });
+    }
+
+    /** Rebuilds the session for a setting it carries, unless it is recording or streaming. */
+    private void restartPictureSession() {
+        mHandler.post(() -> {
+            Session session = mActiveSession;
+            if (mCameraDevice == null || mIsPaused || !(session instanceof PictureSession)
+                    || session instanceof VideoSession) {
+                return;
+            }
+            setSession(new PictureSession(this));
         });
     }
 
