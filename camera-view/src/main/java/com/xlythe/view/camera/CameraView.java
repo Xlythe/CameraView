@@ -159,8 +159,6 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_DYNAMIC_RANGE = "dynamic_range";
     /** Saved-state key for the CameraX photo extension. */
     private static final String EXTRA_EXTENSION = "extension";
-    /** Saved-state key for front-video mirroring. */
-    private static final String EXTRA_FRONT_VIDEO_MIRRORING = "front_video_mirroring";
     /** Saved-state key for stabilization. */
     private static final String EXTRA_STABILIZATION = "stabilization";
     /** Saved-state key for exposure compensation. */
@@ -531,7 +529,6 @@ public class CameraView extends FrameLayout {
             setMatchPreviewAspectRatio(a.getBoolean(R.styleable.CameraView_matchPreviewAspectRatio, isMatchPreviewAspectRatioEnabled()));
             setDynamicRange(DynamicRange.fromId(a.getInteger(R.styleable.CameraView_dynamicRange, getDynamicRange().id)));
             setExtension(Extension.fromId(a.getInteger(R.styleable.CameraView_extension, getExtension().id)));
-            setFrontVideoMirroringEnabled(a.getBoolean(R.styleable.CameraView_frontVideoMirroringEnabled, isFrontVideoMirroringEnabled()));
             setStabilizationEnabled(a.getBoolean(R.styleable.CameraView_stabilizationEnabled, isStabilizationEnabled()));
             setExposureCompensation(a.getInteger(R.styleable.CameraView_exposureCompensation, getExposureCompensation()));
             setTorchEnabled(a.getBoolean(R.styleable.CameraView_torchEnabled, isTorchEnabled()));
@@ -596,7 +593,6 @@ public class CameraView extends FrameLayout {
         state.putBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO, isMatchPreviewAspectRatioEnabled());
         state.putInt(EXTRA_DYNAMIC_RANGE, getDynamicRange().id);
         state.putInt(EXTRA_EXTENSION, getExtension().id);
-        state.putBoolean(EXTRA_FRONT_VIDEO_MIRRORING, isFrontVideoMirroringEnabled());
         state.putBoolean(EXTRA_STABILIZATION, isStabilizationEnabled());
         state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
         state.putBoolean(EXTRA_TORCH, isTorchEnabled());
@@ -630,7 +626,6 @@ public class CameraView extends FrameLayout {
             setMatchPreviewAspectRatio(state.getBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO));
             setDynamicRange(DynamicRange.fromId(state.getInt(EXTRA_DYNAMIC_RANGE, DynamicRange.SDR.id)));
             setExtension(Extension.fromId(state.getInt(EXTRA_EXTENSION, Extension.NONE.id)));
-            setFrontVideoMirroringEnabled(state.getBoolean(EXTRA_FRONT_VIDEO_MIRRORING, true));
             setStabilizationEnabled(state.getBoolean(EXTRA_STABILIZATION));
             setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
             setTorchEnabled(state.getBoolean(EXTRA_TORCH));
@@ -903,7 +898,10 @@ public class CameraView extends FrameLayout {
             mCameraModule.pause();
 
             mVideoPreview.setVisibility(View.VISIBLE);
-            mVideoPreview.setShouldMirror(isUsingFrontFacingCamera());
+            // Mirrored for display only where the file is not, so the confirmation looks like
+            // the preview either way.
+            mVideoPreview.setShouldMirror(
+                    isUsingFrontFacingCamera() && !mCameraModule.isFrontVideoMirrored());
             mVideoPreview.setShouldLoop(true);
             mVideoPreview.setVolume(0.3f);
             mVideoPreview.setFile(file);
@@ -1632,16 +1630,6 @@ public class CameraView extends FrameLayout {
     /** Returns whether the active backend and lens support the extension. */
     public boolean isExtensionSupported(Extension extension) {
         return mCameraModule.isExtensionSupported(extension);
-    }
-
-    /** Controls whether front-camera video files are mirrored. */
-    public void setFrontVideoMirroringEnabled(boolean enabled) {
-        mCameraModule.setFrontVideoMirroringEnabled(enabled);
-    }
-
-    /** Returns whether front-camera video files are mirrored. */
-    public boolean isFrontVideoMirroringEnabled() {
-        return mCameraModule.isFrontVideoMirroringEnabled();
     }
 
     /**

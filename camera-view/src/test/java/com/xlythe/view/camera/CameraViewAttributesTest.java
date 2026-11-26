@@ -139,14 +139,12 @@ public class CameraViewAttributesTest {
                 .addAttribute(R.attr.confirmImages, "true")
                 .addAttribute(R.attr.confirmVideos, "true")
                 .addAttribute(R.attr.pinchToZoomEnabled, "false")
-                .addAttribute(R.attr.matchPreviewAspectRatio, "false")
-                .addAttribute(R.attr.frontVideoMirroringEnabled, "false"));
+                .addAttribute(R.attr.matchPreviewAspectRatio, "false"));
 
         assertTrue(view.isImageConfirmationEnabled());
         assertTrue(view.isVideoConfirmationEnabled());
         assertFalse(view.isPinchToZoomEnabled());
         assertFalse(view.isMatchPreviewAspectRatioEnabled());
-        assertFalse(view.isFrontVideoMirroringEnabled());
     }
 
     @Test

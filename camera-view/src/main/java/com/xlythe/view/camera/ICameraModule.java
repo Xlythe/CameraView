@@ -43,8 +43,6 @@ public abstract class ICameraModule {
     private CameraView.DynamicRange mDynamicRange = CameraView.DynamicRange.SDR;
     /** Requested CameraX photo extension. */
     private CameraView.Extension mExtension = CameraView.Extension.NONE;
-    /** Whether front-camera video output should be mirrored. */
-    private boolean mFrontVideoMirroringEnabled = true;
     /** Whether a steadied picture is requested, of the preview and of a recording alike. */
     private boolean mStabilizationEnabled;
     /** Requested exposure compensation index. */
@@ -311,12 +309,12 @@ public abstract class ICameraModule {
         return extension == CameraView.Extension.NONE;
     }
 
-    public synchronized void setFrontVideoMirroringEnabled(boolean enabled) {
-        mFrontVideoMirroringEnabled = enabled;
-    }
-
-    public synchronized boolean isFrontVideoMirroringEnabled() {
-        return mFrontVideoMirroringEnabled;
+    /**
+     * Whether a recording from the user-facing lens is written mirrored, as its preview shows it.
+     * False where the backend cannot yet flip the frames it encodes.
+     */
+    public boolean isFrontVideoMirrored() {
+        return false;
     }
 
     public synchronized void setStabilizationEnabled(boolean enabled) {

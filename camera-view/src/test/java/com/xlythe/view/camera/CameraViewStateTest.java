@@ -70,7 +70,6 @@ public class CameraViewStateTest {
         cameraView.setVideoConfirmationEnabled(true);
         cameraView.setMatchPreviewAspectRatio(false);
         cameraView.setDynamicRange(CameraView.DynamicRange.HDR);
-        cameraView.setFrontVideoMirroringEnabled(false);
         cameraView.setStabilizationEnabled(true);
         cameraView.setExposureCompensation(3);
         cameraView.setTorchEnabled(true);
@@ -86,7 +85,6 @@ public class CameraViewStateTest {
         assertTrue(restored.isVideoConfirmationEnabled());
         assertFalse(restored.isMatchPreviewAspectRatioEnabled());
         assertEquals(CameraView.DynamicRange.HDR, restored.getDynamicRange());
-        assertFalse(restored.isFrontVideoMirroringEnabled());
         assertTrue(restored.isStabilizationEnabled());
         assertEquals(3, restored.getExposureCompensation());
         assertTrue(restored.isTorchEnabled());

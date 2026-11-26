@@ -905,8 +905,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
     }
 
-    @Override public void setFrontVideoMirroringEnabled(boolean enabled) {
-        super.setFrontVideoMirroringEnabled(enabled);
+    @Override public boolean isFrontVideoMirrored() {
+        return true;
     }
 
     @Override public void setStabilizationEnabled(boolean enabled) {
@@ -1265,8 +1265,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         Recorder recorder = new Recorder.Builder().setQualitySelector(createQualitySelector()).build();
         CameraInfo cameraInfo = mActiveCamera == null ? null : mActiveCamera.getCameraInfo();
         VideoCapture.Builder<Recorder> videoBuilder = new VideoCapture.Builder<>(recorder)
-                .setMirrorMode(isFrontVideoMirroringEnabled()
-                        ? MirrorMode.MIRROR_MODE_ON_FRONT_ONLY : MirrorMode.MIRROR_MODE_OFF)
+                .setMirrorMode(MirrorMode.MIRROR_MODE_ON_FRONT_ONLY)
                 .setTargetRotation(getTargetRotation());
         if (cameraInfo != null) {
             videoBuilder.setDynamicRange(selectedDynamicRange(cameraInfo));
