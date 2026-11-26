@@ -9,7 +9,7 @@ import org.robolectric.annotation.Config;
 import static org.junit.Assert.assertNotNull;
 
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = 37)
+@Config(minSdk = 33)
 public class MainActivityTest {
 
     @Test
