@@ -35,6 +35,9 @@ public class LinkBackpressureTest {
     /** Twice the stream on average, delivered in bursts of 150ms out of every 250ms. */
     private static final Link BURSTY = Link.bursty("bursty", 2, 250, 150);
 
+    /** One and a half times the stream on average, gone for half of every two seconds. */
+    private static final Link GAPPY = Link.bursty("gappy", 1.5, 2000, 1500);
+
     /** The fixed audio threshold VideoStream starts with: half a second at 16kHz mono. */
     private static final int FIXED_AUDIO_THRESHOLD = 16 * 1024;
 
@@ -66,8 +69,8 @@ public class LinkBackpressureTest {
     }
 
     /**
-     * The whole matrix, printed for the record, and the one property every run keeps: the reader
-     * can always parse what arrives. Dropping may cost frames, never framing.
+     * The whole matrix, printed for the record, and the properties every run keeps: the reader
+     * can always parse what arrives, and decode it. Dropping may cost frames, never framing.
      */
     @Test
     public void everyStrategyKeepsTheStreamParseable() throws IOException {
@@ -80,6 +83,8 @@ public class LinkBackpressureTest {
                     rows.add(result.row());
                     assertTrue("header lost: " + result.row(), result.headerIntact);
                     assertEquals("torn records: " + result.row(), 0, result.corruptRecords);
+                    assertEquals("undecodable frames: " + result.row(),
+                            0, result.undecodableFrames);
                 }
             }
         }
@@ -227,13 +232,32 @@ public class LinkBackpressureTest {
 
     /**
      * Each H.264 delta is predicted from the frame before it, so dropping one breaks every frame
-     * after it until the next key frame. Dropping deltas one at a time leaves a link that is
-     * persistently a little too slow delivering frames that mostly cannot be decoded.
+     * after it until the next key frame. Dropping deltas one at a time left most of what arrived
+     * undecodable: 249 of 288 frames on the slow link, and on the gappy one 337 of 378 with
+     * VideoRecorder's default ten seconds between key frames. Dropping the rest of the group and
+     * asking for a key frame once the reader has caught up delivers fewer frames, all of which
+     * decode - several times as many as before.
      */
     @Test
-    public void droppingSingleDeltasBreaksMostOfWhatArrives() throws IOException {
-        Result result = run(Media.VIDEO, SLOW, Transport.acknowledged(200), Pump.PACED);
-        int arrived = result.decodableFrames + result.undecodableFrames;
-        assertTrue(result.row(), result.undecodableFrames > arrived * 0.8);
+    public void aDroppedDeltaTakesItsGroupWithIt() throws IOException {
+        // The Wear sample's one second between key frames and VideoRecorder's default ten, each
+        // with the decodable frames a second that dropping single deltas managed.
+        Object[][] cases = {
+                {20, SLOW, 2.0},
+                {20, GAPPY, 10.9},
+                {200, SLOW, 0.7},
+                {200, GAPPY, 2.0},
+        };
+        List<String> rows = new ArrayList<>();
+        for (Object[] testCase : cases) {
+            Result result = new LinkSimulation(Media.VIDEO).link((Link) testCase[1])
+                    .keyFrameInterval((int) testCase[0])
+                    .transport(Transport.acknowledged(200)).pump(Pump.PACED).run();
+            rows.add(testCase[0] + " frames between key frames: " + result.row());
+            assertEquals(result.row(), 0, result.undecodableFrames);
+            assertTrue(result.row(),
+                    result.decodableFramesPerSecond() > 1.5 * (double) testCase[2]);
+        }
+        System.out.println(String.join("\n", rows));
     }
 }

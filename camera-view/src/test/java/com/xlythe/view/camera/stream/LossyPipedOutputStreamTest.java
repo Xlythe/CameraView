@@ -132,6 +132,72 @@ public class LossyPipedOutputStreamTest {
         }
     }
 
+    /**
+     * A delta is predicted from the frame before it, so once one is dropped the rest of its group
+     * cannot be decoded. They are dropped too, even after the reader has caught up, until a frame
+     * others depend on is written again.
+     */
+    @Test
+    public void aDroppedDeltaTakesTheRestOfItsGroupWithIt() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            assertTrue(stream.writeFrame(frameOf(MAX_BUFFERED + 1, (byte) 1), true));
+            assertFalse(stream.writeFrame(frameOf(16, (byte) 2), true));
+            drain(sink);
+
+            assertFalse("predicted from a frame the reader never got",
+                    stream.writeFrame(frameOf(16, (byte) 3), true));
+            assertTrue(stream.writeFrame(frameOf(16, (byte) 4), false));
+            assertTrue(stream.writeFrame(frameOf(16, (byte) 5), true));
+        }
+    }
+
+    /**
+     * Losing a delta asks for a key frame, but only once the reader has read everything: a key
+     * frame landing on a backlog that is still deep only pushes it back over the threshold.
+     */
+    @Test
+    public void aDroppedDeltaAsksForAKeyFrameOnceTheReaderHasEverything() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            assertTrue(stream.writeFrame(frameOf(MAX_BUFFERED + 1, (byte) 1), true));
+            assertFalse(stream.writeFrame(frameOf(16, (byte) 2), true));
+            assertFalse(stream.consumeResyncRequest());
+
+            sink.read(new byte[MAX_BUFFERED]);
+            assertTrue(stream.bufferedBytes() > 0);
+            assertFalse("the reader still has a frame to read", stream.consumeResyncRequest());
+
+            drain(sink);
+            assertTrue(stream.consumeResyncRequest());
+            assertFalse(stream.consumeResyncRequest());
+
+            // Further drops in the same broken group do not ask again.
+            assertFalse(stream.writeFrame(frameOf(16, (byte) 3), true));
+            assertFalse(stream.consumeResyncRequest());
+        }
+    }
+
+    /** A key frame that arrives on schedule repairs the group, so the request is withdrawn. */
+    @Test
+    public void aKeyFrameOnScheduleWithdrawsTheRequest() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            assertTrue(stream.writeFrame(frameOf(MAX_BUFFERED + 1, (byte) 1), true));
+            assertFalse(stream.writeFrame(frameOf(16, (byte) 2), true));
+            assertTrue(stream.writeFrame(frameOf(16, (byte) 3), false));
+            drain(sink);
+            assertFalse(stream.consumeResyncRequest());
+        }
+    }
+
+    private static void drain(PipedInputStream sink) throws IOException {
+        byte[] scratch = new byte[PIPE_BYTES];
+        while (sink.available() > 0) {
+            sink.read(scratch, 0, sink.available());
+        }
+    }
+
     @Test
     public void reportsAMissingSink() {
         LossyPipedOutputStream stream = new LossyPipedOutputStream();
