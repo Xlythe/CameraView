@@ -2,7 +2,10 @@ package com.xlythe.sample.camera;
 
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
+import android.Manifest;
 import android.annotation.SuppressLint;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
@@ -11,8 +14,11 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.TextView;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresPermission;
+import androidx.annotation.WorkerThread;
 
 import com.google.android.gms.wearable.ChannelClient;
 import com.google.android.gms.wearable.MessageClient;
@@ -23,6 +29,7 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.VideoStream;
 
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -122,7 +129,7 @@ public class WearFragment extends CameraFragment {
      * frames produced before there is anywhere to put them are frames the watch will never see,
      * and with a one second key frame interval that delay is visible.</p>
      */
-    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.CAMERA)
     private void startStreaming() {
         String watch = mWatchNodeId;
         if (watch == null || !mCameraView.isOpen() || mStreaming.get()) {
@@ -146,8 +153,12 @@ public class WearFragment extends CameraFragment {
                 });
     }
 
-    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.CAMERA)
     private void pump(ChannelClient.Channel channel, OutputStream out) {
+        // stream() declares the microphone because a stream usually carries audio, and an
+        // annotation cannot say "only when the parameters ask for it". These parameters do not,
+        // so the one line that calls it is the whole scope of the exception.
+        @SuppressLint("MissingPermission")
         VideoStream stream = mCameraView.stream(new VideoStream.Params.Builder()
                 .setAudioEnabled(false)
                 .setVideoEnabled(true)
@@ -207,7 +218,7 @@ public class WearFragment extends CameraFragment {
         }
     }
 
-    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.CAMERA)
     private void takePictureForWatch() {
         if (!mCameraView.isOpen()) {
             return;
@@ -237,6 +248,16 @@ public class WearFragment extends CameraFragment {
         if (watch == null) {
             return;
         }
+        // Scaled off the main thread: decoding and re-encoding a full-size JPEG is tens of
+        // milliseconds at best, and this runs straight after a capture.
+        Executors.newSingleThreadExecutor().execute(() -> {
+            File scaled = scaleForWatch(file);
+            runOnMain(() -> send(watch, scaled == null ? file : scaled));
+        });
+    }
+
+    @MainThread
+    private void send(@NonNull String watch, @NonNull File file) {
         ChannelClient channels = Wearable.getChannelClient(requireContext());
         channels.openChannel(watch, WearProtocol.PATH_PICTURE)
                 .addOnSuccessListener(requireActivity(), channel ->
@@ -245,6 +266,48 @@ public class WearFragment extends CameraFragment {
                                         Log.w(TAG, "Could not send the picture", error)))
                 .addOnFailureListener(requireActivity(), error ->
                         Log.w(TAG, "Could not open a channel for the picture", error));
+    }
+
+    /**
+     * A copy of the picture no larger than the watch can draw, or null if it could not be made.
+     *
+     * <p>Bounds are read first so the decode itself is done at a sample size, rather than
+     * decoding a full-size bitmap and throwing most of it away - which on a large capture is
+     * where the memory goes.</p>
+     */
+    @Nullable
+    @WorkerThread
+    private File scaleForWatch(@NonNull File file) {
+        try {
+            BitmapFactory.Options bounds = new BitmapFactory.Options();
+            bounds.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(file.getPath(), bounds);
+            int longest = Math.max(bounds.outWidth, bounds.outHeight);
+            if (longest <= 0) {
+                return null;
+            }
+
+            BitmapFactory.Options options = new BitmapFactory.Options();
+            options.inSampleSize = Integer.highestOneBit(
+                    Math.max(1, longest / WearProtocol.PICTURE_MAX_EDGE));
+            Bitmap decoded = BitmapFactory.decodeFile(file.getPath(), options);
+            if (decoded == null) {
+                return null;
+            }
+
+            File scaled = new File(requireContext().getCacheDir(), "to-watch.jpg");
+            try (OutputStream out = new FileOutputStream(scaled)) {
+                boolean written = decoded.compress(
+                        Bitmap.CompressFormat.JPEG, WearProtocol.PICTURE_QUALITY, out);
+                return written ? scaled : null;
+            } finally {
+                decoded.recycle();
+            }
+        } catch (IOException | RuntimeException | OutOfMemoryError error) {
+            // The full-size picture still sends, just slowly, so this is never worth failing for.
+            Log.w(TAG, "Could not scale the picture for the watch", error);
+            return null;
+        }
     }
 
     @Override

@@ -48,5 +48,19 @@ final class WearProtocol {
 
     static final int PREVIEW_KEY_FRAME_INTERVAL_SECONDS = 1;
 
+    /**
+     * The longest edge of a picture sent to the watch.
+     *
+     * <p>Generous for a watch screen and still a fraction of what the camera produced, which
+     * is the point: a full-size JPEG is a few megabytes and a watch link is slow enough that
+     * sending one is seconds of waiting for a picture that gets drawn a few hundred pixels
+     * across. The phone scales to this before sending, so the watch has nothing to guess
+     * at.</p>
+     */
+    static final int PICTURE_MAX_EDGE = 640;
+
+    /** How hard to compress the scaled copy. High: it is drawn once and then discarded. */
+    static final int PICTURE_QUALITY = 85;
+
     private WearProtocol() {}
 }
