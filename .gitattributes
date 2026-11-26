@@ -1,0 +1,16 @@
+# Line endings are decided here rather than by whatever each contributor's Git happens to be
+# configured to do. Two files in this repository were stored CRLF while the other hundred and
+# sixty-seven were LF, and commits that touched either one flipped it - which turns a thirty-line
+# change into a two-thousand-line rewrite in review, and makes a branch conflict on a file nobody
+# disagreed about.
+* text=auto eol=lf
+
+# Except the one kind of file that has to keep CRLF to run at all.
+*.bat text eol=crlf
+
+# And the ones that are not text, so Git never looks inside them for lines.
+*.jar binary
+*.png binary
+*.webp binary
+*.ttf binary
+*.keystore binary
