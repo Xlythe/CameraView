@@ -294,6 +294,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** The high-speed session config currently bound, which unbinds separately from use cases. */
     @Nullable private SessionConfig mBoundSessionConfig;
 
+    /** The high-speed profiles this camera will actually bind, worked out once per camera. */
+    @Nullable private List<HighSpeedProfile> mBindableHighSpeedProfiles;
+
+    /** The camera the cached profiles were worked out for, so a lens switch recomputes them. */
+    @Nullable private CameraInfo mHighSpeedProfilesCamera;
+
     /** Set when a layout settles during a capture, so the rebind it asks for is owed, not lost. */
     private boolean mSizeRebindPending;
     /** Monotonic token invalidating stale provider, surface, and binding callbacks. */
@@ -1762,11 +1768,29 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                     Log.w(TAG, "CameraX could not preflight the requested streaming combination");
                 }
             }
+            // The high-speed combination, which is the one that cannot be recovered from by
+            // dropping a use case: there is nothing in it but the preview and the recording.
+            // Preflighted because the profiles offered to the caller are read from the camera2
+            // characteristics - that is where the sizes are - while the bind goes through
+            // CameraX, which has its own idea of what it will take. A profile the device
+            // publishes and CameraX refuses throws out of the bind, and by then the working
+            // session has been unbound and the recording is gone.
+            SessionConfig highSpeedConfig = null;
+            if (highSpeed != null && mVideoCapture != null) {
+                highSpeedConfig = createHighSpeedConfig(displayPreview, highSpeed);
+                if (highSpeedConfig == null
+                        || !cameraInfo.isSessionConfigSupported(highSpeedConfig)) {
+                    Log.w(TAG, "CameraX will not record at " + highSpeed
+                            + " on this camera, although it publishes the configuration");
+                    // Before unbinding anything, so the camera carries on as it was.
+                    return false;
+                }
+            }
             unbindCurrentUseCases();
             // After unbinding, so that an effect being let go is not closing outputs CameraX is
             // still drawing into, and before binding, because the group carries the effect.
             CameraEffect effect = reconcileFrameEffect(!streamPreviews.isEmpty());
-            Camera camera = bindAtomically(selector, requested, effect, highSpeed, displayPreview);
+            Camera camera = bindAtomically(selector, requested, effect, highSpeedConfig);
             if (generation != mGeneration || !mOpenRequested || mPaused) {
                 provider.unbind(requested.toArray(new UseCase[0]));
                 return false;
@@ -1800,21 +1824,39 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
     }
 
+    /**
+     * The session config a high-speed recording binds with, or null if one cannot be built.
+     *
+     * <p>Null rather than thrown, because the builder validates what it is given and the caller
+     * here is deciding whether to go this way at all - a refusal is an answer, and the one that
+     * leaves the camera running.</p>
+     */
+    @Nullable private SessionConfig createHighSpeedConfig(@NonNull Preview preview,
+            @NonNull HighSpeedProfile highSpeed) {
+        VideoCapture<Recorder> videoCapture = mVideoCapture;
+        if (videoCapture == null) {
+            return null;
+        }
+        try {
+            return CameraXHighSpeed.sessionConfig(videoCapture, preview, highSpeed);
+        } catch (IllegalArgumentException | IllegalStateException error) {
+            Log.w(TAG, "CameraX would not build a high-speed session for " + highSpeed, error);
+            return null;
+        }
+    }
+
     @NonNull private Camera bindAtomically(@NonNull CameraSelector selector,
             @NonNull List<UseCase> useCases, @Nullable CameraEffect effect,
-            @Nullable HighSpeedProfile highSpeed, @NonNull Preview preview) {
-        VideoCapture<Recorder> videoCapture = mVideoCapture;
-        if (highSpeed != null && videoCapture != null) {
+            @Nullable SessionConfig highSpeedConfig) {
+        if (highSpeedConfig != null) {
             // Bound as a session config rather than as a list of use cases, because the frame
             // rate and the slow-motion decision live on the config. No view port either: the
             // config resolves the resolution itself and refuses to be told - and no effect, for
             // the same reason, since the config validates what it is given and takes neither.
             // Remembered, because a SessionConfig is not unbound by unbinding use cases and
             // CameraX will not let the two kinds of bind share a LifecycleOwner.
-            SessionConfig sessionConfig =
-                    CameraXHighSpeed.sessionConfig(videoCapture, preview, highSpeed);
-            mBoundSessionConfig = sessionConfig;
-            return mCameraProvider.bindToLifecycle(this, selector, sessionConfig);
+            mBoundSessionConfig = highSpeedConfig;
+            return mCameraProvider.bindToLifecycle(this, selector, highSpeedConfig);
         }
         int width = getWidth();
         int height = getHeight();
@@ -2022,7 +2064,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     @NonNull @Override public List<HighSpeedProfile> getSupportedHighSpeedProfiles() {
         Camera camera = mActiveCamera;
-        return CameraXHighSpeed.publishedProfiles(camera == null ? null : camera.getCameraInfo());
+        if (camera == null) {
+            return Collections.emptyList();
+        }
+        CameraInfo cameraInfo = camera.getCameraInfo();
+        // Cached because this is asked repeatedly - every setHighSpeedProfile checks against it -
+        // and answering means building a throwaway session config per profile to ask CameraX
+        // about. The answer cannot change for a camera, so it is cached per camera.
+        List<HighSpeedProfile> cached = mBindableHighSpeedProfiles;
+        if (cached != null && cameraInfo == mHighSpeedProfilesCamera) {
+            return cached;
+        }
+        List<HighSpeedProfile> bindable = CameraXHighSpeed.bindableProfiles(
+                cameraInfo, CameraXHighSpeed.publishedProfiles(cameraInfo));
+        mHighSpeedProfilesCamera = cameraInfo;
+        mBindableHighSpeedProfiles = bindable;
+        return bindable;
     }
 
     @Override

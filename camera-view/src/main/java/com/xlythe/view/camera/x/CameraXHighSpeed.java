@@ -90,6 +90,64 @@ final class CameraXHighSpeed {
     }
 
     /**
+     * The published profiles that CameraX will actually bind, which is not all of them.
+     *
+     * <p>Two different authorities, and they disagree. The sizes and rates above are read from
+     * the camera2 characteristics, because that is the only place a size can be got from. The
+     * recording is bound through HighSpeedVideoSessionConfig, which CameraX validates against
+     * its own idea of what this camera can do - and on a Galaxy S25 Ultra, the one device here
+     * that publishes high-speed configurations for CameraX, those are not the same set.</p>
+     *
+     * <p>Asked here rather than discovered at the bind, because by the time a bind fails the
+     * working session has been unbound and the recording the caller asked for is gone. A
+     * profile that will not bind is better reported as one this camera does not record, which
+     * is what the caller can act on.</p>
+     *
+     * @param cameraInfo the camera to ask, or null when none is bound yet
+     */
+    @NonNull
+    static List<HighSpeedProfile> bindableProfiles(@Nullable CameraInfo cameraInfo,
+            @NonNull List<HighSpeedProfile> published) {
+        if (cameraInfo == null || published.isEmpty()) {
+            return published;
+        }
+        List<HighSpeedProfile> bindable = new ArrayList<>(published.size());
+        for (HighSpeedProfile profile : published) {
+            if (isBindable(cameraInfo, profile)) {
+                bindable.add(profile);
+            } else {
+                Log.d(TAG, "CameraX will not bind " + profile + " on this camera");
+            }
+        }
+        return bindable;
+    }
+
+    /**
+     * Whether CameraX would take a session for this profile, asked without binding one.
+     *
+     * <p>The use cases built here are thrown away. They exist because the question can only be
+     * asked of a whole session config, and a config needs both of them - so a bare recorder and
+     * a bare preview stand in for the real ones, which is what the config would be given
+     * anyway.</p>
+     */
+    private static boolean isBindable(@NonNull CameraInfo cameraInfo,
+            @NonNull HighSpeedProfile profile) {
+        try {
+            Recorder recorder = new Recorder.Builder()
+                    .setQualitySelector(qualitySelector(profile.getSize())).build();
+            VideoCapture<Recorder> videoCapture = new VideoCapture.Builder<>(recorder).build();
+            SessionConfig config =
+                    sessionConfig(videoCapture, new Preview.Builder().build(), profile);
+            return cameraInfo.isSessionConfigSupported(config);
+        } catch (IllegalArgumentException | IllegalStateException | LinkageError error) {
+            // The builder validates what it is given, so a profile it refuses is one that
+            // cannot be recorded - which is the answer, not a failure.
+            Log.d(TAG, "CameraX refused a high-speed session for " + profile, error);
+            return false;
+        }
+    }
+
+    /**
      * The session config a high-speed recording is bound with.
      *
      * <p>A SessionConfig rather than a list of use cases, because that is the only shape CameraX
