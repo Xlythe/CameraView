@@ -279,7 +279,6 @@ class CameraComposableTest {
                 pictureQuality = 60,
                 stabilizationEnabled = true,
                 lowLightBoostEnabled = true,
-                frontVideoMirroringEnabled = false,
                 controller = controller,
             )
         }
@@ -294,7 +293,6 @@ class CameraComposableTest {
         assertEquals(60, camera.pictureQuality)
         assertTrue(camera.isStabilizationEnabled)
         assertTrue(camera.isLowLightBoostEnabled)
-        assertFalse(camera.isFrontVideoMirroringEnabled)
     }
 
     /** And the ones left out keep the camera's own defaults rather than a zeroed version. */
@@ -309,8 +307,6 @@ class CameraComposableTest {
         assertEquals(CameraView.DynamicRange.SDR, camera.dynamicRange)
         assertEquals(CameraView.Extension.NONE, camera.extension)
         assertEquals(95, camera.pictureQuality)
-        assertTrue("front video matches the preview it was framed in",
-                camera.isFrontVideoMirroringEnabled)
         assertFalse(camera.isTorchEnabled)
     }
 
@@ -353,6 +349,7 @@ class CameraComposableTest {
                 published.isSnapshotWhileRecordingSupported)
         assertEquals(setOf(DynamicRange.SDR), published.supportedDynamicRanges)
         assertEquals(setOf(Extension.NONE), published.supportedExtensions)
+        assertEquals(setOf(PictureFormat.JPEG), published.supportedPictureFormats)
         assertFalse(published.isRecording)
         assertFalse(published.isAnalyzingFrames)
         assertTrue("the fake camera publishes its optics",

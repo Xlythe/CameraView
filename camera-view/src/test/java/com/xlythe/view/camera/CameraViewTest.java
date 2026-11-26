@@ -100,7 +100,6 @@ public class CameraViewTest {
     public void optionalCameraControlsRoundTrip() {
         cameraView.setDynamicRange(CameraView.DynamicRange.HDR);
         cameraView.setExtension(CameraView.Extension.NIGHT);
-        cameraView.setFrontVideoMirroringEnabled(false);
         cameraView.setStabilizationEnabled(true);
         cameraView.setExposureCompensation(2);
         cameraView.setTorchEnabled(true);
@@ -108,7 +107,6 @@ public class CameraViewTest {
 
         assertEquals(CameraView.DynamicRange.HDR, cameraView.getDynamicRange());
         assertEquals(CameraView.Extension.NIGHT, cameraView.getExtension());
-        assertFalse(cameraView.isFrontVideoMirroringEnabled());
         assertTrue(cameraView.isStabilizationEnabled());
         assertEquals(2, cameraView.getExposureCompensation());
         assertTrue(cameraView.isTorchEnabled());

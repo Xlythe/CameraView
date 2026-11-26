@@ -59,11 +59,11 @@ Camera(
 ```
 
 Camera also accepts zoomLevel [0 to maxZoomLevel, or null to leave the zoom to pinchToZoom],
-pictureQuality [1 to 100], colorSpace [srgb, displayP3], exposureCompensation [integer],
-torchEnabled [boolean], dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch,
-auto], stabilizationEnabled [boolean], lowLightBoostEnabled [boolean] and
-frontVideoMirroringEnabled [boolean]. Not every camera can do all of these, so CameraState below
-says which this one supports.
+pictureQuality [1 to 100], colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr],
+exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
+extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
+lowLightBoostEnabled [boolean]. Not every camera can do all of these, so CameraState below says
+which this one supports.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
 opens, and is republished when the camera reconfigures, so ask it before offering a control: a
@@ -85,9 +85,10 @@ if (camera != null && camera.hasFlash) {
 
 CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, isZoomSupported,
 maxZoomLevel, isExposureCompensationSupported, minExposureCompensation, maxExposureCompensation,
-supportedColorSpaces, supportedDynamicRanges, supportedExtensions, isStabilizationSupported,
-isLowLightBoostSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
-horizontalFieldOfView, verticalFieldOfView, isRecording and isAnalyzingFrames.
+supportedColorSpaces, supportedPictureFormats, supportedDynamicRanges, supportedExtensions,
+isStabilizationSupported, isLowLightBoostSupported, isSnapshotWhileRecordingSupported,
+isFaceDetectionSupported, horizontalFieldOfView, verticalFieldOfView, isRecording and
+isAnalyzingFrames.
 
 Camera's methods are rather straight forward.
 
@@ -223,8 +224,8 @@ flash [auto, on, off], lensFacing [back, front], maxVideoDuration [milliseconds]
 maxVideoSize [bytes], confirmImages [boolean], confirmVideos [boolean],
 pinchToZoomEnabled [boolean], matchPreviewAspectRatio [boolean],
 dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
-frontVideoMirroringEnabled [boolean], stabilizationEnabled [boolean],
-exposureCompensation [integer], torchEnabled [boolean] and lowLightBoostEnabled [boolean].
+stabilizationEnabled [boolean], exposureCompensation [integer], torchEnabled [boolean] and
+lowLightBoostEnabled [boolean].
 ```xml
 <com.xlythe.view.camera.CameraView
     xmlns:camera="http://schemas.android.com/apk/res-auto"

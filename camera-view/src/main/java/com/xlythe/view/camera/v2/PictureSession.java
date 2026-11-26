@@ -74,7 +74,7 @@ class PictureSession extends PreviewSession {
         // then capped to it.
         onPreviewInitialized(map);
         if (hasStillCapture()) {
-            mPictureSurface.initialize(map, maxPictureSize());
+            mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr());
         }
     }
 
@@ -100,6 +100,14 @@ class PictureSession extends PreviewSession {
     @Nullable
     protected Size maxPictureSize() {
         return null;
+    }
+
+    /**
+     * Whether the still may be Ultra HDR. Camera2 verifies JPEG_R beside a preview alone, so a
+     * session that also feeds an encoder keeps its still as JPEG.
+     */
+    protected boolean allowsUltraHdr() {
+        return true;
     }
 
     @NonNull
@@ -224,7 +232,8 @@ class PictureSession extends PreviewSession {
 
         private static byte[] toByteArray(Image image) {
             byte[] data = null;
-            if (image.getFormat() == ImageFormat.JPEG) {
+            if (image.getFormat() == ImageFormat.JPEG
+                    || (Build.VERSION.SDK_INT >= 34 && image.getFormat() == ImageFormat.JPEG_R)) {
                 Image.Plane[] planes = image.getPlanes();
                 ByteBuffer buffer = planes[0].getBuffer();
                 data = new byte[buffer.capacity()];
@@ -313,11 +322,11 @@ class PictureSession extends PreviewSession {
 
     private static final class PictureSurface extends CameraSurface {
         private List<Size> getSizes(StreamConfigurationMap map) {
-            Size[] sizes = map.getOutputSizes(getImageFormat(getQuality()));
+            Size[] sizes = map.getOutputSizes(mImageFormat);
 
             // Special case for high resolution images (assuming, of course, quality was set to high)
             if (Build.VERSION.SDK_INT >= 23) {
-                Size[] highResSizes = map.getHighResolutionOutputSizes(getImageFormat(getQuality()));
+                Size[] highResSizes = map.getHighResolutionOutputSizes(mImageFormat);
                 if (highResSizes != null) {
                     sizes = concat(sizes, highResSizes);
                 }
@@ -370,6 +379,9 @@ class PictureSession extends PreviewSession {
         private ImageReader mImageReader;
         private File mFile;
 
+        /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
+        private int mImageFormat = IMAGE_FORMAT_DEFAULT;
+
         PictureSurface(Camera2Module camera2Module, CameraSurface previewSurface) {
             super(camera2Module);
             mPreviewSurface = previewSurface;
@@ -377,11 +389,13 @@ class PictureSession extends PreviewSession {
 
         @Override
         void initialize(StreamConfigurationMap map) {
-            initialize(map, null /* maxSize */);
+            initialize(map, null /* maxSize */, true /* ultraHdrAllowed */);
         }
 
-        void initialize(StreamConfigurationMap map, @Nullable Size maxSize) {
+        void initialize(
+                StreamConfigurationMap map, @Nullable Size maxSize, boolean ultraHdrAllowed) {
             if (DEBUG) Log.d(TAG, "Initializing PictureSession");
+            mImageFormat = chooseImageFormat(ultraHdrAllowed);
             super.initialize(chooseSize(within(getSizes(map), maxSize), mPreviewSurface.mSize));
             if (mImageReader != null) {
                 // Initialized again - a session can be, when the camera is reconfigured - and an
@@ -389,8 +403,22 @@ class PictureSession extends PreviewSession {
                 // replaced has to be handed back rather than dropped.
                 mImageReader.close();
             }
-            mImageReader = ImageReader.newInstance(getWidth(), getHeight(), getImageFormat(getQuality()), 1 /* maxImages */);
+            mImageReader = ImageReader.newInstance(
+                    getWidth(), getHeight(), mImageFormat, 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getHandler());
+        }
+
+        /**
+         * JPEG_R where Ultra HDR is asked for and this camera writes it. Asked again each time,
+         * because a lens or colour space that changed since the request may not support it.
+         */
+        private int chooseImageFormat(boolean ultraHdrAllowed) {
+            if (ultraHdrAllowed && Build.VERSION.SDK_INT >= 34
+                    && mCameraView.getPictureFormat() == CameraView.PictureFormat.ULTRA_HDR
+                    && mCameraView.isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR)) {
+                return ImageFormat.JPEG_R;
+            }
+            return getImageFormat(getQuality());
         }
 
         void initializePicture(File file) {

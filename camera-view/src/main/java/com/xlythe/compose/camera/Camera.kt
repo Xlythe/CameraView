@@ -61,6 +61,12 @@ enum class ColorSpace {
     DISPLAY_P3
 }
 
+/** The file a picture is written as. See [CameraState.supportedPictureFormats]. */
+enum class PictureFormat {
+    JPEG,
+    ULTRA_HDR
+}
+
 /** Standard or high dynamic range video. See [CameraState.supportedDynamicRanges]. */
 enum class DynamicRange {
     SDR,
@@ -105,6 +111,8 @@ data class CameraState(
     val maxExposureCompensation: Int = 0,
     /** Always holds at least [ColorSpace.SRGB], which every camera can produce. */
     val supportedColorSpaces: Set<ColorSpace> = emptySet(),
+    /** Always holds at least [PictureFormat.JPEG], which every camera can write. */
+    val supportedPictureFormats: Set<PictureFormat> = emptySet(),
     val supportedDynamicRanges: Set<DynamicRange> = emptySet(),
     val supportedExtensions: Set<Extension> = emptySet(),
     val isStabilizationSupported: Boolean = false,
@@ -358,6 +366,9 @@ private fun CameraView.readCameraState(): CameraState {
         supportedColorSpaces = supported(ColorSpace.entries) {
             isColorSpaceSupported(it.toCameraView())
         },
+        supportedPictureFormats = supported(PictureFormat.entries) {
+            isPictureFormatSupported(it.toCameraView())
+        },
         supportedDynamicRanges = supported(DynamicRange.entries) {
             isDynamicRangeSupported(it.toCameraView())
         },
@@ -396,6 +407,11 @@ private fun LensFacing.toCameraView() = when (this) {
 private fun ColorSpace.toCameraView() = when (this) {
     ColorSpace.SRGB -> CameraView.ColorSpace.SRGB
     ColorSpace.DISPLAY_P3 -> CameraView.ColorSpace.DISPLAY_P3
+}
+
+private fun PictureFormat.toCameraView() = when (this) {
+    PictureFormat.JPEG -> CameraView.PictureFormat.JPEG
+    PictureFormat.ULTRA_HDR -> CameraView.PictureFormat.ULTRA_HDR
 }
 
 private fun DynamicRange.toCameraView() = when (this) {
@@ -444,13 +460,12 @@ private fun Extension.toCameraView() = when (this) {
  *  exposure the camera metered for itself.
  * @param torchEnabled Lights the flash continuously, rather than for a capture.
  * @param colorSpace The range of colours pictures are recorded in.
+ * @param pictureFormat The file a picture is written as.
  * @param dynamicRange The dynamic range videos are recorded in.
  * @param extension An optional vendor photo-processing extension.
  * @param pictureQuality How hard a still capture is compressed, from 1 to 100.
  * @param stabilizationEnabled Steadies the preview and recorded video, where the camera can.
  * @param lowLightBoostEnabled Brightens the preview in the dark.
- * @param frontVideoMirroringEnabled Mirrors front-camera video files, so a recording matches the
- *  preview it was framed in.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
@@ -472,12 +487,12 @@ fun Camera(
     exposureCompensation: Int = 0,
     torchEnabled: Boolean = false,
     colorSpace: ColorSpace = ColorSpace.SRGB,
+    pictureFormat: PictureFormat = PictureFormat.JPEG,
     dynamicRange: DynamicRange = DynamicRange.SDR,
     extension: Extension = Extension.NONE,
     pictureQuality: Int = ICameraModule.DEFAULT_PICTURE_QUALITY,
     stabilizationEnabled: Boolean = false,
     lowLightBoostEnabled: Boolean = false,
-    frontVideoMirroringEnabled: Boolean = true,
     controller: MutableState<CameraController?>,
     state: MutableState<CameraState?> = remember { mutableStateOf(null) },
     onImageConfirmation: () -> Unit = {},
@@ -679,12 +694,12 @@ fun Camera(
         view.exposureCompensation = exposureCompensation
         view.isTorchEnabled = torchEnabled
         view.colorSpace = colorSpace.toCameraView()
+        view.pictureFormat = pictureFormat.toCameraView()
         view.dynamicRange = dynamicRange.toCameraView()
         view.extension = extension.toCameraView()
         view.pictureQuality = pictureQuality
         view.isStabilizationEnabled = stabilizationEnabled
         view.isLowLightBoostEnabled = lowLightBoostEnabled
-        view.isFrontVideoMirroringEnabled = frontVideoMirroringEnabled
         // What the camera can do depends on what it has just been asked for - a lens, an extension
         // and a zoom each change the answers - so the snapshot is taken after the settings land.
         publishState(view)

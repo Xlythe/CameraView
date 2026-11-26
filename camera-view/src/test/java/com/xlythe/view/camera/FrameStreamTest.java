@@ -156,13 +156,18 @@ public class FrameStreamTest {
         }, new FrameStream.Params());
 
         ImageReader reader = awaitReader(canvas);
-        // One frame at a time: the pump keeps only the newest, so two offered together are one
-        // delivery and one drop.
         ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv(320, 240));
         assertTrue(first.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
-        ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv(320, 240));
 
-        assertTrue("the second frame still arrives",
+        // Offered until one lands: the stream keeps only the newest frame, so one offered while
+        // the analyzer is still inside onFrame is dropped by design.
+        long deadline = System.currentTimeMillis() + TIMEOUT_SECONDS * 1_000;
+        while (second.getCount() > 0 && System.currentTimeMillis() < deadline) {
+            ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv(320, 240));
+            second.await(50, TimeUnit.MILLISECONDS);
+        }
+
+        assertTrue("the stream stopped delivering after an analyzer threw",
                 second.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
         assertTrue(stream.isAnalyzing());
     }

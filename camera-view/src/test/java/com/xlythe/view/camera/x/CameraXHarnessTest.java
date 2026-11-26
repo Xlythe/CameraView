@@ -187,11 +187,14 @@ public class CameraXHarnessTest {
         FakeCameraXHost.idle();
         assertEquals(CameraView.DynamicRange.SDR, module.getDynamicRange());
 
-        // Mirroring and the torch are plain state this camera can hold.
-        module.setFrontVideoMirroringEnabled(false);
-        assertFalse(module.isFrontVideoMirroringEnabled());
-        module.setFrontVideoMirroringEnabled(true);
-        assertTrue(module.isFrontVideoMirroringEnabled());
+        // And so is Ultra HDR, leaving pictures as JPEG.
+        assertFalse(module.isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR));
+        module.setPictureFormat(CameraView.PictureFormat.ULTRA_HDR);
+        FakeCameraXHost.idle();
+        assertEquals(CameraView.PictureFormat.JPEG, module.getPictureFormat());
+
+        // CameraX flips a front recording itself, so the file matches the preview.
+        assertTrue(module.isFrontVideoMirrored());
 
         // Whether this camera will take a focus area at all, which is what an app asks before
         // offering the gesture. The answer depends on the bound camera, so asking is a question
