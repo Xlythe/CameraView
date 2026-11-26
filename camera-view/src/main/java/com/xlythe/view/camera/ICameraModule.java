@@ -505,6 +505,14 @@ public abstract class ICameraModule {
     }
 
     /**
+     * Whether frames are going through GL now, for a renderer, a filter or a mask. A picture is
+     * then drawn as the preview shows it, which a format the camera encodes itself cannot carry.
+     */
+    protected boolean isDrawingFrames() {
+        return false;
+    }
+
+    /**
      * Sets what draws each frame. A backend that supports effects should start putting frames
      * through GL, which usually means reconfiguring the camera.
      */

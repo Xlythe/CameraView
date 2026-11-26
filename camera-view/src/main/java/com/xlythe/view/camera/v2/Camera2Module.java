@@ -323,6 +323,11 @@ public class Camera2Module extends ICameraModule {
         return mEffect;
     }
 
+    @Override
+    protected boolean isDrawingFrames() {
+        return mEffect != null;
+    }
+
     /** The frames being segmented, or null when nothing is. */
     @Nullable
     private FrameStream mSegmentationStream;
@@ -1364,7 +1369,7 @@ public class Camera2Module extends ICameraModule {
         if (format != CameraView.PictureFormat.ULTRA_HDR) {
             return super.isPictureFormatSupported(format);
         }
-        if (Build.VERSION.SDK_INT < 34) {
+        if (Build.VERSION.SDK_INT < 34 || isDrawingFrames()) {
             return false;
         }
         try {

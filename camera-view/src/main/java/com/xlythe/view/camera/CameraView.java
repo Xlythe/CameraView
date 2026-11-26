@@ -1550,7 +1550,13 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getColorSpace();
     }
 
-    /** Whether this camera can write pictures in a given format. */
+    /**
+     * Whether this camera can write pictures in a given format.
+     *
+     * <p>Ultra HDR is not, while a renderer, filter or mask is drawing: a picture is then drawn
+     * as the preview shows it, and a drawn picture carries no gain map. It is written again once
+     * nothing is drawing.</p>
+     */
     public boolean isPictureFormatSupported(PictureFormat format) {
         return mCameraModule.isPictureFormatSupported(format);
     }

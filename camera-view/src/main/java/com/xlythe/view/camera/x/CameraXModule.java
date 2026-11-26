@@ -2123,7 +2123,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .setCaptureMode(getCaptureMode())
                 .setJpegQuality(getPictureQuality());
         // Checked against this camera as well as on request, since the lens may have changed.
-        if (getPictureFormat() == CameraView.PictureFormat.ULTRA_HDR
+        if (getPictureFormat() == CameraView.PictureFormat.ULTRA_HDR && !isDrawingFrames()
                 && writesUltraHdr(cameraInfo)) {
             builder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR);
         }
@@ -2145,7 +2145,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return super.isPictureFormatSupported(format);
         }
         Camera camera = mActiveCamera;
-        return camera != null && writesUltraHdr(camera.getCameraInfo());
+        return camera != null && !isDrawingFrames() && writesUltraHdr(camera.getCameraInfo());
+    }
+
+    @Override protected boolean isDrawingFrames() {
+        return mFrameEffect != null;
     }
 
     @Override public void setPictureFormat(CameraView.PictureFormat format) {

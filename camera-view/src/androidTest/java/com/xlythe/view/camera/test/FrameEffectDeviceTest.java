@@ -1,6 +1,7 @@
 package com.xlythe.view.camera.test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
@@ -114,6 +115,20 @@ public final class FrameEffectDeviceTest {
             frames.incrementAndGet();
             return true;
         }
+    }
+
+    /**
+     * A drawn picture is encoded from what the renderer produced and carries no gain map, so a
+     * camera that writes Ultra HDR stops offering it while anything is drawing.
+     */
+    @Test
+    public void ultraHdrIsNotOfferedWhileDrawing() throws Exception {
+        AtomicReference<Boolean> offered = new AtomicReference<>();
+
+        withOpenCamera(new FloodFill(), camera -> offered.set(
+                camera.isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR)));
+
+        assertFalse("Ultra HDR offered while a renderer is drawing", offered.get());
     }
 
     /** The claim: what the renderer draws is what the capture writes. */
