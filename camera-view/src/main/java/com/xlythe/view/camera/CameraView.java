@@ -6,6 +6,7 @@ import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Matrix;
 import android.graphics.Rect;
+import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.os.Build;
 import android.os.Bundle;
@@ -26,6 +27,7 @@ import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
+import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -118,6 +120,25 @@ public class CameraView extends FrameLayout {
     public static final int INDEFINITE_VIDEO_SIZE = -1;
 
     public static final String ACTION_CAMERA_STATE_CHANGED = "com.xlythe.view.camera.CAMERA_STATE_CHANGED";
+
+    /**
+     * How still layout has to be before the camera is reconfigured for the size it reached.
+     *
+     * <p>Long enough to cover a rotation, a split-screen drag, a foldable opening or a Compose
+     * layout taking several passes to settle - each of which arrives as a run of layout passes at
+     * different sizes - and short enough that it is over before a user has finished looking at
+     * the new shape of the window.</p>
+     */
+    private static final long LAYOUT_SETTLE_DELAY_MILLIS = 150;
+
+    /**
+     * How long a focus request is given before it is reported as having not converged.
+     *
+     * <p>A camera is not obliged to answer. It can be closed, or switched to another lens, with a
+     * request outstanding, and an app drawing a reticle has no other way to learn that the answer
+     * is never coming.</p>
+     */
+    private static final long FOCUS_TIMEOUT_MILLIS = 3000;
 
     private static final String EXTRA_SUPER = "super";
     private static final String EXTRA_MODULE = "module";
@@ -354,14 +375,30 @@ public class CameraView extends FrameLayout {
     };
 
     // For tap-to-focus
-    private final Rect mFocusingRect = new Rect();
-    private final Rect mMeteringRect = new Rect();
+    @Nullable
+    private FocusListener mFocusListener;
+    /** Where the outstanding focus request was aimed, in view coordinates, or null for none. */
+    @Nullable
+    private RectF mPendingFocusArea;
+    /** Answers a request the camera never came back about, so every request is answered once. */
+    private final Runnable mFocusTimeoutRunnable = () -> onFocusCompleted(false);
+    /** Drawn over the preview where a focus request lands. */
+    @Nullable
+    private FocusReticle mFocusReticle;
+    private boolean mFocusReticleEnabled = true;
+    @ColorInt
+    private int mFocusReticleColor = FocusReticle.DEFAULT_FOCUSING_COLOR;
+    @ColorInt
+    private int mFocusReticleLockedColor = FocusReticle.DEFAULT_LOCKED_COLOR;
 
     // For pinch-to-zoom
     private PinchToZoomGestureDetector mScaleDetector;
     private boolean mIsPinchToZoomEnabled = true;
 
     private ICameraModule mCameraModule;
+
+    /** Lets a burst of layout passes finish before the camera is reconfigured for the last one. */
+    private final Runnable mLayoutSettledRunnable = this::onLayoutSettled;
 
     @Nullable
     private OnCameraStateChangedListener mOnCameraStateChangedListener;
@@ -499,6 +536,11 @@ public class CameraView extends FrameLayout {
             setExposureCompensation(a.getInteger(R.styleable.CameraView_exposureCompensation, getExposureCompensation()));
             setTorchEnabled(a.getBoolean(R.styleable.CameraView_torchEnabled, isTorchEnabled()));
             setLowLightBoostEnabled(a.getBoolean(R.styleable.CameraView_lowLightBoostEnabled, isLowLightBoostEnabled()));
+            mFocusReticleEnabled = a.getBoolean(R.styleable.CameraView_focusReticleEnabled, true);
+            mFocusReticleColor = a.getColor(
+                    R.styleable.CameraView_focusReticleColor, FocusReticle.DEFAULT_FOCUSING_COLOR);
+            mFocusReticleLockedColor = a.getColor(
+                    R.styleable.CameraView_focusReticleLockedColor, FocusReticle.DEFAULT_LOCKED_COLOR);
             a.recycle();
         }
 
@@ -523,6 +565,8 @@ public class CameraView extends FrameLayout {
         addView(mCameraView = new TextureView(getContext()));
         addView(mImagePreview = new ImageView(getContext()));
         addView(mVideoPreview = new VideoView(getContext()));
+        addView(mFocusReticle = new FocusReticle(getContext()));
+        mFocusReticle.setColors(mFocusReticleColor, mFocusReticleLockedColor);
         mImagePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
         mImagePreview.setVisibility(View.GONE);
         mVideoPreview.setVisibility(View.GONE);
@@ -712,6 +756,9 @@ public class CameraView extends FrameLayout {
             onClose();
         } finally {
             setStatus(Status.CLOSED);
+            // A camera that is gone will not answer the focus it was in the middle of, and an
+            // app should not be left holding a reticle until the timeout to find that out.
+            onFocusCompleted(false);
         }
     }
 
@@ -1435,6 +1482,108 @@ public class CameraView extends FrameLayout {
     }
 
     /**
+     * Whether this camera can be told what to focus on.
+     *
+     * <p>Worth asking before offering a tap-to-focus affordance: a fixed-focus camera, which is
+     * most front cameras and every external one, accepts no focus area, and
+     * {@link #focus(Rect, Rect)} on one does nothing rather than failing.</p>
+     */
+    public boolean isFocusSupported() {
+        return mCameraModule.isFocusSupported();
+    }
+
+    /**
+     * Follows a focus request from the moment the camera takes it to the moment it answers.
+     *
+     * <p>This library draws nothing over the preview, so an app that wants the reticle a camera
+     * app shows draws its own. What it needs from here is when a focus actually started, where it
+     * was aimed, and what came of it - the last of those because a reticle that confirms a lock
+     * the camera never reported is telling the user something untrue.</p>
+     *
+     * @see #setFocusListener
+     */
+    public interface FocusListener {
+        /**
+         * Called on the main thread once the camera has taken a focus request.
+         *
+         * <p>Not called for a request a camera declined, so there is nothing to draw for a camera
+         * that cannot focus.</p>
+         *
+         * @param area where the camera is focusing, in this view's coordinates
+         */
+        void onFocusRequested(@NonNull RectF area);
+
+        /**
+         * Called on the main thread with what became of the matching request, exactly once.
+         *
+         * @param area the area from the {@link #onFocusRequested} this answers
+         * @param locked whether the camera reported that it converged. False covers a camera that
+         *     finished without a lock and one that never answered at all.
+         */
+        void onFocusCompleted(@NonNull RectF area, boolean locked);
+    }
+
+    /**
+     * Reports focus requests and their outcomes, or stops when given null.
+     *
+     * <p>Both a tap on the preview and a {@link #focus(Rect, Rect)} of your own are reported, so
+     * an affordance driven from here follows the camera rather than the touch.</p>
+     */
+    public void setFocusListener(@Nullable FocusListener listener) {
+        mFocusListener = listener;
+    }
+
+    /** Called by the active backend, on the main thread. */
+    @UiThread
+    void onFocusRequested(@NonNull RectF area) {
+        // One focus at a time: a second request supersedes the first rather than queueing behind
+        // it, because that is what the camera itself does with the region.
+        mHandler.removeCallbacks(mFocusTimeoutRunnable);
+        mPendingFocusArea = area;
+        mHandler.postDelayed(mFocusTimeoutRunnable, FOCUS_TIMEOUT_MILLIS);
+        if (mFocusReticleEnabled && mFocusReticle != null) {
+            mFocusReticle.showAt(area);
+        }
+        if (mFocusListener != null) {
+            mFocusListener.onFocusRequested(new RectF(area));
+        }
+    }
+
+    /** Called by the active backend, on the main thread. */
+    @UiThread
+    void onFocusCompleted(boolean locked) {
+        RectF area = mPendingFocusArea;
+        if (area == null) {
+            // A camera reports what it is doing continuously, whether or not anything asked it
+            // to, and only the answer to a request this view announced is one to pass on.
+            return;
+        }
+        mPendingFocusArea = null;
+        mHandler.removeCallbacks(mFocusTimeoutRunnable);
+        if (mFocusReticleEnabled && mFocusReticle != null) {
+            mFocusReticle.settle(locked);
+        }
+        if (mFocusListener != null) {
+            mFocusListener.onFocusCompleted(area, locked);
+        }
+    }
+
+    /**
+     * Whether to draw a reticle where a focus request lands. On by default; turn it off to draw
+     * your own from a {@link FocusListener}.
+     */
+    public void setFocusReticleEnabled(boolean enabled) {
+        mFocusReticleEnabled = enabled;
+        if (!enabled && mFocusReticle != null) {
+            mFocusReticle.settle(false);
+        }
+    }
+
+    public boolean isFocusReticleEnabled() {
+        return mFocusReticleEnabled;
+    }
+
+    /**
      * Sets the active flash strategy.
      */
     public void setFlash(Flash flashMode) {
@@ -1574,8 +1723,37 @@ public class CameraView extends FrameLayout {
     protected void onLayout(boolean changed, int left, int top, int right, int bottom) {
         super.onLayout(changed, left, top, right, bottom);
         if (changed) {
-            mCameraModule.onLayoutChanged();
+            // The transform is re-aimed on every pass, so the preview keeps showing the scene at
+            // the right shape throughout. Reconfiguring the camera waits: a resize arrives as a
+            // run of layout passes, and a backend that rebuilds its session for each one pays for
+            // a whole camera session per frame of an animation.
+            onLayoutChanged();
+            mHandler.removeCallbacks(mLayoutSettledRunnable);
+            mHandler.postDelayed(mLayoutSettledRunnable, LAYOUT_SETTLE_DELAY_MILLIS);
         }
+    }
+
+    /** Re-aims the preview at the bounds of a layout pass. Called for every one that changed. */
+    protected void onLayoutChanged() {
+        mCameraModule.onLayoutChanged();
+    }
+
+    /**
+     * Lets the camera reconfigure itself for the size the view settled at.
+     *
+     * <p>Called once {@link #LAYOUT_SETTLE_DELAY_MILLIS} has passed with no further change, so a
+     * resize costs one reconfiguration rather than one per layout pass.</p>
+     */
+    protected void onLayoutSettled() {
+        mCameraModule.onLayoutSettled();
+    }
+
+    @Override
+    protected void onDetachedFromWindow() {
+        super.onDetachedFromWindow();
+        // Nothing to reconfigure for a view that is no longer on screen, and the next layout pass
+        // after it comes back will ask again.
+        mHandler.removeCallbacks(mLayoutSettledRunnable);
     }
 
     @Override
@@ -1616,10 +1794,10 @@ public class CameraView extends FrameLayout {
                             && hasOnClickListeners()) {
                         performClick();
                     } else {
-                        calculateTapArea(mFocusingRect, event.getX(), event.getY(), 1f);
-                        calculateTapArea(mMeteringRect, event.getX(), event.getY(), 1.5f);
-                        if (area(mFocusingRect) != 0 && area(mMeteringRect) != 0) {
-                            focus(mFocusingRect, mMeteringRect);
+                        Rect focusArea = meteringArea(event.getX(), event.getY(), 1f);
+                        Rect meteringArea = meteringArea(event.getX(), event.getY(), 1.5f);
+                        if (area(focusArea) != 0 && area(meteringArea) != 0) {
+                            focus(focusArea, meteringArea);
                         }
                     }
                 }
@@ -1641,67 +1819,10 @@ public class CameraView extends FrameLayout {
         return rect.width() * rect.height();
     }
 
-    /**
-     * The area must be between -1000,-1000 and 1000,1000
-     */
-    private void calculateTapArea(Rect rect, float x, float y, float coefficient) {
-        int max = 1000;
-        int min = -1000;
-
-        // Default to 300 (1/6th the total area) and scale by the coefficient
-        int areaSize = Float.valueOf(300 * coefficient).intValue();
-
-        // Rotate the coordinates if the camera orientation is different
-        int width = getWidth();
-        int height = getHeight();
-
-        int relativeCameraOrientation = getRelativeCameraOrientation();
-        int temp = -1;
-        float tempf = -1f;
-        switch (relativeCameraOrientation) {
-            case 90:
-                // Fall-through
-            case 270:
-                // We're horizontal. Swap width/height. Swap x/y.
-                temp = width;
-                width = height;
-                height = temp;
-
-                tempf = x;
-                x = y;
-                y = tempf;
-                break;
-        }
-        switch (relativeCameraOrientation) {
-            case 180:
-                // Fall-through
-            case 270:
-                // We're upside down. Fix x/y.
-                x = width - x;
-                y = height - y;
-                break;
-        }
-
-        // Grab the x, y position from within the View and normalize it to -1000 to 1000
-        x = min + distance(max, min) * (x / width);
-        y = min + distance(max, min) * (y / height);
-
-
-        // Modify the rect to the bounding area
-        rect.top = (int) y - areaSize / 2;
-        rect.left = (int) x - areaSize / 2;
-        rect.bottom = rect.top + areaSize;
-        rect.right = rect.left + areaSize;
-
-        // Cap at -1000 to 1000
-        rect.top = rangeLimit(rect.top, max, min);
-        rect.left = rangeLimit(rect.left, max, min);
-        rect.bottom = rangeLimit(rect.bottom, max, min);
-        rect.right = rangeLimit(rect.right, max, min);
-    }
-
-    private int rangeLimit(int val, int max, int min) {
-        return Math.min(Math.max(val, min), max);
+    /** The area a camera should focus or meter on for a touch at this point on the view. */
+    private Rect meteringArea(float x, float y, float coefficient) {
+        return TransformMath.meteringArea(x, y, getWidth(), getHeight(),
+                getRelativeCameraOrientation(), coefficient);
     }
 
     /**
@@ -1722,10 +1843,6 @@ public class CameraView extends FrameLayout {
         float clamped = Math.max(1f, Math.min(scaleFactor, maxScale));
         int zoomLevel = (int) ((clamped - 1f) * maxZoomLevel / (maxScale - 1f));
         return Math.min(Math.max(zoomLevel, 0), maxZoomLevel);
-    }
-
-    private int distance(int a, int b) {
-        return Math.abs(a - b);
     }
 
     /**

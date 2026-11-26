@@ -45,6 +45,9 @@
         <attr name="exposureCompensation" format="integer" />
         <attr name="torchEnabled" format="boolean" />
         <attr name="lowLightBoostEnabled" format="boolean" />
+        <attr name="focusReticleEnabled" format="boolean" />
+        <attr name="focusReticleColor" format="color" />
+        <attr name="focusReticleLockedColor" format="color" />
     </declare-styleable>
     <declare-styleable name="VideoView">
         <attr name="filePath" format="string" />

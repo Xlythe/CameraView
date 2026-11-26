@@ -243,9 +243,23 @@ public class CameraViewStateTest {
 
     @Test
     public void thePreviewViewsAreBuiltAndHiddenUntilNeeded() {
-        assertEquals(3, cameraView.getChildCount());
+        assertEquals(4, cameraView.getChildCount());
         assertNotNull(cameraView.asTextureView());
         assertEquals(View.VISIBLE, cameraView.asTextureView().getVisibility());
+    }
+
+    /** The reticle is the last child, so it draws over the preview rather than under it. */
+    @Test
+    public void theFocusReticleSitsOverThePreview() {
+        View top = cameraView.getChildAt(cameraView.getChildCount() - 1);
+        assertTrue(top instanceof FocusReticle);
+    }
+
+    @Test
+    public void theFocusReticleIsOnByDefaultAndCanBeTurnedOff() {
+        assertTrue(cameraView.isFocusReticleEnabled());
+        cameraView.setFocusReticleEnabled(false);
+        assertFalse(cameraView.isFocusReticleEnabled());
     }
 
     @Test

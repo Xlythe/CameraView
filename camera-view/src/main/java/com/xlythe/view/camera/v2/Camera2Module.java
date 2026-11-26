@@ -271,6 +271,9 @@ public class Camera2Module extends ICameraModule {
     /** How many faces the last report had, so an empty camera is not reported every frame. */
     private int mLastFaceCount;
 
+    /** Whether a focus request is still waiting on the camera to report what came of it. */
+    private boolean mIsFocusPending;
+
     /**
      * The current zoom level, from 0 to {@link #getMaxZoomLevel()}.
      */
@@ -640,6 +643,7 @@ public class Camera2Module extends ICameraModule {
         mReopenAttempts = 0;
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
+        mIsFocusPending = false;
         mGeneration++;
         closeCameraResources();
     }
@@ -772,9 +776,13 @@ public class Camera2Module extends ICameraModule {
 
             // Now we can update our request
             mActiveSession.setMeteringRectangle(new MeteringRectangle(metering, MeteringRectangle.METERING_WEIGHT_MAX));
+            // Watched before the request goes out, because the result that answers it can arrive
+            // on the very first frame the new request produces.
+            mIsFocusPending = true;
             if (!mIsPaused) {
                 mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
             }
+            onFocusRequested(focus);
         } catch (CameraAccessException | RuntimeException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to focus", e);
@@ -1265,6 +1273,56 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     Integer getFaceDetectMode() {
         return mFaceDetectMode;
+    }
+
+    @Override
+    public boolean isFocusSupported() {
+        try {
+            return supportsFocus(getActiveCamera());
+        } catch (CameraAccessException | RuntimeException e) {
+            if (DEBUG) Log.d(TAG, "Unable to ask whether this camera can focus", e);
+            return false;
+        }
+    }
+
+    /** Whether a focus request is waiting on the camera to say what came of it. */
+    boolean isFocusPending() {
+        return mIsFocusPending;
+    }
+
+    /**
+     * Reads the camera's focus state out of a capture result, and reports it once it settles.
+     *
+     * <p>The preview runs continuous autofocus, so what a tap does is move the region the camera
+     * is already converging on. That shows up as the passive states rather than the locked ones a
+     * triggered focus would produce, and both are the camera saying it has finished moving the
+     * lens - so both answer the request, while the scanning states are it still working.</p>
+     */
+    void onFocusCaptured(@NonNull CaptureResult result) {
+        if (!mIsFocusPending) {
+            return;
+        }
+        Integer state = result.get(CaptureResult.CONTROL_AF_STATE);
+        if (state == null) {
+            // A camera that publishes no focus state will never answer, so there is nothing to
+            // wait for; the view's timeout reports the request unresolved.
+            return;
+        }
+        switch (state) {
+            case CaptureResult.CONTROL_AF_STATE_FOCUSED_LOCKED:
+            case CaptureResult.CONTROL_AF_STATE_PASSIVE_FOCUSED:
+                mIsFocusPending = false;
+                onFocusCompleted(true);
+                break;
+            case CaptureResult.CONTROL_AF_STATE_NOT_FOCUSED_LOCKED:
+            case CaptureResult.CONTROL_AF_STATE_PASSIVE_UNFOCUSED:
+                mIsFocusPending = false;
+                onFocusCompleted(false);
+                break;
+            default:
+                // Inactive or still scanning: the lens is in motion and the answer is not in yet.
+                break;
+        }
     }
 
     /**

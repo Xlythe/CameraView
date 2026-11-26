@@ -2,7 +2,6 @@ package com.xlythe.sample.camera;
 
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
-import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -11,6 +10,7 @@ import android.view.ViewGroup;
 import android.widget.Toast;
 
 import com.xlythe.fragment.camera.CameraFragment;
+import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 
 import java.io.File;

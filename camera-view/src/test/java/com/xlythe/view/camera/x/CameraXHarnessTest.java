@@ -91,17 +91,45 @@ public class CameraXHarnessTest {
             exerciseLensToggle(module);
             exercisePausedOperations(module);
 
-            module.onLayoutChanged();
-            FakeCameraXHost.idle();
+            exerciseResize(module, host);
 
             module.close();
             FakeCameraXHost.idle();
             assertFalse("closing releases the bind", module.isCameraBoundForTesting());
+            assertFalse("and a camera that is gone cannot be told where to look",
+                    module.isFocusSupported());
         } finally {
             module.close();
             FakeCameraXHost.idle();
             host.release();
         }
+    }
+
+    /**
+     * A resize re-aims the preview without rebinding, and rebinds once the size has settled.
+     *
+     * <p>CameraX is the one backend for which a new size means new use cases, which means a
+     * capture session torn down and configured again. That is why the two halves of a layout
+     * change are separate calls: a run of layout passes - a rotation, a foldable opening, a
+     * Compose layout arriving at its answer - costs a transform each and one rebind at the end.
+     * </p>
+     */
+    private static void exerciseResize(CameraXModule module, FakeCameraXHost host) {
+        host.getCameraView().layout(0, 0, 540, 1920);
+
+        module.onLayoutChanged();
+        FakeCameraXHost.idle();
+        assertTrue("re-aiming the preview must not cost the bind",
+                module.isCameraBoundForTesting());
+
+        module.onLayoutSettled();
+        assertTrue("and the settled size has to be bound for", FakeCameraXHost.awaitBind(module));
+
+        // Settling again at the same size has nothing to do, which is what keeps a layout pass
+        // that changed nothing from costing a session.
+        module.onLayoutSettled();
+        FakeCameraXHost.idle();
+        assertTrue(module.isCameraBoundForTesting());
     }
 
     /**
@@ -165,9 +193,14 @@ public class CameraXHarnessTest {
         module.setFrontVideoMirroringEnabled(true);
         assertTrue(module.isFrontVideoMirroringEnabled());
 
+        // Whether this camera will take a focus area at all, which is what an app asks before
+        // offering the gesture. The answer depends on the bound camera, so asking is a question
+        // put to it rather than a constant - and must not disturb what is bound.
+        module.isFocusSupported();
         module.focus(new android.graphics.Rect(-100, -100, 100, 100),
                 new android.graphics.Rect(-200, -200, 200, 200));
         FakeCameraXHost.idle();
+        assertTrue("asking about focus must not cost the bind", module.isCameraBoundForTesting());
     }
 
     /**
