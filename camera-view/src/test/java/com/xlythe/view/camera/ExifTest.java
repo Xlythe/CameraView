@@ -115,8 +115,14 @@ public class ExifTest {
     public void timestamp() {
         assertEquals(-1, exif.getTimestamp());
 
+        // Bracketed by the clock rather than compared with it afterwards, which a busy machine
+        // can delay by any amount.
+        long before = System.currentTimeMillis();
         exif.attachTimestamp();
-        assertWithin(System.currentTimeMillis(), exif.getTimestamp(), 3);
+        long after = System.currentTimeMillis();
+        long timestamp = exif.getTimestamp();
+        assertTrue(before + " <= " + timestamp + " <= " + after,
+                before <= timestamp && timestamp <= after);
 
         exif.removeTimestamp();
         assertEquals(-1, exif.getTimestamp());
