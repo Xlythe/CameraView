@@ -1,5 +1,6 @@
 package com.xlythe.view.camera;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
@@ -260,6 +261,122 @@ public class ExifMetadataTest {
         assertEquals(Exif.softwareName(RuntimeEnvironment.getApplication()),
                 saved.getAttribute(ExifInterface.TAG_SOFTWARE));
         assertNotNull(saved.getAttribute(ExifInterface.TAG_SOFTWARE));
+    }
+
+    /** Each capture gets an id of its own: 128 bits, as 32 hexadecimal digits. */
+    @Test
+    public void aCaptureGetsAnIdOfItsOwn() throws IOException {
+        Exif exif = new Exif(file);
+        exif.attachCaptureDevice(RuntimeEnvironment.getApplication());
+        exif.save();
+
+        String id = new Exif(file).getAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID);
+        assertNotNull(id);
+        assertTrue("not 32 hexadecimal digits: " + id, id.matches("[0-9a-f]{32}"));
+        assertNotEquals("two pictures never share an id", Exif.newImageUniqueId(),
+                Exif.newImageUniqueId());
+    }
+
+    /** A camera that numbered its own pictures keeps its numbering. */
+    @Test
+    public void aCamerasOwnIdIsKept() throws IOException {
+        Exif exif = new Exif(file);
+        exif.setAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID, "JK0XLRD00VM");
+        exif.attachCaptureDevice(RuntimeEnvironment.getApplication());
+        exif.save();
+
+        assertEquals("JK0XLRD00VM",
+                new Exif(file).getAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID));
+    }
+
+    /** A capture says a camera made it, and photographed the scene directly. */
+    @Test
+    public void aCaptureSaysACameraTookIt() throws IOException {
+        Exif exif = new Exif(file);
+        exif.attachCaptureDevice(RuntimeEnvironment.getApplication());
+        exif.save();
+
+        ExifInterface saved = new ExifInterface(file.getPath());
+        assertArrayEquals("a digital still camera", new byte[] {3},
+                saved.getAttributeBytes(ExifInterface.TAG_FILE_SOURCE));
+        assertArrayEquals("directly photographed", new byte[] {1},
+                saved.getAttributeBytes(ExifInterface.TAG_SCENE_TYPE));
+    }
+
+    /** What a camera said of its own source and scene stands. */
+    @Test
+    public void aCamerasOwnSourceAndSceneAreKept() throws IOException {
+        Exif camera = new Exif(file);
+        camera.setAttribute(ExifInterface.TAG_FILE_SOURCE, "\u0002");
+        camera.setAttribute(ExifInterface.TAG_SCENE_TYPE, "\u0000");
+        camera.save();
+
+        Exif exif = new Exif(file);
+        exif.attachCaptureDevice(RuntimeEnvironment.getApplication());
+        exif.save();
+
+        ExifInterface saved = new ExifInterface(file.getPath());
+        assertArrayEquals(new byte[] {2}, saved.getAttributeBytes(ExifInterface.TAG_FILE_SOURCE));
+        assertArrayEquals(new byte[] {0}, saved.getAttributeBytes(ExifInterface.TAG_SCENE_TYPE));
+    }
+
+    /**
+     * The tags the standard defines as bytes are saved as bytes: UNDEFINED, at their own length,
+     * rather than as text with a terminator.
+     */
+    @Test
+    public void bytesAreSavedAsBytes() throws IOException {
+        Exif exif = new Exif(file);
+        exif.attachCaptureDevice(RuntimeEnvironment.getApplication());
+        exif.save();
+
+        byte[] jpeg = readAll(file);
+        ExifSegment.Segment segment = ExifSegment.find(jpeg);
+        assertNotNull(segment);
+        assertUndefined(jpeg, segment, 0x9101, 4);
+        assertUndefined(jpeg, segment, 0xA300, 1);
+        assertUndefined(jpeg, segment, 0xA301, 1);
+        assertArrayEquals(new byte[] {1, 2, 3, 0}, new ExifInterface(file.getPath())
+                .getAttributeBytes(ExifInterface.TAG_COMPONENTS_CONFIGURATION));
+    }
+
+    /** A second save finds them right already and leaves them be. */
+    @Test
+    public void bytesSurviveASecondSave() throws IOException {
+        Exif exif = new Exif(file);
+        exif.attachCaptureDevice(RuntimeEnvironment.getApplication());
+        exif.save();
+        new Exif(file).save();
+
+        byte[] jpeg = readAll(file);
+        ExifSegment.Segment segment = ExifSegment.find(jpeg);
+        assertNotNull(segment);
+        assertUndefined(jpeg, segment, 0xA300, 1);
+        assertArrayEquals(new byte[] {3}, new ExifInterface(file.getPath())
+                .getAttributeBytes(ExifInterface.TAG_FILE_SOURCE));
+    }
+
+    private static void assertUndefined(
+            byte[] jpeg, ExifSegment.Segment segment, int tag, int count) {
+        int entry = ExifSegment.findEntry(jpeg, segment, ExifSegment.exifIfd(jpeg, segment), tag);
+        assertTrue("no entry for " + Integer.toHexString(tag), entry >= 0);
+        assertEquals("the type of " + Integer.toHexString(tag), 7,
+                ExifSegment.u16(jpeg, entry + 2, segment.littleEndian));
+        assertEquals("the count of " + Integer.toHexString(tag), count,
+                ExifSegment.u32(jpeg, entry + 4, segment.littleEndian));
+    }
+
+    private static byte[] readAll(File file) throws IOException {
+        byte[] data = new byte[(int) file.length()];
+        try (FileInputStream in = new FileInputStream(file)) {
+            int read = 0;
+            while (read < data.length) {
+                int count = in.read(data, read, data.length - read);
+                if (count < 0) break;
+                read += count;
+            }
+        }
+        return data;
     }
 
     /** A spec tag androidx cannot name, written and read back through Exif itself. */

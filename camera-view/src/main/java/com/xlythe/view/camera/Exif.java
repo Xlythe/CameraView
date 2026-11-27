@@ -17,11 +17,13 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
 import java.util.TimeZone;
+import java.util.UUID;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -134,6 +136,20 @@ public class Exif {
             ExifInterface.TAG_GPS_H_POSITIONING_ERROR,
     };
 
+    /** A digital still camera, as FileSource records it: the one byte 3. */
+    private static final String FILE_SOURCE_DIGITAL_STILL_CAMERA = "\u0003";
+    /** A directly photographed image, as SceneType records it: the one byte 1. */
+    private static final String SCENE_TYPE_DIRECTLY_PHOTOGRAPHED = "\u0001";
+
+    /** The Exif tags the standard defines as UNDEFINED bytes, with how many bytes each holds. */
+    private static final int[][] UNDEFINED_TAGS = {
+            {0x9101 /* ComponentsConfiguration */, 4},
+            {0xA300 /* FileSource */, 1},
+            {0xA301 /* SceneType */, 1},
+    };
+    /** Enough of the file to hold an Exif segment, which is at most 64KB, and what precedes it. */
+    private static final int HEAD_BYTES = 256 * 1024;
+
     private static final String KILOMETERS_PER_HOUR = "K";
     private static final String MILES_PER_HOUR = "M";
     private static final String KNOTS = "N";
@@ -186,6 +202,35 @@ public class Exif {
         }
         attachMandatoryTags();
         mExifInterface.saveAttributes();
+        restoreUndefinedTypes();
+    }
+
+    /**
+     * Gives the tags in {@link #UNDEFINED_TAGS} back the type the standard defines. Set by name,
+     * ExifInterface 1.4 saves them as text, which adds a terminator and leaves a reader "?" in
+     * place of every byte below a space. Only those entries are rewritten.
+     */
+    private void restoreUndefinedTypes() {
+        if (mFilePath == null) {
+            return;
+        }
+        try (RandomAccessFile file = new RandomAccessFile(mFilePath, "rw")) {
+            byte[] head = new byte[(int) Math.min(file.length(), HEAD_BYTES)];
+            file.readFully(head);
+            ExifSegment.Segment segment = ExifSegment.find(head);
+            if (segment == null) {
+                return;
+            }
+            for (int[] tag : UNDEFINED_TAGS) {
+                int entry = ExifSegment.retypeAsUndefined(head, segment, tag[0], tag[1]);
+                if (entry >= 0) {
+                    file.seek(entry);
+                    file.write(head, entry, ExifSegment.ENTRY_BYTES);
+                }
+            }
+        } catch (IOException | RuntimeException error) {
+            Log.w(TAG, "Unable to restore the type of the Exif tags written as bytes", error);
+        }
     }
 
     /**
@@ -484,8 +529,9 @@ public class Exif {
     }
 
     /**
-     * Fills in what the device that just took the picture knows and the camera left out: its
-     * make and model, and the app, with its version, as the software.
+     * Fills in what the library knows of any capture and the camera left out: the device's make
+     * and model, the app, with its version, as the software, that a camera photographed the
+     * scene directly, and an id unique to this picture.
      */
     @RestrictTo(RestrictTo.Scope.LIBRARY)
     public void attachCaptureDevice(@NonNull Context context) {
@@ -498,6 +544,27 @@ public class Exif {
         if (isBlank(mExifInterface.getAttribute(ExifInterface.TAG_SOFTWARE))) {
             mExifInterface.setAttribute(ExifInterface.TAG_SOFTWARE, softwareName(context));
         }
+        if (mExifInterface.getAttribute(ExifInterface.TAG_FILE_SOURCE) == null) {
+            mExifInterface.setAttribute(
+                    ExifInterface.TAG_FILE_SOURCE, FILE_SOURCE_DIGITAL_STILL_CAMERA);
+        }
+        if (mExifInterface.getAttribute(ExifInterface.TAG_SCENE_TYPE) == null) {
+            mExifInterface.setAttribute(
+                    ExifInterface.TAG_SCENE_TYPE, SCENE_TYPE_DIRECTLY_PHOTOGRAPHED);
+        }
+        if (isBlank(mExifInterface.getAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID))) {
+            mExifInterface.setAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID, newImageUniqueId());
+        }
+    }
+
+    /**
+     * A fresh 128-bit id as the 32 hexadecimal digits ImageUniqueID holds. Random, since nothing
+     * about the device or the moment should be recoverable from it.
+     */
+    @VisibleForTesting
+    @NonNull
+    static String newImageUniqueId() {
+        return UUID.randomUUID().toString().replace("-", "");
     }
 
     /** The app's name and version, as the software that made a capture, or null if unknown. */
