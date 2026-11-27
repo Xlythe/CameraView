@@ -3,8 +3,8 @@ Camera View
 
 CameraView provides a simple wrapper around the Android camera APIs, with backwards compatibility
 to API 21. Rather than directly manipulating the camera, here you have an Android View that can be
-placed within your app. This View displays a preview and has the methods takePicture(File),
-startRecording(File) and stopRecording(). For simple use cases, CameraFragment exists as well.
+placed within your app. This View displays a preview and has the methods takePicture(),
+startRecording() and stopRecording(). For simple use cases, CameraFragment exists as well.
 If you inflate a CameraFragment with Views that have the correct ids (eg. @id/capture),
 CameraFragment will bind to them to control the CameraView.
 
@@ -28,8 +28,8 @@ The following permissions are required in your AndroidManfiest.xml
 ```xml
 <uses-permission android:name="android.permission.CAMERA" />
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
-<!-- If you're not saving the file to the SD Card, you can set a max sdk version of 18 (Jellybean) -->
-<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="18" />
+<!-- Below API 29, takePicture() and startRecording() need this to file captures in the gallery -->
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
 <!-- Optional camera permissions -->
 <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -94,13 +94,25 @@ isAnalyzingFrames.
 
 Camera's methods are rather straight forward.
 
-Takes a picture and saves it to the given file
+Takes a picture and files it in the gallery, under Pictures
 ```kotlin
-cameraController.takePicture(file)
+cameraController.takePicture()
 ```
-Starts recording until stopRecording is called, the max duration is reached, or the max file size is reached
+Starts recording until stopRecording is called, the max duration is reached, or the max file size
+is reached, then files the video in the gallery, under Movies
 ```kotlin
-cameraController.startRecording(file)
+cameraController.startRecording()
+```
+Only these calls without a file put anything in the gallery, and they report where it went.
+Given a file, takePicture(file) and startRecording(file) write there instead and report the file.
+```kotlin
+Camera(
+    controller = cameraController,
+    onImageSaved = { uri -> ... },
+    onVideoSaved = { uri -> ... },
+    onImageCaptured = { file -> ... },
+    onVideoCaptured = { file -> ... }
+)
 ```
 Stops recording
 ```kotlin
@@ -132,11 +144,9 @@ cameraController.setFaceDetectionListener { faces, faceToView -> ... }
 CameraFragment
 -----------------
 CameraFragment allows for simple use cases of CameraView without requiring much more logic than a
-layout xml file. Extend CameraFragment and override the required methods. As pictures and videos are
-saved, you'll be notified via onImageCaptured(File) and onVideoCaptured(File). Note that both are
-saved to a cache directory and may eventually be overwritten or deleted if you don't move them.
-It's advised that you copy the files to persistent storage, or back them up to a server, if your
-usecase requires long term storage.
+layout xml file. Extend CameraFragment and override the required methods. Every picture and video
+it takes is filed in the gallery, and you'll be notified where via onImageSaved(Uri) and
+onVideoSaved(Uri).
 ```java
 public class MainFragment extends CameraFragment {
 
@@ -146,12 +156,12 @@ public class MainFragment extends CameraFragment {
     }
 
     @Override
-    public void onImageCaptured(File file) {
+    public void onImageSaved(Uri uri) {
         ...
     }
 
     @Override
-    public void onVideoCaptured(File file) {
+    public void onVideoSaved(Uri uri) {
         ...
     }
 }
@@ -248,13 +258,26 @@ unsupported request is logged and dropped rather than applied.
 CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
 handle binding the Views to the appropriate methods on CameraView.
 
-Takes a picture and saves it to the given file
+Takes a picture and files it in the gallery, under Pictures
 ```java
-mCameraView.takePicture(file);
+mCameraView.takePicture();
 ```
-Starts recording until stopRecording is called, the max duration is reached, or the max file size is reached
+Starts recording until stopRecording is called, the max duration is reached, or the max file size
+is reached, then files the video in the gallery, under Movies
 ```java
-mCameraView.startRecording(file);
+mCameraView.startRecording();
+```
+Only these overloads without a file put anything in the gallery, and the listeners hear where it
+went in onImageSaved(Uri) and onVideoSaved(Uri). Given a file, takePicture(file) and
+startRecording(file) write there instead, and report the file in onImageCaptured(File) and
+onVideoCaptured(File). Every method but the confirmation and failure ones has a default, so
+override the ones you use.
+```java
+mCameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+  @Override public void onImageConfirmation() {}
+  @Override public void onImageSaved(Uri uri) { ... }
+  @Override public void onFailure() {}
+});
 ```
 Stops recording
 ```java
@@ -273,8 +296,8 @@ Reports when the camera opens and closes. CameraFragment already implements this
 mCameraView.setOnCameraStateChangedListener(listener);
 ```
 With confirmation enabled, a capture is shown in CameraView's own preview and onImageConfirmation()
-or onVideoConfirmation() fires instead of onImageCaptured(File) or onVideoCaptured(File). Accept or
-discard it to continue; rejecting also deletes the file. Enable matchPreviewAspectRatio alongside
+or onVideoConfirmation() fires before it is reported. Accept or discard it to continue; rejecting
+also deletes the file, and files nothing in the gallery. Enable matchPreviewAspectRatio alongside
 this so the capture and the preview are framed the same.
 ```java
 mCameraView.setImageConfirmationEnabled(true);
@@ -400,9 +423,10 @@ exif.removeLocation();
 
 VideoView
 -----------------
-VideoView is another simplified Android View. In this case, as the name implies, it plays Videos.
+VideoView is another simplified Android View. In this case, as the name implies, it plays Videos,
+from a file or from a uri such as the one onVideoSaved(Uri) reports.
 ```java
-mVideoView.setFile(file);
+mVideoView.setFile(file); // or setUri(uri)
 mVideoView.play();
 mVideoView.pause();
 ```

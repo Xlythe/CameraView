@@ -14,7 +14,6 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.os.Vibrator;
-import android.text.format.DateFormat;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.View;
@@ -28,9 +27,7 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.R;
 
-import java.io.File;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.Formatter;
 import java.util.Locale;
 
@@ -102,11 +99,6 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     /** Package-private so a test can deliver a result under the same code the prompt asks with. */
     static final int REQUEST_CODE_PERMISSIONS = 10;
-    // Colons are not legal in a file name on every filesystem Android mounts, and MediaStore
-    // rejects them in a display name, so the default avoids them.
-    private static final String DESTINATION = "yyyy-MM-dd-HH-mm-ss";
-    private static final String PHOTO_EXT = ".jpg";
-    private static final String VIDEO_EXT = ".mp4";
 
     private View mCameraHolder;
 
@@ -255,16 +247,6 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             mCamera.close();
         }
         super.onStop();
-    }
-
-    @Override
-    public void onImageCaptured(File file) {
-
-    }
-
-    @Override
-    public void onVideoCaptured(File file) {
-
     }
 
     public void setEnabled(boolean enabled) {
@@ -632,7 +614,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         }
 
         void onTap() {
-            mCamera.takePicture(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + PHOTO_EXT));
+            mCamera.takePicture();
             onTakePicture();
         }
 
@@ -641,7 +623,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         @RequiresPermission(Manifest.permission.RECORD_AUDIO)
         void onHold() {
             vibrate();
-            mCamera.startRecording(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + VIDEO_EXT));
+            mCamera.startRecording();
             if (mCamera.isRecording()) {
                 boolean hasDurationLimit = mCamera.getMaxVideoDuration() > 0;
                 if (mDuration != null) {

@@ -13,10 +13,8 @@ android {
 
     defaultConfig {
         applicationId "com.xlythe.sample.camera"
-        // 23 for the core build, so the pre-24 branches in CaptureSaver are live code rather
-        // than a claim - at 24 the broadcast path older Android needs is never compiled against
-        // anything, and dead code demonstrates nothing. Not 21: the Material components this
-        // sample's UI uses do not go lower, though the library itself does.
+        // 23 for the core build, so the library's pre-24 paths, such as filing a capture with a
+        // broadcast, run in an app. Not 21: the Material components this sample uses stop at 23.
         minSdkVersion coreOnly ? 23 : 24
         targetSdkVersion 37
         versionCode 1

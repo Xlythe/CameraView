@@ -2,6 +2,7 @@ package com.xlythe.compose.camera
 
 import android.Manifest
 import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
@@ -22,6 +23,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowMediaMetadataRetriever
 import org.robolectric.shadows.ShadowMediaPlayer
 import org.robolectric.shadows.util.DataSource
@@ -198,6 +200,26 @@ class VideoComposableTest {
         compose.waitForIdle()
 
         assertEquals(listOf("second"), completions)
+    }
+
+    /** A uri, such as the one Camera's onVideoSaved reports, is played the way a file is. */
+    @Test
+    fun aUriReachesThePlayer() {
+        val uri = Uri.parse("content://media/external/video/media/1")
+        val controller = mutableStateOf<VideoController?>(null)
+        compose.setContent { Video(uri = uri, controller = controller) }
+        compose.waitForIdle()
+
+        val expected = DataSource.toDataSource(RuntimeEnvironment.getApplication(), uri)
+        val deadline = System.currentTimeMillis() + 5_000
+        while (Shadows.shadowOf(requireVideoView().mediaPlayer).dataSource != expected
+            && System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            Thread.sleep(10)
+        }
+
+        assertEquals(expected, Shadows.shadowOf(requireVideoView().mediaPlayer).dataSource)
+        assertEquals("a uri replaces any file", null, requireVideoView().file)
     }
 
     private fun requireVideoView(): VideoView {
