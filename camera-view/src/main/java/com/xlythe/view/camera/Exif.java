@@ -211,9 +211,7 @@ public class Exif {
      * place of every byte below a space. Only those entries are rewritten.
      */
     private void restoreUndefinedTypes() {
-        if (mFilePath == null) {
-            return;
-        }
+        // Only ever after a save, which a stream cannot have, so there is always a file.
         try (RandomAccessFile file = new RandomAccessFile(mFilePath, "rw")) {
             byte[] head = new byte[(int) Math.min(file.length(), HEAD_BYTES)];
             file.readFully(head);

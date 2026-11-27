@@ -20,10 +20,16 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
+import java.io.ByteArrayOutputStream;
+import java.io.DataOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.zip.CRC32;
+import java.util.zip.Deflater;
 
 /**
  * What a saved file says about itself beyond its orientation: the tags Exif requires of a
@@ -354,6 +360,50 @@ public class ExifMetadataTest {
         assertUndefined(jpeg, segment, 0xA300, 1);
         assertArrayEquals(new byte[] {3}, new ExifInterface(file.getPath())
                 .getAttributeBytes(ExifInterface.TAG_FILE_SOURCE));
+    }
+
+    /** A PNG has no JPEG segment to retype tags in, and saves all the same. */
+    @Test
+    public void aPngSavesWithoutRetyping() throws IOException {
+        File png = File.createTempFile("metadata", ".png");
+        png.deleteOnExit();
+        try (FileOutputStream out = new FileOutputStream(png)) {
+            out.write(minimalPng());
+        }
+        Exif exif = new Exif(png);
+        exif.attachCaptureDevice(RuntimeEnvironment.getApplication());
+        exif.save();
+
+        assertNotNull(new Exif(png).getAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID));
+    }
+
+    /** One grey pixel: the signature, a header, the pixel compressed, and the end. */
+    private static byte[] minimalPng() throws IOException {
+        ByteArrayOutputStream png = new ByteArrayOutputStream();
+        png.write(new byte[] {(byte) 0x89, 'P', 'N', 'G', 13, 10, 26, 10});
+        pngChunk(png, "IHDR", new byte[] {0, 0, 0, 1, 0, 0, 0, 1, 8, 0, 0, 0, 0});
+        Deflater deflater = new Deflater();
+        deflater.setInput(new byte[] {0 /* no filter */, (byte) 0x80});
+        deflater.finish();
+        byte[] compressed = new byte[64];
+        int length = deflater.deflate(compressed);
+        deflater.end();
+        pngChunk(png, "IDAT", Arrays.copyOf(compressed, length));
+        pngChunk(png, "IEND", new byte[0]);
+        return png.toByteArray();
+    }
+
+    private static void pngChunk(ByteArrayOutputStream png, String type, byte[] data)
+            throws IOException {
+        DataOutputStream out = new DataOutputStream(png);
+        out.writeInt(data.length);
+        byte[] typeBytes = type.getBytes(StandardCharsets.US_ASCII);
+        out.write(typeBytes);
+        out.write(data);
+        CRC32 crc = new CRC32();
+        crc.update(typeBytes);
+        crc.update(data);
+        out.writeInt((int) crc.getValue());
     }
 
     private static void assertUndefined(
