@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.legacy;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -10,18 +11,26 @@ import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 
+import androidx.exifinterface.media.ExifInterface;
+
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowCamera;
+import org.robolectric.util.ReflectionHelpers;
 
+import java.io.InputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -141,33 +150,109 @@ public class LegacyCameraModuleTest {
         assertEquals(0, module.getZoomLevel());
     }
 
+    /**
+     * MAX asks for the largest picture the camera lists. The shadowed camera starts at 1280x960
+     * and lists nothing larger than 800x600, so the two are easy to tell apart.
+     */
+    @Test
+    public void aMaxPictureIsTheLargestListed() {
+        module.setQuality(CameraView.Quality.MAX);
+        module.open();
+
+        assertEquals("800x600", pictureSize());
+    }
+
+    /** Every other quality keeps the size the camera started with. */
+    @Test
+    public void otherQualitiesKeepTheCamerasOwnSize() {
+        module.setQuality(CameraView.Quality.HIGH);
+        module.open();
+
+        assertEquals("1280x960", pictureSize());
+    }
+
+    /** A change of quality reaches a camera that is already open, both ways. */
+    @Test
+    public void changingQualityWhileOpenResizesThePicture() {
+        module.open();
+
+        module.setQuality(CameraView.Quality.MAX);
+        assertEquals("800x600", pictureSize());
+
+        module.setQuality(CameraView.Quality.LOW);
+        assertEquals("1280x960", pictureSize());
+    }
+
+    private String pictureSize() {
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        Camera.Size size = camera.getParameters().getPictureSize();
+        return size.width + "x" + size.height;
+    }
+
     /** The published scale matches the other backends, so one control drives all three. */
     @Test
     public void theZoomScaleIsTheSameOnEveryBackend() {
         assertEquals(100, module.getMaxZoomLevel());
     }
 
+    /** This API takes an index into a table of ratios, so a ratio picks the nearest entry. */
     @Test
-    public void zoomLevelsMapOntoTheCamerasOwnZoomTable() {
-        // A camera offering 30 steps: the ends line up and the middle lands mid-table.
-        assertEquals(0, LegacyCameraModule.toZoomIndex(0, 30));
-        assertEquals(30, LegacyCameraModule.toZoomIndex(100, 30));
-        assertEquals(15, LegacyCameraModule.toZoomIndex(50, 30));
+    public void aRatioPicksTheNearestEntryOfTheZoomTable() {
+        List<Integer> table = Arrays.asList(100, 150, 200, 300, 400);
 
-        // Out-of-range positions clamp instead of reaching the camera.
-        assertEquals(0, LegacyCameraModule.toZoomIndex(-50, 30));
-        assertEquals(30, LegacyCameraModule.toZoomIndex(Integer.MAX_VALUE, 30));
+        assertEquals(0, LegacyCameraModule.nearestZoomIndex(table, 1f));
+        assertEquals(2, LegacyCameraModule.nearestZoomIndex(table, 2f));
+        assertEquals("2.4x is nearer 2x than 3x",
+                2, LegacyCameraModule.nearestZoomIndex(table, 2.4f));
+        assertEquals(3, LegacyCameraModule.nearestZoomIndex(table, 2.6f));
 
-        // A camera that cannot zoom has no table to index into.
-        assertEquals(0, LegacyCameraModule.toZoomIndex(100, 0));
+        // Beyond either end is that end.
+        assertEquals(0, LegacyCameraModule.nearestZoomIndex(table, 0.5f));
+        assertEquals(4, LegacyCameraModule.nearestZoomIndex(table, 10f));
     }
 
+    /** A ratio set on an open camera lands on the table and reads back as the entry it chose. */
     @Test
-    public void zoomIndexesMapBackOntoTheLevel() {
-        assertEquals(0, LegacyCameraModule.toZoomLevel(0, 30));
-        assertEquals(100, LegacyCameraModule.toZoomLevel(30, 30));
-        assertEquals(50, LegacyCameraModule.toZoomLevel(15, 30));
-        assertEquals(0, LegacyCameraModule.toZoomLevel(5, 0));
+    public void aRatioRoundTripsThroughTheZoomTable() throws Exception {
+        module.open();
+        giveTheCameraAZoomTable();
+        assertTrue(module.isZoomSupported());
+        assertEquals(1f, module.getMinZoomRatio(), 0f);
+        assertEquals(4f, module.getMaxZoomRatio(), 0f);
+
+        module.setZoomRatio(2f);
+        assertEquals(2f, module.getZoomRatio(), 0f);
+        assertEquals("the camera is on the 2x entry", 2, openCamera().getParameters().getZoom());
+
+        module.setZoomRatio(2.9f);
+        assertEquals("the nearest entry", 3f, module.getZoomRatio(), 0f);
+
+        module.setZoomLevel(module.getMaxZoomLevel());
+        assertEquals(4f, module.getZoomRatio(), 0f);
+        assertEquals(module.getMaxZoomLevel(), module.getZoomLevel());
+    }
+
+    /** 1x, 2x and the far end of the table, since this API says nothing about lenses. */
+    @Test
+    public void presetsAreOneTwoAndTheMaximum() throws Exception {
+        assertArrayEquals("a closed camera has nothing but 1x",
+                new float[] {1f}, module.getZoomPresets(), 0f);
+
+        module.open();
+        giveTheCameraAZoomTable();
+
+        assertArrayEquals(new float[] {1f, 2f, 4f}, module.getZoomPresets(), 0f);
+    }
+
+    /** A zoom asked for while closed waits for open, and a camera that cannot zoom drops it. */
+    @Test
+    public void aZoomSetWhileClosedWaitsForTheCamera() {
+        module.setZoomRatio(3f);
+        assertEquals("held until there is a camera to give it to", 3f, module.getZoomRatio(), 0f);
+
+        module.open();
+
+        assertEquals("the shadowed camera cannot zoom at all", 1f, module.getZoomRatio(), 0f);
     }
 
     /** Querying zoom before opening must answer rather than throw. */
@@ -177,6 +262,120 @@ public class LegacyCameraModuleTest {
         assertEquals(100, module.getMaxZoomLevel());
         assertFalse(module.isZoomSupported());
         module.setZoomLevel(50);
+    }
+
+    /** The range is the open camera's; a closed one has none to give. */
+    @Test
+    public void exposureCompensationReportsTheCamerasRange() {
+        assertFalse(module.isExposureCompensationSupported());
+        assertEquals(0, module.getMinExposureCompensation());
+        assertEquals(0, module.getMaxExposureCompensation());
+        assertEquals(0f, module.getExposureCompensationStep(), 0f);
+
+        module.open();
+
+        // The shadowed camera's defaults: -6 to 6, in steps of 1/2.
+        assertTrue(module.isExposureCompensationSupported());
+        assertEquals(-6, module.getMinExposureCompensation());
+        assertEquals(6, module.getMaxExposureCompensation());
+        assertEquals(0.5f, module.getExposureCompensationStep(), 0f);
+    }
+
+    /** An index lands on the camera's parameters, held to its range. */
+    @Test
+    public void anExposureIndexReachesTheCameraClamped() throws Exception {
+        module.open();
+
+        module.setExposureCompensation(3);
+        assertEquals(3, module.getExposureCompensation());
+        assertEquals(3, openCamera().getParameters().getExposureCompensation());
+
+        module.setExposureCompensation(40);
+        assertEquals(6, module.getExposureCompensation());
+        assertEquals(6, openCamera().getParameters().getExposureCompensation());
+
+        module.setExposureCompensation(-40);
+        assertEquals(-6, module.getExposureCompensation());
+        assertEquals(-6, openCamera().getParameters().getExposureCompensation());
+    }
+
+    /** With no camera to ask, the index is kept as given, and clamped once there is one. */
+    @Test
+    public void anExposureIndexSetWhileClosedWaitsForTheCamera() throws Exception {
+        module.setExposureCompensation(40);
+        assertEquals(40, module.getExposureCompensation());
+
+        module.open();
+
+        assertEquals(6, module.getExposureCompensation());
+        assertEquals(6, openCamera().getParameters().getExposureCompensation());
+    }
+
+    /**
+     * A camera that cannot compensate refuses a request while it is open, and leaves one made
+     * before it opened for the next camera that can.
+     */
+    @Test
+    public void aCameraWithoutExposureCompensationDeclines() throws Exception {
+        module.open();
+        takeAwayExposureCompensation();
+        assertFalse(module.isExposureCompensationSupported());
+        assertEquals(0, module.getMinExposureCompensation());
+        assertEquals(0, module.getMaxExposureCompensation());
+        assertEquals("the step it publishes is not one it can use",
+                0f, module.getExposureCompensationStep(), 0f);
+
+        module.setExposureCompensation(3);
+        assertEquals(0, module.getExposureCompensation());
+        assertEquals(0, openCamera().getParameters().getExposureCompensation());
+
+        module.close();
+        module.setExposureCompensation(2);
+        // The same camera, whose parameters the shadow keeps between openings.
+        module.open();
+        assertEquals("kept for a camera that can", 2, module.getExposureCompensation());
+        assertEquals(0, openCamera().getParameters().getExposureCompensation());
+    }
+
+    /**
+     * The torch, stabilization and low-light boost are refused while a camera that cannot do them
+     * is open, as on the other backends, rather than reported on and never acted on. A request
+     * made while closed is kept for the camera that opens.
+     */
+    @Test
+    public void controlsTheCameraCannotDoAreRefusedWhileItIsOpen() {
+        module.setTorchEnabled(true);
+        assertTrue("kept until a camera opens", module.isTorchEnabled());
+        module.setTorchEnabled(false);
+
+        module.open();
+        assertFalse(module.hasFlash());
+        module.setTorchEnabled(true);
+        assertFalse(module.isTorchEnabled());
+
+        assertFalse(module.isStabilizationSupported());
+        module.setStabilizationEnabled(true);
+        assertFalse(module.isStabilizationEnabled());
+
+        assertFalse(module.isLowLightBoostSupported());
+        module.setLowLightBoostEnabled(true);
+        assertFalse(module.isLowLightBoostEnabled());
+    }
+
+    /** A picture's Exif reports the index the camera took, times its step. */
+    @Test
+    public void aPictureRecordsTheExposureBias() throws Exception {
+        module.open();
+        module.setExposureCompensation(-3);
+
+        ExifCaptureParameters parameters =
+                ExifCaptureParameters.forLegacyCamera(openCamera().getParameters());
+        Exif exif = new Exif(Mockito.mock(InputStream.class));
+        parameters.applyTo(exif);
+
+        String[] bias = exif.getAttribute(ExifInterface.TAG_EXPOSURE_BIAS_VALUE).split("/");
+        assertEquals("-3 steps of 1/2 EV", -1.5,
+                Double.parseDouble(bias[0]) / Double.parseDouble(bias[1]), 0.001);
     }
 
     /**
@@ -236,5 +435,33 @@ public class LegacyCameraModuleTest {
         module.open();
         module.close();
         module.close();
+    }
+
+    /**
+     * Gives the open camera a zoom table of 1x, 1.5x, 2x, 3x and 4x.
+     *
+     * <p>The shadowed camera starts with none, so it reports that it cannot zoom. Its parameters
+     * are held by the camera and handed out as the same object every time, which is what lets them
+     * be changed here.</p>
+     */
+    private void giveTheCameraAZoomTable() throws Exception {
+        Camera.Parameters parameters = openCamera().getParameters();
+        parameters.set("zoom-supported", "true");
+        parameters.set("max-zoom", 4);
+        parameters.set("zoom-ratios", "100,150,200,300,400");
+        parameters.set("zoom", 0);
+    }
+
+    /** Gives the open camera the 0-to-0 range this API reports for one that cannot compensate. */
+    private void takeAwayExposureCompensation() throws Exception {
+        Camera.Parameters parameters = openCamera().getParameters();
+        parameters.set("min-exposure-compensation", 0);
+        parameters.set("max-exposure-compensation", 0);
+    }
+
+    private Camera openCamera() throws Exception {
+        java.lang.reflect.Field field = LegacyCameraModule.class.getDeclaredField("mCamera");
+        field.setAccessible(true);
+        return (Camera) field.get(module);
     }
 }

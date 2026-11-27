@@ -18,13 +18,18 @@ import android.media.CamcorderProfile;
 import android.media.MediaActionSound;
 import android.media.MediaRecorder;
 
+import androidx.exifinterface.media.ExifInterface;
+
 import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifFixtures;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowGeotaggingMediaRecorder;
 import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
+import com.xlythe.view.camera.shadow.ShadowPreviewlessCamera;
 
 import org.junit.After;
 import org.junit.Before;
@@ -212,6 +217,29 @@ public class LegacyCaptureTest {
                 captured.get() != null || failures.get() > 0);
     }
 
+    /**
+     * A picture whose Exif has no room for the camera's own tags is still kept and reported,
+     * with the rest of its metadata.
+     */
+    @Test
+    public void aPictureIsKeptWhenItsTagsDoNotFit() throws IOException {
+        AtomicReference<File> captured = new AtomicReference<>();
+        AtomicInteger failures = new AtomicInteger();
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onImageConfirmation() {}
+            @Override public void onImageCaptured(File file) { captured.set(file); }
+            @Override public void onFailure() { failures.incrementAndGet(); }
+        });
+
+        File file = savePicture(ExifFixtures.overfullCapture());
+
+        assertEquals(file, captured.get());
+        assertEquals(0, failures.get());
+        Exif saved = new Exif(file);
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertNull(saved.getTag(ExifFixtures.TAG_UNDEFINED_BY_ANY_STANDARD));
+    }
+
     /** The platform clicks for the old API itself, so the library adds only the callback. */
     @Test
     public void theClickIsThePlatformsOwn() throws IOException {
@@ -294,6 +322,30 @@ public class LegacyCaptureTest {
 
         assertTrue(Shadows.shadowOf(camera).isShutterSoundEnabled());
         assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+    }
+
+    /**
+     * A camera that will not take its preview is not announced as open.
+     *
+     * <p>An app enables its shutter when the view says the camera is open, which the view says once
+     * the backend reports it ready. A camera that opened and then refused its preview was released
+     * and reported ready all the same, so the app's first picture failed with nothing to explain
+     * it. Camera2 and CameraX report a failed open as an error, and so does this backend.</p>
+     */
+    @Test
+    @Config(shadows = ShadowPreviewlessCamera.class)
+    public void aCameraThatWillNotPreviewIsNotAnnouncedAsOpen() {
+        AtomicInteger opens = new AtomicInteger();
+        cameraView.setOnCameraStateChangedListener(new CameraView.OnCameraStateChangedListener() {
+            @Override public void onCameraOpened() { opens.incrementAndGet(); }
+            @Override public void onCameraClosed() {}
+        });
+
+        cameraView.open();
+        idle();
+
+        assertEquals("a camera that failed to open is never announced", 0, opens.get());
+        assertFalse(cameraView.isOpen());
     }
 
     /** A capture asked for before the camera is open fails rather than throwing. */
@@ -425,12 +477,18 @@ public class LegacyCaptureTest {
      * into, so this hands it a real one as the driver would.</p>
      */
     private File savePicture() throws IOException {
+        return savePicture(EMPTY_JPEG);
+    }
+
+    /** Hands the picture listener the given frame and lets it save. */
+    private File savePicture(byte[] frame) throws IOException {
         File file = File.createTempFile("legacy", ".jpg");
         file.deleteOnExit();
         ShadowPausedAsyncTask.overrideExecutor(Runnable::run);
         Camera camera = Camera.open(1);
         try {
-            new LegacyPictureListener(file, 0, false, module).onPictureTaken(EMPTY_JPEG, camera);
+            new LegacyPictureListener(file, 0, false, new ExifCaptureParameters(), module)
+                    .onPictureTaken(frame, camera);
             idle();
         } finally {
             camera.release();

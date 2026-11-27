@@ -19,9 +19,11 @@ import android.os.Looper;
 import android.util.Log;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.TransformMath;
+import com.xlythe.view.camera.ZoomMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.ByteArrayOutputStream;
@@ -33,6 +35,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -44,9 +47,6 @@ public class LegacyCameraModule extends ICameraModule {
     /** No camera chosen yet, which is not the same as camera zero. */
     private static final int INVALID_CAMERA_ID = -1;
 
-    /** The zoom scale CameraView publishes, matching the Camera2 and CameraX backends. */
-    private static final int MAX_ZOOM_LEVEL = 100;
-
     /** Which of the device's cameras is selected, as an index into Camera.getNumberOfCameras. */
     private int mActiveCamera = INVALID_CAMERA_ID;
 
@@ -55,6 +55,18 @@ public class LegacyCameraModule extends ICameraModule {
 
     /** The preview size chosen for the open camera, or null when no camera is open. */
     @Nullable private Camera.Size mPreviewSize;
+
+    /**
+     * The picture size the open camera started with, which every quality but MAX keeps, or null
+     * when no camera is open. See {@link #applyPictureSize}.
+     */
+    @Nullable private Camera.Size mDefaultPictureSize;
+
+    /**
+     * The zoom, as a ratio. While a camera is open it is the entry of its zoom table the camera is
+     * set to; while none is, it is what was asked for, which the next open applies.
+     */
+    private float mZoomRatio = 1f;
 
     /** The recorder for a recording in progress, or null when nothing is being recorded. */
     private MediaRecorder mVideoRecorder;
@@ -79,6 +91,7 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera = Camera.open(getActiveCamera());
         } catch (RuntimeException e) {
             Log.e(TAG, "Failed to open camera", e);
+            onCameraError(e);
             return;
         }
 
@@ -92,11 +105,19 @@ public class LegacyCameraModule extends ICameraModule {
             parameters.setPreviewSize(getPreviewWidth(), getPreviewHeight());
             parameters.setPictureFormat(ImageFormat.JPEG);
             parameters.setJpegQuality(getPictureQuality());
+            mDefaultPictureSize = parameters.getPictureSize();
+            applyPictureSize(parameters);
+            float zoomRatio = applyZoom(parameters, mZoomRatio);
+            Integer exposureCompensation = applyExposureCompensation(parameters);
             mCamera.setParameters(parameters);
+            if (exposureCompensation != null) {
+                super.setExposureCompensation(exposureCompensation);
+            }
             applyShutterSound();
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
             mCamera.startPreview();
+            onZoomRatioApplied(zoomRatio);
         } catch (IOException | RuntimeException e) {
             // A camera opened but never started is worse than no camera: close() would release
             // it, but takePicture() and startRecording() would both act on one configured by
@@ -111,7 +132,52 @@ public class LegacyCameraModule extends ICameraModule {
             }
             mCamera = null;
             mPreviewSize = null;
+            mDefaultPictureSize = null;
+            onCameraError(e);
         }
+    }
+
+    /**
+     * Ready once open() has a camera previewing, and not after an open that failed: the view
+     * announces a ready camera as open, and an app enables its shutter on that.
+     */
+    @Override
+    public boolean isCameraReady() {
+        return mCamera != null;
+    }
+
+    @Override
+    public void setQuality(CameraView.Quality quality) {
+        super.setQuality(quality);
+        if (mCamera == null) {
+            return;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            applyPictureSize(parameters);
+            mCamera.setParameters(parameters);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Camera would not change its picture size", e);
+        }
+    }
+
+    /**
+     * Asks for the largest picture the camera lists when the quality is MAX, and for the size it
+     * started with otherwise.
+     */
+    private void applyPictureSize(Camera.Parameters parameters) {
+        Camera.Size size = getQuality() == CameraView.Quality.MAX
+                ? largestPictureSize(parameters.getSupportedPictureSizes())
+                : mDefaultPictureSize;
+        if (size != null) {
+            parameters.setPictureSize(size.width, size.height);
+        }
+    }
+
+    @Nullable
+    private static Camera.Size largestPictureSize(@Nullable List<Camera.Size> sizes) {
+        return sizes == null || sizes.isEmpty()
+                ? null : Collections.max(sizes, new CompareSizesByArea());
     }
 
     @Override
@@ -128,6 +194,7 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera.release();
             mCamera = null;
             mPreviewSize = null;
+            mDefaultPictureSize = null;
         }
     }
 
@@ -213,6 +280,11 @@ public class LegacyCameraModule extends ICameraModule {
             mPlaysOwnClick = false;
             return;
         }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            // The click cannot be silenced before API 17, so it plays in place of the app's own.
+            mPlaysOwnClick = false;
+            return;
+        }
         boolean custom = getShutterSound() != 0;
         try {
             boolean applied = mCamera.enableShutterSound(isShutterSoundEnabled() && !custom);
@@ -234,13 +306,36 @@ public class LegacyCameraModule extends ICameraModule {
             return;
         }
         mCamera.takePicture(this::onShutter, null, new LegacyPictureListener(
-                file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(), this));
+                file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(),
+                exifCaptureParameters(), this));
+    }
+
+    /**
+     * The Exif a picture taken now should carry about how it was taken, read from the camera's
+     * parameters before the capture can change them.
+     */
+    @NonNull
+    private ExifCaptureParameters exifCaptureParameters() {
+        try {
+            return ExifCaptureParameters.forLegacyCamera(mCamera.getParameters());
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to read the camera's parameters for a picture's Exif", error);
+            return new ExifCaptureParameters();
+        }
     }
 
     @Override
     public void startRecording(File file) {
         if (mCamera == null) {
             Log.w(TAG, "Cannot record before the camera is open");
+            onVideoFailed();
+            return;
+        }
+        if (Build.VERSION.SDK_INT < 16) {
+            // Before API 16, MediaRecorder sets the camera's preview to a surface of its own, and
+            // it cannot take one made from our SurfaceTexture: the camera loses its preview and
+            // mediaserver aborts the recording.
+            Log.w(TAG, "Recording needs API 16");
             onVideoFailed();
             return;
         }
@@ -405,60 +500,245 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     @Override
-    public void setZoomLevel(int zoomLevel) {
+    public void setZoomRatio(float zoomRatio) {
         if (mCamera == null) {
-            Log.w(TAG, "Attempted to set zoom level to " + zoomLevel + " but no camera found");
+            // Nothing open to set, so it waits for open() to apply it.
+            onZoomRatioApplied(zoomRatio);
             return;
         }
-        Camera.Parameters parameters = mCamera.getParameters();
-        if (!parameters.isZoomSupported()) {
-            Log.w(TAG, "Zoom not supported");
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            float applied = applyZoom(parameters, zoomRatio);
+            if (applied == mZoomRatio) {
+                return;
+            }
+            mCamera.setParameters(parameters);
+            onZoomRatioApplied(applied);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "The camera would not zoom", e);
+        }
+    }
+
+    /**
+     * Writes the entry of the camera's zoom table nearest a ratio into its parameters.
+     *
+     * <p>This API takes an index into a table of ratios that differs per device, rather than a
+     * ratio, so the nearest entry is the closest it can come.</p>
+     *
+     * @return the ratio the camera is at once the parameters are applied
+     */
+    private static float applyZoom(@NonNull Camera.Parameters parameters, float zoomRatio) {
+        List<Integer> ratios = parameters.isZoomSupported() ? parameters.getZoomRatios() : null;
+        if (ratios == null || ratios.isEmpty()) {
+            return 1f;
+        }
+        int index = nearestZoomIndex(ratios, zoomRatio);
+        parameters.setZoom(index);
+        return ratios.get(index) / 100f;
+    }
+
+    /** The entry of a zoom table, given in hundredths, nearest a ratio. */
+    static int nearestZoomIndex(@NonNull List<Integer> ratios, float zoomRatio) {
+        int nearest = 0;
+        for (int i = 1; i < ratios.size(); i++) {
+            if (Math.abs(ratios.get(i) / 100f - zoomRatio)
+                    < Math.abs(ratios.get(nearest) / 100f - zoomRatio)) {
+                nearest = i;
+            }
+        }
+        return nearest;
+    }
+
+    private void onZoomRatioApplied(float zoomRatio) {
+        if (zoomRatio != mZoomRatio) {
+            mZoomRatio = zoomRatio;
+            onZoomChanged(zoomRatio);
+        }
+    }
+
+    @Override
+    public float getZoomRatio() {
+        return mZoomRatio;
+    }
+
+    /** 1, which is where every zoom table starts. */
+    @Override
+    public float getMinZoomRatio() {
+        return 1f;
+    }
+
+    @Override
+    public float getMaxZoomRatio() {
+        if (mCamera == null) {
+            return 1f;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            List<Integer> ratios =
+                    parameters.isZoomSupported() ? parameters.getZoomRatios() : null;
+            return ratios == null || ratios.isEmpty()
+                    ? 1f : Math.max(1f, ratios.get(ratios.size() - 1) / 100f);
+        } catch (RuntimeException e) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its zoom range", e);
+            return 1f;
+        }
+    }
+
+    /**
+     * 1x, 2x and the far end of the zoom table.
+     *
+     * <p>This API publishes nothing about lenses or sensors, so there is nothing more to work stops
+     * out from.</p>
+     */
+    @NonNull
+    @Override
+    public float[] getZoomPresets() {
+        float maxZoomRatio = getMaxZoomRatio();
+        return ZoomMath.presets(1f, maxZoomRatio, new float[] {2f, maxZoomRatio},
+                false /* cropStop */);
+    }
+
+    /**
+     * Sets the exposure compensation index, in the camera's own steps.
+     *
+     * <p>With no camera open there is no range to hold the index to, so it is kept as given and
+     * clamped once one opens. An open camera that cannot compensate refuses it.</p>
+     */
+    @MainThread
+    @Override
+    public void setExposureCompensation(int exposureCompensation) {
+        if (mCamera == null) {
+            super.setExposureCompensation(exposureCompensation);
             return;
         }
-        // The level is a position in the camera's range, as it is on the other backends, while
-        // this API takes an index into the camera's own zoom table. Passing the level straight
-        // through meant the scale differed per device and an out-of-range value reached the
-        // camera unchecked.
-        parameters.setZoom(toZoomIndex(zoomLevel, parameters.getMaxZoom()));
-        mCamera.setParameters(parameters);
-    }
-
-    /** Maps a 0..MAX_ZOOM_LEVEL position onto an index into the camera's zoom table. */
-    static int toZoomIndex(int zoomLevel, int maxZoomIndex) {
-        int clamped = Math.max(0, Math.min(zoomLevel, MAX_ZOOM_LEVEL));
-        if (maxZoomIndex <= 0) {
-            return 0;
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            if (!offersExposureCompensation(parameters)) {
+                Log.w(TAG,
+                        "Ignoring exposure request because the active camera does not support it");
+                return;
+            }
+            int clamped = clampExposureCompensation(parameters, exposureCompensation);
+            if (clamped == parameters.getExposureCompensation()
+                    && clamped == getExposureCompensation()) {
+                return;
+            }
+            parameters.setExposureCompensation(clamped);
+            mCamera.setParameters(parameters);
+            super.setExposureCompensation(clamped);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "The camera would not take the exposure compensation", e);
         }
-        return Math.round((float) clamped * maxZoomIndex / MAX_ZOOM_LEVEL);
     }
 
-    /** Maps an index into the camera's zoom table back onto a 0..MAX_ZOOM_LEVEL position. */
-    static int toZoomLevel(int zoomIndex, int maxZoomIndex) {
-        if (maxZoomIndex <= 0) {
-            return 0;
-        }
-        int clamped = Math.max(0, Math.min(zoomIndex, maxZoomIndex));
-        return Math.round((float) clamped * MAX_ZOOM_LEVEL / maxZoomIndex);
-    }
-
+    @MainThread
     @Override
-    public int getZoomLevel() {
+    public int getMinExposureCompensation() {
+        Camera.Parameters parameters = exposureParameters();
+        return parameters == null ? 0 : parameters.getMinExposureCompensation();
+    }
+
+    @MainThread
+    @Override
+    public int getMaxExposureCompensation() {
+        Camera.Parameters parameters = exposureParameters();
+        return parameters == null ? 0 : parameters.getMaxExposureCompensation();
+    }
+
+    @MainThread
+    @Override
+    public float getExposureCompensationStep() {
+        Camera.Parameters parameters = exposureParameters();
+        return parameters == null ? 0f : parameters.getExposureCompensationStep();
+    }
+
+    @MainThread
+    @Override
+    public boolean isExposureCompensationSupported() {
+        return exposureParameters() != null;
+    }
+
+    /**
+     * Refused while a camera without a flash is open, as on the other backends. This backend
+     * drives no flash, so that is every camera it opens; a request made while closed is kept.
+     */
+    @MainThread
+    @Override
+    public void setTorchEnabled(boolean enabled) {
+        if (enabled && mCamera != null && !hasFlash()) {
+            Log.w(TAG, "Ignoring torch request because the active camera has no flash unit");
+            return;
+        }
+        super.setTorchEnabled(enabled);
+    }
+
+    /** Refused while a camera that cannot steady the picture is open, as on the other backends. */
+    @MainThread
+    @Override
+    public void setStabilizationEnabled(boolean enabled) {
+        if (enabled && mCamera != null && !isStabilizationSupported()) {
+            Log.w(TAG, "Ignoring stabilization because the active camera does not support it");
+            return;
+        }
+        super.setStabilizationEnabled(enabled);
+    }
+
+    /** Refused while a camera without low-light boost is open, as on the other backends. */
+    @MainThread
+    @Override
+    public void setLowLightBoostEnabled(boolean enabled) {
+        if (enabled && mCamera != null && !isLowLightBoostSupported()) {
+            Log.w(TAG, "Ignoring low-light boost because the active camera does not support it");
+            return;
+        }
+        super.setLowLightBoostEnabled(enabled);
+    }
+
+    /**
+     * Writes the exposure index into a camera's parameters, held to its range.
+     *
+     * @return the index the camera is at once the parameters are applied, or null for a camera
+     *     that cannot compensate, which keeps the index for the next camera that can
+     */
+    @Nullable
+    private Integer applyExposureCompensation(@NonNull Camera.Parameters parameters) {
+        if (!offersExposureCompensation(parameters)) {
+            return null;
+        }
+        int clamped = clampExposureCompensation(parameters, getExposureCompensation());
+        parameters.setExposureCompensation(clamped);
+        return clamped;
+    }
+
+    private static int clampExposureCompensation(
+            @NonNull Camera.Parameters parameters, int exposureCompensation) {
+        return Math.max(parameters.getMinExposureCompensation(),
+                Math.min(exposureCompensation, parameters.getMaxExposureCompensation()));
+    }
+
+    /** The open camera's parameters, where it can compensate exposure, or null. */
+    @Nullable
+    private Camera.Parameters exposureParameters() {
         if (mCamera == null) {
-            return 0;
+            return null;
         }
-        Camera.Parameters parameters = mCamera.getParameters();
-        return toZoomLevel(parameters.getZoom(), parameters.getMaxZoom());
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            return offersExposureCompensation(parameters) ? parameters : null;
+        } catch (RuntimeException e) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its exposure compensation", e);
+            return null;
+        }
     }
 
-    @Override
-    public int getMaxZoomLevel() {
-        // Fixed, so one zoom control works across every backend.
-        return MAX_ZOOM_LEVEL;
-    }
-
-    @Override
-    public boolean isZoomSupported() {
-        return mCamera != null && mCamera.getParameters().isZoomSupported();
+    /**
+     * Whether a camera can compensate exposure. This API reports a range of 0 to 0 for one that
+     * cannot; a range that stops at zero on either side counts as none too, which is where the
+     * other backends draw the line.
+     */
+    static boolean offersExposureCompensation(@NonNull Camera.Parameters parameters) {
+        return parameters.getMinExposureCompensation() != 0
+                && parameters.getMaxExposureCompensation() != 0;
     }
 
     @Override

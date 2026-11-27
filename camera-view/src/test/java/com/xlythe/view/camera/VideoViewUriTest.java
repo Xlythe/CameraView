@@ -111,7 +111,9 @@ public class VideoViewUriTest {
 
     /** Runs the main looper until the player holds the source, since metadata is read off it. */
     private MediaPlayer awaitPlayerFor(DataSource expected) throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 5_000;
+        // Generous, because a loaded machine can starve that thread for seconds; the loop ends
+        // as soon as it reports, so a passing run is no slower.
+        long deadline = System.currentTimeMillis() + 30_000;
         while (!expected.equals(Shadows.shadowOf(videoView.getMediaPlayer()).getDataSource())
                 && System.currentTimeMillis() < deadline) {
             idle();

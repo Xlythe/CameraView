@@ -49,6 +49,29 @@ final class WearProtocol {
     static final int PREVIEW_KEY_FRAME_INTERVAL_SECONDS = 1;
 
     /**
+     * How much of the preview the phone sends before it waits to hear the watch has read it.
+     *
+     * <p>A channel is lossless, so whatever is written to it is delivered however late, and how
+     * much it holds on the way is up to the Data Layer. A phone that writes as fast as it can moves
+     * its delay there, where nothing can drop a late frame, and on a link slower than the preview
+     * that delay grows for as long as the preview runs. Waiting for the watch leaves the backlog
+     * in CameraView's lossy stream, which drops late frames instead.</p>
+     *
+     * <p>A quarter second of the preview. It has to outlast the round trip, or the link idles
+     * between acknowledgements, and exceed {@link #PREVIEW_ACK_INTERVAL_BYTES}, or the phone waits
+     * for an acknowledgement the watch is not yet due to send.</p>
+     */
+    static final int PREVIEW_IN_FLIGHT_BYTES = PREVIEW_BIT_RATE / 8 / 4;
+
+    /**
+     * How much of the preview the watch reads between acknowledgements.
+     *
+     * <p>An acknowledgement is the total the watch has read so far, as a big-endian long, written
+     * back over the preview channel.</p>
+     */
+    static final int PREVIEW_ACK_INTERVAL_BYTES = 4 * 1024;
+
+    /**
      * The longest edge of a picture sent to the watch.
      *
      * <p>Generous for a watch screen and still a fraction of what the camera produced, which

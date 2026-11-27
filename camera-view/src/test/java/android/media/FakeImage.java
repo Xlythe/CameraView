@@ -1,6 +1,7 @@
 package android.media;
 
 import android.graphics.ImageFormat;
+import android.graphics.PixelFormat;
 
 import java.nio.ByteBuffer;
 
@@ -28,6 +29,21 @@ public final class FakeImage extends Image {
     /** A frame in a format nothing in the library knows how to decode. */
     public static FakeImage unsupportedFormat(int width, int height) {
         return new FakeImage(ImageFormat.RAW10, width, height, new byte[] {1, 2, 3, 4});
+    }
+
+    /**
+     * A RAW_SENSOR frame carrying the sensor timestamp its capture result would.
+     *
+     * <p>The timestamp is chosen rather than read from the clock, because it is what a frame is
+     * paired to its result by, and a pairing cannot be asserted against a timestamp the test never
+     * saw.</p>
+     */
+    public static FakeImage raw(int width, int height, long timestamp) {
+        // Sixteen bits a pixel in one plane, which is how a Bayer sensor hands over a frame.
+        return new FakeImage(ImageFormat.RAW_SENSOR, width, height,
+                new Plane[] {new FakePlane(
+                        ByteBuffer.wrap(new byte[width * height * 2]), 2, width * 2)},
+                timestamp);
     }
 
     /** A frame in the format a camera produces for analysis. */
@@ -97,6 +113,34 @@ public final class FakeImage extends Image {
                 new Plane[] {lumaPlane, uPlane, vPlane});
     }
 
+    /**
+     * An RGBA_8888 frame of one colour, laid out the way an ImageReader holds what GL drew.
+     *
+     * <p>A reader pads each row out to a stride the hardware likes, so a row is wider in memory
+     * than the picture. The padding is filled with {@link #POISON_RGBA}, so a conversion that
+     * reads it as picture shows up as that colour in the result.</p>
+     *
+     * @param paddingPixels pixels of padding after each row
+     * @param rgba the colour of every pixel of the picture, as red, green, blue and alpha bytes
+     */
+    public static FakeImage rgba(int width, int height, int paddingPixels, byte[] rgba) {
+        int pixelStride = 4;
+        int rowStride = (width + paddingPixels) * pixelStride;
+        byte[] pixels = new byte[rowStride * height];
+        for (int row = 0; row < height; row++) {
+            for (int col = 0; col < width + paddingPixels; col++) {
+                byte[] colour = col < width ? rgba : POISON_RGBA;
+                System.arraycopy(colour, 0, pixels, row * rowStride + col * pixelStride,
+                        pixelStride);
+            }
+        }
+        return new FakeImage(PixelFormat.RGBA_8888, width, height,
+                new Plane[] {new FakePlane(ByteBuffer.wrap(pixels), pixelStride, rowStride)});
+    }
+
+    /** Opaque green, which stands in for row padding that nothing should read as picture. */
+    public static final byte[] POISON_RGBA = {0, (byte) 0xFF, 0, (byte) 0xFF};
+
     /** The byte that stands in for luma-row padding, which nothing should read. */
     public static final byte POISON = (byte) 0xEE;
 
@@ -128,10 +172,14 @@ public final class FakeImage extends Image {
     }
 
     private FakeImage(int format, int width, int height, Plane[] planes) {
+        this(format, width, height, planes, System.nanoTime());
+    }
+
+    private FakeImage(int format, int width, int height, Plane[] planes, long timestamp) {
         this.format = format;
         this.width = width;
         this.height = height;
-        this.timestamp = System.nanoTime();
+        this.timestamp = timestamp;
         this.planes = planes;
     }
 

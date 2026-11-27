@@ -149,7 +149,7 @@ final class CameraXMath {
         }
         return TransformMath.asTextureTransform(
                 TransformMath.centerCrop(crop, rotationDegrees, mirrored, viewWidth, viewHeight),
-                bufferSize, viewWidth, viewHeight);
+                bufferSize.getWidth(), bufferSize.getHeight(), viewWidth, viewHeight);
     }
 
     private static int clamp(int value, int minimum, int maximum) {
