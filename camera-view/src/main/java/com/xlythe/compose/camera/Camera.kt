@@ -142,6 +142,31 @@ interface CameraController {
     fun takePicture(file: File)
 
     /**
+     * Takes up to [count] pictures in quick succession and files each where the gallery looks, as
+     * takePicture() does, until [count] is reached or [stopBurst] is called. [onImageSaved] hears
+     * each picture as it lands, and [onFinished] then how many there were.
+     *
+     * The flash and the shutter sound stay off, except where the device insists on the sound, and
+     * image confirmation does not apply. A burst that cannot start finishes at once with 0.
+     */
+    fun startBurst(
+        count: Int,
+        onImageSaved: (uri: Uri) -> Unit = {},
+        onFinished: (count: Int) -> Unit = {}
+    )
+
+    /** Takes a burst into [directory] instead, reporting each picture's file to [onImageCaptured]. */
+    fun startBurst(
+        directory: File,
+        count: Int,
+        onImageCaptured: (file: File) -> Unit = {},
+        onFinished: (count: Int) -> Unit = {}
+    )
+
+    /** Ends a burst before its count. Pictures already being taken still arrive. */
+    fun stopBurst()
+
+    /**
      * Records a video and files it where the gallery looks, reporting it to [Camera]'s
      * onVideoSaved. Only this overload files into MediaStore. Below API 29 that needs
      * WRITE_EXTERNAL_STORAGE, and without it onVideoCaptureFailed is called instead.
@@ -233,6 +258,56 @@ private class CameraControllerImpl(
     override fun takePicture(file: File) {
         getView()?.takePicture(file)
             ?: Log.e(TAG, "View not available for takePicture")
+    }
+
+    override fun startBurst(
+        count: Int,
+        onImageSaved: (uri: Uri) -> Unit,
+        onFinished: (count: Int) -> Unit
+    ) {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for startBurst")
+            onFinished(0)
+            return
+        }
+        view.startBurst(count, object : CameraView.OnBurstListener {
+            override fun onBurstImageSaved(uri: Uri) {
+                onImageSaved(uri)
+            }
+
+            override fun onBurstFinished(count: Int) {
+                onFinished(count)
+            }
+        })
+    }
+
+    override fun startBurst(
+        directory: File,
+        count: Int,
+        onImageCaptured: (file: File) -> Unit,
+        onFinished: (count: Int) -> Unit
+    ) {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for startBurst")
+            onFinished(0)
+            return
+        }
+        view.startBurst(directory, count, object : CameraView.OnBurstListener {
+            override fun onBurstImageCaptured(file: File) {
+                onImageCaptured(file)
+            }
+
+            override fun onBurstFinished(count: Int) {
+                onFinished(count)
+            }
+        })
+    }
+
+    override fun stopBurst() {
+        getView()?.stopBurst()
+            ?: Log.e(TAG, "View not available for stopBurst")
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -500,7 +575,8 @@ private fun Extension.toCameraView() = when (this) {
  * @param stabilizationEnabled Steadies the preview and recorded video, where the camera can.
  * @param lowLightBoostEnabled Brightens the preview in the dark.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
- *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
+ *  {@link CameraController#startBurst}, {@link CameraController#startRecording(File)} and
+ *  {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
  * @param onImageCaptured Receives a picture from [CameraController.takePicture] given a file.
  * @param onImageSaved Receives where a picture from [CameraController.takePicture] without a file
