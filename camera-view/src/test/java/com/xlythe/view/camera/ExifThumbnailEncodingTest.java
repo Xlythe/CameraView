@@ -143,6 +143,64 @@ public class ExifThumbnailEncodingTest {
         assertEquals(480, bounds.outHeight);
     }
 
+    /**
+     * Spec tags and a thumbnail asked for together are both written, and a later plain save
+     * keeps both, in a block that still parses and stays inside its 64KB.
+     */
+    @Test
+    public void specTagsAndAThumbnailAreBothKept() throws IOException {
+        File file = picture(640, 480);
+        Exif exif = new Exif(file);
+        assertTrue(exif.setTags(new ExifTags.Builder()
+                .set(ExifTags.Tag.IMAGE_TITLE, "Both")
+                .set(ExifTags.Tag.TEMPERATURE, "21.5")));
+        exif.attachThumbnail();
+        exif.save();
+
+        assertTagsAndThumbnail(file);
+
+        Exif again = new Exif(file);
+        again.setDescription("saved again");
+        again.save();
+
+        assertTagsAndThumbnail(file);
+        assertEquals("saved again", new Exif(file).getDescription());
+    }
+
+    /** A thumbnailed file given tags later keeps the thumbnail it had. */
+    @Test
+    public void specTagsSetLaterKeepTheThumbnail() throws IOException {
+        File file = thumbnailed(picture(640, 480));
+
+        Exif exif = new Exif(file);
+        exif.setTags(new ExifTags.Builder()
+                .set(ExifTags.Tag.IMAGE_TITLE, "Both")
+                .set(ExifTags.Tag.TEMPERATURE, "21.5"));
+        exif.save();
+
+        assertTagsAndThumbnail(file);
+    }
+
+    /**
+     * The file carries the tags the two tests above set and one declared thumbnail, in an Exif
+     * segment that parses, fits its length field, and leaves the picture decodable.
+     */
+    private static void assertTagsAndThumbnail(File file) throws IOException {
+        assertOneDeclaredThumbnail(file);
+        Exif saved = new Exif(file);
+        assertTrue(saved.hasThumbnail());
+        assertEquals("Both", saved.getTag(ExifTags.Tag.IMAGE_TITLE));
+        assertEquals("21500/1000", saved.getTag(ExifTags.Tag.TEMPERATURE));
+        ExifSegment.Segment segment = ExifSegment.find(readAll(file));
+        assertNotNull("the Exif segment should still parse", segment);
+        assertTrue(segment.payloadLength <= ExifSegment.MAX_APP1_PAYLOAD);
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(file.getPath(), bounds);
+        assertEquals(640, bounds.outWidth);
+        assertEquals(480, bounds.outHeight);
+    }
+
     /** A file with no picture in it to shrink saves without a thumbnail. */
     @Test
     public void aFileThatWillNotDecodeSavesWithoutAThumbnail() throws IOException {

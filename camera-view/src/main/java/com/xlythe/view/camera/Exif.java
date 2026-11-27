@@ -21,6 +21,7 @@ import java.io.RandomAccessFile;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.EnumMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TimeZone;
@@ -171,6 +172,16 @@ public class Exif {
      */
     private boolean mHasThumbnail;
 
+    /**
+     * The {@link ExifTags} tags the file is to carry: those it held when opened, as
+     * {@link #setTags} has changed them since. ExifInterface cannot parse them, so its save
+     * drops them, and every save writes these back after it.
+     */
+    private final Map<ExifTags.Tag, ExifTags.Value> mTags;
+
+    /** Whether this is a JPEG file, the one kind whose Exif block {@link ExifTags} can write. */
+    private final boolean mCanWriteTags;
+
     // When true, avoid saving any time. This is a privacy issue.
     private boolean mRemoveTimestamp = false;
 
@@ -199,17 +210,26 @@ public class Exif {
         mExifInterface = new ExifInterface(filePath);
         mFilePath = filePath;
         mHasThumbnail = mExifInterface.hasThumbnail();
+        byte[] head = readHead(filePath);
+        mCanWriteTags = ExifSegment.isJpeg(head);
+        mTags = ExifTags.readAll(head);
     }
 
     public Exif(InputStream is) throws IOException {
         mExifInterface = new ExifInterface(is);
         mFilePath = null;
         mHasThumbnail = mExifInterface.hasThumbnail();
+        mCanWriteTags = false;
+        mTags = new EnumMap<>(ExifTags.Tag.class);
     }
 
     /**
-     * Persists changes to disc. A thumbnail the file already holds is kept, and one
+     * Persists changes to disc. The {@link ExifTags} tags the file held and those
+     * {@link #setTags} set are written, a thumbnail the file already holds is kept, and one
      * {@link #attachThumbnail()} asked for is written.
+     *
+     * @throws IOException if the file cannot be saved, or its Exif block has no room left for
+     *     the {@link ExifTags} tags, in which case everything else is still saved
      */
     @WorkerThread
     public void save() throws IOException {
@@ -219,7 +239,46 @@ public class Exif {
         attachMandatoryTags();
         mExifInterface.saveAttributes();
         restoreUndefinedTypes();
+        IOException tagsError = null;
+        try {
+            saveTags();
+        } catch (IOException error) {
+            // Held until the thumbnail is saved, so failing to fit the tags costs nothing else.
+            tagsError = error;
+        }
         saveThumbnail();
+        if (tagsError != null) {
+            throw tagsError;
+        }
+    }
+
+    /**
+     * Writes the {@link ExifTags} tags into the block saveAttributes has just rewritten without
+     * them. They follow restoreUndefinedTypes, since the private directory they are added to is
+     * copied as it stands, and precede the thumbnail, which takes whatever room they leave.
+     *
+     * @throws IOException if the file cannot be rewritten or its block has no room for them
+     */
+    @WorkerThread
+    private void saveTags() throws IOException {
+        if (mTags.isEmpty()) {
+            return;
+        }
+        // Only a JPEG file has tags to write, so there is always a file.
+        File file = new File(mFilePath);
+        byte[] updated;
+        try {
+            byte[] jpeg = read(file);
+            updated = jpeg == null ? null : ExifTags.write(jpeg, mTags);
+        } catch (RuntimeException | OutOfMemoryError error) {
+            throw new IOException("Unable to write " + mTags.keySet(), error);
+        }
+        if (updated == null) {
+            throw new IOException("No room in the Exif block for " + mTags.keySet());
+        }
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            out.write(updated);
+        }
     }
 
     /**
@@ -723,57 +782,40 @@ public class Exif {
 
     /**
      * Reads a tag the standard defines but {@code ExifInterface} has no name for, which is most
-     * of what Exif 3.0 added.
+     * of what Exif 3.0 added: the value the file held when opened, or the one {@link #setTags}
+     * has set since.
      *
-     * @return the value as text, or null when the tag is absent
+     * @return the value as text in the shape the file stores it, a rational as
+     *     "numerator/denominator", or null when the tag is absent
      */
+    @AnyThread
     @Nullable
     public String getTag(@NonNull ExifTags.Tag tag) {
-        if (mFilePath == null) {
-            return null;
-        }
-        try {
-            byte[] jpeg = read(new File(mFilePath));
-            ExifTags.Value value = jpeg == null ? null : ExifTags.readAll(jpeg).get(tag);
-            return value == null ? null : value.text();
-        } catch (IOException | RuntimeException error) {
-            Log.w(TAG, "Unable to read " + tag, error);
-            return null;
-        }
+        ExifTags.Value value = mTags.get(tag);
+        return value == null ? null : value.text();
     }
 
     /**
-     * Writes tags the standard defines but {@code ExifInterface} has no name for. Applied at once
-     * rather than at {@link #save()}, which rewrites the block and would drop them, so call it
-     * after saving.
+     * Sets tags the standard defines but {@code ExifInterface} has no name for, to be written by
+     * {@link #save()} as {@link #setAttribute} is. A null value removes the tag. Saving writes
+     * them after the rest of the block, so this may be called at any point before.
      *
-     * @return true if anything was written
+     * @return true if saving will write them; false, with nothing changed, when a value does not
+     *     suit its tag, such as a word for a number, or this was opened on a stream or on a file
+     *     other than a JPEG, which have no Exif block these can be written into
      */
+    @AnyThread
     public boolean setTags(@NonNull ExifTags.Builder tags) {
-        if (mFilePath == null) {
-            return false;
-        }
-        File file = new File(mFilePath);
-        try {
-            byte[] jpeg = read(file);
-            if (jpeg == null) {
-                return false;
-            }
-            Map<ExifTags.Tag, ExifTags.Value> values = ExifTags.readAll(jpeg);
-            if (!ExifTags.apply(tags, values)) {
-                return false;
-            }
-            byte[] updated = ExifTags.write(jpeg, values);
-            if (updated == null) {
-                return false;
-            }
-            try (FileOutputStream out = new FileOutputStream(file)) {
-                out.write(updated);
-            }
-            return true;
-        } catch (IOException | RuntimeException | OutOfMemoryError error) {
-            Log.w(TAG, "Unable to write the requested tags", error);
-            return false;
+        return mCanWriteTags && ExifTags.apply(tags, mTags);
+    }
+
+    /** The start of a file, enough to hold its Exif segment if it has one. */
+    @NonNull
+    private static byte[] readHead(@NonNull String filePath) throws IOException {
+        try (RandomAccessFile file = new RandomAccessFile(filePath, "r")) {
+            byte[] head = new byte[(int) Math.min(file.length(), HEAD_BYTES)];
+            file.readFully(head);
+            return head;
         }
     }
 
