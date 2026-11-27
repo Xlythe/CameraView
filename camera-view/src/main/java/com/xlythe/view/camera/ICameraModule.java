@@ -16,6 +16,7 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.UiThread;
 
 import com.xlythe.view.camera.stream.VideoRecorder;
 
@@ -112,6 +113,34 @@ public abstract class ICameraModule {
     }
 
     protected void stopBarcodeScanner() {}
+
+    /** Receives preview frames as the original camera API delivers them. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public interface PreviewFrameListener {
+        /**
+         * Called on the main thread with each preview frame.
+         *
+         * @param nv21 the frame, which the listener may keep
+         * @param rotationDegrees the clockwise turn that stands the frame upright
+         * @param frontFacing whether the frame came from a lens facing the user
+         */
+        @UiThread
+        void onPreviewFrame(@NonNull byte[] nv21, int width, int height, int rotationDegrees,
+                boolean frontFacing);
+    }
+
+    /**
+     * Hands every preview frame to a listener as NV21 bytes, or stops when given null.
+     *
+     * <p>For a backend whose frames cannot reach an ImageReader, which is how a sweep reads the
+     * original camera API. Backends built on camera2 hand out a surface instead, and say no.</p>
+     *
+     * @return whether frames will be delivered
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    protected boolean setPreviewFrameListener(@Nullable PreviewFrameListener listener) {
+        return false;
+    }
 
     @RequiresApi(18)
     public VideoRecorder.Canvas getCanvas() {
