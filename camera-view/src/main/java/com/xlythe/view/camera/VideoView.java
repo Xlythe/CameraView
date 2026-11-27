@@ -462,12 +462,8 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         closePreparingInputStream();
         Surface surface = new Surface(surfaceTexture);
         try {
-            try {
-                Objects.requireNonNull(mMediaPlayer).stop();
-            } catch (IllegalStateException ignored) {
-                // The newly created player has not entered the started state yet.
-            }
-            mMediaPlayer.reset();
+            // Reset stops whatever played from any state; stop would complain of a new player.
+            Objects.requireNonNull(mMediaPlayer).reset();
 
             if (file != null) {
                 // MediaPlayer reads from the descriptor until it finishes preparing, so unlike
