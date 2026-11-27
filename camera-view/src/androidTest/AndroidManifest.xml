@@ -23,5 +23,13 @@
             android:name="com.xlythe.view.camera.test.CameraTestActivity"
             android:exported="false"
             android:screenOrientation="fullSensor" />
+        <!--
+          In a process of its own, so the camera service weighs it against the test's process
+          as another app.
+        -->
+        <activity
+            android:name="com.xlythe.view.camera.test.CameraHolderActivity"
+            android:exported="false"
+            android:process=":holder" />
     </application>
 </manifest>

@@ -2760,7 +2760,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
-                .setCaptureMode(getCaptureMode(cameraInfo, format))
+                .setCaptureMode(getCaptureMode(cameraInfo, format, drawing))
                 .setJpegQuality(getPictureQuality());
         // Checked against this camera as well as on request, since the lens may have changed.
         if (format == CameraView.PictureFormat.ULTRA_HDR && writesUltraHdr(cameraInfo)) {
@@ -3095,14 +3095,31 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      *
      * <p>RAW never comes from the buffer: CameraX takes such a picture by reprocessing a kept
      * frame, and a reprocessed capture writes only JPEG or YUV, never a RAW_SENSOR frame.</p>
+     *
+     * <p>Nor does a drawn still. An effect makes CameraX share one camera stream between the
+     * preview and the still, and each use case it shares has to fit in a single surface; keeping
+     * frames adds the surfaces they are kept and reprocessed through, and the bind throws.</p>
+     *
+     * @param drawing whether the bind puts frames through an effect
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
-    private int getCaptureMode(
-            @NonNull CameraInfo cameraInfo, @NonNull CameraView.PictureFormat format) {
-        if (getQuality() == CameraView.Quality.MAX) {
+    private int getCaptureMode(@NonNull CameraInfo cameraInfo,
+            @NonNull CameraView.PictureFormat format, boolean drawing) {
+        return captureMode(getQuality(), cameraInfo.isZslSupported(), format, drawing);
+    }
+
+    /**
+     * See {@link #getCaptureMode}.
+     *
+     * @param zslSupported whether the camera keeps frames to take a picture from
+     */
+    @OptIn(markerClass = ExperimentalZeroShutterLag.class)
+    static int captureMode(@NonNull CameraView.Quality quality, boolean zslSupported,
+            @NonNull CameraView.PictureFormat format, boolean drawing) {
+        if (quality == CameraView.Quality.MAX) {
             return ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY;
         }
-        return cameraInfo.isZslSupported() && !writesRaw(format)
+        return zslSupported && !writesRaw(format) && !drawing
                 ? ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
                 : ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY;
     }
