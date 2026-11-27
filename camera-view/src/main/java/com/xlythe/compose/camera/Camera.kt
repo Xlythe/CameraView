@@ -272,7 +272,8 @@ interface CameraController {
      * runs from 0 to 1 along the way. All three are called on the main thread.
      *
      * @return whether the sweep started. False on a device that cannot report its rotation, or a
-     *     camera that does not publish its angle of view.
+     *     camera that does not publish its angle of view, and while [enterBackgroundReplacement]
+     *     is in force.
      * @throws IllegalStateException if the camera is not open, a sweep is already running, or
      *     the camera's frames are already going to a barcode scanner, an analyzer or a recording
      */

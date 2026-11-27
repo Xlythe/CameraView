@@ -1675,9 +1675,10 @@ public class CameraView extends FrameLayout {
         return mReplacingBackground;
     }
 
-    /** Whether frame analysis or the barcode scanner is reading frames. */
+    /** Whether frame analysis, the barcode scanner or a sweep is reading frames. */
     private boolean isReadingFrames() {
-        return mFrameStream != null || mBarcodeScanner != null || mUsingModuleBarcodeScanner;
+        return mFrameStream != null || mBarcodeScanner != null || mUsingModuleBarcodeScanner
+                || mPanoramaSession != null;
     }
 
     public void exitBarcodeScanner() {
@@ -1842,7 +1843,8 @@ public class CameraView extends FrameLayout {
      * viewer shows it as a panorama.</p>
      *
      * @return whether the sweep started. False on a device that cannot report its rotation, or a
-     *     camera that does not publish its angle of view, and before API 19.
+     *     camera that does not publish its angle of view, before API 19, and while the background
+     *     is being replaced.
      * @throws IllegalStateException if the camera is not open, a sweep is already running, or the
      *     camera's frames are already going to a barcode scanner, a frame analyzer or a recording
      */
@@ -1869,6 +1871,10 @@ public class CameraView extends FrameLayout {
         if (mFrameStream != null || mBarcodeScanner != null || mUsingModuleBarcodeScanner
                 || isRecording()) {
             throw new IllegalStateException("The camera's frames are already in use");
+        }
+        if (mReplacingBackground) {
+            Log.w(TAG, "A sweep cannot run while the background is being replaced");
+            return false;
         }
         PanoramaCallback callback = new PanoramaCallback(listener, gallery);
         PanoramaSession session = new PanoramaSession(getContext(),
