@@ -44,7 +44,7 @@ import java.util.concurrent.Executors;
 /**
  * ViewerFragment shows any picture, video or sound file in the library's MediaView, which works
  * out what the file is: a picture or DNG to zoom into, a panorama, a photo sphere, a video, a
- * motion photo, a 360° video or a recording. The choices along the bottom show it as something
+ * motion photo, a 360° video, a recording or an animated picture. The choices along the bottom show it as something
  * else instead, and the line at the top says what MediaTags reads from it.
  *
  * <p>MainFragment opens it on the picture it just filed; the menu opens it empty, to pick a
@@ -273,6 +273,9 @@ public class ViewerFragment extends Fragment {
         if (tags.getMotionPhoto() != null) {
             parts.add(resources.getString(R.string.viewer_motion_photo));
         }
+        if (tags.isAnimated()) {
+            parts.add(resources.getString(R.string.viewer_animated));
+        }
         if (parts.isEmpty()) {
             return resources.getString(R.string.viewer_no_metadata);
         }
@@ -322,6 +325,8 @@ public class ViewerFragment extends Fragment {
             return MediaView.SPHERICAL_VIDEO;
         } else if (id == R.id.viewer_type_audio) {
             return MediaView.AUDIO;
+        } else if (id == R.id.viewer_type_animation) {
+            return MediaView.ANIMATION;
         }
         return MediaView.UNKNOWN;
     }
@@ -344,6 +349,8 @@ public class ViewerFragment extends Fragment {
                 return R.string.viewer_mode_spherical;
             case MediaView.AUDIO:
                 return R.string.viewer_mode_audio;
+            case MediaView.ANIMATION:
+                return R.string.viewer_mode_animation;
             default:
                 return R.string.viewer_mode_detect;
         }

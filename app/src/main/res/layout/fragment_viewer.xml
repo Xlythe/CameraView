@@ -117,6 +117,11 @@
                         style="@style/ViewerChoice"
                         android:text="@string/viewer_mode_audio" />
 
+                    <RadioButton
+                        android:id="@+id/viewer_type_animation"
+                        style="@style/ViewerChoice"
+                        android:text="@string/viewer_mode_animation" />
+
                 </RadioGroup>
 
                 <CheckBox

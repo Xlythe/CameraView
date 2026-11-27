@@ -56,6 +56,8 @@
     <string name="viewer_mode_spherical">360°</string>
     <!-- Plays the file as a recording -->
     <string name="viewer_mode_audio">Sound</string>
+    <!-- Plays the file as an animated picture -->
+    <string name="viewer_mode_animation">Animation</string>
     <!-- What the viewer shows, for accessibility services -->
     <string name="viewer_media_description">The file being viewed</string>
     <!-- What the file is shown as, then what its metadata says -->
@@ -66,6 +68,8 @@
     <string name="viewer_hdr">HDR</string>
     <!-- The file is a motion photo -->
     <string name="viewer_motion_photo">Motion photo</string>
+    <!-- The file is an animated picture -->
+    <string name="viewer_animated">Animated</string>
     <!-- The file says nothing about itself -->
     <string name="viewer_no_metadata">No metadata</string>
     <!-- Shows the picture flat, to zoom into -->

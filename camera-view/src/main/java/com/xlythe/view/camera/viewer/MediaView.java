@@ -76,7 +76,8 @@ import java.util.concurrent.TimeUnit;
  *   <li>a video, which a tap plays and pauses;</li>
  *   <li>a motion photo, whose clip plays while it is held;</li>
  *   <li>a 360° video, to look around while it plays;</li>
- *   <li>sound, showing its cover picture if it has one, which a tap plays and pauses.</li>
+ *   <li>sound, showing its cover picture if it has one, which a tap plays and pauses;</li>
+ *   <li>an animated GIF, WebP or PNG, which plays as soon as it shows and a tap pauses.</li>
  * </ul>
  *
  * <p>HDR pictures and videos put the window in HDR colour mode while they show, where the device
@@ -92,7 +93,7 @@ import java.util.concurrent.TimeUnit;
 public class MediaView extends FrameLayout {
     /** What a file is shown as. */
     @IntDef({UNKNOWN, PICTURE, PANORAMA, PHOTOSPHERE, VIDEO, MOTION_PHOTO, SPHERICAL_VIDEO,
-            AUDIO})
+            AUDIO, ANIMATION})
     @Retention(RetentionPolicy.SOURCE)
     public @interface MediaType {}
 
@@ -112,6 +113,8 @@ public class MediaView extends FrameLayout {
     public static final int SPHERICAL_VIDEO = 6;
     /** Sound, shown as its cover picture. */
     public static final int AUDIO = 7;
+    /** An animated picture, which loops. */
+    public static final int ANIMATION = 8;
 
     /** The progress line's thickness when no style sets it, in dp. */
     private static final float DEFAULT_PROGRESS_DP = 2;
@@ -409,6 +412,13 @@ public class MediaView extends FrameLayout {
             case AUDIO:
                 showAudio(location, detection);
                 break;
+            case ANIMATION: {
+                AnimationView animation = new AnimationView(getContext(), mExecutor);
+                animation.setImageLoadListener(imageListener());
+                setContent(animation);
+                animation.setLocation(location);
+                break;
+            }
             default:
                 reportFailed();
                 return;
@@ -758,6 +768,9 @@ public class MediaView extends FrameLayout {
         if (mContent instanceof VideoView) {
             return ((VideoView) mContent).isPlaying();
         }
+        if (mContent instanceof AnimationView) {
+            return ((AnimationView) mContent).isPlaying();
+        }
         try {
             return mPlayer != null && mPlayerPrepared && mPlayer.isPlaying();
         } catch (IllegalStateException released) {
@@ -774,6 +787,9 @@ public class MediaView extends FrameLayout {
     public boolean play() {
         if (mContent instanceof VideoView) {
             return ((VideoView) mContent).play();
+        }
+        if (mContent instanceof AnimationView) {
+            return ((AnimationView) mContent).play();
         }
         if (mType == MOTION_PHOTO || mPlayer == null || !mPlayerPrepared) {
             return false;
@@ -795,6 +811,9 @@ public class MediaView extends FrameLayout {
     public boolean pause() {
         if (mContent instanceof VideoView) {
             return ((VideoView) mContent).pause();
+        }
+        if (mContent instanceof AnimationView) {
+            return ((AnimationView) mContent).pause();
         }
         if (!isPlaying()) {
             return false;
@@ -943,7 +962,8 @@ public class MediaView extends FrameLayout {
     @Override
     public boolean performClick() {
         boolean handled = super.performClick();
-        if (!mTapToPlay || (mType != VIDEO && mType != SPHERICAL_VIDEO && mType != AUDIO)) {
+        if (!mTapToPlay || (mType != VIDEO && mType != SPHERICAL_VIDEO && mType != AUDIO
+                && mType != ANIMATION)) {
             return handled;
         }
         if (isPlaying()) {

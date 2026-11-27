@@ -402,6 +402,74 @@ public class MediaViewTest {
                 MediaTags.SphericalVideo.STEREO_MONO), 0f);
     }
 
+    /** An animated picture plays as soon as it shows, and a tap pauses and plays it. */
+    @Test
+    public void anAnimationPlaysAndATapPausesIt() throws IOException {
+        show(file(ApngDecoderTest.everyOperation(), ".png"));
+        ShadowLooper.idleMainLooper();
+        assertEquals(MediaView.ANIMATION, mView.getMediaType());
+        assertEquals(MediaView.ANIMATION, mRecorder.loaded);
+        assertTrue(mView.getContentView() instanceof AnimationView);
+        assertTrue(mView.isPlaying());
+        assertFalse("already playing", mView.play());
+
+        assertTrue(mView.performClick());
+        assertFalse(mView.isPlaying());
+        assertFalse("already paused", mView.pause());
+        assertTrue(mView.performClick());
+        assertTrue(mView.isPlaying());
+        Bitmap bitmap = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888);
+        mView.draw(new Canvas(bitmap));
+
+        // Shown as a still, an animation is just its first frame.
+        mView.setMediaType(MediaView.PICTURE);
+        assertTrue(mView.getContentView() instanceof LargeImageView);
+    }
+
+    /** A picture asked to animate that does not, shows still. */
+    @Test
+    public void aStillShownAsAnAnimationStaysStill() throws IOException {
+        mView.setMediaType(MediaView.ANIMATION);
+        show(file(jpeg(64, 48, null), ".jpg"));
+        ShadowLooper.idleMainLooper();
+        assertTrue(mView.getContentView() instanceof AnimationView);
+        assertEquals(MediaView.ANIMATION, mRecorder.loaded);
+        assertFalse(mView.isPlaying());
+        assertFalse(mView.play());
+        Bitmap bitmap = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888);
+        mView.draw(new Canvas(bitmap));
+    }
+
+    /** What cannot be decoded at all fails, as anything else would. */
+    @Test
+    public void anAnimationThatCannotBeReadFails() {
+        mView.setMediaType(MediaView.ANIMATION);
+        show(new File("/nowhere.gif"));
+        ShadowLooper.idleMainLooper();
+        assertTrue(mRecorder.failed);
+    }
+
+    @Test
+    @Config(sdk = 27)
+    public void beforeAndroid9OnlyGifAndPngAnimate() {
+        assertTrue(MediaDetector.animatesHere(MediaTags.FORMAT_PNG));
+        assertTrue(MediaDetector.animatesHere(MediaTags.FORMAT_GIF));
+        assertFalse(MediaDetector.animatesHere(MediaTags.FORMAT_WEBP));
+        assertFalse(MediaDetector.animatesHere(MediaTags.FORMAT_HEIF));
+    }
+
+    @Test
+    public void fromAndroid9WebpAnimatesButAvifWaitsFor12() {
+        assertTrue(MediaDetector.animatesHere(MediaTags.FORMAT_WEBP));
+        assertFalse(MediaDetector.animatesHere(MediaTags.FORMAT_AVIF));
+    }
+
+    @Test
+    @Config(sdk = 31)
+    public void fromAndroid12AvifAnimates() {
+        assertTrue(MediaDetector.animatesHere(MediaTags.FORMAT_AVIF));
+    }
+
     /** Draws without anything to show, which draws nothing. */
     @Test
     public void drawsNothingWhenEmpty() {

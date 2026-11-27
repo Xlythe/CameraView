@@ -110,6 +110,10 @@ final class MediaDetector {
                     return new Detection(MediaView.MOTION_PHOTO, hdr, motion, null, wholeFrame,
                             null);
                 }
+                if (tags != null && tags.isAnimated() && animatesHere(tags.getFormat())) {
+                    return new Detection(MediaView.ANIMATION, false, null, null, wholeFrame,
+                            null);
+                }
                 int rotation = tags == null ? 0 : tags.getRotation();
                 return new Detection(pictureType(tags == null ? null : tags.getPanorama(),
                         bounds, rotation), hdr, null, null, wholeFrame, null);
@@ -135,6 +139,21 @@ final class MediaDetector {
             default:
                 throw new IOException(location + " is no media this device knows");
         }
+    }
+
+    /**
+     * Whether an animated picture of a format plays on this release: an animated PNG and GIF
+     * always, the rest from Android 9, and AVIF from Android 12, where it decodes at all.
+     */
+    @VisibleForTesting
+    static boolean animatesHere(@MediaTags.Format int format) {
+        if (format == MediaTags.FORMAT_PNG || format == MediaTags.FORMAT_GIF) {
+            return true;
+        }
+        if (format == MediaTags.FORMAT_AVIF) {
+            return Build.VERSION.SDK_INT >= 31;
+        }
+        return Build.VERSION.SDK_INT >= 28;
     }
 
     /**
