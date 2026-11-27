@@ -65,6 +65,15 @@ jobs:
     needs: verify
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # One runner per device, so an emulator going down costs only its own results.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: pixel2Api28
+            image: system-images;android-28;google_apis;x86
+          - device: pixel6Api37
+            image: system-images;android-37.0;google_apis_ps16k;x86_64
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -89,16 +98,22 @@ jobs:
       # failure; a licence that is genuinely still missing fails the next step loudly.
       - name: Accept the SDK licences the emulator images need
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-      - name: Run API 28 and API 37 managed-device tests
+      # Installed before Gradle, which otherwise downloads the emulator during device setup.
+      - name: Install the emulator and system image
+        run: >-
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          emulator
+          "${{ matrix.image }}"
+      - name: Run ${{ matrix.device }} managed-device tests
         run: >-
           gradle --no-daemon --stacktrace
-          :camera-view:cameraMatrixGroupDebugAndroidTest
+          :camera-view:${{ matrix.device }}DebugAndroidTest
           -Pandroid.testoptions.manageddevices.emulator.gpu=swiftshader_indirect
       - name: Upload device-test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: managed-device-results
+          name: managed-device-results-${{ matrix.device }}
           if-no-files-found: ignore
           path: |
             camera-view/build/reports/androidTests/**
