@@ -310,7 +310,9 @@ public class LegacyCameraModule extends ICameraModule {
         }
         boolean custom = getShutterSound() != 0;
         try {
-            boolean applied = mCamera.enableShutterSound(isShutterSoundEnabled() && !custom);
+            // A burst is silent, where the platform lets the click be silenced.
+            boolean applied = mCamera.enableShutterSound(
+                    mBurst == null && isShutterSoundEnabled() && !custom);
             mPlaysOwnClick = custom && applied;
         } catch (RuntimeException e) {
             Log.w(TAG, "Failed to set the shutter sound", e);
@@ -366,7 +368,7 @@ public class LegacyCameraModule extends ICameraModule {
             return;
         }
         mBurst = burst;
-        boolean silenced = enableShutterSound(camera, false);
+        applyShutterSound();
         String flashMode = turnFlashOff(camera);
         burst.whenFinished(() -> {
             if (mBurst != burst) {
@@ -374,9 +376,7 @@ public class LegacyCameraModule extends ICameraModule {
             }
             mBurst = null;
             mBurstFile = null;
-            if (silenced) {
-                enableShutterSound(camera, true);
-            }
+            applyShutterSound();
             if (flashMode != null) {
                 setFlashMode(camera, flashMode);
             }
@@ -399,6 +399,8 @@ public class LegacyCameraModule extends ICameraModule {
         }
         mBurstFile = file;
         try {
+            // No shutter callback: the platform plays the click where it cannot be silenced, and
+            // a burst plays none of the app's own.
             camera.takePicture(null, null, new LegacyPictureListener(
                     file, getRelativeCameraOrientation(false /* isPreview */),
                     isUsingFrontFacingCamera(), exifCaptureParameters(), this,
@@ -430,23 +432,6 @@ public class LegacyCameraModule extends ICameraModule {
             Log.e(TAG, "Failed to take a burst picture", e);
             mBurstFile = null;
             burst.onPictureFailed(file);
-        }
-    }
-
-    /**
-     * Turns the camera's own click on or off, where the device lets it be turned off.
-     *
-     * @return whether the camera took the change
-     */
-    private static boolean enableShutterSound(@NonNull Camera camera, boolean enabled) {
-        if (Build.VERSION.SDK_INT < 17) {
-            return false;
-        }
-        try {
-            return camera.enableShutterSound(enabled);
-        } catch (RuntimeException e) {
-            Log.w(TAG, "Failed to change the shutter sound", e);
-            return false;
         }
     }
 

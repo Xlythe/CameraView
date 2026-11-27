@@ -171,6 +171,55 @@ public class LegacyBurstTest {
         assertTrue(shadow().isShutterSoundEnabled());
     }
 
+    /** Afterwards the click is as the app set it, not simply back on. */
+    @Test
+    public void theShutterComesBackAsTheAppSetIt() {
+        module.setShutterSoundEnabled(false);
+        module.open();
+        Burst burst = new Burst(directory, "muted", 2, heard);
+
+        module.startBurst(burst);
+        runUntilFinished(burst);
+
+        assertFalse(shadow().isShutterSoundEnabled());
+    }
+
+    /** A click turned on during a burst waits for the burst to finish. */
+    @Test
+    public void aShutterTurnedOnDuringABurstWaitsForTheEnd() {
+        module.setShutterSoundEnabled(false);
+        module.open();
+        ShadowJpegCamera.holdPictures();
+        Burst burst = new Burst(directory, "later", 2, heard);
+
+        module.startBurst(burst);
+        module.setShutterSoundEnabled(true);
+        assertFalse("still silent while the burst runs", shadow().isShutterSoundEnabled());
+
+        ShadowJpegCamera.releasePictures();
+        runUntilFinished(burst);
+        assertTrue(shadow().isShutterSoundEnabled());
+    }
+
+    /** No picture of a burst reports its shutter, so no sound of the app's own plays for one. */
+    @Test
+    public void noPictureOfABurstReportsItsShutter() {
+        int[] shutters = {0};
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onShutter() { shutters[0]++; }
+            @Override public void onImageConfirmation() {}
+            @Override public void onFailure() { failures++; }
+        });
+        module.open();
+        Burst burst = new Burst(directory, "unheard", 3, heard);
+
+        module.startBurst(burst);
+        runUntilFinished(burst);
+
+        assertEquals(3, heard.pictures.size());
+        assertEquals(0, shutters[0]);
+    }
+
     @Test
     public void aBurstNeverFiresTheFlash() {
         module.open();
