@@ -22,6 +22,7 @@ import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
+import java.util.Map;
 import java.util.TimeZone;
 import java.util.UUID;
 
@@ -733,7 +734,8 @@ public class Exif {
         }
         try {
             byte[] jpeg = read(new File(mFilePath));
-            return jpeg == null ? null : ExifTags.read(jpeg, tag);
+            ExifTags.Value value = jpeg == null ? null : ExifTags.readAll(jpeg).get(tag);
+            return value == null ? null : value.text();
         } catch (IOException | RuntimeException error) {
             Log.w(TAG, "Unable to read " + tag, error);
             return null;
@@ -757,7 +759,11 @@ public class Exif {
             if (jpeg == null) {
                 return false;
             }
-            byte[] updated = ExifTags.write(jpeg, tags);
+            Map<ExifTags.Tag, ExifTags.Value> values = ExifTags.readAll(jpeg);
+            if (!ExifTags.apply(tags, values)) {
+                return false;
+            }
+            byte[] updated = ExifTags.write(jpeg, values);
             if (updated == null) {
                 return false;
             }
