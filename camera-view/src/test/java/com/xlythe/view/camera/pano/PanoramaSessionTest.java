@@ -16,6 +16,7 @@ import android.graphics.BitmapFactory;
 import android.hardware.Sensor;
 import android.hardware.SensorManager;
 import android.location.Location;
+import android.os.Build;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -138,8 +139,15 @@ public class PanoramaSessionTest {
         assertEquals(60f, metadata.initialVerticalFovDegrees, 0.1f);
         // Without a compass the heading is not known, and is not made up.
         assertNull(metadata.poseHeadingDegrees);
-        assertNotNull(new ExifInterface(file.getPath())
-                .getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        // The Exif every picture carries, which the photo sphere packet written after it keeps.
+        ExifInterface exif = new ExifInterface(file.getPath());
+        assertNotNull(exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertEquals(Build.MANUFACTURER, exif.getAttribute(ExifInterface.TAG_MAKE));
+        assertEquals(Build.MODEL, exif.getAttribute(ExifInterface.TAG_MODEL));
+        assertNotNull(exif.getAttribute(ExifInterface.TAG_SOFTWARE));
+        assertTrue(exif.getAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID).matches("[0-9a-f]{32}"));
+        assertTrue("no thumbnail", exif.hasThumbnail());
+        assertNotNull(exif.getThumbnailBitmap());
     }
 
     @Test

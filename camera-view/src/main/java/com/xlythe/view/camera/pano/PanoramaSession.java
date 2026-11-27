@@ -642,8 +642,12 @@ public final class PanoramaSession implements GuideState.Source {
         } finally {
             bitmap.recycle();
         }
+        // What every picture the camera takes carries. Exposure settings are left out, since each
+        // frame of a sweep was exposed on its own.
         Exif exif = new Exif(mFile);
         exif.attachTimestamp();
+        exif.attachCaptureDevice(mContext);
+        exif.attachThumbnail();
         Location location = mCallback.getLocation();
         if (location != null) {
             exif.attachLocation(location);

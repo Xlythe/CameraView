@@ -12,14 +12,18 @@ import android.content.Context;
 import android.hardware.Camera;
 import android.hardware.Sensor;
 import android.hardware.SensorManager;
+import android.location.Location;
+import android.location.LocationManager;
 import android.media.FakeImage;
 import android.media.ImageReader;
 import android.net.Uri;
+import android.os.Build;
 import android.os.SystemClock;
 import android.view.View;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.exifinterface.media.ExifInterface;
 
 import com.xlythe.view.camera.pano.PanoramaGuideView;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
@@ -168,6 +172,45 @@ public class PanoramaCaptureTest {
         assertEquals(file, recorder.saved);
         assertFalse(cameraView.isCapturingPanorama());
         assertEquals(View.GONE, guide().getVisibility());
+    }
+
+    /**
+     * A saved sweep carries the Exif any picture does, tagged with the fix the camera has followed
+     * since it opened, which is still there once the system has forgotten its own.
+     */
+    @Test
+    public void aSavedSweep_carriesThePictureExif_andWhereTheDeviceIs() throws Exception {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+        addRotationSensor();
+        openCamera2();
+        FakeLocation.deliver(context, FakeLocation.fix(LocationManager.GPS_PROVIDER,
+                FakeLocation.LATITUDE, FakeLocation.LONGITUDE, 5));
+        FakeLocation.setLastKnown(context, LocationManager.GPS_PROVIDER, null);
+        assertTrue(cameraView.startPanorama(file, CameraView.PanoramaMode.PANORAMA, recorder));
+        ImageReader reader = awaitReader();
+        long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
+        while (!hasPainted() && System.currentTimeMillis() < deadline) {
+            holdStill();
+            ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv420(64, 48, 0, 2));
+            Thread.sleep(50);
+            idle();
+        }
+        assertTrue("no frame was painted", hasPainted());
+        cameraView.stopPanorama();
+        awaitResult();
+        assertEquals(file, recorder.saved);
+
+        Location tagged = new Exif(file).getLocation();
+        assertNotNull("expected the sweep to carry a location", tagged);
+        assertEquals(FakeLocation.LATITUDE, tagged.getLatitude(), 1e-4);
+        assertEquals(FakeLocation.LONGITUDE, tagged.getLongitude(), 1e-4);
+        assertEquals("the sweep asks for nothing of its own", 2, FakeLocation.listeners(context));
+        ExifInterface exif = new ExifInterface(file.getPath());
+        assertEquals(Build.MANUFACTURER, exif.getAttribute(ExifInterface.TAG_MAKE));
+        assertEquals(Build.MODEL, exif.getAttribute(ExifInterface.TAG_MODEL));
+        assertNotNull(exif.getAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID));
+        assertTrue("no thumbnail", exif.hasThumbnail());
     }
 
     @Test

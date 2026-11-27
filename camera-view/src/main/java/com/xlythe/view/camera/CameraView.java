@@ -1747,8 +1747,9 @@ public class CameraView extends FrameLayout {
      * is also saved, with whatever it covered, when {@link #stopPanorama} is called or the camera
      * closes.</p>
      *
-     * <p>The file is a JPEG carrying photo sphere XMP metadata, so a gallery or a panorama viewer
-     * shows it as a panorama rather than as a very wide picture.</p>
+     * <p>The file is a JPEG with the Exif any picture has, the device's location included when the
+     * app holds a location permission, and photo sphere XMP metadata, so a gallery or a panorama
+     * viewer shows it as a panorama.</p>
      *
      * @return whether the sweep started. False on a device that cannot report its rotation, or a
      *     camera that does not publish its angle of view, and before API 19.

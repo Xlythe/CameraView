@@ -464,11 +464,12 @@ only has to turn on the spot. A panorama finishes once it has gone all the way r
 photosphere once the whole sphere is covered, straight up and down included. stopPanorama saves
 what was covered so far, and cancelPanorama saves nothing.
 
-The picture is a JPEG carrying photo sphere metadata, so galleries and panorama viewers show it as
-a panorama. Without a file it is filed in the gallery, under Pictures, and reported to
-onPanoramaSaved(Uri); given a file it is written there and reported to onPanoramaCaptured(File).
-startPanorama returns false on a device that cannot report which way it is pointing. Lock the
-screen's orientation while a sweep runs, or turning the phone will rotate it.
+The picture is a JPEG with the same Exif as any other picture and photo sphere metadata, so
+galleries and panorama viewers show it as a panorama. Without a file it is filed in the gallery,
+under Pictures, and reported to onPanoramaSaved(Uri); given a file it is written there and
+reported to onPanoramaCaptured(File). startPanorama returns false on a device that cannot report
+which way it is pointing. Lock the screen's orientation while a sweep runs, or turning the phone
+will rotate it.
 ```java
 mCameraView.startPanorama(CameraView.PanoramaMode.PHOTOSPHERE,
     new CameraView.PanoramaListener() {
