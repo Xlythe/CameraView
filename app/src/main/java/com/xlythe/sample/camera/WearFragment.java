@@ -224,6 +224,7 @@ public class WearFragment extends CameraFragment {
             return;
         }
         setStatus(R.string.wear_status_capturing);
+        // Given a file, because the picture is scaled and sent to the watch rather than filed.
         mCameraView.takePicture(new File(requireContext().getCacheDir(),
                 "for-watch-" + System.currentTimeMillis() + ".jpg"));
     }
@@ -231,11 +232,6 @@ public class WearFragment extends CameraFragment {
     @Override
     public void onImageCaptured(File file) {
         sendToWatch(file);
-    }
-
-    @Override
-    public void onCaptureFiled(@Nullable Uri uri) {
-        Log.d(TAG, uri == null ? "Could not save the picture" : "Saved to " + uri);
     }
 
     /**

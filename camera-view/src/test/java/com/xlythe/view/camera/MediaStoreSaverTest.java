@@ -2,6 +2,7 @@ package com.xlythe.view.camera;
 
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
@@ -15,6 +16,7 @@ import android.provider.MediaStore;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
@@ -44,7 +46,7 @@ public class MediaStoreSaverTest {
     @Before
     public void setUp() throws IOException {
         context = RuntimeEnvironment.getApplication();
-        capture = new File(context.getCacheDir(), "2026-11-26 10.15.00.jpg");
+        capture = new File(context.getCacheDir(), "2026-11-26-10-15-00-000.jpg");
         try (FileOutputStream output = new FileOutputStream(capture)) {
             output.write(CONTENTS);
         }
@@ -76,7 +78,7 @@ public class MediaStoreSaverTest {
         assertEquals(1, updates.size());
         assertEquals(0, (int) updates.get(0).getContentValues()
                 .getAsInteger(MediaStore.MediaColumns.IS_PENDING));
-        assertTrue("the capture itself is left for the caller", capture.exists());
+        assertFalse("the cache file goes once it is filed", capture.exists());
     }
 
     @Test
@@ -118,16 +120,18 @@ public class MediaStoreSaverTest {
         assertEquals(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES),
                 copied.getParentFile());
         assertArrayEquals(CONTENTS, Files.readAllBytes(copied.toPath()));
-        assertTrue(capture.exists());
+        assertFalse(capture.exists());
     }
 
-    /** A timestamped name keeps its shape, without the colons some filesystems refuse. */
+    /** A capture MediaStore will not take is lost either way, so its cache file still goes. */
     @Test
     @Config(sdk = 37)
-    public void aNameLosesTheCharactersFilesystemsReject() {
-        assertEquals("2026-11-26 10-15-00.jpg",
-                MediaStoreSaver.displayName(new File("2026-11-26 10:15:00.jpg")));
-        assertEquals("a-b-c.mp4", MediaStoreSaver.displayName(new File("a?b*c.mp4")));
+    public void aRefusedCaptureStillLosesItsCacheFile() throws Exception {
+        Robolectric.buildContentProvider(CameraViewFilingTest.RefusingMediaProvider.class)
+                .create(MediaStore.AUTHORITY);
+
+        assertNull(save(false /* isVideo */));
+        assertFalse(capture.exists());
     }
 
     private static byte[] readAll(InputStream input) throws IOException {

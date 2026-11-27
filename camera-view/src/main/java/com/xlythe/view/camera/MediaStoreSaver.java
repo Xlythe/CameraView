@@ -16,8 +16,6 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
-import androidx.annotation.RestrictTo;
-import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 
 import java.io.File;
@@ -32,12 +30,11 @@ import java.util.concurrent.Executors;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
 /**
- * Puts a copy of a capture where the gallery looks: through MediaStore from API 29, and into the
- * public directory before that. {@link com.xlythe.fragment.camera.CameraFragment} calls it for
- * every capture it takes; an app driving CameraView itself chose its own destination.
+ * Moves a capture where the gallery looks: through MediaStore from API 29, and into the public
+ * directory before that. {@link CameraView#takePicture()} and {@link CameraView#startRecording()}
+ * file every capture through it; a capture given a File stays where the caller put it.
  */
-@RestrictTo(RestrictTo.Scope.LIBRARY)
-public final class MediaStoreSaver {
+final class MediaStoreSaver {
     /** The album captures are filed under, inside Pictures or Movies. */
     private static final String ALBUM = "CameraView";
 
@@ -49,7 +46,7 @@ public final class MediaStoreSaver {
     });
 
     /** Hears where a capture landed, on the main thread. */
-    public interface Callback {
+    interface Callback {
         /** The published capture, or null if it could not be saved. */
         void onSaved(@Nullable Uri uri);
     }
@@ -57,10 +54,10 @@ public final class MediaStoreSaver {
     private MediaStoreSaver() {}
 
     /**
-     * Publishes a copy of a capture, and says where it went. The file itself is left alone, since
-     * a caller may still be reading it.
+     * Publishes a capture, says where it went, and deletes the cache file it came from. The cache
+     * file goes even when publishing fails, since nothing else knows it is there.
      */
-    public static void save(@NonNull Context context, @NonNull File file, boolean isVideo,
+    static void save(@NonNull Context context, @NonNull File file, boolean isVideo,
             @NonNull Callback callback) {
         Context applicationContext = context.getApplicationContext();
         Handler mainHandler = new Handler(Looper.getMainLooper());
@@ -68,6 +65,9 @@ public final class MediaStoreSaver {
             Uri uri = Build.VERSION.SDK_INT >= 29
                     ? insert(applicationContext.getContentResolver(), file, isVideo)
                     : copyToPublicDirectory(applicationContext, file, isVideo);
+            if (file.exists() && !file.delete()) {
+                Log.w(TAG, "Could not delete " + file);
+            }
             mainHandler.post(() -> callback.onSaved(uri));
         });
     }
@@ -84,7 +84,7 @@ public final class MediaStoreSaver {
             return null;
         }
 
-        File destination = new File(directory, displayName(file));
+        File destination = new File(directory, file.getName());
         if (destination.exists() && !destination.delete()) {
             Log.e(TAG, "Could not replace " + destination);
             return null;
@@ -133,7 +133,7 @@ public final class MediaStoreSaver {
                 : MediaStore.Images.Media.EXTERNAL_CONTENT_URI;
 
         ContentValues values = new ContentValues();
-        values.put(MediaStore.MediaColumns.DISPLAY_NAME, displayName(file));
+        values.put(MediaStore.MediaColumns.DISPLAY_NAME, file.getName());
         values.put(MediaStore.MediaColumns.MIME_TYPE, isVideo ? "video/mp4" : "image/jpeg");
         String directory = isVideo ? Environment.DIRECTORY_MOVIES : Environment.DIRECTORY_PICTURES;
         values.put(MediaStore.MediaColumns.RELATIVE_PATH, directory + "/" + ALBUM);
@@ -169,12 +169,6 @@ public final class MediaStoreSaver {
             }
             return null;
         }
-    }
-
-    /** The file's name, with characters some filesystems reject, colons above all, replaced. */
-    @VisibleForTesting
-    static String displayName(File file) {
-        return file.getName().replaceAll("[\\\\/:*?\"<>|]", "-");
     }
 
     @WorkerThread

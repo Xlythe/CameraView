@@ -17,10 +17,8 @@ import androidx.annotation.Nullable;
 
 import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.CameraView;
-import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.VideoView;
 
-import java.io.File;
 import java.util.Objects;
 
 /**
@@ -88,13 +86,13 @@ public class StreamFragment extends CameraFragment {
     }
 
     @Override
-    public void onImageCaptured(final File file) {
-        Log.d(TAG, Exif.describe(file));
+    public void onImageSaved(@NonNull Uri uri) {
+        report("Picture saved to " + uri);
     }
 
     @Override
-    public void onCaptureFiled(@Nullable Uri uri) {
-        report(uri == null ? "Could not save the capture" : "Saved to " + uri);
+    public void onVideoSaved(@NonNull Uri uri) {
+        report("Video saved to " + uri);
     }
 
     @Override

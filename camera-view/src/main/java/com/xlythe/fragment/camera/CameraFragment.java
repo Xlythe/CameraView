@@ -9,14 +9,11 @@ import android.content.Intent;
 import android.content.IntentFilter;
 import android.graphics.Rect;
 import android.hardware.display.DisplayManager;
-import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.os.Vibrator;
-import android.text.format.DateFormat;
-import android.util.Log;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.View;
@@ -27,24 +24,18 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 
 import com.xlythe.view.camera.CameraView;
-import com.xlythe.view.camera.MediaStoreSaver;
 import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.R;
 
-import java.io.File;
 import java.util.Arrays;
-import java.util.Date;
 import java.util.Formatter;
 import java.util.Locale;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
-import androidx.annotation.UiThread;
 import androidx.core.content.ContextCompat;
 import androidx.fragment.app.Fragment;
-
-import static com.xlythe.view.camera.ICameraModule.TAG;
 
 public abstract class CameraFragment extends Fragment implements CameraView.OnImageCapturedListener, CameraView.OnVideoCapturedListener, CameraView.OnCameraStateChangedListener {
     private static final String[] REQUIRED_PERMISSIONS;
@@ -100,11 +91,6 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
 
     /** Package-private so a test can deliver a result under the same code the prompt asks with. */
     static final int REQUEST_CODE_PERMISSIONS = 10;
-    // Colons are not legal in a file name on every filesystem Android mounts, and MediaStore
-    // rejects them in a display name, so the default avoids them.
-    private static final String DESTINATION = "yyyy-MM-dd-HH-mm-ss";
-    private static final String PHOTO_EXT = ".jpg";
-    private static final String VIDEO_EXT = ".mp4";
 
     private View mCameraHolder;
 
@@ -255,40 +241,6 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         super.onStop();
     }
 
-    @Override
-    public void onImageCaptured(File file) {
-
-    }
-
-    @Override
-    public void onVideoCaptured(File file) {
-
-    }
-
-    /**
-     * Called once a capture has been copied to where the gallery looks, with where it went, or
-     * null if it could not be. Every capture is filed without anything having to call for it.
-     */
-    @UiThread
-    public void onCaptureFiled(@Nullable Uri uri) {
-
-    }
-
-    /** Files a copy of a capture where the gallery looks, leaving the cache file alone. */
-    @UiThread
-    private void file(File capture, boolean isVideo) {
-        Context context = getContext();
-        if (context == null) {
-            return;
-        }
-        MediaStoreSaver.save(context, capture, isVideo, uri -> {
-            if (uri == null) {
-                Log.w(TAG, "Could not file " + capture + " where the gallery looks");
-            }
-            onCaptureFiled(uri);
-        });
-    }
-
     public void setEnabled(boolean enabled) {
         if (mCapture != null) {
             mCapture.setEnabled(enabled);
@@ -419,42 +371,8 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             return;
         }
 
-        // Wrapped rather than passed as this, so a subclass that overrides onImageCaptured
-        // without calling super still has its captures filed.
-        mCamera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
-            @Override
-            public void onImageConfirmation() {
-                CameraFragment.this.onImageConfirmation();
-            }
-
-            @Override
-            public void onImageCaptured(File file) {
-                CameraFragment.this.onImageCaptured(file);
-                file(file, false /* isVideo */);
-            }
-
-            @Override
-            public void onFailure() {
-                CameraFragment.this.onFailure();
-            }
-        });
-        mCamera.setOnVideoCapturedListener(new CameraView.OnVideoCapturedListener() {
-            @Override
-            public void onVideoConfirmation() {
-                CameraFragment.this.onVideoConfirmation();
-            }
-
-            @Override
-            public void onVideoCaptured(File file) {
-                CameraFragment.this.onVideoCaptured(file);
-                file(file, true /* isVideo */);
-            }
-
-            @Override
-            public void onFailure() {
-                CameraFragment.this.onFailure();
-            }
-        });
+        mCamera.setOnImageCapturedListener(this);
+        mCamera.setOnVideoCapturedListener(this);
         mCamera.setOnCameraStateChangedListener(this);
 
         if (mCapture != null) {
@@ -688,7 +606,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         }
 
         void onTap() {
-            mCamera.takePicture(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + PHOTO_EXT));
+            mCamera.takePicture();
             onTakePicture();
         }
 
@@ -697,7 +615,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
         @RequiresPermission(Manifest.permission.RECORD_AUDIO)
         void onHold() {
             vibrate();
-            mCamera.startRecording(new File(getContext().getCacheDir(), DateFormat.format(DESTINATION, new Date()) + VIDEO_EXT));
+            mCamera.startRecording();
             if (mCamera.isRecording()) {
                 boolean hasDurationLimit = mCamera.getMaxVideoDuration() > 0;
                 if (mDuration != null) {
