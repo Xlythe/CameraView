@@ -719,7 +719,8 @@ class PictureSession extends PreviewSession {
          */
         private List<Size> getMaximumResolutionSizes(List<Size> binned) {
             List<Size> unbinned = new ArrayList<>();
-            if (getQuality() != CameraView.Quality.MAX || mImageFormat != ImageFormat.JPEG) {
+            if (Build.VERSION.SDK_INT < 31 || getQuality() != CameraView.Quality.MAX
+                    || mImageFormat != ImageFormat.JPEG) {
                 return unbinned;
             }
             StreamConfigurationMap map = mCameraView.getMaximumResolutionMap();
