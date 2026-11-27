@@ -176,6 +176,7 @@ public final class CameraDeviceCaptureTest {
     /** Frames reach an analyzer, with a transform that maps them onto the view. */
     @Test
     public void framesReachAnAnalyzer() throws Exception {
+        DeviceState.assumeYuvBuffersWork();
         CountDownLatch analyzed = new CountDownLatch(3);
         AtomicReference<Matrix> transform = new AtomicReference<>();
         AtomicReference<Size> size = new AtomicReference<>();
