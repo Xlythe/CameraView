@@ -208,6 +208,17 @@ public class PhotosphereView extends FrameLayout {
     /** The pitch it looks at, likewise. */
     private volatile double mLookPitch;
 
+    /** Hears the surface a video decodes into, while one is shown instead of a picture. */
+    @Nullable
+    private VideoSurfaceListener mVideoListener;
+
+    /** Hears the surface a 360° video decodes into. */
+    interface VideoSurfaceListener {
+        /** A surface to decode into, in place of any given before. */
+        @MainThread
+        void onVideoSurface(@NonNull Surface surface);
+    }
+
     public PhotosphereView(@NonNull Context context) {
         this(context, null);
     }
@@ -347,8 +358,49 @@ public class PhotosphereView extends FrameLayout {
         updateMatrix();
     }
 
+    /**
+     * Shows a 360° video in place of a picture, on the part of the sphere the metadata covers.
+     * The surface its frames go into arrives through the listener, and again whenever the view
+     * makes a new one, such as after it was detached.
+     *
+     * @param s0 where in each frame the sphere starts across, which a stereo video halves
+     * @param t0 where it starts down
+     * @param s1 where it ends across
+     * @param t1 where it ends down
+     */
+    @MainThread
+    void showVideo(@NonNull GPano gpano, float s0, float t0, float s1, float t1,
+            @NonNull VideoSurfaceListener listener) {
+        load(null);
+        mVideoListener = listener;
+        mPlaced = false;
+        final int generation = mGeneration;
+        onSphereOpened(generation, gpano);
+        mRenderer.showVideo(SphereMesh.patch(gpano, 0, 0, 1, 1, s0, t0, s1, t1),
+                texture -> {
+                    texture.setOnFrameAvailableListener(updated -> mSurface.requestRender());
+                    mHandler.post(() -> {
+                        if (generation == mGeneration && mVideoListener == listener) {
+                            listener.onVideoSurface(new Surface(texture));
+                        }
+                    });
+                });
+        mSurface.requestRender();
+    }
+
+    /** Stops showing a video. */
+    @MainThread
+    void clearVideo() {
+        mVideoListener = null;
+        mRenderer.clearVideo();
+        mSurface.requestRender();
+    }
+
     @MainThread
     private void load(@Nullable ImageLocation location) {
+        if (mVideoListener != null && location != null) {
+            clearVideo();
+        }
         if (location == null ? mLocation == null : location.equals(mLocation)) {
             return;
         }
