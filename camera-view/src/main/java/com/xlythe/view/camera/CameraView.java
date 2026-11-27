@@ -688,11 +688,11 @@ public class CameraView extends FrameLayout {
         addView(mCameraView = new TextureView(getContext()));
         addView(mImagePreview = new ImageView(getContext()));
         addView(mVideoPreview = new VideoView(getContext()));
-        addView(mFocusReticle = new FocusReticle(getContext()));
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             addView(mPanoramaGuide = new PanoramaGuideView(getContext()));
             mPanoramaGuide.setVisibility(View.GONE);
         }
+        addView(mFocusReticle = new FocusReticle(getContext()));
         mFocusReticle.setColors(mFocusReticleColor, mFocusReticleLockedColor);
         mImagePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
         mImagePreview.setVisibility(View.GONE);
