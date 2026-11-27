@@ -363,6 +363,9 @@ public class CameraXHarnessTest {
         assertFalse("the camera should take the burst on", burst.isFinished());
         assertEquals("a burst never fires the flash",
                 ImageCapture.FLASH_MODE_OFF, module.imageCaptureFlashModeForTesting());
+        module.setFlash(CameraView.Flash.AUTO);
+        assertEquals("a flash asked for during a burst waits for it to finish",
+                ImageCapture.FLASH_MODE_OFF, module.imageCaptureFlashModeForTesting());
         FakeCameraXHost.idle();
         Burst second = new Burst(directory, "second", 3, new Burst.Callback() {
             @Override public void onPictureTaken(@NonNull File file) {}
@@ -384,8 +387,8 @@ public class CameraXHarnessTest {
 
         assertTrue("a burst has to finish", burst.isFinished());
         assertEquals(1, finishes[0]);
-        assertEquals("and the flash comes back once it is over",
-                ImageCapture.FLASH_MODE_ON, module.imageCaptureFlashModeForTesting());
+        assertEquals("and the flash last asked for comes back once it is over",
+                ImageCapture.FLASH_MODE_AUTO, module.imageCaptureFlashModeForTesting());
         module.setFlash(CameraView.Flash.OFF);
         assertTrue("a burst must not cost the binding", FakeCameraXHost.awaitBind(module));
     }

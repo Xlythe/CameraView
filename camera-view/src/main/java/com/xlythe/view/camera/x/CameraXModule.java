@@ -1052,7 +1052,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @Override public void setFlash(CameraView.Flash flash) {
         super.setFlash(flash);
-        runOnMainThread(() -> { if (mImageCapture != null) mImageCapture.setFlashMode(getFlashMode()); });
+        // A burst keeps the flash off, and puts this mode back once it finishes.
+        runOnMainThread(() -> {
+            if (mImageCapture != null && mBurst == null) mImageCapture.setFlashMode(getFlashMode());
+        });
     }
 
     @Override public void setDynamicRange(CameraView.DynamicRange dynamicRange) {
