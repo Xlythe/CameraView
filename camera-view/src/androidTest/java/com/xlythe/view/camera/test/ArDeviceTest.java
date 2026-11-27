@@ -14,6 +14,7 @@ import android.os.SystemClock;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -34,6 +35,7 @@ import org.junit.runner.RunWith;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
@@ -62,7 +64,9 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>Skips where AR cannot run, which is a real configuration: no ARCore, a phone Google does not
  * support for it, or one whose camera ARCore will not use. Tracking needs light, something to see
- * and a little movement, so the second test skips, saying which, where the phone cannot track.</p>
+ * and a little movement, so the second test skips, saying which, where the phone cannot track. On
+ * an emulator whose virtual scene camera it is told how to move, see {@link EmulatorScene}, the
+ * second test walks the camera through the room itself and so never skips for want of movement.</p>
  */
 @RunWith(AndroidJUnit4.class)
 public final class ArDeviceTest {
@@ -135,6 +139,99 @@ public final class ArDeviceTest {
     @After
     public void restoreTheDefault() {
         CameraView.setDefaultBackend(CameraView.Backend.AUTO);
+    }
+
+    /**
+     * Keeps the emulator's camera moving as a hand-held phone does: swaying side to side and a
+     * little forward, and turning a few degrees, while looking down at the room, so AR sees it from
+     * more than one place and finds the floor and the table.
+     */
+    private static final class Walk implements AutoCloseable {
+        /** How often the camera is given somewhere new to glide to. */
+        private static final long STEP_MILLIS = 250;
+
+        /** How far round the loop each step goes, in radians: a loop takes about six seconds. */
+        private static final double STEP_RADIANS = 0.25;
+
+        /** How far the camera looks down, in degrees. */
+        private static final float PITCH_DEGREES = -25f;
+
+        /**
+         * How many steps in a row the emulator may refuse before the walk gives up. The guest's
+         * network drops the odd connection to the host, which costs one step, not the walk.
+         */
+        private static final int MAX_FAILED_STEPS = 5;
+
+        /** The camera being walked. */
+        private final EmulatorScene mScene;
+
+        /** Moves the camera until closed. */
+        private final Thread mThread;
+
+        /** Why the camera stopped moving early, or null while it moves. */
+        private volatile IOException mFailure;
+
+        /** Whether the walk has been asked to stop. */
+        private volatile boolean mStopped;
+
+        /** Starts from where the camera began, facing the way the walk looks. */
+        Walk(@NonNull EmulatorScene scene) throws IOException {
+            mScene = scene;
+            scene.moveTo(0f, 0f, 0f);
+            scene.turnTo(PITCH_DEGREES, 0f, 0f);
+            mThread = new Thread(this::walk, "ArDeviceTestWalk");
+            mThread.start();
+        }
+
+        private void walk() {
+            double t = 0;
+            int failedSteps = 0;
+            while (!mStopped) {
+                t += STEP_RADIANS;
+                try {
+                    mScene.moveTo((float) (0.3 * Math.sin(t)), (float) (0.05 * Math.sin(2 * t)),
+                            (float) (-0.2 * (1 - Math.cos(t))));
+                    mScene.turnTo((float) (PITCH_DEGREES + 5 * Math.sin(1.3 * t)),
+                            (float) (10 * Math.sin(0.7 * t)), 0f);
+                    failedSteps = 0;
+                } catch (IOException error) {
+                    if (++failedSteps >= MAX_FAILED_STEPS) {
+                        mFailure = error;
+                        return;
+                    }
+                }
+                try {
+                    Thread.sleep(STEP_MILLIS);
+                } catch (InterruptedException error) {
+                    return;
+                }
+            }
+        }
+
+        /** Where the camera has been told to be, in metres, which is where it is heading. */
+        @NonNull
+        float[] getPosition() throws IOException {
+            return mScene.getPosition();
+        }
+
+        /** Fails if the camera stopped moving because the emulator would not move it. */
+        void assertMoving() {
+            IOException failure = mFailure;
+            if (failure != null) {
+                throw new AssertionError("the emulator stopped moving its camera", failure);
+            }
+        }
+
+        @Override
+        public void close() {
+            mStopped = true;
+            mThread.interrupt();
+            try {
+                mThread.join();
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+        }
     }
 
     /** Counts what each frame carried, and stands a light a metre and a half ahead once tracked. */
@@ -803,12 +900,26 @@ public final class ArDeviceTest {
         assumeArStarted(scenario, camera, entered.get());
         assertTrue("the camera did not reopen for AR",
                 opened.get().await(OPEN_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        EmulatorScene scene = EmulatorScene.fromArguments();
+        Log.i(TAG, scene == null ? "nothing moves the camera but whoever holds the phone"
+                : "walking the emulator's camera through its room");
+        try (Walk walk = scene == null ? null : new Walk(scene)) {
+            checkTrackedFrames(scenario, camera, probe, tracking, trackedAfter, start[0], walk);
+        }
+    }
+
+    private void checkTrackedFrames(@NonNull ActivityScenario<CameraTestActivity> scenario,
+            @NonNull CameraView camera, @NonNull Probe probe, @NonNull List<String> tracking,
+            @NonNull AtomicLong trackedAfter, long start, @Nullable Walk walk) throws Exception {
         int framesAtStart = probe.frames.get();
 
         // Tracking, which needs light, something to see and the phone moving a little.
-        deadline = SystemClock.uptimeMillis() + TRACKING_TIMEOUT_MILLIS;
+        long deadline = SystemClock.uptimeMillis() + TRACKING_TIMEOUT_MILLIS;
         while (trackedAfter.get() == 0 && SystemClock.uptimeMillis() < deadline) {
             Thread.sleep(100);
+        }
+        if (walk != null) {
+            walk.assertMoving();
         }
         Log.i(TAG, "tracking went " + tracking);
         Assume.assumeTrue("AR did not track within " + TRACKING_TIMEOUT_MILLIS + "ms, ending "
@@ -855,6 +966,8 @@ public final class ArDeviceTest {
 
         // The anchor stays put in the room, however the camera moves.
         float[] cameraAtStart = cameraPosition(v);
+        float[] sceneAtStart = walk == null ? null : walk.getPosition();
+        float sceneTravel = 0f;
         float drift = 0f;
         float travel = 0f;
         int samples = 0;
@@ -869,8 +982,21 @@ public final class ArDeviceTest {
                         distance(placed, new float[] {model[12], model[13], model[14]}));
             }
             travel = Math.max(travel, distance(cameraAtStart, cameraPosition(snapshot(probe.view))));
+            if (walk != null) {
+                try {
+                    sceneTravel = Math.max(sceneTravel,
+                            distance(sceneAtStart, walk.getPosition()));
+                } catch (IOException error) {
+                    // A dropped connection to the host costs this sample only.
+                }
+            }
         }
-        long elapsed = SystemClock.uptimeMillis() - start[0];
+        long elapsed = SystemClock.uptimeMillis() - start;
+        if (walk != null) {
+            walk.assertMoving();
+            Log.i(TAG, "the emulator moved its camera up to " + sceneTravel * 100f
+                    + "cm from where the anchor was placed");
+        }
         Log.i(TAG, "over " + DRIFT_WATCH_MILLIS + "ms the anchor moved " + drift * 100f
                 + "cm, tracked in " + trackedSamples + " of " + samples + " samples, while the"
                 + " camera moved " + travel * 100f + "cm; "

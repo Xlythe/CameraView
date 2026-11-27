@@ -8,6 +8,11 @@
       it was taken has to be able to hold the permission that supplies it.
     -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!--
+      So ArDeviceTest can move the emulator's virtual scene camera, through the emulator's gRPC
+      endpoint on the host. AR only starts tracking a camera that moves.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application>
         <!-- What an app that enters AR declares, so ArDeviceTest can. -->
