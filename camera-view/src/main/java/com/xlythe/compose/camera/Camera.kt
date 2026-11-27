@@ -44,7 +44,7 @@ enum class Quality {
     LOW,
     MEDIUM,
     HIGH,
-    /** Video at 4K and the largest picture the camera offers. See [CameraView.Quality.MAX]. */
+    /** Video at 4K and the largest picture the camera offers apps. See [CameraView.Quality.MAX]. */
     MAX
 }
 

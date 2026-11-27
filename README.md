@@ -59,6 +59,11 @@ Camera(
 )
 ```
 
+quality sizes videos and pictures. max records 4K and takes the largest picture the camera offers
+apps. Most phone sensors combine neighbouring pixels into one; on a phone that lets apps read the
+whole sensor, a max picture can use every pixel instead, and takes longer to capture. A picture
+taken while recording, or as ultraHdr or rawJpeg, keeps to the combined size.
+
 Camera also accepts zoomRatio [minZoomRatio to maxZoomRatio, or null to leave the zoom to
 pinchToZoom], animateZoom [boolean], shutterSoundEnabled [boolean], shutterSound [raw resource],
 pictureQuality [1 to 100], colorSpace [srgb, displayP3],
@@ -270,6 +275,9 @@ lowLightBoostEnabled [boolean].
     camera:maxVideoDuration="10000"
     camera:maxVideoSize="10000000" />
 ```
+
+quality="max" records 4K and takes the largest picture the camera offers apps, with every pixel of
+the sensor on a phone that lets apps read all of them, as described for Camera above.
 
 Each attribute has a matching setter. The last seven describe things not every camera can do, so
 each also has a companion that reports whether the camera now open supports it, for example
