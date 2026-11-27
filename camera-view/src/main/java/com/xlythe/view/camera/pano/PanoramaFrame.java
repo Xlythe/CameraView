@@ -113,7 +113,7 @@ public final class PanoramaFrame {
     @NonNull
     @WorkerThread
     ArgbImage toArgb(int maxSide, @NonNull Scratch scratch) {
-        int step = Math.max(1, (Math.max(width, height) + maxSide - 1) / maxSide);
+        int step = shrinkFactor(maxSide);
         int outWidth = width / step;
         int outHeight = height / step;
         byte[] y = scratch.y = mY.copy(scratch.y);
@@ -143,6 +143,11 @@ public final class PanoramaFrame {
             }
         }
         return new ArgbImage(pixels, outWidth, outHeight);
+    }
+
+    /** What {@link #toArgb} divides each side by to fit {@code maxSide}. */
+    int shrinkFactor(int maxSide) {
+        return Math.max(1, (Math.max(width, height) + maxSide - 1) / maxSide);
     }
 
     /** Full-range BT.601, which is what camera YUV is, in fixed point with ten fractional bits. */

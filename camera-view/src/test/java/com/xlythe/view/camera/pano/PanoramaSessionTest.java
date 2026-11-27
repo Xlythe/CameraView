@@ -1,0 +1,459 @@
+package com.xlythe.view.camera.pano;
+
+import static com.xlythe.view.camera.pano.FootprintTest.rolled;
+import static com.xlythe.view.camera.pano.RotationSensorTest.addSensor;
+import static com.xlythe.view.camera.pano.RotationSensorTest.vector;
+import static com.xlythe.view.camera.pano.SphereMathTest.uprightFacing;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+
+import android.content.Context;
+import android.graphics.BitmapFactory;
+import android.hardware.Sensor;
+import android.hardware.SensorManager;
+import android.location.Location;
+
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.exifinterface.media.ExifInterface;
+
+import com.xlythe.view.camera.Exif;
+
+import org.junit.Before;
+import org.junit.Rule;
+import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
+import org.junit.runner.RunWith;
+import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.Executor;
+
+/**
+ * A whole sweep, from frames and rotation to a file on disk, without a camera.
+ *
+ * <p>Frames are NV21 buffers and the rotation is fed straight into the sensor's history, so each
+ * frame is exactly where the test says it is. The main thread is a queue the test drains, which
+ * keeps the order of callbacks deterministic.</p>
+ */
+@RunWith(RobolectricTestRunner.class)
+public class PanoramaSessionTest {
+    /** A 4:3 sensor, 60 degrees across its long side. */
+    private static final float HORIZONTAL_FOV = 60f;
+    private static final float VERTICAL_FOV =
+            (float) Math.toDegrees(2 * Math.atan(Math.tan(Math.toRadians(30)) * 3 / 4));
+
+    private static final int FRAME_WIDTH = 320;
+    private static final int FRAME_HEIGHT = 240;
+
+    /** Frames a tenth of a second apart, which is a slow, steady sweep. */
+    private static final long FRAME_NANOS = 100_000_000L;
+
+    private static final long TIMEOUT_MILLIS = 20_000;
+
+    @Rule
+    public final TemporaryFolder folder = new TemporaryFolder();
+
+    /** The main thread, as a queue the test drains. */
+    private final ConcurrentLinkedQueue<Runnable> mMain = new ConcurrentLinkedQueue<>();
+
+    private final Executor mMainExecutor = mMain::add;
+
+    private Context context;
+    private Sensor gameRotation;
+    private RotationSensor sensor;
+    private Recorder recorder;
+    private File file;
+
+    /** The capture time of the next frame. */
+    private long time = 1_000_000_000L;
+
+    @Before
+    public void setUp() throws IOException {
+        context = RuntimeEnvironment.getApplication();
+        gameRotation = addSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
+        sensor = new RotationSensor(context);
+        recorder = new Recorder();
+        file = new File(folder.getRoot(), "sweep.jpg");
+    }
+
+    @Test
+    public void photosphere_finishesOnItsOwn_andSavesTheWholeSphere() throws IOException {
+        PanoramaSession session = session(true);
+        assertTrue(session.start());
+        feed(session, 0f, 0f, 0f, false);
+        GuideState first = session.getGuideState();
+        assertNotNull(first);
+        assertTrue(first.photosphere);
+        assertTrue(first.nextTarget >= 0);
+        // Do what the guide says: aim at the target it shows, a little off and a little turned
+        // each time, as a hand does, until it has nothing left to show.
+        float[][] wobble = {{0f, 0f, 0f}, {4f, 0f, 30f}, {-4f, 0f, 60f}, {0f, 4f, 15f},
+                {0f, -4f, 45f}};
+        int aims = 0;
+        while (session.isRunning() && aims < 600) {
+            GuideState state = session.getGuideState();
+            if (state.nextTarget < 0) {
+                break;
+            }
+            float[] offset = wobble[aims % wobble.length];
+            feed(session, state.targetYaws[state.nextTarget] + offset[0],
+                    state.targetPitches[state.nextTarget] + offset[1], offset[2], false);
+            aims++;
+        }
+        assertTrue("the guide never ran out of targets", aims < 600);
+        awaitResult();
+        assertEquals(1, recorder.finishing);
+        assertEquals(file, recorder.saved);
+        assertEquals(1f, recorder.progress.get(recorder.progress.size() - 1), 0f);
+
+        BitmapFactory.Options bounds = decodeBounds(file);
+        assertEquals(2 * bounds.outHeight, bounds.outWidth);
+        GPanoMetadata metadata = GPanoMetadata.readFrom(file);
+        assertNotNull(metadata);
+        assertEquals(bounds.outWidth, metadata.fullPanoWidthPixels);
+        assertEquals(bounds.outHeight, metadata.fullPanoHeightPixels);
+        assertEquals(bounds.outWidth, metadata.croppedAreaImageWidthPixels);
+        assertEquals(0, metadata.croppedAreaLeftPixels);
+        assertEquals(0, metadata.croppedAreaTopPixels);
+        assertEquals("equirectangular", metadata.projectionType);
+        assertTrue(metadata.sourcePhotosCount > 40);
+        assertNotNull(metadata.firstPhotoDate);
+        assertTrue(metadata.lastPhotoDate >= metadata.firstPhotoDate);
+        assertEquals(46.8f, metadata.initialHorizontalFovDegrees, 0.1f);
+        assertEquals(60f, metadata.initialVerticalFovDegrees, 0.1f);
+        // Without a compass the heading is not known, and is not made up.
+        assertNull(metadata.poseHeadingDegrees);
+        assertNotNull(new ExifInterface(file.getPath())
+                .getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+    }
+
+    @Test
+    public void panorama_finishesAllTheWayRound_andSavesABand() throws IOException {
+        addSensor(Sensor.TYPE_ROTATION_VECTOR);
+        sensor = new RotationSensor(context);
+        // The compass's north is 25 degrees clockwise of the gyroscope's.
+        sensor.onReading(false, 1, vector(uprightFacing(0f)));
+        sensor.onReading(true, 2, vector(uprightFacing(25f)));
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        for (int yaw = 30; yaw <= 390 && session.isRunning(); yaw += 5) {
+            feed(session, yaw, 0f, 0f, false);
+        }
+        awaitResult();
+        assertEquals(file, recorder.saved);
+
+        BitmapFactory.Options bounds = decodeBounds(file);
+        GPanoMetadata metadata = GPanoMetadata.readFrom(file);
+        assertNotNull(metadata);
+        assertEquals(metadata.fullPanoWidthPixels, bounds.outWidth);
+        assertEquals(metadata.croppedAreaImageWidthPixels, bounds.outWidth);
+        // A band round the horizon: a little under the frame's sixty degrees tall.
+        float tall = 180f * bounds.outHeight / metadata.fullPanoHeightPixels;
+        assertTrue("the band is " + tall + " degrees", tall > 45f && tall < 61f);
+        assertEquals(bounds.outHeight, metadata.croppedAreaImageHeightPixels);
+        assertEquals(0, metadata.initialViewPitchDegrees, 2);
+        // The sweep started at 30 by the gyroscope, which is 55 by the compass.
+        assertEquals(55f, metadata.poseHeadingDegrees, 1f);
+        assertEquals(55f, metadata.initialViewHeadingDegrees, 1f);
+    }
+
+    @Test
+    public void stoppingEarly_savesWhatWasSwept() throws IOException {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        for (int yaw = 0; yaw <= 90; yaw += 5) {
+            feed(session, yaw, 0f, 0f, false);
+        }
+        assertTrue(session.isRunning());
+        session.finish();
+        // Asking twice changes nothing.
+        session.finish();
+        assertFalse(session.isRunning());
+        assertEquals(GuideState.SAVING, session.getGuideState().status);
+        awaitResult();
+        GPanoMetadata metadata = GPanoMetadata.readFrom(file);
+        assertNotNull(metadata);
+        float wide = 360f * metadata.croppedAreaImageWidthPixels / metadata.fullPanoWidthPixels;
+        // Ninety degrees of sweep, and as much of the first and last frames as was painted.
+        assertTrue("the panorama is " + wide + " degrees wide", wide > 110f && wide < 137f);
+        // Placed in the middle of the full panorama, so it never runs off the edge.
+        assertEquals((metadata.fullPanoWidthPixels - metadata.croppedAreaImageWidthPixels) / 2,
+                metadata.croppedAreaLeftPixels);
+    }
+
+    @Test
+    public void stoppingBeforeAnyFrame_fails() {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        session.finish();
+        awaitResult();
+        assertTrue(recorder.failed);
+        assertFalse(file.exists());
+    }
+
+    @Test
+    public void cancelling_writesNothing() {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        // Started well above the horizon, so the panorama is swept along that pitch.
+        feed(session, 0f, 30f, 0f, false);
+        assertEquals(30f, session.getGuideState().bandPitch, 0.5f);
+        session.cancel();
+        session.cancel();
+        // A frame after the end is ignored.
+        feed(session, 20f, 0f, 0f, false);
+        drainFor(200);
+        assertNull(recorder.saved);
+        assertFalse(recorder.failed);
+        assertFalse(file.exists());
+    }
+
+    @Test
+    public void cancellingWhileSaving_removesThePicture() {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        feed(session, 0f, 0f, 0f, false);
+        session.finish();
+        session.cancel();
+        drainFor(2000);
+        assertNull(recorder.saved);
+        assertFalse(recorder.failed);
+        assertFalse(file.exists());
+    }
+
+    @Test
+    public void withoutARotationSensor_doesNotStart() {
+        Shadows.shadowOf((SensorManager) context.getSystemService(Context.SENSOR_SERVICE))
+                .removeSensor(gameRotation);
+        sensor = new RotationSensor(context);
+        assertFalse(session(false).start());
+    }
+
+    @Test
+    public void withoutOptics_doesNotStart() {
+        PanoramaSession session = new PanoramaSession(context, false, file, 90, 0f, 0f, recorder,
+                mMainExecutor, sensor);
+        assertFalse(session.start());
+        assertFalse(session.isRunning());
+    }
+
+    @Test
+    public void turningTooFast_paintsNothing() {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        // Ninety degrees a second.
+        for (int i = 0; i <= 10; i++) {
+            sensor.onReading(false, time + i * 10_000_000L, vector(uprightFacing(i * 0.9f)));
+        }
+        session.onFrame(frame(time + 50_000_000L, false));
+        GuideState state = session.getGuideState();
+        assertNotNull(state);
+        assertEquals(GuideState.TOO_FAST, state.status);
+        assertNull(state.thumbnail);
+        assertEquals(0f, state.progress, 0f);
+    }
+
+    @Test
+    public void aFrameWithNoRotationForIt_isIgnored() {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        session.onFrame(frame(time, false));
+        assertNull(session.getGuideState());
+        float[] matrix = new float[9];
+        assertFalse(session.getDisplayRotation(matrix));
+    }
+
+    @Test
+    public void aFrameAtThePlaceAlreadyPainted_isNotPaintedAgain() {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        feed(session, 0f, 0f, 0f, false);
+        int version = session.getGuideState().thumbnailVersion;
+        feed(session, 1f, 0f, 0f, false);
+        assertEquals(version, session.getGuideState().thumbnailVersion);
+        feed(session, 15f, 0f, 0f, false);
+        assertEquals(version + 1, session.getGuideState().thumbnailVersion);
+    }
+
+    @Test
+    public void legacyFrames_areProcessedOffTheCallersThread() {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        readings(0f, 0f, 0f);
+        session.offerFrame(frame(time, false));
+        long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
+        while (session.getGuideState() == null && System.currentTimeMillis() < deadline) {
+            Thread.yield();
+        }
+        assertNotNull(session.getGuideState());
+        session.finish();
+        // Offered after the end, and dropped.
+        session.offerFrame(frame(time, false));
+        awaitResult();
+        assertEquals(file, recorder.saved);
+    }
+
+    @Test
+    public void displayRotation_isTheNewestReadingWhenNothingIsNewer() {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        feed(session, 40f, 0f, 0f, false);
+        float[] matrix = new float[9];
+        assertTrue(session.getDisplayRotation(matrix));
+        CameraPose pose = new CameraPose(matrix, 90, false, 320, 240, 200f);
+        assertEquals(40f, pose.yaw(), 0.5f);
+    }
+
+    @Test
+    public void frontCamera_savesAMirroredPicture_withItsLocation() throws IOException {
+        Location location = new Location("test");
+        location.setLatitude(37.422);
+        location.setLongitude(-122.084);
+        recorder.location = location;
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        for (int yaw = 0; yaw <= 60; yaw += 5) {
+            feed(session, yaw, 0f, 0f, true);
+        }
+        assertTrue(session.getGuideState().frontFacing);
+        session.finish();
+        awaitResult();
+        assertEquals(file, recorder.saved);
+        Location tagged = new Exif(file).getLocation();
+        assertNotNull(tagged);
+        assertEquals(37.422, tagged.getLatitude(), 1e-3);
+    }
+
+    @Test
+    public void guideState_withStatus_keepsTheRest() {
+        PanoramaSession session = session(true);
+        assertTrue(session.start());
+        feed(session, 0f, 0f, 0f, false);
+        GuideState sweeping = session.getGuideState();
+        GuideState complete = sweeping.withStatus(GuideState.COMPLETE);
+        assertEquals(1f, complete.progress, 0f);
+        assertEquals(-1, complete.nextTarget);
+        assertEquals(sweeping.thumbnailVersion, complete.thumbnailVersion);
+        assertEquals(sweeping.targetYaws.length, complete.targetYaws.length);
+        GuideState again = complete.withStatus(GuideState.SWEEPING);
+        assertEquals(sweeping.nextTarget, sweeping.withStatus(GuideState.SWEEPING).nextTarget);
+        assertEquals(GuideState.SWEEPING, again.status);
+    }
+
+    private PanoramaSession session(boolean photosphere) {
+        return new PanoramaSession(context, photosphere, file, 90, HORIZONTAL_FOV, VERTICAL_FOV,
+                recorder, mMainExecutor, sensor);
+    }
+
+    /** Holds the phone still at a pose, and takes a frame there. */
+    private void feed(PanoramaSession session, float yaw, float pitch, float roll,
+            boolean front) {
+        readings(yaw, pitch, roll);
+        session.onFrame(frame(time, front));
+        drain();
+    }
+
+    /** Readings either side of the next frame's time, all of the same pose: held still. */
+    private void readings(float yaw, float pitch, float roll) {
+        time += FRAME_NANOS;
+        float[] values = vector(rolled(uprightFacing(yaw, pitch), roll));
+        sensor.onReading(false, time - 50_000_000L, values);
+        sensor.onReading(false, time - 10_000_000L, values);
+        sensor.onReading(false, time, values);
+    }
+
+    /** A textured frame, so the saved picture is not a flat colour. */
+    private static PanoramaFrame frame(long timestamp, boolean front) {
+        byte[] nv21 = new byte[FRAME_WIDTH * FRAME_HEIGHT * 3 / 2];
+        for (int y = 0; y < FRAME_HEIGHT; y++) {
+            for (int x = 0; x < FRAME_WIDTH; x++) {
+                nv21[y * FRAME_WIDTH + x] = (byte) ((x * 7 + y * 3) & 0xFF);
+            }
+        }
+        for (int i = FRAME_WIDTH * FRAME_HEIGHT; i < nv21.length; i++) {
+            nv21[i] = (byte) 128;
+        }
+        return PanoramaFrame.fromNv21(nv21, FRAME_WIDTH, FRAME_HEIGHT, front ? 270 : 90, front,
+                timestamp);
+    }
+
+    private void drain() {
+        Runnable runnable;
+        while ((runnable = mMain.poll()) != null) {
+            runnable.run();
+        }
+    }
+
+    /** Drains the main queue until the sweep reports what came of it. */
+    private void awaitResult() {
+        long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
+        while (recorder.saved == null && !recorder.failed
+                && System.currentTimeMillis() < deadline) {
+            drain();
+            Thread.yield();
+        }
+        drain();
+        assertTrue("the sweep never reported back", recorder.saved != null || recorder.failed);
+    }
+
+    private void drainFor(long millis) {
+        long deadline = System.currentTimeMillis() + millis;
+        while (System.currentTimeMillis() < deadline) {
+            drain();
+            Thread.yield();
+        }
+    }
+
+    private static BitmapFactory.Options decodeBounds(File file) {
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(file.getPath(), options);
+        assertTrue(options.outWidth > 0);
+        return options;
+    }
+
+    /** Remembers what the sweep said. */
+    private static final class Recorder implements PanoramaSession.Callback {
+        final List<Float> progress = new ArrayList<>();
+        int finishing;
+        @Nullable volatile File saved;
+        volatile boolean failed;
+        @Nullable Location location;
+
+        @Override
+        public void onProgress(float value) {
+            progress.add(value);
+        }
+
+        @Override
+        public void onFinishing() {
+            finishing++;
+        }
+
+        @Override
+        public void onSaved(@NonNull File file) {
+            saved = file;
+        }
+
+        @Override
+        public void onFailed() {
+            failed = true;
+        }
+
+        @Nullable
+        @Override
+        public Location getLocation() {
+            return location;
+        }
+    }
+}
