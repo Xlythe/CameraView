@@ -12,9 +12,11 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.ImageFormat;
 import android.graphics.PixelFormat;
 import android.graphics.SurfaceTexture;
 import android.media.FakeImage;
+import android.hardware.camera2.CaptureRequest;
 import android.media.ImageReader;
 import android.util.Size;
 
@@ -99,7 +101,8 @@ public class FrameEffectSessionTest {
         ShadowFrameSurfaceTexture.setFrameTransform(CAMERA_FLIP);
 
         Context context = RuntimeEnvironment.getApplication();
-        FakeCamera2.addBackAndFrontCameras(context);
+        // Cameras that write RAW, so that what a renderer withdraws is there to withdraw.
+        FakeCamera2.addBackAndFrontCameras(context, FakeCamera2.RawSupport.FULL);
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
         cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
             @Override public void onImageConfirmation() {}
@@ -241,6 +244,50 @@ public class FrameEffectSessionTest {
                 -1L, new Exif(output).getTimestamp());
         assertNotSame("the reader is given back once its one frame is read",
                 drawn, ShadowInjectableImageReader.latestReader());
+    }
+
+    /**
+     * RAW is withdrawn while a renderer draws, as Ultra HDR is: a drawn picture is a JPEG. A RAW
+     * format chosen before the renderer was set leaves the session without a sensor reader, and a
+     * picture asked for in it is refused rather than quietly written as a JPEG.
+     */
+    @Test
+    public void aRendererWithdrawsRawAndRefusesAPictureAskedForInIt() {
+        module.setPictureFormat(CameraView.PictureFormat.RAW_JPEG);
+        assertEquals("this camera writes RAW",
+                CameraView.PictureFormat.RAW_JPEG, module.getPictureFormat());
+        module.setFrameRenderer(renderer);
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        assertFalse(module.isPictureFormatSupported(CameraView.PictureFormat.RAW));
+        assertFalse(module.isPictureFormatSupported(CameraView.PictureFormat.RAW_JPEG));
+        assertTrue(module.isPictureFormatSupported(CameraView.PictureFormat.JPEG));
+        assertNull("no sensor reader while frames are drawn",
+                ShadowInjectableImageReader.latestReader(ImageFormat.RAW_SENSOR));
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+
+        assertTrue("the picture is refused", failed.get());
+        assertNull(captured.get());
+        assertEquals("nothing is asked of the camera", 0, stills().size());
+
+        module.setFrameRenderer(null);
+        FakeCamera2.idleMainLooper();
+        assertTrue("and RAW is offered again once nothing draws",
+                module.isPictureFormatSupported(CameraView.PictureFormat.RAW));
+    }
+
+    /** One-off requests carrying a picture, which are the only ones that set a JPEG quality. */
+    private static List<CaptureRequest> stills() {
+        List<CaptureRequest> stills = new ArrayList<>();
+        for (CaptureRequest request : ShadowCallbackCameraCaptureSession.getCaptures()) {
+            if (request.get(CaptureRequest.JPEG_QUALITY) != null) {
+                stills.add(request);
+            }
+        }
+        return stills;
     }
 
     /** The texture the camera writes stills into: the one listening that is not the preview's. */

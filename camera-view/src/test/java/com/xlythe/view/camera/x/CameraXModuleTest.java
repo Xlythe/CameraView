@@ -179,26 +179,27 @@ public final class CameraXModuleTest {
         assertEquals(new Size(720, 480), CameraXModule.imageTargetSize(CameraView.Quality.LOW));
     }
 
+    /** An effect gives way to a custom stream, whose second Preview CameraX cannot tell apart. */
+    @Test
+    public void anEffectGivesWayOnlyToACustomStream() {
+        assertTrue("the ordinary case binds an effect",
+                CameraXModule.canBindFrameEffect(false));
+        assertFalse("a custom stream needs a second Preview CameraX cannot tell apart",
+                CameraXModule.canBindFrameEffect(true));
+    }
+
     /**
-     * The two configurations an effect cannot be bound alongside, and the one it can.
-     *
-     * <p>Both refusals are CameraX's rather than this library's, and the second of them refuses by
-     * throwing out of the bind - so getting this wrong costs the camera, not the effect.</p>
+     * While frames are drawn the still is built as a JPEG whatever format was asked for, as it is
+     * on Camera2. CameraX throws out of a bind that pairs an effect with a raw or Ultra HDR still,
+     * so getting this wrong costs the camera, not the effect.
      */
     @Test
-    public void anEffectGivesWayToAStreamAndToAnUnprocessedStill() {
-        assertTrue("the ordinary case is an effect over a JPEG still",
-                CameraXModule.canBindFrameEffect(false, CameraView.PictureFormat.JPEG));
-
-        assertFalse("a custom stream needs a second Preview CameraX cannot tell apart",
-                CameraXModule.canBindFrameEffect(true, CameraView.PictureFormat.JPEG));
-
+    public void aDrawnStillIsBuiltAsAJpegWhateverTheFormat() {
         for (CameraView.PictureFormat format : CameraView.PictureFormat.values()) {
-            if (format == CameraView.PictureFormat.JPEG) {
-                continue;
-            }
-            assertFalse(format + " cannot come out of a GL pipeline",
-                    CameraXModule.canBindFrameEffect(false, format));
+            assertEquals(format + " while drawing", CameraView.PictureFormat.JPEG,
+                    CameraXModule.boundPictureFormat(format, true));
+            assertEquals(format + " otherwise", format,
+                    CameraXModule.boundPictureFormat(format, false));
         }
     }
 

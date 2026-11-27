@@ -1838,9 +1838,10 @@ public class CameraView extends FrameLayout {
     /**
      * Whether this camera can write pictures in a given format.
      *
-     * <p>Ultra HDR is not, while a renderer, filter or mask is drawing: a picture is then drawn
-     * as the preview shows it, and a drawn picture carries no gain map. It is written again once
-     * nothing is drawing.</p>
+     * <p>While a renderer, filter or mask is drawing, a picture is drawn as the preview shows it
+     * and written as a JPEG, so JPEG is the only format supported. Ultra HDR set beforehand
+     * falls back to JPEG, and a picture taken in RAW or RAW_JPEG set beforehand fails. Every
+     * format the camera writes is supported again once nothing is drawing.</p>
      */
     public boolean isPictureFormatSupported(PictureFormat format) {
         return mCameraModule.isPictureFormatSupported(format);

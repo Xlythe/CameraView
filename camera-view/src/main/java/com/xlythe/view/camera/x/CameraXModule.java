@@ -1381,8 +1381,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         boolean raw = writesRaw(getPictureFormat());
         if (raw && !writesRaw(imageCapture)) {
-            // The format changed to one this camera cannot write, as a lens switch can leave it. A
-            // caller who asked for a DNG and quietly got a JPEG would have no way to tell.
+            // The format changed to one this camera cannot write, as a lens switch can leave it,
+            // or frames are drawn, which makes the still a JPEG. A caller who asked for a DNG and
+            // quietly got a JPEG would have no way to tell.
             Log.w(TAG, "The bound camera cannot capture " + getPictureFormat());
             onImageFailed();
             return;
@@ -2072,14 +2073,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             CameraInfo cameraInfo = provider.getCameraInfo(selector);
             mSensorOrientation = cameraInfo.getSensorRotationDegrees();
             Preview displayPreview = createDisplayPreview(generation, cameraInfo);
+            Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews = createStreamPreviews(generation);
+            // Before the still, which is built as a JPEG whenever frames are drawn.
+            boolean drawing = prepareFrameEffect(!streamPreviews.isEmpty());
             // A still output is wanted alongside a recording, not instead of it: that is the
             // combination a camera app's video-snapshot button uses. Barcode analysis is the one
             // thing that genuinely takes the slot, because it needs the frames itself.
             ImageCapture imageCapture = mFrameAnalyzer == null
-                    ? createImageCapture(cameraInfo) : null;
+                    ? createImageCapture(cameraInfo, drawing) : null;
             ImageAnalysis imageAnalysis = mVideoCapture == null && mFrameAnalyzer != null
                     ? createImageAnalysis() : null;
-            Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews = createStreamPreviews(generation);
             List<UseCase> requested = new ArrayList<>();
             requested.add(displayPreview);
             if (mVideoCapture != null) requested.add(mVideoCapture);
@@ -2114,7 +2117,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             unbindCurrentUseCases();
             // After unbinding, so that an effect being let go is not closing outputs CameraX is
             // still drawing into, and before binding, because the group carries the effect.
-            CameraEffect effect = reconcileFrameEffect(!streamPreviews.isEmpty());
+            CameraEffect effect = reconcileFrameEffect(drawing);
             Camera camera = bindAtomically(selector, requested, effect);
             if (generation != mGeneration || !mOpenRequested || mPaused) {
                 provider.unbind(requested.toArray(new UseCase[0]));
@@ -2232,36 +2235,56 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     /**
-     * Whether an effect can be part of a bind that also carries these.
-     *
-     * <p>Two configurations rule one out, and the effect gives way to both because both were
-     * asked for on purpose where an effect may only be decorating.</p>
+     * Whether an effect can be part of a bind that also carries a custom stream, which it cannot.
      *
      * <p>A custom stream needs a second Preview, and CameraX picks the use cases an effect applies
-     * to by target type - it cannot tell two Previews apart. A raw or Ultra HDR still cannot come
-     * out of a GL pipeline at all, and CameraX says so by throwing out of the bind rather than by
-     * dropping the effect, so asking would cost the whole camera.</p>
+     * to by target type - it cannot tell two Previews apart. The effect gives way, because the
+     * stream was asked for on purpose where an effect may only be decorating.</p>
      */
-    static boolean canBindFrameEffect(
-            boolean hasCustomStream, @NonNull CameraView.PictureFormat pictureFormat) {
-        return !hasCustomStream && pictureFormat == CameraView.PictureFormat.JPEG;
+    static boolean canBindFrameEffect(boolean hasCustomStream) {
+        return !hasCustomStream;
     }
 
     /**
-     * The effect to bind with, bringing it up or letting it go so that it matches.
+     * The format the still use case is built for: the one asked for, or JPEG while frames are
+     * drawn.
      *
-     * <p>Returns null when {@link #canBindFrameEffect} says no, having released the renderer, so
-     * that the bind is the one that would have happened had nobody asked for an effect.</p>
+     * <p>A raw or Ultra HDR still cannot come out of a GL pipeline at all, and CameraX says so by
+     * throwing out of the bind rather than by dropping the effect. So the effect wins, as it does
+     * on Camera2: the still is a drawn JPEG, Ultra HDR falls back to it, and a capture asked for
+     * as RAW is refused rather than quietly written as something else.</p>
      */
-    @Nullable private CameraEffect reconcileFrameEffect(boolean hasCustomStream) {
-        if (canBindFrameEffect(hasCustomStream, getPictureFormat())) {
-            ensureFrameEffect();
-            return mFrameEffect;
+    @NonNull
+    static CameraView.PictureFormat boundPictureFormat(
+            @NonNull CameraView.PictureFormat requested, boolean drawing) {
+        return drawing ? CameraView.PictureFormat.JPEG : requested;
+    }
+
+    /**
+     * Brings the effect up ahead of the use cases built around it, if one is wanted and can be
+     * bound. Letting one go waits for {@link #reconcileFrameEffect}, after the unbind.
+     *
+     * @return whether the coming bind puts frames through GL
+     */
+    private boolean prepareFrameEffect(boolean hasCustomStream) {
+        if (!canBindFrameEffect(hasCustomStream)) {
+            if (mFrameEffect != null || getFrameRenderer() != null
+                    || getCameraTextureProvider() != null) {
+                Log.w(TAG, "Camera frames bypass GL: a custom stream is attached");
+            }
+            return false;
         }
-        if (mFrameEffect != null || getFrameRenderer() != null
-                || getCameraTextureProvider() != null) {
-            Log.w(TAG, "Camera frames bypass GL: " + (hasCustomStream
-                    ? "a custom stream is attached" : "stills are " + getPictureFormat()));
+        ensureFrameEffect();
+        return mFrameEffect != null;
+    }
+
+    /**
+     * The effect to bind with, letting it go when the bind does not draw frames, so that the bind
+     * is the one that would have happened had nobody asked for an effect.
+     */
+    @Nullable private CameraEffect reconcileFrameEffect(boolean drawing) {
+        if (drawing) {
+            return mFrameEffect;
         }
         releaseFrameEffect();
         return null;
@@ -2566,22 +2589,23 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         });
     }
 
-    @NonNull private ImageCapture createImageCapture(@NonNull CameraInfo cameraInfo) {
+    /** @param drawing whether the bind puts frames through GL, which makes every still a JPEG */
+    @NonNull private ImageCapture createImageCapture(
+            @NonNull CameraInfo cameraInfo, boolean drawing) {
+        CameraView.PictureFormat format = boundPictureFormat(getPictureFormat(), drawing);
         ImageCapture.Builder builder = new ImageCapture.Builder()
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
-                .setCaptureMode(getCaptureMode(cameraInfo))
+                .setCaptureMode(getCaptureMode(cameraInfo, format))
                 .setJpegQuality(getPictureQuality());
         // Checked against this camera as well as on request, since the lens may have changed.
-        if (getPictureFormat() == CameraView.PictureFormat.ULTRA_HDR && !isDrawingFrames()
-                && writesUltraHdr(cameraInfo)) {
+        if (format == CameraView.PictureFormat.ULTRA_HDR && writesUltraHdr(cameraInfo)) {
             builder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR);
         }
         Size sensorSize = DngWriter.sensorSize(cameraCharacteristics(cameraInfo));
-        if (writesRaw(getPictureFormat()) && writesRaw(cameraInfo, getPictureFormat())
-                && sensorSize != null) {
-            builder.setOutputFormat(outputFormatFor(getPictureFormat()));
+        if (writesRaw(format) && writesRaw(cameraInfo, format) && sensorSize != null) {
+            builder.setOutputFormat(outputFormatFor(format));
             // DngCreator only writes a frame the sensor's size, so that is the one size asked for.
             // Should CameraX not offer it after all, its own choice stands and a frame of the
             // wrong size fails the capture rather than the bind.
@@ -2880,11 +2904,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * frame, and a reprocessed capture writes only JPEG or YUV, never a RAW_SENSOR frame.</p>
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
-    private int getCaptureMode(@NonNull CameraInfo cameraInfo) {
+    private int getCaptureMode(
+            @NonNull CameraInfo cameraInfo, @NonNull CameraView.PictureFormat format) {
         if (getQuality() == CameraView.Quality.MAX) {
             return ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY;
         }
-        return cameraInfo.isZslSupported() && !writesRaw(getPictureFormat())
+        return cameraInfo.isZslSupported() && !writesRaw(format)
                 ? ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
                 : ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY;
     }

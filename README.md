@@ -461,9 +461,10 @@ mCameraView.exitBackgroundReplacement();
 The two halves work apart: a caller with their own model drives BackgroundReplacer.setMask itself,
 and a caller who only wants to know where the subject is takes the masks and draws nothing.
 
-A photograph taken while something is drawing is the camera's full resolution, drawn as the
-preview shows it and encoded from that. Such a picture carries no Ultra HDR gain map, so
-isPictureFormatSupported reports Ultra HDR unsupported until nothing is drawing.
+A photograph taken while something is drawing is drawn as the preview shows it and written as a
+JPEG. isPictureFormatSupported reports every other format unsupported until nothing is drawing:
+Ultra HDR chosen beforehand falls back to JPEG, and a picture taken in RAW or RAW_JPEG chosen
+beforehand fails.
 
 Frames
 -----------------
