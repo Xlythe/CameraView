@@ -1373,11 +1373,7 @@ public class CameraView extends FrameLayout {
      * confirmation does not apply. While something is drawing, each picture is drawn and written
      * before the next is taken, so the burst is slower.</p>
      *
-     * <p>A burst does not start, and finishes at once with a count of 0, while the camera is
-     * closed or recording, while a picture is being taken or awaits confirmation, while another
-     * burst runs, or while the format is {@link PictureFormat#RAW} or
-     * {@link PictureFormat#RAW_JPEG}. A picture that cannot be taken or filed ends the burst with
-     * the pictures it already had. Below API 29, filing needs
+     * <p>A burst that can't start finishes at once with a count of 0. Below API 29, filing needs
      * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}, as it does for {@link #takePicture()}.</p>
      *
      * @throws IllegalArgumentException if count is less than 1

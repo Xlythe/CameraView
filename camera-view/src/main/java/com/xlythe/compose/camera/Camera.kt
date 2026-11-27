@@ -191,10 +191,8 @@ interface CameraController {
      * frames are drawn, each picture is drawn and written before the next is taken, so the burst
      * is slower.
      *
-     * A burst does not start, and finishes at once with 0, while the camera is closed or
-     * recording, while a picture is being taken or awaits confirmation, while another burst runs,
-     * or while the format is [PictureFormat.RAW] or [PictureFormat.RAW_JPEG]. Below API 29,
-     * filing needs WRITE_EXTERNAL_STORAGE, as it does for takePicture().
+     * A burst that can't start finishes at once with 0. Below API 29, filing needs
+     * WRITE_EXTERNAL_STORAGE, as it does for takePicture().
      */
     fun startBurst(
         count: Int,
