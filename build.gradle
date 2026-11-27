@@ -2,8 +2,18 @@
 
 buildscript {
     repositories {
+        google {
+            // Google's own artifacts, asked of Google alone. With Maven Central first, every
+            // androidx and Android tools lookup went there to miss before reaching Google, and
+            // a CI runner sharing an address with others is rate limited on those misses: a 429
+            // fails the build over an artifact Maven Central does not even have.
+            content {
+                includeGroupByRegex 'androidx\\..*'
+                includeGroupByRegex 'com\\.android(\\..*)?'
+                includeGroupByRegex 'com\\.google(\\..*)?'
+            }
+        }
         mavenCentral()
-        google()
     }
     dependencies {
         classpath 'com.android.tools.build:gradle:9.3.1'
@@ -15,8 +25,18 @@ buildscript {
 
 allprojects {
     repositories {
+        google {
+            // Google's own artifacts, asked of Google alone. With Maven Central first, every
+            // androidx and Android tools lookup went there to miss before reaching Google, and
+            // a CI runner sharing an address with others is rate limited on those misses: a 429
+            // fails the build over an artifact Maven Central does not even have.
+            content {
+                includeGroupByRegex 'androidx\\..*'
+                includeGroupByRegex 'com\\.android(\\..*)?'
+                includeGroupByRegex 'com\\.google(\\..*)?'
+            }
+        }
         mavenCentral()
-        google()
     }
 
     tasks.withType(Test).configureEach {

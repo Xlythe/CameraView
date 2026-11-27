@@ -22,7 +22,7 @@ import com.xlythe.view.camera.CameraView;
  * device with a real PIN - and that one is worth saying out loud, because the alternative is six
  * tests timing out thirty seconds at a time and blaming the backend.</p>
  */
-final class DeviceState {
+public final class DeviceState {
     private DeviceState() {}
 
     /**
@@ -64,13 +64,32 @@ final class DeviceState {
      * <p>Only worth asking where an emulator is known to behave differently from every device,
      * and the difference is the emulator's rather than the library's.</p>
      */
-    static boolean isEmulator() {
+    public static boolean isEmulator() {
         return Build.FINGERPRINT.startsWith("generic")
                 || Build.FINGERPRINT.startsWith("unknown")
                 || Build.FINGERPRINT.contains("emulator")
                 || Build.HARDWARE.equals("goldfish")
                 || Build.HARDWARE.equals("ranchu")
                 || Build.PRODUCT.contains("sdk");
+    }
+
+    /**
+     * Whether the camera can fill YUV_420_888 buffers without taking the device down.
+     *
+     * <p>Not on an emulator older than API 29: its graphics allocator logs that it is taking an
+     * experimental path for the format, and the emulator process exits or hangs, so every test
+     * after it is lost to "device offline". The library asks for those buffers to analyze frames
+     * and scan barcodes, and the old camera API asks for them itself to record or stream. An app
+     * cannot crash the emulator, and the same tests pass on the API 37 emulator, so there is
+     * nothing here for the library to fix.</p>
+     */
+    public static boolean canFillYuvBuffers() {
+        return !(isEmulator() && Build.VERSION.SDK_INT < 29);
+    }
+
+    /** Skips a test that needs {@link #canFillYuvBuffers}. */
+    public static void assumeYuvBuffersWork() {
+        Assume.assumeTrue("this emulator dies filling YUV_420_888 buffers", canFillYuvBuffers());
     }
 
     /** What to tell someone whose camera never opened, which is usually about the screen. */
