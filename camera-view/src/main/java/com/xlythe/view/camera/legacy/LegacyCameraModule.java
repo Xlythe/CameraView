@@ -219,6 +219,14 @@ public class LegacyCameraModule extends ICameraModule {
             onVideoFailed();
             return;
         }
+        if (Build.VERSION.SDK_INT < 16) {
+            // Before API 16, MediaRecorder sets the camera's preview to a surface of its own, and
+            // it cannot take one made from our SurfaceTexture: the camera loses its preview and
+            // mediaserver aborts the recording.
+            Log.w(TAG, "Recording needs API 16");
+            onVideoFailed();
+            return;
+        }
         mVideoFile = file;
         mVideoRecorder = new MediaRecorder();
 

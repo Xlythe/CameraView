@@ -1124,7 +1124,8 @@ public class CameraView extends FrameLayout {
      * Takes a video and calls {@link OnVideoCapturedListener#onVideoCaptured(File)} when done.
      *
      * <p>Records audio alongside the video, so this is where the microphone is needed rather
-     * than at {@link #open()}.</p>
+     * than at {@link #open()}. Needs API 16; below it, {@link OnVideoCapturedListener#onFailure()}
+     * is called instead.</p>
      *
      * @param file The destination.
      */
