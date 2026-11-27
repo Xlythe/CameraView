@@ -1885,42 +1885,113 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Steadies the picture, in the preview and in a recording, where the camera can.
+     * Turns stabilization on or off: the camera steadies the picture against hand shake, in the
+     * preview and in recordings, as far as it can.
      *
-     * <p>One switch rather than two. A camera may be able to steady one and not the other,
-     * and each is then steadied where it can be; which of the two a given camera manages is
-     * not something a caller can act on.</p>
+     * <p>One switch rather than two. A camera may be able to steady one and not the other, and
+     * each is then steadied where it can be; which of the two a given camera manages is not
+     * something a caller can act on. Steadying digitally can narrow the view slightly.</p>
+     *
+     * <p>It takes a camera that can steady at least one of the two
+     * ({@link #isStabilizationSupported()}). Turning it on while a camera that cannot is open
+     * does nothing. A request made before the camera opens is kept, and so is one across a lens
+     * switch: it applies on whichever camera can steady.</p>
+     *
+     * <p>Changing it reconfigures the camera, which can interrupt the preview for a moment. During
+     * a recording the change waits: the recording keeps the setting it started with, and the
+     * change applies once the recording ends.</p>
      */
     public void setStabilizationEnabled(boolean enabled) {
         mCameraModule.setStabilizationEnabled(enabled);
     }
 
-    /** Returns whether stabilization is requested. */
+    /**
+     * Returns whether stabilization is turned on. It reports the request, so it can be true on a
+     * camera that cannot steady: one switched to after it was turned on, or one opened after it
+     * was asked for. See {@link #setStabilizationEnabled}.
+     */
     public boolean isStabilizationEnabled() {
         return mCameraModule.isStabilizationEnabled();
     }
 
-    /** Returns whether the active camera can steady either the preview or a recording. */
+    /**
+     * Returns whether the active camera can steady either the preview or a recording. Cameras on
+     * one device can differ, so read it once the camera has opened, and again after a lens switch.
+     */
     public boolean isStabilizationSupported() {
         return mCameraModule.isStabilizationSupported();
     }
 
-    /** Sets the exposure compensation index, clamped to the active camera's range. */
+    /**
+     * Shifts the camera's automatic exposure brighter or darker than it would choose by itself.
+     *
+     * <p>This biases auto-exposure rather than replacing it: the camera keeps metering the scene
+     * and setting its own exposure time and sensitivity, then aims above (positive) or below
+     * (negative) the exposure it metered. The shift applies to the preview, to pictures and to
+     * recordings alike.</p>
+     *
+     * <p>The value is an index, not a number of stops. 0 is no compensation, and each step is
+     * worth {@link #getExposureCompensationStep()} EV, so the shift in EV is the index times the
+     * step. Cameras typically step in 1/3 or 1/6 EV and reach about 2 to 4 EV either way: with a
+     * step of 1/6, index 6 is +1 EV and index -3 is -0.5 EV.</p>
+     *
+     * <p>The camera accepts indexes from {@link #getMinExposureCompensation()} to
+     * {@link #getMaxExposureCompensation()} inclusive, and clamps one outside that range to the
+     * nearer end. Where {@link #isExposureCompensationSupported()} is false, both ends are 0 and
+     * the call does nothing while that camera is open.</p>
+     *
+     * <p>The range and the step belong to the active camera, so read them once it has opened. An
+     * index set before then is kept as given, and clamped to the range of the camera that opens.
+     * A lens switch keeps the index, clamped to the new camera's range, and switching back does
+     * not undo that clamp. Cameras can step differently, so the same index can be a different
+     * number of EV on the new lens. A camera that cannot compensate leaves the index unapplied,
+     * and the next camera that can applies it.</p>
+     *
+     * <p>A new index takes effect within a frame or two, during a recording as well: the recording
+     * carries on, and its exposure changes from that point.</p>
+     *
+     * @param exposureCompensation the index, where 0 is the exposure the camera would choose by
+     *     itself
+     */
     public void setExposureCompensation(int exposureCompensation) {
         mCameraModule.setExposureCompensation(exposureCompensation);
     }
 
-    /** Returns the last accepted exposure compensation index. */
+    /**
+     * Returns the exposure compensation index the camera is using, or with no camera open, the one
+     * it will apply, held to its range, once it opens. 0 is no compensation.
+     *
+     * <p>A camera can take a frame or two to accept a new index, and this reports the previous
+     * one until it has. On a camera that cannot compensate, it is the index kept for the next
+     * camera that can. Multiply it by {@link #getExposureCompensationStep()} for the shift in EV.
+     * See {@link #setExposureCompensation}.</p>
+     */
     public int getExposureCompensation() {
         return mCameraModule.getExposureCompensation();
     }
 
-    /** Returns the active camera's minimum exposure compensation index. */
+    /**
+     * Returns the lowest exposure compensation index the active camera accepts, the one that
+     * darkens the picture the most; times {@link #getExposureCompensationStep()}, it is the
+     * furthest in EV the exposure can go below what the camera would choose. 0 where
+     * {@link #isExposureCompensationSupported()} is false.
+     *
+     * <p>Read it once the camera has opened, and again after a lens switch. See
+     * {@link #setExposureCompensation}.</p>
+     */
     public int getMinExposureCompensation() {
         return mCameraModule.getMinExposureCompensation();
     }
 
-    /** Returns the active camera's maximum exposure compensation index. */
+    /**
+     * Returns the highest exposure compensation index the active camera accepts, the one that
+     * brightens the picture the most; times {@link #getExposureCompensationStep()}, it is the
+     * furthest in EV the exposure can go above what the camera would choose. 0 where
+     * {@link #isExposureCompensationSupported()} is false.
+     *
+     * <p>Read it once the camera has opened, and again after a lens switch. See
+     * {@link #setExposureCompensation}.</p>
+     */
     public int getMaxExposureCompensation() {
         return mCameraModule.getMaxExposureCompensation();
     }
@@ -1941,41 +2012,78 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getExposureCompensationStep();
     }
 
-    /** Returns whether the active camera supports exposure compensation. */
+    /**
+     * Returns whether the active camera can shift its automatic exposure through
+     * {@link #setExposureCompensation}. Where it cannot, the minimum, the maximum and the step are
+     * all 0, and an index set while that camera is open does nothing.
+     *
+     * <p>Cameras on one device can differ, so read it once the camera has opened, and again after
+     * a lens switch.</p>
+     */
     public boolean isExposureCompensationSupported() {
         return mCameraModule.isExposureCompensationSupported();
     }
 
     /**
-     * Lights the flash continuously, on a camera that has one ({@link #hasFlash}).
+     * Turns the flash on as a steady light, or off.
      *
-     * <p>Turns low-light boost off, since the two cannot be used together.</p>
+     * <p>A lit torch stays on until it is turned off: through the preview, while a picture is
+     * taken and while recording. Closing the camera puts it out, and the camera lights it again
+     * when it reopens. It is separate from {@link #setFlash}, which fires the flash for a
+     * picture.</p>
+     *
+     * <p>It takes a camera with a flash ({@link #hasFlash()}), which front cameras usually lack.
+     * Turning it on while a camera without one is open does nothing. A request made before the
+     * camera opens is kept, and so is one across a lens switch: the torch stays dark on a camera
+     * without a flash and lights on the next one with. It can be turned on and off during a
+     * recording.</p>
+     *
+     * <p>The torch and low-light boost cannot be on together, since each takes over the camera's
+     * automatic exposure, so turning the torch on turns low-light boost off.</p>
      */
     public void setTorchEnabled(boolean enabled) {
         mCameraModule.setTorchEnabled(enabled);
     }
 
-    /** Returns whether torch illumination is requested. */
+    /**
+     * Returns whether the torch is turned on. It reports the request, so it can be true while the
+     * torch is dark: before the camera opens, or on a lens without a flash that was switched to
+     * after it was lit. See {@link #setTorchEnabled}.
+     */
     public boolean isTorchEnabled() {
         return mCameraModule.isTorchEnabled();
     }
 
     /**
-     * Brightens the preview and recordings in the dark, on a camera that can
-     * ({@link #isLowLightBoostSupported}).
+     * Turns low-light boost on or off. In a dark scene the camera then brightens the preview and
+     * recordings beyond what its usual automatic exposure reaches, for which it may lower the
+     * frame rate.
      *
-     * <p>Turns the torch off, since the two cannot be used together.</p>
+     * <p>It takes a camera that offers it ({@link #isLowLightBoostSupported()}), which many do
+     * not. Turning it on while a camera without it is open does nothing. A request made before the
+     * camera opens is kept, and so is one across a lens switch: it applies on whichever camera
+     * offers it. It can be turned on and off during a recording.</p>
+     *
+     * <p>Low-light boost and the torch cannot be on together, since each takes over the camera's
+     * automatic exposure, so turning low-light boost on turns the torch off.</p>
      */
     public void setLowLightBoostEnabled(boolean enabled) {
         mCameraModule.setLowLightBoostEnabled(enabled);
     }
 
-    /** Returns whether low-light boost is requested. */
+    /**
+     * Returns whether low-light boost is turned on. It reports the request, so it can be true on a
+     * camera without it: one switched to after it was turned on, or one opened after it was asked
+     * for. See {@link #setLowLightBoostEnabled}.
+     */
     public boolean isLowLightBoostEnabled() {
         return mCameraModule.isLowLightBoostEnabled();
     }
 
-    /** Returns whether the active camera supports low-light boost. */
+    /**
+     * Returns whether the active camera offers low-light boost. Cameras on one device can differ,
+     * so read it once the camera has opened, and again after a lens switch.
+     */
     public boolean isLowLightBoostSupported() {
         return mCameraModule.isLowLightBoostSupported();
     }
