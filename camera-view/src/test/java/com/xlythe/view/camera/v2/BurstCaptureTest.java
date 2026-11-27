@@ -8,6 +8,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.graphics.ImageFormat;
 import android.hardware.camera2.CaptureRequest;
 import android.location.Location;
 import android.location.LocationManager;
@@ -93,7 +94,8 @@ public class BurstCaptureTest {
         ShadowInjectableImageReader.reset();
         CameraSoundsTest.resetSounds();
         context = RuntimeEnvironment.getApplication();
-        FakeCamera2.addBackAndFrontCameras(context);
+        // Cameras that write RAW, so that a format change has a session of its own to wait for.
+        FakeCamera2.addBackAndFrontCameras(context, FakeCamera2.RawSupport.FULL);
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
         cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
             @Override public void onShutter() { shutters++; }
@@ -213,7 +215,7 @@ public class BurstCaptureTest {
         Burst burst = openAndStart(10);
         ShadowCallbackCameraCaptureSession.Capture first =
                 ShadowCallbackCameraCaptureSession.getCapturesWithCallbacks().get(0);
-        ImageReader reader = ShadowInjectableImageReader.latestReader();
+        ImageReader reader = ShadowInjectableImageReader.latestReader(ImageFormat.JPEG);
         assertNotNull(reader);
 
         first.callback.onCaptureBufferLost(null, first.request, reader.getSurface(), 1);
@@ -255,6 +257,54 @@ public class BurstCaptureTest {
         FakeCamera2.idleMainLooper();
 
         assertEquals(1, failures);
+    }
+
+    /**
+     * A burst asked for straight after a format change waits for that format's session, as a
+     * picture does, and then takes every picture.
+     */
+    @Test
+    public void aBurstWaitsForTheSessionANewFormatNeeds() {
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.setPictureFormat(CameraView.PictureFormat.RAW_JPEG);
+        Burst burst = new Burst(directory, "format", 2, heard);
+        module.startBurst(burst);
+        assertFalse("waiting is not finishing", burst.isFinished());
+        assertTrue("nothing is asked of the old session", burstRequests().isEmpty());
+        FakeCamera2.idleMainLooper();
+
+        assertNotNull("the burst runs in the new session",
+                ShadowInjectableImageReader.latestReader(ImageFormat.RAW_SENSOR));
+        assertEquals(2, burstRequests().size());
+        deliverFrames(2);
+        assertTrue(burst.isFinished());
+        assertEquals(2, heard.pictures.size());
+    }
+
+    /** Closing the camera ends a waiting burst, and stopping one keeps it from starting later. */
+    @Test
+    public void aWaitingBurstEndsWhenClosedOrStopped() {
+        module.open();
+        FakeCamera2.idleMainLooper();
+        module.setPictureFormat(CameraView.PictureFormat.RAW_JPEG);
+        Burst stopped = new Burst(directory, "stopped", 2, heard);
+        module.startBurst(stopped);
+
+        stopped.end();
+        FakeCamera2.idleMainLooper();
+        assertTrue(stopped.isFinished());
+        assertTrue("a stopped burst is not started", burstRequests().isEmpty());
+
+        module.setPictureFormat(CameraView.PictureFormat.JPEG);
+        Burst closed = new Burst(directory, "closed", 2, heard);
+        module.startBurst(closed);
+        module.close();
+        FakeCamera2.idleMainLooper();
+        assertTrue(closed.isFinished());
+        assertEquals(0, heard.pictures.size());
+        assertEquals(2, heard.finishes);
     }
 
     @Test
@@ -325,7 +375,7 @@ public class BurstCaptureTest {
     }
 
     private void deliver(FakeImage image) {
-        ImageReader reader = ShadowInjectableImageReader.latestReader();
+        ImageReader reader = ShadowInjectableImageReader.latestReader(ImageFormat.JPEG);
         assertNotNull("the picture session should have made a reader", reader);
         ShadowInjectableImageReader.offerImage(reader, image);
         FakeCamera2.idleMainLooper();
