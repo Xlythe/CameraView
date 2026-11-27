@@ -42,6 +42,14 @@ final class AnimationView extends View {
     /** The most bytes of a file read into memory to decode it: 64 MB. */
     private static final int MAX_FILE_BYTES = 64 * 1024 * 1024;
 
+    /**
+     * How long a decode may take before the picture is reported as failed. A platform decoder can
+     * stall on a malformed file, as Android 5's does on one animated PNG; its thread is left to
+     * it, and whatever it finishes with is ignored.
+     */
+    @VisibleForTesting
+    static final long DECODE_TIMEOUT_MILLIS = 20_000;
+
     /** The longest side a still is decoded at. */
     private static final int MAX_STILL_SIDE = 2048;
 
@@ -93,6 +101,18 @@ final class AnimationView extends View {
     /** How often a GIF played through {@link Movie}, which says nothing of its frames, redraws. */
     private static final long MOVIE_FRAME_MILLIS = 16;
 
+    /** Gives up on a decode that has taken too long. */
+    private final Runnable mTimeout = new Runnable() {
+        @Override
+        public void run() {
+            Log.w(TAG, "Gave up decoding an animation after " + DECODE_TIMEOUT_MILLIS + " ms");
+            mGeneration++;
+            if (mListener != null) {
+                mListener.onImageFailed();
+            }
+        }
+    };
+
     /** Shows the next frame of an animated PNG or GIF when it is due. */
     private final Runnable mTick = new Runnable() {
         @Override
@@ -119,6 +139,7 @@ final class AnimationView extends View {
         release();
         final int generation = ++mGeneration;
         final Context context = getContext().getApplicationContext();
+        mHandler.postDelayed(mTimeout, DECODE_TIMEOUT_MILLIS);
         mExecutor.execute(() -> {
             Object decoded;
             try {
@@ -235,6 +256,9 @@ final class AnimationView extends View {
 
     @MainThread
     private void onDecoded(int generation, @Nullable Object decoded) {
+        if (generation == mGeneration) {
+            mHandler.removeCallbacks(mTimeout);
+        }
         if (generation != mGeneration) {
             if (decoded instanceof Bitmap) {
                 ((Bitmap) decoded).recycle();
@@ -349,6 +373,7 @@ final class AnimationView extends View {
     @MainThread
     void release() {
         mGeneration++;
+        mHandler.removeCallbacks(mTimeout);
         pause();
         mPausedAt = 0;
         if (mDrawable != null) {
