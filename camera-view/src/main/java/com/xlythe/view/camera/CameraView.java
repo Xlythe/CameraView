@@ -1231,10 +1231,10 @@ public class CameraView extends FrameLayout {
     /**
      * Starts reporting the barcodes the camera can see.
      *
-     * @return whether scanning started. False when ML Kit's barcode model is not available on
+     * @return whether scanning started. False below API 21, when the app does not include ML Kit's
+     *     {@code com.google.mlkit:barcode-scanning}, or when its barcode model is not available on
      *     this device.
      */
-    @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean enterBarcodeScanner(BarcodeDetectorListener listener, @Barcode.Format int format, @Barcode.Format int... formats) {
         if (!isOpen()) {
@@ -1243,6 +1243,11 @@ public class CameraView extends FrameLayout {
 
         if (mBarcodeScanner != null || mUsingModuleBarcodeScanner) {
             throw new IllegalStateException("Barcode scanner cannot be started twice");
+        }
+
+        if (Build.VERSION.SDK_INT < 21 || !BarcodeScanner.isAvailable()) {
+            Log.w(TAG, "Barcode scanning needs API 21 and ML Kit's barcode-scanning library");
+            return false;
         }
 
         mUsingModuleBarcodeScanner = mCameraModule.startBarcodeScanner(listener, format, formats);
@@ -1263,9 +1268,8 @@ public class CameraView extends FrameLayout {
         return true;
     }
 
-    @RequiresApi(19)
     public void exitBarcodeScanner() {
-        if (mBarcodeScanner != null) {
+        if (Build.VERSION.SDK_INT >= 21 && mBarcodeScanner != null) {
             mBarcodeScanner.stop();
             mBarcodeScanner = null;
         }
