@@ -1,9 +1,12 @@
 package com.xlythe.view.camera;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+
+import android.location.Location;
 
 import org.junit.After;
 import org.junit.Before;
@@ -15,6 +18,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.net.URISyntaxException;
+import java.net.URL;
+import java.util.Arrays;
 import java.util.TimeZone;
 
 /**
@@ -167,6 +173,141 @@ public class MediaCorpusTest {
         assertEquals(MediaTags.FORMAT_OPUS, open("androidx_bear.opus").getFormat());
         assertEquals(MediaTags.FORMAT_M4A, open("chromium_sfx.m4a").getFormat());
         assertEquals(MediaTags.KIND_AUDIO, open("chromium_sfx.m4a").getKind());
+    }
+
+    /** Every asset, as a file to open. */
+    private static File[] assets() throws URISyntaxException {
+        URL notice = MediaCorpusTest.class.getResource("/media/NOTICE.md");
+        assertNotNull(notice);
+        File[] files = new File(notice.toURI()).getParentFile().listFiles(
+                (directory, name) -> !name.equals("NOTICE.md"));
+        assertNotNull(files);
+        Arrays.sort(files);
+        return files;
+    }
+
+    /** Every asset reads whole, whatever it is, and says the same twice. */
+    @Test
+    public void everyAssetReads() throws IOException, URISyntaxException {
+        for (File asset : assets()) {
+            String name = asset.getName();
+            MediaTags tags = MediaTags.open(MediaFixtures.file(MediaFixtures.read(asset),
+                    "-" + name));
+            String said = describe(tags);
+            assertEquals(name, said, describe(MediaTags.read(MediaFixtures.read(asset))));
+            assertNotNull(name, tags.toString());
+        }
+    }
+
+    /** Everything a file says, as one line, to compare. */
+    private static String describe(MediaTags tags) {
+        StringBuilder line = new StringBuilder();
+        line.append(tags.getFormat()).append('/').append(tags.getKind())
+                .append('/').append(tags.getTitle()).append('/').append(tags.getDescription())
+                .append('/').append(tags.getAuthor()).append('/').append(tags.getCopyright())
+                .append('/').append(tags.getMake()).append('/').append(tags.getModel())
+                .append('/').append(tags.getSoftware()).append('/').append(tags.getCaptureTime())
+                .append('/').append(tags.getLocation() == null ? null
+                        : tags.getLocation().getLatitude() + "," + tags.getLocation().getLongitude())
+                .append('/').append(tags.getHeading()).append('/').append(tags.getRotation())
+                .append('/').append(tags.isMirrored()).append('/').append(tags.getAmbientConditions())
+                .append('/').append(tags.getPanorama()).append('/').append(tags.getMotionPhoto())
+                .append('/').append(tags.getGainMap()).append('/').append(tags.getVideoTransfer())
+                .append('/').append(tags.getSphericalVideo()).append('/')
+                .append(tags.getCaptureSettings()).append('/').append(tags.getLivePhotoId())
+                .append('/').append(tags.getCoverArt() == null ? -1 : tags.getCoverArt().length)
+                .append('/').append(Arrays.toString(tags.getVideoSize()))
+                .append('/').append(tags.isAnimated()).append('/').append(tags.getExifTag(0x010F))
+                .append('/').append(tags.getVideoTag(VideoMetadata.Tag.TITLE))
+                .append('/').append(tags.getXmp(Xmp.NS_DC, "title"));
+        return line.toString();
+    }
+
+    /**
+     * Every asset that can be written takes every field it says it can keep, and gives each
+     * back; the media itself is untouched. One that cannot be written refuses each.
+     */
+    @Test
+    public void everyWritableAssetTakesEveryField() throws IOException, URISyntaxException {
+        Location location = new Location("test");
+        location.setLatitude(47.6);
+        location.setLongitude(-122.3);
+        for (File asset : assets()) {
+            String name = asset.getName();
+            File file = MediaFixtures.file(MediaFixtures.read(asset), "-" + name);
+            MediaTags before = MediaTags.open(file);
+            boolean title = before.setTitle("Titre édité");
+            boolean description = before.setDescription("Described");
+            boolean author = before.setAuthor("Ana Ñúñez");
+            boolean copyright = before.setCopyright("CC0");
+            boolean software = before.setSoftware("CameraView");
+            // On a whole minute: ID3v2.3 keeps no seconds.
+            boolean time = before.setCaptureTime(1_599_999_960_000L);
+            boolean place = before.setLocation(location);
+            boolean heading = before.setHeading(123.5f);
+            boolean ambient = before.setAmbientConditions(new AmbientConditions.Builder()
+                    .setTemperature(21.5).build());
+            boolean xmp = before.setXmp(Xmp.NS_DC, "source", "Corpus");
+            if (before.isReadOnly()) {
+                assertFalse(name, title || description || author || copyright || software
+                        || time || place || heading || ambient || xmp);
+                continue;
+            }
+            before.save();
+            MediaTags after = MediaTags.open(file);
+            if (title) {
+                assertEquals(name, "Titre édité", after.getTitle());
+            }
+            if (description) {
+                assertEquals(name, "Described", after.getDescription());
+            }
+            if (author) {
+                assertEquals(name, "Ana Ñúñez", after.getAuthor());
+            }
+            if (copyright) {
+                assertEquals(name, "CC0", after.getCopyright());
+            }
+            if (software) {
+                assertEquals(name, "CameraView", after.getSoftware());
+            }
+            if (time) {
+                // WAV's creation date has no time of day.
+                assertEquals(name, name.endsWith(".wav") ? 1_599_955_200_000L
+                        : 1_599_999_960_000L, after.getCaptureTime());
+            }
+            if (place) {
+                assertEquals(name, 47.6, after.getLocation().getLatitude(), 1e-4);
+            }
+            if (heading) {
+                assertEquals(name, 123.5f, after.getHeading(), 0.01f);
+            }
+            if (ambient) {
+                assertEquals(name, 21.5, after.getAmbientConditions().getTemperature(), 0.01);
+            }
+            if (xmp) {
+                assertEquals(name, "Corpus", after.getXmp(Xmp.NS_DC, "source"));
+            }
+            MediaTags original = MediaTags.open(MediaFixtures.file(MediaFixtures.read(asset),
+                    "-" + name));
+            assertEquals(name, original.getRotation(), after.getRotation());
+            assertEquals(name, original.getGainMap(), after.getGainMap());
+            assertEquals(name, original.getVideoTransfer(), after.getVideoTransfer());
+            assertEquals(name, original.getMotionPhoto() == null, after.getMotionPhoto() == null);
+            assertEquals(name, original.isAnimated(), after.isAnimated());
+            assertEquals(name, Arrays.toString(original.getVideoSize()),
+                    Arrays.toString(after.getVideoSize()));
+
+            // And taking it all away again leaves none of it.
+            assertTrue(name, !title || after.setTitle(null));
+            assertTrue(name, !time || after.setCaptureTime(-1));
+            assertTrue(name, !place || after.setLocation(null));
+            after.save();
+            MediaTags cleared = MediaTags.open(file);
+            if (title) {
+                assertEquals(name, original.getTitle() == null ? null : cleared.getTitle(),
+                        cleared.getTitle());
+            }
+        }
     }
 
     @Test
