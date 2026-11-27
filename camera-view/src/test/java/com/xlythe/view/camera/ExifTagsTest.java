@@ -336,8 +336,6 @@ public class ExifTagsTest {
      */
     @Test
     public void theTagNumbersAreTheOnesTheStandardAssigns() {
-        assertArrayEquals(new int[] {0x9287, Exif.TYPE_UNDEFINED},
-                ExifTags.standardTag("LearningOptOutIn"));
         assertArrayEquals(new int[] {0x9400, Exif.TYPE_SRATIONAL},
                 ExifTags.standardTag("Temperature"));
         assertArrayEquals(new int[] {0xA435, Exif.TYPE_ASCII},

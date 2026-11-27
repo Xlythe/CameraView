@@ -149,7 +149,6 @@ final class ExifTags {
 
         // The rest of CIPA DC-008's private directory. LensSerialNumber has a name in
         // ExifInterface but no entry in the table it reads and writes.
-        standard("LearningOptOutIn", 0x9287, Exif.TYPE_UNDEFINED);
         standard("Temperature", TAG_TEMPERATURE, Exif.TYPE_SRATIONAL);
         standard("Humidity", TAG_HUMIDITY, Exif.TYPE_RATIONAL);
         standard("Pressure", TAG_PRESSURE, Exif.TYPE_RATIONAL);
