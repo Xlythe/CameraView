@@ -192,12 +192,11 @@ public class TransformMathTest {
      */
     @Test
     public void aTextureTransformIsRelativeToTheStretchTextureViewAlreadyApplied() {
-        Size buffer = new Size(640, 480);
         Matrix bufferToView = TransformMath.centerCrop(
                 new RectF(0f, 0f, 640f, 480f), 0, false, 1280, 960);
 
         Matrix textureTransform =
-                TransformMath.asTextureTransform(bufferToView, buffer, 1280, 960);
+                TransformMath.asTextureTransform(bufferToView, 640, 480, 1280, 960);
 
         assertTrue("a plain stretch needs no texture transform", textureTransform.isIdentity());
     }
@@ -205,12 +204,11 @@ public class TransformMathTest {
     /** And the rotation survives the change of frame of reference. */
     @Test
     public void aRotatedTextureTransformStillMapsTheViewOntoItself() {
-        Size buffer = new Size(640, 480);
         Matrix bufferToView = TransformMath.centerCrop(
                 new RectF(0f, 0f, 640f, 480f), 90, false, 480, 640);
 
         Matrix textureTransform =
-                TransformMath.asTextureTransform(bufferToView, buffer, 480, 640);
+                TransformMath.asTextureTransform(bufferToView, 640, 480, 480, 640);
 
         // The stretch maps the frame's top-left to the view's top-left, and the transform then has
         // to put it where the rotation says it belongs.
@@ -224,9 +222,9 @@ public class TransformMathTest {
         bufferToView.setScale(2f, 2f);
 
         assertTrue(TransformMath.asTextureTransform(
-                bufferToView, new Size(0, 480), 100, 100).isIdentity());
+                bufferToView, 0, 480, 100, 100).isIdentity());
         assertTrue(TransformMath.asTextureTransform(
-                bufferToView, new Size(640, 480), 0, 100).isIdentity());
+                bufferToView, 640, 480, 0, 100).isIdentity());
     }
 
     /**

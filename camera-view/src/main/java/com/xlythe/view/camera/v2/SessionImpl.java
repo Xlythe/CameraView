@@ -1,7 +1,6 @@
 package com.xlythe.view.camera.v2;
 
 import android.Manifest;
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
@@ -30,12 +29,13 @@ import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 abstract class SessionImpl implements Camera2Module.Session {
     private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
     private static final long GPS_TIMEOUT_MILLIS = 10;

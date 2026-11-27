@@ -153,6 +153,7 @@ public class VideoRecorder {
    * resolution. The backend picks the closest size its camera supports within the bound, so the
    * stream is usually smaller than asked and never larger. Null follows the preview.</p>
    */
+  @RequiresApi(21)
   public void setMaxSize(@Nullable Size maxSize) {
     if (maxSize != null && (maxSize.getWidth() <= 0 || maxSize.getHeight() <= 0)) {
       throw new IllegalArgumentException("Stream dimensions must be positive: " + maxSize);
@@ -463,7 +464,7 @@ public class VideoRecorder {
    * and means a long I-frame interval stays affordable for the bandwidth it saves.</p>
    */
   private void requestSyncFrameIfNeeded(MediaCodec encoder) {
-    if (!(mOutputStream instanceof LossyPipedOutputStream)) {
+    if (Build.VERSION.SDK_INT < 19 || !(mOutputStream instanceof LossyPipedOutputStream)) {
       return;
     }
     try {

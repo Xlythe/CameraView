@@ -1,7 +1,6 @@
 package com.xlythe.view.camera.v2;
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
@@ -26,12 +25,13 @@ import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 class VideoSession extends PictureSession {
     /**
      * The VideoSurface must always check CamcorderProfile to see if the outputs supported by the

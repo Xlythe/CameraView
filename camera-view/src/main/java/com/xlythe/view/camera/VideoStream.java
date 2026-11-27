@@ -2,6 +2,7 @@ package com.xlythe.view.camera;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.os.Build;
 import android.util.Log;
 import android.util.Size;
 
@@ -101,7 +102,9 @@ public class VideoStream implements Closeable {
         if (params.getIFrameInterval() != 0) {
           videoRecorder.setIFrameInterval(params.getIFrameInterval());
         }
-        videoRecorder.setMaxSize(params.getMaxSize());
+        if (Build.VERSION.SDK_INT >= 21) {
+          videoRecorder.setMaxSize(params.getMaxSize());
+        }
         videoRecorder.start();
       }
     } catch (IOException | RuntimeException e) {
@@ -405,7 +408,11 @@ public class VideoStream implements Closeable {
        * the closest size it supports within the bound, so the stream is usually smaller than
        * asked for and never larger. Leave it unset to follow the preview.</p>
        */
+      @RequiresApi(21)
       public Builder setMaxSize(@Nullable Size maxSize) {
+        if (maxSize != null && (maxSize.getWidth() <= 0 || maxSize.getHeight() <= 0)) {
+          throw new IllegalArgumentException("Stream dimensions must be positive: " + maxSize);
+        }
         mMaxSize = maxSize;
         return this;
       }
@@ -451,10 +458,6 @@ public class VideoStream implements Closeable {
           throw new IllegalArgumentException(
                   "Audio is mono or stereo, not " + mAudioChannelCount + " channels");
         }
-        if (mMaxSize != null && (mMaxSize.getWidth() <= 0 || mMaxSize.getHeight() <= 0)) {
-          throw new IllegalArgumentException("Stream dimensions must be positive: " + mMaxSize);
-        }
-
         return new Params(mAudioEnabled, mVideoEnabled, mBitRate, mFrameRate, mIFrameInterval,
                 mIsLossy, mMaxSize, mAudioSampleRate, mAudioChannelCount);
       }

@@ -45,7 +45,6 @@ import static android.os.Process.setThreadPriority;
  *
  * <p>Start one with {@link CameraView#startFrameAnalysis}.</p>
  */
-@RequiresApi(19)
 public final class FrameStream implements Closeable {
     private static final String TAG = CameraView.class.getSimpleName();
 
@@ -81,6 +80,7 @@ public final class FrameStream implements Closeable {
          * within this bound, so the frames are usually smaller than asked for and never larger.
          * </p>
          */
+        @RequiresApi(21)
         @NonNull
         public Params setMaxSize(@Nullable Size maxSize) {
             mMaxSize = maxSize;
@@ -111,6 +111,7 @@ public final class FrameStream implements Closeable {
     }
 
     /** One frame, valid for the duration of the {@link Analyzer#onFrame} call that received it. */
+    @RequiresApi(19)
     public final class Frame {
         private final Image mImage;
         private final int mRotationDegrees;
@@ -153,6 +154,7 @@ public final class FrameStream implements Closeable {
         }
 
         /** The frame's size once {@link #getRotationDegrees} has been applied. */
+        @RequiresApi(21)
         @NonNull
         public Size getUprightSize() {
             return TransformMath.rotateSize(
@@ -203,6 +205,7 @@ public final class FrameStream implements Closeable {
     /** The thread pulling frames, once started. */
     private final AtomicReference<Thread> mThread = new AtomicReference<>();
 
+    @RequiresApi(19)
     FrameStream(@NonNull VideoRecorder.Canvas canvas, @Nullable CameraView cameraView,
             @NonNull Params params, @NonNull Analyzer analyzer) {
         mCanvas = canvas;
@@ -217,6 +220,7 @@ public final class FrameStream implements Closeable {
     }
 
     /** Starts delivering frames. Does nothing if already started. */
+    @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
     public void start() {
         if (!mIsAlive.compareAndSet(false, true)) {
@@ -245,6 +249,7 @@ public final class FrameStream implements Closeable {
         }
     }
 
+    @RequiresApi(19)
     private void pump() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             setThreadPriority(THREAD_PRIORITY_VIDEO);
