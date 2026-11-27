@@ -2,7 +2,6 @@ package com.xlythe.view.camera;
 
 import android.graphics.Rect;
 import android.hardware.Camera;
-import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
@@ -14,6 +13,7 @@ import android.util.SizeF;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
 import androidx.exifinterface.media.ExifInterface;
@@ -89,11 +89,14 @@ public final class ExifCaptureParameters {
         /** The f-numbers it can be set to, which phones fix at one. Empty when unknown. */
         @NonNull final float[] apertures;
 
-        /** The sensor behind it, in millimetres, or null when unknown. */
-        @Nullable final SizeF sensorSize;
+        /**
+         * The sensor behind it, as {width, height} in millimetres, or null when unknown. Plain
+         * numbers rather than a SizeF, which the old camera API's releases do not have.
+         */
+        @Nullable final float[] sensorSize;
 
         Lens(@Nullable float[] focalLengths, @Nullable float[] apertures,
-                @Nullable SizeF sensorSize) {
+                @Nullable float[] sensorSize) {
             this.focalLengths = focalLengths == null ? new float[0] : focalLengths;
             this.apertures = apertures == null ? new float[0] : apertures;
             this.sensorSize = sensorSize;
@@ -143,8 +146,14 @@ public final class ExifCaptureParameters {
      */
     private boolean mZoomIsDigital;
 
-    /** One exposure-compensation step in EV, or null when the camera offers none. */
-    @Nullable private Rational mExposureStep;
+    /**
+     * One exposure-compensation step in EV, as a numerator over {@link #mExposureStepDenominator}.
+     * Plain numbers rather than a Rational, which the old camera API's releases do not have.
+     */
+    private long mExposureStepNumerator;
+
+    /** The denominator of {@link #mExposureStepNumerator}, or 0 when the camera offers no step. */
+    private long mExposureStepDenominator;
 
     /** The sensor's active array, which a crop region's zoom is measured against. */
     @Nullable private Rect mActiveArray;
@@ -167,6 +176,7 @@ public final class ExifCaptureParameters {
      * What a camera2 camera's characteristics say, including those of the physical cameras
      * behind a logical one. A camera that cannot be read gives the common defaults alone.
      */
+    @RequiresApi(21)
     @NonNull
     public static ExifCaptureParameters forCamera(
             @NonNull CameraManager manager, @NonNull String cameraId) {
@@ -179,12 +189,15 @@ public final class ExifCaptureParameters {
                 }
             }
             return forCamera(characteristics, physicalCameras);
-        } catch (CameraAccessException | RuntimeException error) {
+        } catch (Exception error) {
+            // Exception rather than CameraAccessException: the legacy camera's releases load this
+            // class too, and before API 19 a catch of an exception type they lack fails to load it.
             Log.w(TAG, "Unable to read the camera's optics for its Exif", error);
             return new ExifCaptureParameters();
         }
     }
 
+    @RequiresApi(21)
     @VisibleForTesting
     @NonNull
     static ExifCaptureParameters forCamera(@NonNull CameraCharacteristics characteristics,
@@ -200,8 +213,11 @@ public final class ExifCaptureParameters {
         }
         parameters.mLogical = logical;
         parameters.mZoomIsDigital = !logical;
-        parameters.mExposureStep =
-                characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
+        Rational step = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
+        if (step != null && step.getDenominator() != 0) {
+            parameters.mExposureStepNumerator = step.getNumerator();
+            parameters.mExposureStepDenominator = step.getDenominator();
+        }
         parameters.mActiveArray =
                 characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
         Integer calibration =
@@ -221,6 +237,7 @@ public final class ExifCaptureParameters {
         return parameters;
     }
 
+    @RequiresApi(21)
     private static boolean isLogicalMultiCamera(@NonNull CameraCharacteristics characteristics) {
         if (Build.VERSION.SDK_INT < 28) {
             return false;
@@ -239,12 +256,14 @@ public final class ExifCaptureParameters {
         return false;
     }
 
+    @RequiresApi(21)
     @NonNull
     private static Lens lensOf(@NonNull CameraCharacteristics characteristics) {
+        SizeF sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
         return new Lens(
                 characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS),
                 characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_APERTURES),
-                characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE));
+                sensor == null ? null : new float[] {sensor.getWidth(), sensor.getHeight()});
     }
 
     /**
@@ -263,8 +282,8 @@ public final class ExifCaptureParameters {
         parameters.mZoomIsDigital = false;
         float step = readOrZero(camera::getExposureCompensationStep);
         if (step > 0) {
-            parameters.mExposureStep =
-                    new Rational(Math.round(step * RATIONAL_SCALE), (int) RATIONAL_SCALE);
+            parameters.mExposureStepNumerator = Math.round(step * RATIONAL_SCALE);
+            parameters.mExposureStepDenominator = (long) RATIONAL_SCALE;
         }
         parameters.setExposureCompensation(camera.getExposureCompensation());
         if (camera.isZoomSupported()) {
@@ -356,10 +375,9 @@ public final class ExifCaptureParameters {
     public ExifCaptureParameters setExposureCompensation(int index) {
         if (index == 0) {
             mValues.put(ExifInterface.TAG_EXPOSURE_BIAS_VALUE, NO_EXPOSURE_BIAS);
-        } else if (mExposureStep != null) {
+        } else if (mExposureStepDenominator != 0) {
             mValues.put(ExifInterface.TAG_EXPOSURE_BIAS_VALUE,
-                    (long) index * mExposureStep.getNumerator() + "/"
-                            + mExposureStep.getDenominator());
+                    index * mExposureStepNumerator + "/" + mExposureStepDenominator);
         } else {
             mValues.remove(ExifInterface.TAG_EXPOSURE_BIAS_VALUE);
         }
@@ -429,6 +447,7 @@ public final class ExifCaptureParameters {
      * aperture, focal length, focus distance, flash, white balance and zoom. For a picture the
      * library encodes itself, whose file has none of these until they are copied in.
      */
+    @RequiresApi(21)
     @NonNull
     public ExifCaptureParameters setCaptureResult(@NonNull CaptureResult result) {
         Long exposureNanos = result.get(CaptureResult.SENSOR_EXPOSURE_TIME);
@@ -542,6 +561,7 @@ public final class ExifCaptureParameters {
     }
 
     /** How far a frame was zoomed, from its ratio or its crop of the active array. */
+    @RequiresApi(21)
     @Nullable
     private Float zoomOf(@NonNull CaptureResult result) {
         if (Build.VERSION.SDK_INT >= 30) {
@@ -605,10 +625,9 @@ public final class ExifCaptureParameters {
             if (!Double.isNaN(widest)) {
                 fill(exif, ExifInterface.TAG_MAX_APERTURE_VALUE, rational(apex(widest)));
             }
-            if (lens.sensorSize != null && lens.sensorSize.getWidth() > 0
-                    && lens.sensorSize.getHeight() > 0) {
+            if (lens.sensorSize != null && lens.sensorSize[0] > 0 && lens.sensorSize[1] > 0) {
                 long equivalent = Math.round(focalLength * FULL_FRAME_DIAGONAL_MM
-                        / Math.hypot(lens.sensorSize.getWidth(), lens.sensorSize.getHeight()));
+                        / Math.hypot(lens.sensorSize[0], lens.sensorSize[1]));
                 fill(exif, ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM,
                         Long.toString(Math.min(equivalent, MAX_SHORT)));
             }

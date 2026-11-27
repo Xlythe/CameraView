@@ -29,9 +29,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * <p>This is an ML Kit analyzer on top of {@link FrameStream}, which owns the camera frames; the
  * same stream is public, so any other detector can be run the same way.</p>
  */
-@RequiresApi(18)
+@RequiresApi(21)
 class BarcodeScanner {
   private static final String TAG = CameraView.class.getSimpleName();
+
+  /** Loaded to learn whether ML Kit is on the classpath, which an app on the core build adds. */
+  private static final String ML_KIT_CLASS = "com.google.mlkit.vision.barcode.BarcodeScanning";
 
   /** Maximum time allowed for a single ML Kit scan. */
   private static final long OPERATION_TIMEOUT_SECONDS = 10;
@@ -58,6 +61,21 @@ class BarcodeScanner {
     this.mListener = listener;
     this.mFrames = new FrameStream(
             canvas, cameraView, new FrameStream.Params(), this::processFrame);
+  }
+
+  /**
+   * Whether ML Kit's barcode scanning can be loaded.
+   *
+   * <p>Checked by name and without initializing the class, so a missing dependency is a false here
+   * rather than a NoClassDefFoundError out of the constructor.</p>
+   */
+  static boolean isAvailable() {
+    try {
+      Class.forName(ML_KIT_CLASS, false, BarcodeScanner.class.getClassLoader());
+      return true;
+    } catch (ClassNotFoundException | LinkageError error) {
+      return false;
+    }
   }
 
   /** @return True if actively scanning. False otherwise. */

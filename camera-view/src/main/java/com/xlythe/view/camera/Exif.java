@@ -540,6 +540,20 @@ public class Exif {
      */
     public void setAttribute(@NonNull String tag, @Nullable String value) {
         mExifInterface.setAttribute(tag, value);
+        if (value != null && value.indexOf('/') >= 0 && !holds(tag, value)) {
+            // ExifInterface before 1.4, which the API 14 build uses, takes FNumber,
+            // DigitalZoomRatio, ExposureTime and SubjectDistance only as a decimal and drops a
+            // fraction. The fraction is tried first because a decimal is stored in ten-thousandths.
+            mExifInterface.setAttribute(tag, Double.toString(ExifCaptureParameters.number(value)));
+        }
+    }
+
+    /** Whether a tag now reads back as the value just set, as a number. */
+    private boolean holds(@NonNull String tag, @NonNull String value) {
+        double expected = ExifCaptureParameters.number(value);
+        double actual = ExifCaptureParameters.number(mExifInterface.getAttribute(tag));
+        return Double.isNaN(expected)
+                || Math.abs(actual - expected) <= 1e-6 * Math.max(1, Math.abs(expected));
     }
 
     /**

@@ -18,8 +18,6 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 
-import com.google.common.primitives.Ints;
-import com.google.common.util.concurrent.SettableFuture;
 import com.xlythe.view.camera.CameraView;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
@@ -30,8 +28,6 @@ import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.Objects;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
@@ -157,6 +153,7 @@ public class VideoRecorder {
    * resolution. The backend picks the closest size its camera supports within the bound, so the
    * stream is usually smaller than asked and never larger. Null follows the preview.</p>
    */
+  @RequiresApi(21)
   public void setMaxSize(@Nullable Size maxSize) {
     if (maxSize != null && (maxSize.getWidth() <= 0 || maxSize.getHeight() <= 0)) {
       throw new IllegalArgumentException("Stream dimensions must be positive: " + maxSize);
@@ -203,15 +200,15 @@ public class VideoRecorder {
                   return;
                 }
 
-                SettableFuture<CameraMetadata> requestedSizeFuture = SettableFuture.create();
-                SettableFuture<Surface> providedSurface = SettableFuture.create();
+                Handoff<CameraMetadata> requestedSizeFuture = new Handoff<>();
+                Handoff<Surface> providedSurface = new Handoff<>();
                 SurfaceProvider surfaceProvider = new SurfaceProvider() {
                   @Override
                   public Surface getSurface(int width, int height, int orientation, boolean flipped) {
                     requestedSizeFuture.set(new CameraMetadata(width, height, orientation, flipped));
                     try {
                       return providedSurface.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                    } catch (ExecutionException | InterruptedException | TimeoutException e) {
+                    } catch (InterruptedException | TimeoutException e) {
                       throw new RuntimeException(e);
                     }
                   }
@@ -233,7 +230,7 @@ public class VideoRecorder {
 
                 Surface surface = null;
                 try {
-                  CameraMetadata metadata = Objects.requireNonNull(requestedSizeFuture.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                  CameraMetadata metadata = requestedSizeFuture.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                   MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, metadata.getWidth(), metadata.getHeight());
 
                   // Failing to specify some of these can cause the MediaCodec configure() call to
@@ -300,7 +297,7 @@ public class VideoRecorder {
                   }
 
                   encoder.signalEndOfInputStream();
-                } catch (IOException | IllegalArgumentException | IllegalStateException | InterruptedException | ExecutionException | TimeoutException e) {
+                } catch (IOException | IllegalArgumentException | IllegalStateException | InterruptedException | TimeoutException e) {
                   Log.e(TAG, "Exception with recording video stream", e);
                 } finally {
                   detachSurfaceProvider();
@@ -391,10 +388,10 @@ public class VideoRecorder {
    * could resynchronize on.</p>
    */
   private void writeFrame(byte[] frame, boolean droppable) throws IOException {
-    byte[] prefixed = new byte[Integer.BYTES + frame.length];
-    byte[] length = Ints.toByteArray(frame.length);
-    System.arraycopy(length, 0, prefixed, 0, length.length);
-    System.arraycopy(frame, 0, prefixed, length.length, frame.length);
+    byte[] prefixed = ByteBuffer.allocate(Integer.BYTES + frame.length)
+            .putInt(frame.length)
+            .put(frame)
+            .array();
 
     if (mOutputStream instanceof LossyPipedOutputStream) {
       LossyPipedOutputStream lossyOutputStream = (LossyPipedOutputStream) mOutputStream;
@@ -468,7 +465,7 @@ public class VideoRecorder {
    * for the bandwidth it saves.</p>
    */
   private void requestSyncFrameIfNeeded(MediaCodec encoder) {
-    if (!(mOutputStream instanceof LossyPipedOutputStream)) {
+    if (Build.VERSION.SDK_INT < 19 || !(mOutputStream instanceof LossyPipedOutputStream)) {
       return;
     }
     try {

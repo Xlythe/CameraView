@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- The core build's lint configuration. Lint reads whole source directories rather than what the
+     compiler was given, so without this it reports on the CameraX, media3 and Compose sources the
+     core build leaves out, against a minSdk they were never meant to meet. -->
+<lint>
+    <issue id="all">
+        <ignore path="src/main/java/com/xlythe/view/camera/x/**" />
+        <ignore path="src/main/java/com/xlythe/view/camera/edit/**" />
+        <ignore path="src/main/java/com/xlythe/compose/**" />
+        <ignore path="src/main/java/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java" />
+    </issue>
+</lint>
