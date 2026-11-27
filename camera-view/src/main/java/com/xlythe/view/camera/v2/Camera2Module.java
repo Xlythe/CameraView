@@ -42,8 +42,10 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
@@ -274,6 +276,9 @@ public class Camera2Module extends ICameraModule {
 
     /** Whether a focus request is still waiting on the camera to report what came of it. */
     private boolean mIsFocusPending;
+
+    /** Readers of preview frames, which the still-capture session carries beside its outputs. */
+    private final Set<VideoRecorder.SurfaceProvider> mAnalysisProviders = new LinkedHashSet<>();
 
     /**
      * The current zoom level, from 0 to {@link #getMaxZoomLevel()}.
@@ -1511,6 +1516,127 @@ public class Camera2Module extends ICameraModule {
     @Override
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
         setSession(new PictureSession(this));
+    }
+
+    /**
+     * Carried by the still-capture session rather than a session of its own, so a picture can
+     * still be taken. A recording session leaves it out, and the next still session picks it up.
+     */
+    @Override
+    protected void attachAnalysisSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        if (mAnalysisProviders.add(surfaceProvider)) {
+            reconfigureStillSession();
+        }
+    }
+
+    @Override
+    protected void detachAnalysisSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        if (mAnalysisProviders.remove(surfaceProvider)) {
+            reconfigureStillSession();
+        }
+    }
+
+    /** The readers a still-capture session carries. See {@link #attachAnalysisSurface}. */
+    @NonNull
+    List<VideoRecorder.SurfaceProvider> getAnalysisProviders() {
+        return new ArrayList<>(mAnalysisProviders);
+    }
+
+    /** Rebuilds the still-capture session, if that is the one running, for a change of readers. */
+    private void reconfigureStillSession() {
+        Session session = mRegisteringSession != null ? mRegisteringSession : mActiveSession;
+        if (mCameraDevice != null && session instanceof PictureSession
+                && !(session instanceof VideoSession)) {
+            setSession(new PictureSession(this));
+        }
+    }
+
+    /** Frames come from {@link #attachAnalysisSurface}, and the subject needs a region. */
+    @Override
+    public boolean isSubjectTrackingSupported() {
+        if (mCameraDevice == null) {
+            return false;
+        }
+        try {
+            CameraCharacteristics characteristics =
+                    mCameraManager.getCameraCharacteristics(getActiveCamera());
+            Integer focusRegions = characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AF);
+            Integer exposureRegions =
+                    characteristics.get(CameraCharacteristics.CONTROL_MAX_REGIONS_AE);
+            return (focusRegions != null && focusRegions > 0)
+                    || (exposureRegions != null && exposureRegions > 0);
+        } catch (CameraAccessException | RuntimeException e) {
+            if (DEBUG) Log.d(TAG, "Unable to ask whether this camera can track", e);
+            return false;
+        }
+    }
+
+    /**
+     * Moves the regions continuous autofocus and auto-exposure work within, which follows the
+     * subject without restarting a focus search each time. Unlike {@link #focus}, nothing waits
+     * on the camera to converge.
+     */
+    @Override
+    protected void setSubjectArea(@Nullable Rect area) {
+        if (mCaptureSession == null || mActiveSession == null || mCameraDevice == null) {
+            return;
+        }
+        try {
+            MeteringRectangle region = null;
+            if (area != null) {
+                Rect sensorArea = toSensorRegion(area);
+                if (sensorArea == null) {
+                    return;
+                }
+                region = new MeteringRectangle(sensorArea, MeteringRectangle.METERING_WEIGHT_MAX);
+            }
+            mActiveSession.setMeteringRectangle(region);
+            if (!mIsPaused) {
+                mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+            }
+        } catch (CameraAccessException | RuntimeException e) {
+            Log.w(TAG, "Failed to move the subject's regions", e);
+        }
+    }
+
+    /**
+     * Maps an area from -1000 to 1000 across what the camera shows onto the active array, where
+     * its regions are given. A crop zoom shows only the crop, so the area is mapped into that; a
+     * zoom ratio leaves the regions' coordinates covering what is shown, so there is nothing to do.
+     */
+    @Nullable
+    private Rect toSensorRegion(@NonNull Rect area) throws CameraAccessException {
+        CameraCharacteristics characteristics =
+                mCameraManager.getCameraCharacteristics(getActiveCamera());
+        Rect activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+        if (activeArray == null) {
+            return null;
+        }
+        Rect shown = new Rect(0, 0, activeArray.width(), activeArray.height());
+        Rect crop = mActiveSession == null ? null : mActiveSession.getCropRegion();
+        boolean zoomRatio = Build.VERSION.SDK_INT >= 30
+                && mActiveSession != null && mActiveSession.getZoomRatio() != null;
+        if (crop != null && !zoomRatio) {
+            shown = new Rect(crop.left - activeArray.left, crop.top - activeArray.top,
+                    crop.right - activeArray.left, crop.bottom - activeArray.top);
+        }
+        return toRegion(area, shown);
+    }
+
+    /** Maps an area from -1000 to 1000 onto a rectangle. */
+    @VisibleForTesting
+    @NonNull
+    static Rect toRegion(@NonNull Rect area, @NonNull Rect shown) {
+        Rect region = new Rect(
+                shown.left + (area.left + 1000) * shown.width() / 2000,
+                shown.top + (area.top + 1000) * shown.height() / 2000,
+                shown.left + (area.right + 1000) * shown.width() / 2000,
+                shown.top + (area.bottom + 1000) * shown.height() / 2000);
+        if (region.isEmpty()) {
+            region.right = region.left + 1;
+            region.bottom = region.top + 1;
+        }
+        return region;
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {

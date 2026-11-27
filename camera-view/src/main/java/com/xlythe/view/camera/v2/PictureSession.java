@@ -21,12 +21,14 @@ import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -60,6 +62,9 @@ class PictureSession extends PreviewSession {
 
     private final PictureSurface mPictureSurface;
 
+    /** Readers of preview frames, such as the subject tracker, carried beside the still. */
+    private final List<AnalysisSurface> mAnalysisSurfaces = new ArrayList<>();
+
     PictureSession(Camera2Module camera2Module) {
         super(camera2Module);
         mPictureSurface = new PictureSurface(camera2Module, getPreviewSurface());
@@ -72,8 +77,33 @@ class PictureSession extends PreviewSession {
         // hook goes between the two: a recording session sizes its video here and the still is
         // then capped to it.
         onPreviewInitialized(map);
+        if (carriesAnalysis()) {
+            for (VideoRecorder.SurfaceProvider provider : getAnalysisProviders()) {
+                AnalysisSurface surface = new AnalysisSurface(
+                        getCamera2Module(), provider, getPreviewSurface());
+                surface.initialize(map);
+                mAnalysisSurfaces.add(surface);
+            }
+        }
         if (hasStillCapture()) {
-            mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr());
+            // JPEG_R is verified beside a preview alone, so a reader alongside keeps it JPEG.
+            mPictureSurface.initialize(map, maxPictureSize(),
+                    allowsUltraHdr() && mAnalysisSurfaces.isEmpty());
+        }
+    }
+
+    /**
+     * Whether this session carries the module's frame readers. A recording session does not:
+     * a preview, an encoder and a reader together are not a combination camera2 guarantees.
+     */
+    protected boolean carriesAnalysis() {
+        return true;
+    }
+
+    @Override
+    void addRepeatingTargets(@NonNull CaptureRequest.Builder builder) {
+        for (AnalysisSurface surface : mAnalysisSurfaces) {
+            builder.addTarget(surface.getSurface());
         }
     }
 
@@ -115,6 +145,9 @@ class PictureSession extends PreviewSession {
         List<Surface> surfaces = super.getSurfaces();
         if (hasStillCapture()) {
             surfaces.add(mPictureSurface.getSurface());
+        }
+        for (AnalysisSurface surface : mAnalysisSurfaces) {
+            surfaces.add(surface.getSurface());
         }
         return surfaces;
     }

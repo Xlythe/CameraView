@@ -15,23 +15,27 @@ import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Handler;
+import android.os.HandlerThread;
 import android.os.Looper;
 import android.util.Log;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.LumaFrame;
 import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -64,6 +68,34 @@ public class LegacyCameraModule extends ICameraModule {
 
     /** The surfaces handed out for streaming, each with the holder that feeds it. */
     private final Map<VideoRecorder.SurfaceProvider, LegacySurfaceHolder> mSurfaceProviders = new ArrayMap<>();
+
+    /** Preview buffers in rotation: one being filled, one being read, and one spare. */
+    private static final int PREVIEW_BUFFER_COUNT = 3;
+
+    /** The thread the camera was opened on, which its callbacks and buffers belong to. */
+    private final Handler mCameraHandler = new Handler(Looper.getMainLooper());
+
+    /** Receives preview frames for the subject tracker, while it wants them. */
+    @Nullable
+    private LumaFrame.Listener mLumaListener;
+
+    /** Where the tracker reads frames, so that it does not hold up the camera's thread. */
+    @Nullable
+    private HandlerThread mLumaThread;
+
+    /** Posts to {@link #mLumaThread}. */
+    @Nullable
+    private Handler mLumaHandler;
+
+    /** Whether the tracker is still reading a frame, so that the next is dropped, not queued. */
+    private final AtomicBoolean mLumaBusy = new AtomicBoolean();
+
+    /** The focus mode a subject replaced, to restore when it is let go; null while there is none. */
+    @Nullable
+    private String mFocusModeBeforeSubject;
+
+    /** Whether an autofocus pass for the subject is running, on a camera without continuous focus. */
+    private boolean mSubjectFocusRunning;
 
     public LegacyCameraModule(CameraView view) {
         super(view);
@@ -125,6 +157,9 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera = null;
             mPreviewSize = null;
         }
+        // The focus mode to restore belonged to that camera.
+        mFocusModeBeforeSubject = null;
+        mSubjectFocusRunning = false;
     }
 
     @Override
@@ -599,11 +634,7 @@ public class LegacyCameraModule extends ICameraModule {
         if (mCamera != null && mPreviewSize != null) {
             LegacySurfaceHolder surfaceHolder = new LegacySurfaceHolder(getContext(), surfaceProvider, mPreviewSize.width, mPreviewSize.height, getSensorOrientation(), isUsingFrontFacingCamera());
             mSurfaceProviders.put(surfaceProvider, surfaceHolder);
-            mCamera.setPreviewCallback((data, camera) -> {
-                Canvas canvas = surfaceHolder.lockCanvas();
-                canvas.drawBitmap(toBitmap(data, camera), new Matrix(), new Paint());
-                surfaceHolder.unlockCanvasAndPost(canvas);
-            });
+            updatePreviewCallback();
         }
     }
 
@@ -613,8 +644,194 @@ public class LegacyCameraModule extends ICameraModule {
         LegacySurfaceHolder surfaceHolder = mSurfaceProviders.remove(surfaceProvider);
         if (surfaceHolder != null) {
             surfaceHolder.close();
-            mCamera.setPreviewCallback(null);
+            updatePreviewCallback();
         }
+    }
+
+    /**
+     * Reads the subject tracker's frames from the preview callback, which this API has at every
+     * version, rather than from frame analysis, which it cannot do.
+     */
+    @Override
+    protected boolean startLumaFrames(@NonNull LumaFrame.Listener listener) {
+        stopLumaFrames();
+        HandlerThread thread = new HandlerThread("CameraView-SubjectFrames");
+        thread.start();
+        mLumaThread = thread;
+        mLumaHandler = new Handler(thread.getLooper());
+        mLumaListener = listener;
+        updatePreviewCallback();
+        return true;
+    }
+
+    @Override
+    protected void stopLumaFrames() {
+        mLumaListener = null;
+        updatePreviewCallback();
+        if (mLumaThread != null) {
+            mLumaThread.quit();
+            mLumaThread = null;
+            mLumaHandler = null;
+        }
+    }
+
+    /**
+     * Installs one preview callback for everything that wants frames, or removes it when nothing
+     * does: the camera holds a single callback, so streams and the tracker share it.
+     *
+     * <p>Frames go into buffers handed back as each is finished with, rather than a new array
+     * per frame, which at full preview size would be megabytes of garbage a second.</p>
+     */
+    private void updatePreviewCallback() {
+        Camera camera = mCamera;
+        Camera.Size size = mPreviewSize;
+        if (camera == null || size == null) {
+            return;
+        }
+        try {
+            if (mSurfaceProviders.isEmpty() && mLumaListener == null) {
+                camera.setPreviewCallbackWithBuffer(null);
+                return;
+            }
+            Camera.Parameters parameters = camera.getParameters();
+            int bufferSize = size.width * size.height
+                    * ImageFormat.getBitsPerPixel(parameters.getPreviewFormat()) / 8;
+            camera.setPreviewCallbackWithBuffer(this::onPreviewFrame);
+            for (int i = 0; i < PREVIEW_BUFFER_COUNT; i++) {
+                camera.addCallbackBuffer(new byte[bufferSize]);
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Unable to change the preview callback", e);
+        }
+    }
+
+    private void onPreviewFrame(byte[] data, Camera camera) {
+        if (Build.VERSION.SDK_INT >= 18 && !mSurfaceProviders.isEmpty()) {
+            drawToStreams(data, camera);
+        }
+        LumaFrame.Listener listener = mLumaListener;
+        Handler handler = mLumaHandler;
+        Camera.Size size = mPreviewSize;
+        if (listener == null || handler == null || size == null
+                || !mLumaBusy.compareAndSet(false, true)) {
+            // The tracker is still on the last frame, and a frame it reads late is worth less
+            // than the next one, so this one goes straight back to the camera.
+            camera.addCallbackBuffer(data);
+            return;
+        }
+        int sensorOrientation = getSensorOrientation();
+        boolean frontFacing = isUsingFrontFacingCamera();
+        handler.post(() -> {
+            try {
+                // NV21, the preview format this module leaves in place, starts with a full-size
+                // brightness plane, a byte per pixel.
+                listener.onFrame(new LumaFrame(ByteBuffer.wrap(data), size.width, size.height,
+                        size.width, sensorOrientation, frontFacing));
+            } finally {
+                mLumaBusy.set(false);
+                mCameraHandler.post(() -> {
+                    if (mCamera == camera) {
+                        camera.addCallbackBuffer(data);
+                    }
+                });
+            }
+        });
+    }
+
+    @RequiresApi(18)
+    private void drawToStreams(byte[] data, Camera camera) {
+        Bitmap bitmap = toBitmap(data, camera);
+        for (LegacySurfaceHolder surfaceHolder : mSurfaceProviders.values()) {
+            Canvas canvas = surfaceHolder.lockCanvas();
+            canvas.drawBitmap(bitmap, new Matrix(), new Paint());
+            surfaceHolder.unlockCanvasAndPost(canvas);
+        }
+    }
+
+    @Override
+    public boolean isSubjectTrackingSupported() {
+        if (mCamera == null) {
+            return false;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            return parameters.getMaxNumFocusAreas() > 0 || parameters.getMaxNumMeteringAreas() > 0;
+        } catch (RuntimeException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Focuses and meters on the subject's area. Continuous focus follows an area by itself, so it
+     * is used where the camera has it; otherwise each new area gets an autofocus pass, one at a
+     * time so that a moving subject does not keep cancelling the last before it lands.
+     */
+    @Override
+    protected void setSubjectArea(@Nullable Rect area) {
+        if (mCamera == null) {
+            return;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            if (area == null) {
+                if (mFocusModeBeforeSubject == null) {
+                    return;
+                }
+                mCamera.cancelAutoFocus();
+                mSubjectFocusRunning = false;
+                parameters.setFocusMode(mFocusModeBeforeSubject);
+                mFocusModeBeforeSubject = null;
+                if (parameters.getMaxNumFocusAreas() > 0) {
+                    parameters.setFocusAreas(null);
+                }
+                if (parameters.getMaxNumMeteringAreas() > 0) {
+                    parameters.setMeteringAreas(null);
+                }
+                mCamera.setParameters(parameters);
+                return;
+            }
+
+            if (mFocusModeBeforeSubject == null) {
+                mFocusModeBeforeSubject = parameters.getFocusMode();
+                String mode = subjectFocusMode(parameters.getSupportedFocusModes());
+                if (mode != null) {
+                    parameters.setFocusMode(mode);
+                }
+            }
+            List<Camera.Area> areas = Collections.singletonList(new Camera.Area(area, 1000));
+            if (parameters.getMaxNumFocusAreas() > 0) {
+                parameters.setFocusAreas(areas);
+            }
+            if (parameters.getMaxNumMeteringAreas() > 0) {
+                parameters.setMeteringAreas(areas);
+            }
+            mCamera.setParameters(parameters);
+            if (Camera.Parameters.FOCUS_MODE_AUTO.equals(parameters.getFocusMode())
+                    && !mSubjectFocusRunning) {
+                mSubjectFocusRunning = true;
+                mCamera.autoFocus((success, camera) -> mSubjectFocusRunning = false);
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to move the subject's areas", e);
+        }
+    }
+
+    /** The focus mode that follows a subject best: continuous where the camera has it. */
+    @Nullable
+    static String subjectFocusMode(@Nullable List<String> supported) {
+        if (supported == null) {
+            return null;
+        }
+        if (supported.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE)) {
+            return Camera.Parameters.FOCUS_MODE_CONTINUOUS_PICTURE;
+        }
+        if (supported.contains(Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO)) {
+            return Camera.Parameters.FOCUS_MODE_CONTINUOUS_VIDEO;
+        }
+        if (supported.contains(Camera.Parameters.FOCUS_MODE_AUTO)) {
+            return Camera.Parameters.FOCUS_MODE_AUTO;
+        }
+        return null;
     }
 
     private Bitmap toBitmap(byte[] data, Camera camera) {

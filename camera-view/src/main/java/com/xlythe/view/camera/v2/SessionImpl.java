@@ -17,6 +17,7 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -58,6 +59,17 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     void transformPreview(int width, int height) throws CameraAccessException {
         mCamera2Module.transformPreview(width, height);
+    }
+
+    @NonNull
+    Camera2Module getCamera2Module() {
+        return mCamera2Module;
+    }
+
+    /** The module's readers of preview frames, for a session that carries them. */
+    @NonNull
+    List<VideoRecorder.SurfaceProvider> getAnalysisProviders() {
+        return mCamera2Module.getAnalysisProviders();
     }
 
     @NonNull

@@ -1,25 +1,33 @@
 package com.xlythe.view.camera;
 
+import android.Manifest;
 import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.location.Location;
+import android.media.Image;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
 import android.util.Log;
+import android.util.Size;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
 
 import com.xlythe.view.camera.stream.VideoRecorder;
 
+import java.io.Closeable;
 import java.io.File;
+import java.io.IOException;
 import java.util.concurrent.CountDownLatch;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -27,6 +35,13 @@ import java.util.concurrent.TimeUnit;
 public abstract class ICameraModule {
     public static final String TAG = CameraView.TAG;
     public static final boolean DEBUG = CameraView.DEBUG;
+    /**
+     * The largest frame the subject tracker asks for. It averages anything larger down to a few
+     * hundred pixels before reading it, so a bigger frame only costs the camera bandwidth.
+     */
+    private static final int LUMA_FRAME_MAX_WIDTH = 640;
+    /** See {@link #LUMA_FRAME_MAX_WIDTH}. */
+    private static final int LUMA_FRAME_MAX_HEIGHT = 480;
     /** Maximum wait for a backend to detach a custom encoder surface on the main thread. */
     private static final long SURFACE_DETACH_TIMEOUT_SECONDS = 2;
 
@@ -59,6 +74,13 @@ public abstract class ICameraModule {
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;
     /** Listener receiving video terminal callbacks. */
     private CameraView.OnVideoCapturedListener mOnVideoCapturedListener;
+
+    /**
+     * The frames {@link #startLumaFrames} reads, while they run. Held as a Closeable because
+     * FrameStream needs API 19 and this class must still load below it.
+     */
+    @Nullable
+    private Closeable mLumaFrames;
 
     /** Whether pictures and videos should match the preview aspect ratio. */
     private boolean mMatchPreviewAspectRatio = true;
@@ -113,24 +135,61 @@ public abstract class ICameraModule {
 
     protected void stopBarcodeScanner() {}
 
+    /**
+     * Attaches a surface whose frames are only read, never encoded or shown.
+     *
+     * <p>Separate from {@link #attachSurface} so that a backend can carry it beside a still
+     * capture rather than in place of one, as the subject tracker needs: tracking a subject and
+     * then photographing it is the point. A backend that makes no such distinction attaches it
+     * like any other surface.</p>
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    protected void attachAnalysisSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        attachSurface(surfaceProvider);
+    }
+
+    /** Detaches a surface attached by {@link #attachAnalysisSurface}. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    protected void detachAnalysisSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+        detachSurface(surfaceProvider);
+    }
+
     @RequiresApi(18)
     public VideoRecorder.Canvas getCanvas() {
+        return createCanvas(this::attachSurface, this::detachSurface);
+    }
+
+    /** A canvas for a surface that only reads frames. See {@link #attachAnalysisSurface}. */
+    @RequiresApi(18)
+    private VideoRecorder.Canvas getAnalysisCanvas() {
+        return createCanvas(this::attachAnalysisSurface, this::detachAnalysisSurface);
+    }
+
+    /** Something done to a surface provider on the main thread. */
+    private interface SurfaceAction {
+        void run(VideoRecorder.SurfaceProvider surfaceProvider);
+    }
+
+    /** A canvas that attaches and detaches on the main thread, where every backend expects it. */
+    @RequiresApi(18)
+    private VideoRecorder.Canvas createCanvas(
+            @NonNull SurfaceAction attach, @NonNull SurfaceAction detach) {
         return new VideoRecorder.Canvas() {
             @Override
             public void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-                new Handler(Looper.getMainLooper()).post(() -> ICameraModule.this.attachSurface(surfaceProvider));
+                new Handler(Looper.getMainLooper()).post(() -> attach.run(surfaceProvider));
             }
 
             @Override
             public void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
                 if (Looper.myLooper() == Looper.getMainLooper()) {
-                    ICameraModule.this.detachSurface(surfaceProvider);
+                    detach.run(surfaceProvider);
                     return;
                 }
                 CountDownLatch detached = new CountDownLatch(1);
                 new Handler(Looper.getMainLooper()).post(() -> {
                     try {
-                        ICameraModule.this.detachSurface(surfaceProvider);
+                        detach.run(surfaceProvider);
                     } finally {
                         detached.countDown();
                     }
@@ -542,6 +601,71 @@ public abstract class ICameraModule {
     protected final void onFocusCompleted(boolean locked) {
         onMainThread(() -> getView().onFocusCompleted(locked));
     }
+
+    /**
+     * Whether this camera can follow a subject: it needs preview frames to find the subject in,
+     * and an area to focus or meter on to keep it sharp and exposed.
+     */
+    public boolean isSubjectTrackingSupported() {
+        return false;
+    }
+
+    /**
+     * Starts handing the subject tracker each preview frame's brightness, on a background thread.
+     *
+     * <p>Frames come from frame analysis by default, attached as a surface that is only read so
+     * that a backend can keep its still capture alongside it. A backend whose frames reach it some
+     * other way overrides this.</p>
+     *
+     * @return whether frames will arrive
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @RequiresPermission(Manifest.permission.CAMERA)
+    @MainThread
+    protected boolean startLumaFrames(@NonNull LumaFrame.Listener listener) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP || !isFrameAnalysisSupported()) {
+            return false;
+        }
+        stopLumaFrames();
+        FrameStream frames = new FrameStream(getAnalysisCanvas(), getView(),
+                new FrameStream.Params().setMaxSize(new Size(
+                        LUMA_FRAME_MAX_WIDTH, LUMA_FRAME_MAX_HEIGHT)),
+                frame -> {
+                    Image.Plane luma = frame.getImage().getPlanes()[0];
+                    listener.onFrame(new LumaFrame(luma.getBuffer(), frame.getWidth(),
+                            frame.getHeight(), luma.getRowStride(), frame.getRotationDegrees(),
+                            frame.isMirrored()));
+                });
+        mLumaFrames = frames;
+        frames.start();
+        return true;
+    }
+
+    /** Stops the frames started by {@link #startLumaFrames}. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    protected void stopLumaFrames() {
+        Closeable frames = mLumaFrames;
+        mLumaFrames = null;
+        if (frames != null) {
+            try {
+                frames.close();
+            } catch (IOException error) {
+                Log.w(TAG, "Unable to stop the subject tracker's frames", error);
+            }
+        }
+    }
+
+    /**
+     * Keeps focus and exposure on an area that moves, in the space {@link #focus} takes it in.
+     *
+     * <p>Unlike {@link #focus}, nothing is announced: the area follows a subject many times a
+     * second, and the app hears about the subject instead. Null hands the choice back to the
+     * camera.</p>
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    protected void setSubjectArea(@Nullable Rect area) {}
 
     /**
      * Runs something on the main thread, where every listener is documented to arrive.

@@ -29,6 +29,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 import androidx.annotation.ColorInt;
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -458,6 +459,13 @@ public class CameraView extends FrameLayout {
     @Nullable
     private FaceDetectionListener mFaceDetectionListener;
 
+    /** The caller's subject listener. While one is set, a tap tracks rather than focuses once. */
+    @Nullable
+    private SubjectTrackingListener mSubjectTrackingListener;
+
+    /** Follows the subject a tap picked, for {@link #mSubjectTrackingListener}. */
+    private SubjectTracking mSubjectTracking;
+
     // When true, avoid adding/removing views. While usually harmless (although it can cause state
     // loss), it's especially important since calling removeView(TextureView) after
     // onSaveInstanceState() will trigger a NPE on Android N.
@@ -545,6 +553,7 @@ public class CameraView extends FrameLayout {
             chosen.recycle();
         }
         mCameraModule = createModule(backend);
+        mSubjectTracking = new SubjectTracking(this, mCameraModule);
 
         if (attrs != null) {
             TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.CameraView);
@@ -762,6 +771,9 @@ public class CameraView extends FrameLayout {
                 return;
             }
             setStatus(Status.OPEN);
+            if (mSubjectTrackingListener != null) {
+                mSubjectTracking.prepare();
+            }
             if (mOnCameraStateChangedListener != null) {
                 mOnCameraStateChangedListener.onCameraOpened();
             }
@@ -1146,6 +1158,7 @@ public class CameraView extends FrameLayout {
             exitBarcodeScanner();
             stopFrameAnalysis();
         }
+        mSubjectTracking.release();
         mLocationTracker.stop();
         mCameraModule.close();
 
@@ -1271,6 +1284,9 @@ public class CameraView extends FrameLayout {
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     public void startRecording(File file) {
         Log.v(TAG, "Recording a video");
+        // Not every camera can feed the tracker its frames while it also feeds an encoder, so a
+        // recording ends tracking on all of them alike.
+        mSubjectTracking.stop(true /* reportLost */);
         mCameraModule.startRecording(file);
     }
 
@@ -1617,6 +1633,9 @@ public class CameraView extends FrameLayout {
      * the front and back facing cameras.
      */
     public void toggleCamera() {
+        // A subject seen through one lens is not in the other's frames, and the frames are sized
+        // for the old lens, so both go; the next tap starts them again.
+        mSubjectTracking.release();
         mCameraModule.toggleCamera();
     }
 
@@ -1628,6 +1647,7 @@ public class CameraView extends FrameLayout {
             return;
         }
 
+        mSubjectTracking.release();
         mCameraModule.setLensFacing(lensFacing);
     }
 
@@ -1745,6 +1765,75 @@ public class CameraView extends FrameLayout {
 
     public boolean isFocusReticleEnabled() {
         return mFocusReticleEnabled;
+    }
+
+    /**
+     * Follows a subject picked by a tap on the preview, as a camera app's tap-to-track does.
+     *
+     * <p>This library draws nothing over the preview, so an app that wants the box around the
+     * subject draws its own from here.</p>
+     *
+     * @see #setSubjectTrackingListener
+     */
+    public interface SubjectTrackingListener {
+        /**
+         * Called on the main thread each time the subject is found in a new frame.
+         *
+         * @param bounds where the subject is, in this view's coordinates
+         */
+        void onSubjectTracked(@NonNull RectF bounds);
+
+        /**
+         * Called on the main thread once the subject is gone: it left the frame, the camera
+         * closed or changed lens, or a recording started. Focus goes back to the camera's own
+         * choice until the next tap.
+         */
+        void onSubjectLost();
+    }
+
+    /**
+     * Makes a tap on the preview track what it lands on, or focus once again when given null.
+     *
+     * <p>The camera then keeps its focus and exposure on the subject as it or the camera moves,
+     * until the subject is lost or another tap picks a new one. A tap on something with nothing
+     * to follow, such as a blank wall, focuses there once. A camera that cannot track keeps
+     * focusing once per tap, and the listener is not called.</p>
+     *
+     * @see #isSubjectTrackingSupported
+     */
+    @MainThread
+    public void setSubjectTrackingListener(@Nullable SubjectTrackingListener listener) {
+        mSubjectTrackingListener = listener;
+        if (listener == null) {
+            mSubjectTracking.release();
+        } else if (isOpen()) {
+            mSubjectTracking.prepare();
+        }
+    }
+
+    /**
+     * Whether this camera can follow a subject.
+     *
+     * <p>Worth asking before offering tap-to-track: it needs a camera that reads its own preview
+     * and can be told where to focus or meter, which most external cameras cannot.</p>
+     */
+    public boolean isSubjectTrackingSupported() {
+        return mCameraModule.isSubjectTrackingSupported();
+    }
+
+    @Nullable
+    SubjectTrackingListener getSubjectTrackingListener() {
+        return mSubjectTrackingListener;
+    }
+
+    /** Focuses once on a point on this view, as a tap does when it is not tracking. */
+    @UiThread
+    void focusAt(float x, float y) {
+        Rect focusArea = meteringArea(x, y, 1f);
+        Rect meteringArea = meteringArea(x, y, 1.5f);
+        if (area(focusArea) != 0 && area(meteringArea) != 0) {
+            focus(focusArea, meteringArea);
+        }
     }
 
     /**
@@ -1947,12 +2036,9 @@ public class CameraView extends FrameLayout {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.ICE_CREAM_SANDWICH_MR1
                             && hasOnClickListeners()) {
                         performClick();
-                    } else {
-                        Rect focusArea = meteringArea(event.getX(), event.getY(), 1f);
-                        Rect meteringArea = meteringArea(event.getX(), event.getY(), 1.5f);
-                        if (area(focusArea) != 0 && area(meteringArea) != 0) {
-                            focus(focusArea, meteringArea);
-                        }
+                    } else if (mSubjectTrackingListener == null || isRecording()
+                            || !mSubjectTracking.start(event.getX(), event.getY())) {
+                        focusAt(event.getX(), event.getY());
                     }
                 }
                 break;

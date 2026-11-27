@@ -84,6 +84,11 @@ class VideoSession extends PictureSession {
     }
 
     @Override
+    protected boolean carriesAnalysis() {
+        return false;
+    }
+
+    @Override
     @SuppressLint({"WrongThread", "ThreadConstraint"})
     protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
             throws CameraAccessException {

@@ -63,8 +63,12 @@ class PreviewSession extends SessionImpl {
         applyZoom(builder);
         applyFaceDetection(builder);
         builder.addTarget(mPreviewSurface.getSurface());
+        addRepeatingTargets(builder);
         return builder.build();
     }
+
+    /** Lets a subclass add outputs that, like the preview, are fed every frame. */
+    void addRepeatingTargets(@NonNull CaptureRequest.Builder builder) {}
 
     @Override
     public void onAvailable(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) throws CameraAccessException {

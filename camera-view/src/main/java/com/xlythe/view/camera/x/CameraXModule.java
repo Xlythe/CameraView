@@ -228,6 +228,17 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     /** How many faces the last report had, so an empty camera is not reported every frame. */
     private int mLastFaceCount;
+
+    /** Whether a tracked subject holds the camera's regions, so stopping owes a cancel. */
+    private boolean mSubjectAreaActive;
+    /** Whether the camera is still answering the last subject area. */
+    private boolean mSubjectActionRunning;
+    /**
+     * The newest subject area, kept while the camera answers the last one. Each area is a
+     * focus search, and starting a new one cancels the old before it can converge, so a moving
+     * subject is followed one finished search at a time with only the latest position queued.
+     */
+    @Nullable private Rect mPendingSubjectArea;
     /** Resolution of the SurfaceTexture buffer for the latest display Preview request. */
     @Nullable private Size mPreviewResolution;
     /** Main-thread state of this CameraX backend. */
@@ -778,6 +789,76 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .createPoint(0.5f, 0.5f);
         return camera.getCameraInfo().isFocusMeteringSupported(
                 new FocusMeteringAction.Builder(center, FocusMeteringAction.FLAG_AF).build());
+    }
+
+    /** Frames come from a streaming Preview, and the subject needs a focus or metering point. */
+    @Override public boolean isSubjectTrackingSupported() {
+        Camera camera = mActiveCamera;
+        Preview preview = mPreview;
+        int width = getWidth();
+        int height = getHeight();
+        if (camera == null || preview == null || width <= 0 || height <= 0) return false;
+        MeteringPoint center = new SurfaceOrientedMeteringPointFactory(width, height, preview)
+                .createPoint(0.5f, 0.5f);
+        return isFrameAnalysisSupported() && camera.getCameraInfo().isFocusMeteringSupported(
+                new FocusMeteringAction.Builder(center,
+                        FocusMeteringAction.FLAG_AF | FocusMeteringAction.FLAG_AE).build());
+    }
+
+    @Override protected void setSubjectArea(@Nullable Rect area) {
+        runOnMainThread(() -> setSubjectAreaOnMainThread(area));
+    }
+
+    private void setSubjectAreaOnMainThread(@Nullable Rect area) {
+        if (area != null) {
+            if (mSubjectActionRunning) {
+                mPendingSubjectArea = area;
+            } else {
+                startSubjectAction(area);
+            }
+            return;
+        }
+        mPendingSubjectArea = null;
+        Camera camera = mActiveCamera;
+        if (mSubjectAreaActive && camera != null) {
+            camera.getCameraControl().cancelFocusAndMetering();
+        }
+        mSubjectAreaActive = false;
+    }
+
+    /**
+     * Focuses, meters and balances on the subject until told otherwise. Auto-cancel is off, since
+     * a subject standing still sends no new area and must not lose its focus after five seconds.
+     */
+    private void startSubjectAction(@NonNull Rect area) {
+        Camera camera = mActiveCamera;
+        Preview preview = mPreview;
+        int width = getWidth();
+        int height = getHeight();
+        if (camera == null || preview == null || width <= 0 || height <= 0) return;
+        MeteringPoint point = new SurfaceOrientedMeteringPointFactory(width, height, preview)
+                .createPoint(
+                        CameraXMath.toSurfaceCoordinate(area.centerX(), width),
+                        CameraXMath.toSurfaceCoordinate(area.centerY(), height),
+                        CameraXMath.toMeteringSize(area));
+        FocusMeteringAction action = new FocusMeteringAction.Builder(point,
+                FocusMeteringAction.FLAG_AF | FocusMeteringAction.FLAG_AE
+                        | FocusMeteringAction.FLAG_AWB)
+                .disableAutoCancel()
+                .build();
+        if (!camera.getCameraInfo().isFocusMeteringSupported(action)) return;
+        mSubjectAreaActive = true;
+        mSubjectActionRunning = true;
+        ListenableFuture<FocusMeteringResult> result =
+                camera.getCameraControl().startFocusAndMetering(action);
+        result.addListener(() -> {
+            mSubjectActionRunning = false;
+            Rect next = mPendingSubjectArea;
+            mPendingSubjectArea = null;
+            if (next != null && mSubjectAreaActive) {
+                startSubjectAction(next);
+            }
+        }, mMainExecutor);
     }
 
     @Override public void setZoomLevel(int zoomLevel) {
