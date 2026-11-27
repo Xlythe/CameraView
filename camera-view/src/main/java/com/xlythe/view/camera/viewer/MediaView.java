@@ -404,10 +404,11 @@ public class MediaView extends FrameLayout {
                 break;
             }
             case VIDEO:
-                showVideo(location);
+                showVideo(detection.playable != null ? detection.playable : location);
                 break;
             case SPHERICAL_VIDEO:
-                showSphericalVideo(location, detection);
+                showSphericalVideo(detection.playable != null ? detection.playable : location,
+                        detection);
                 break;
             case AUDIO:
                 showAudio(location, detection);
