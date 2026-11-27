@@ -207,6 +207,9 @@ dependencies {
         // Named for CameraFragment's registerReceiver flags, rather than left to whichever
         // version something else happens to bring.
         api 'androidx.core:core:[1.9.0,1.10)'
+        // Named because the library's own sources use these annotations throughout. A plain
+        // jar, so it sets no minSdk; capped only so that it never resolves a pre-release.
+        api 'androidx.annotation:annotation:[1.8.1,1.9)'
         api 'androidx.exifinterface:exifinterface:[1.3.6,1.4)'
         // ML Kit needs API 21, so the core build only compiles against it and leaves adding it to
         // the app. CameraView#enterBarcodeScanner returns false when it is missing.
