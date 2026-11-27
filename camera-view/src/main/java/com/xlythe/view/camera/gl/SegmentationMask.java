@@ -8,18 +8,10 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 
 /**
- * Which parts of the frame are the subject, as a grid of confidences.
- *
- * <p>Separated from whatever produced it on purpose. ML Kit's selfie segmenter is one source and
- * the obvious one, but its {@code SegmentationMask} cannot be built outside a running
- * segmentation, and a caller with their own model has the same problem in reverse. What both
- * hand over is a buffer of floats between nought and one, and everything that can be got wrong
- * about reading that - the stride, the orientation, the mirroring of a front camera, a point
- * outside the mask - is here rather than in the part that needs a model.</p>
- *
- * <p>One is the subject and nought is the background, which is ML Kit's convention. A caller
- * whose model is the other way round should invert it before handing it over rather than hope
- * this guesses.</p>
+ * Which parts of a frame are the subject, as a grid of confidences from 0, the background, to 1,
+ * the subject. Build one from a segmentation model of your own and hand it to
+ * {@link BackgroundReplacer#setMask}; a model with the opposite convention has to be inverted
+ * first.
  */
 public final class SegmentationMask {
     /** Below this a sample is treated as background, for the callers who want a hard edge. */
@@ -50,6 +42,7 @@ public final class SegmentationMask {
         return mWidth;
     }
 
+    /** The mask's height in samples. */
     public int getHeight() {
         return mHeight;
     }
@@ -82,13 +75,7 @@ public final class SegmentationMask {
         return confidenceAt(viewX, viewY, viewWidth, viewHeight) >= SUBJECT_THRESHOLD;
     }
 
-    /**
-     * The mask as bytes, for uploading to a texture.
-     *
-     * <p>One byte per sample rather than one float: a mask is a coverage value and eight bits
-     * of it is more than the edge of a segmentation is worth, while a float texture needs an
-     * extension that not every driver has.</p>
-     */
+    /** The mask as one byte per sample, from 0 to 255, for uploading to a texture. */
     @NonNull
     @VisibleForTesting
     public byte[] toAlpha() {

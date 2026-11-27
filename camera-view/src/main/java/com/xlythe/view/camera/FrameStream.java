@@ -221,13 +221,8 @@ public final class FrameStream implements Closeable {
     }
 
     /**
-     * A stream the library drives itself, rather than one an app asked for.
-     *
-     * <p>Here because a backend that has no analysis use case to borrow - Camera2 - gets frames
-     * the same way an app does, and its module lives in another package. Restricted rather than
-     * made public: an app starts a stream through
-     * {@link CameraView#startFrameAnalysis(Analyzer)}, which also keeps the one analysis slot
-     * accounted for.</p>
+     * A stream the library reads for itself. An app starts one with
+     * {@link CameraView#startFrameAnalysis(Analyzer)} instead.
      *
      * @hide
      */

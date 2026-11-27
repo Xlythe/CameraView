@@ -12,21 +12,12 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 
 /**
- * A {@link FrameRenderer} that puts every pixel through a colour matrix.
+ * A {@link FrameRenderer} that puts every pixel through a {@link ColorMatrix}, in the preview, the
+ * recording and the pictures alike: black and white, sepia, a warm or cool cast, more or less
+ * contrast. It looks at one pixel at a time, so a blur, sharpening or edge detection needs a
+ * renderer of your own.
  *
- * <p>Enough for the filters people actually mean by the word - black and white, sepia, a warm or
- * cool cast, more or less punch - at the cost of one multiply per pixel and no extra passes. It
- * draws straight from the camera's external texture, so the filter lands in the preview, the
- * recording and the photograph alike rather than being painted over the top of one of them.</p>
- *
- * <p>What it is not: anything that needs to look at more than one pixel at a time. Blurs,
- * sharpening, edge detection and the rest need neighbours and a second pass, and a caller who
- * wants those should write their own renderer - the seam exists for that, and this is one use
- * of it rather than the only one.</p>
- *
- * <p>The matrix can be changed between frames. Nothing is recompiled for it: the program is
- * built once when the renderer starts and the matrix is a uniform, so a filter wheel costs a
- * copy of sixteen floats.</p>
+ * <p>The matrix can be changed between frames without restarting anything.</p>
  */
 public final class ColorFilter implements FrameRenderer {
     private static final String TAG = "ColorFilter";
@@ -80,10 +71,8 @@ public final class ColorFilter implements FrameRenderer {
     }
 
     /**
-     * Changes what the filter does, from any thread.
-     *
-     * <p>Copied rather than kept, so a caller animating a filter cannot have the array change
-     * under the render thread half way through a frame.</p>
+     * Changes what the filter does, from any thread. The array is copied, so changing it afterwards
+     * changes nothing.
      */
     public void setMatrix(@NonNull float[] matrix) {
         if (matrix.length != ColorMatrix.SIZE) {

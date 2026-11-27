@@ -16,22 +16,14 @@ import java.nio.FloatBuffer;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Keeps the subject and puts something else behind them.
+ * Keeps the subject and draws a colour or an image behind them, in the preview, the recording and
+ * the pictures. {@link com.xlythe.view.camera.CameraView#enterBackgroundReplacement} segments each
+ * frame for it; to use a model of your own, set it as the frame renderer and hand it masks with
+ * {@link #setMask}.
  *
- * <p>Takes a {@link SegmentationMask} from wherever the caller gets one and composites with it,
- * so the replaced background reaches the preview, the recording and the photograph rather than
- * being drawn over one of them. The background is a colour, or an image if one is given.</p>
- *
- * <h2>Why the mask lags, and why that is allowed</h2>
- *
- * <p>Segmentation runs on analysis frames, which arrive slower than the frames being drawn and
- * later than the one they describe. Holding a frame until its mask is ready would make the
- * preview stutter at the speed of the model, so the newest mask is used against the newest
- * frame and the edge trails the subject slightly when they move quickly. That is the trade
- * every implementation of this makes; the alternative looks broken rather than soft.</p>
- *
- * <p>With no mask at all the camera frame is drawn untouched. A background that appeared only
- * once the model warmed up would be stranger than one that fades in.</p>
+ * <p>Masks arrive slower than frames, so the newest mask is drawn with the newest frame, and the
+ * edge trails a subject that moves quickly. Until the first mask arrives, frames are drawn
+ * unchanged.</p>
  */
 public final class BackgroundReplacer implements FrameRenderer {
     private static final String TAG = "BackgroundReplacer";
@@ -108,10 +100,8 @@ public final class BackgroundReplacer implements FrameRenderer {
     }
 
     /**
-     * The image to put behind the subject, or null to go back to the colour.
-     *
-     * <p>Uploaded on the render thread at the next frame, so the bitmap has to stay valid until
-     * then. It is not recycled here: a caller may well be using it elsewhere.</p>
+     * The image to put behind the subject, or null to go back to the colour. It is read at the
+     * next frame, so keep it valid until then; it is never recycled for you.
      */
     public void setBackgroundImage(@Nullable Bitmap background) {
         mPendingBackground.set(background);
@@ -120,13 +110,7 @@ public final class BackgroundReplacer implements FrameRenderer {
         }
     }
 
-    /**
-     * The newest mask, from any thread.
-     *
-     * <p>Replaces rather than queues. A mask that arrived while a newer one was being made
-     * describes a frame already gone, and drawing with it would be a worse answer than drawing
-     * with the newest.</p>
-     */
+    /** The newest mask, from any thread. It replaces any mask not yet drawn. */
     public void setMask(@Nullable SegmentationMask mask) {
         mPendingMask.set(mask);
     }

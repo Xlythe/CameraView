@@ -37,11 +37,12 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 import androidx.annotation.VisibleForTesting;
 
-import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.BackgroundReplacer;
+import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.gl.SegmentationMask;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
@@ -1559,33 +1560,28 @@ public class CameraView extends FrameLayout {
         return true;
     }
 
-    /**
-     * What a segmenter reports: which parts of each frame are the subject.
-     *
-     * <p>Delivered on the main thread, as often as the model manages, which is slower than the
-     * frame rate and is expected to be. A listener that holds onto a mask is holding onto a
-     * description of a moment that has passed.</p>
-     */
+    /** Receives which parts of each frame are the subject, as often as the segmenter manages. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
     public interface SegmentationListener {
         void onSegmentation(@NonNull SegmentationMask mask);
     }
 
     /**
-     * Starts segmenting frames and feeding the result to a renderer that composites with it.
+     * Segments the subject out of each frame and draws it over the replacer's background, in the
+     * preview, the recording and the pictures, until {@link #exitBackgroundReplacement()}. The
+     * replacer becomes the frame renderer, in place of any other.
      *
-     * <p>The two halves are separate on purpose and can be used apart: a caller with their own
-     * model can drive {@link BackgroundReplacer#setMask} themselves, and a caller who only
-     * wants to know where the subject is can take the masks and draw nothing. This is the
-     * convenience for the common case of wanting a different background.</p>
+     * <p>It reads the frames an analyzer would, so it cannot run alongside
+     * {@link #startFrameAnalysis} or the barcode scanner. To use a segmentation model of your
+     * own, set a {@link BackgroundReplacer} with {@link #setFrameRenderer} and hand it masks with
+     * {@link BackgroundReplacer#setMask} instead.</p>
      *
-     * <p>Both camera backends can do it. It needs a frame stream alongside a running preview,
-     * which CameraX has a use case for and Camera2 gets by adding a reader to its session. It
-     * takes the frames a caller's own analyzer would, so it cannot run at the same time as the
-     * barcode scanner or anything else reading frames.</p>
-     *
-     * @return false where the backend cannot segment or the model is unavailable
+     * @return whether it started. False where frames cannot be drawn, which
+     *     {@link #isFrameEffectSupported()} says in advance, when the app does not include ML
+     *     Kit's {@code com.google.mlkit:segmentation-selfie}, or when its model is not available
+     *     on this device.
+     * @throws IllegalStateException if the camera is not open
      */
-    @RequiresApi(21)
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean enterBackgroundReplacement(@NonNull BackgroundReplacer replacer) {
         if (!isOpen()) {
@@ -1605,8 +1601,7 @@ public class CameraView extends FrameLayout {
         return true;
     }
 
-    /** Stops segmenting and puts the camera frame back as it was. */
-    @RequiresApi(21)
+    /** Stops replacing the background, and shows the camera's own frames again. */
     public void exitBackgroundReplacement() {
         if (!mReplacingBackground) {
             return;
@@ -1711,26 +1706,15 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Draws every camera frame through a caller's renderer on its way to the preview, the
-     * recording and the stills.
+     * Draws every camera frame through a renderer on its way to the preview, the recording and
+     * the pictures, so what it draws is in the files as well as on the screen.
      *
-     * <p>Unopinionated on purpose: the library puts the frames through GL and says nothing at all
-     * about what comes out. A tint, a watermark burnt into the recording, a replaced background, a
-     * face drawn over a face, something registered to a point in the world - they are all this one
-     * hook, and which of them a camera does is the app's decision rather than this library's.</p>
+     * <p>Where frames cannot be drawn, which {@link #isFrameEffectSupported()} says, the renderer
+     * is kept but never called, and the camera's own frames are shown.</p>
      *
-     * <p>What makes it worth going through GL instead of drawing a View over the preview is that
-     * the frame is drawn into every output: the still and the recording come out the way the
-     * screen looked, not the way the camera looked.</p>
+     * <p>The renderer is called on a GL thread of its own. See {@link FrameRenderer}.</p>
      *
-     * <p>Ask {@link #isFrameEffectSupported()} first. A renderer set on a backend with no effects
-     * is accepted and ignored rather than refused, because an effect is usually decoration and a
-     * camera that keeps working beats one that throws - but a caller whose renderer is the whole
-     * feature needs to know, and the probe is how.</p>
-     *
-     * <p>The renderer is called on the GL thread, never this one. See {@link FrameRenderer}.</p>
-     *
-     * @param renderer what draws each frame, or null to go back to the camera's own frame
+     * @param renderer what draws each frame, or null for the camera's own frames
      * @see #startFrameAnalysis for reading frames rather than drawing them
      */
     public void setFrameRenderer(@Nullable FrameRenderer renderer) {
@@ -1744,21 +1728,11 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Hands the camera a texture the caller created, and tells the caller when a frame lands on
-     * it.
+     * Has the camera write its frames into a texture the caller creates, and tells the caller as
+     * each frame lands on it, for a consumer whose API takes the name of a texture it made. See
+     * {@link CameraTextureProvider}.
      *
-     * <p>The other half of the seam, and the half that cannot be worked around. A renderer draws
-     * a texture this library made; a consumer that has to be given the texture name rather than
-     * handed one - because it owns the context the texture must live in, or because its own API
-     * takes a name - cannot use that at all. So this exists: set a provider and the camera renders
-     * into its texture instead of ours.</p>
-     *
-     * <p>ARCore's non-shared session is the example to hand:
-     * {@code Session.setCameraTextureName(int)} takes a texture the caller made, and until it has
-     * one {@code Session.update()} never returns a frame.</p>
-     *
-     * <p>The texture is created once, when the camera starts rendering, so changing the provider
-     * reconfigures the camera where changing the renderer does not.</p>
+     * <p>Changing the provider briefly restarts the camera; changing the renderer does not.</p>
      *
      * @param provider who creates the texture and consumes its frames, or null for the library's
      *     own texture
@@ -1774,26 +1748,13 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Whether {@link #setFrameRenderer} and {@link #setCameraTextureProvider} do anything on the
-     * backend in use.
+     * Whether this camera can draw its frames through {@link #setFrameRenderer} and
+     * {@link #setCameraTextureProvider}, into the preview, the recording and the pictures. A
+     * picture taken while frames are drawn is drawn as the preview shows it and written as a
+     * JPEG; see {@link #isPictureFormatSupported}.
      *
-     * <p>Both camera backends can. CameraX has a seam for putting a processor between the
-     * camera and its outputs; Camera2 has no such seam and needs none, because the surfaces its
-     * session writes to can be the renderer's as easily as the preview's. The old backend
-     * reports false: it hands buffers to the surfaces that consume them with nothing in
-     * between.</p>
-     *
-     * <p>What it reaches is the preview, the recording and the photograph. The photograph is
-     * the one worth saying out loud, because the easy way to do it is wrong: on Camera2 the
-     * still is taken through a second input at the camera's own resolution rather than off the
-     * preview stream, since drawing the preview into the file would quietly turn a twelve
-     * megapixel camera into a two megapixel one. It is encoded from what the renderer drew, so
-     * it does not go through the camera's own JPEG encoder, and a DNG is left alone entirely -
-     * a RAW frame is the sensor's own grid and there is nothing for a renderer to draw into
-     * it.</p>
-     *
-     * <p>False also once GL has failed on this device, which is reported here rather than thrown
-     * so that the camera carries on working without the effect.</p>
+     * <p>False also once drawing has failed on this device, after which the camera keeps showing
+     * its own frames.</p>
      */
     public boolean isFrameEffectSupported() {
         return mCameraModule.isFrameEffectSupported();

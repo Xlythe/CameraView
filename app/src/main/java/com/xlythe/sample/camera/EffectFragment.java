@@ -48,17 +48,14 @@ public class EffectFragment extends CameraFragment {
     }
 
     /**
-     * Says whether the frames are actually going through GL.
-     *
-     * <p>Worth saying out loud, because setting a renderer on a backend without effects is
-     * accepted and ignored: the camera works and the band simply is not there. Only the probe
-     * tells the two apart, which is why this layout names the backend that can.</p>
+     * Says whether the band is being drawn. A camera that cannot draw frames keeps the renderer
+     * and shows its own frames, so without this the band would just be missing.
      */
     @Override
     public void onCameraOpened() {
         report(mCameraView.isFrameEffectSupported()
                 ? "Frames are going through GL - the band is in the saved file too"
-                : "The " + mCameraView.getBackend() + " backend has nowhere to draw a frame");
+                : "This camera cannot draw on its frames");
     }
 
     @Override

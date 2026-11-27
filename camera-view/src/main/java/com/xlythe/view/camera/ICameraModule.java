@@ -131,11 +131,9 @@ public abstract class ICameraModule {
     protected void stopBarcodeScanner() {}
 
     /**
-     * Starts handing frames to a segmenter, if this backend can.
+     * Starts handing frames to a segmenter, which reports each mask to {@code listener}.
      *
-     * <p>False by default, and false on every backend but CameraX: segmentation needs a stream
-     * of frames while the preview keeps running, which is what an ImageAnalysis use case is
-     * for and what the other two have no equivalent of.</p>
+     * @return whether it started. False where this camera cannot segment.
      */
     @RequiresPermission(Manifest.permission.CAMERA)
     protected boolean startSegmentation(CameraView.SegmentationListener listener) {
@@ -686,30 +684,23 @@ public abstract class ICameraModule {
     @Nullable private CameraTextureProvider mCameraTextureProvider;
 
     /**
-     * Whether this backend can put camera frames through GL on their way to the preview, the
-     * recording and the stills.
-     *
-     * <p>False here, because being able to is a property of how a backend gets its frames rather
-     * than something every backend has. A backend that reports false ignores the renderer and the
-     * texture provider entirely and keeps showing the camera, which is the behaviour a caller
-     * whose effect is decoration wants; one whose effect is the feature asks this first.</p>
+     * Whether this camera can draw its frames through a renderer or a texture provider on their
+     * way to the preview, the recording and the pictures. One that cannot keeps both and shows its
+     * own frames.
      */
     public boolean isFrameEffectSupported() {
         return false;
     }
 
     /**
-     * Whether frames are going through GL now, for a renderer, a filter or a mask. A picture is
-     * then drawn as the preview shows it, which a format the camera encodes itself cannot carry.
+     * Whether frames are being drawn now, for a renderer, a filter or a mask, in which case a
+     * picture is drawn as the preview shows it and written as a JPEG.
      */
     protected boolean isDrawingFrames() {
         return false;
     }
 
-    /**
-     * Sets what draws each frame. A backend that supports effects should start putting frames
-     * through GL, which usually means reconfiguring the camera.
-     */
+    /** Sets what draws each frame, or null for the camera's own frames. */
     public void setFrameRenderer(@Nullable FrameRenderer renderer) {
         mFrameRenderer = renderer;
     }
