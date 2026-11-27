@@ -16,6 +16,7 @@ import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.MediaTags;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -743,7 +744,7 @@ public final class PanoramaSession implements GuideState.Source {
     @WorkerThread
     private boolean write() throws IOException {
         Bitmap bitmap;
-        GPanoMetadata metadata;
+        MediaTags.Panorama metadata;
         synchronized (mLock) {
             SphereCanvas canvas = mCanvas;
             if (canvas == null || canvas.getFramesPainted() == 0) {
@@ -839,7 +840,7 @@ public final class PanoramaSession implements GuideState.Source {
 
     /** Writes a picture with its Exif and photo sphere metadata. */
     @WorkerThread
-    private boolean save(@NonNull Bitmap bitmap, @NonNull GPanoMetadata metadata)
+    private boolean save(@NonNull Bitmap bitmap, @NonNull MediaTags.Panorama metadata)
             throws IOException {
         try (FileOutputStream out = new FileOutputStream(mFile)) {
             if (!bitmap.compress(Bitmap.CompressFormat.JPEG, mQuality, out)) {
@@ -859,7 +860,11 @@ public final class PanoramaSession implements GuideState.Source {
             exif.attachLocation(location);
         }
         exif.save();
-        metadata.writeTo(mFile);
+        MediaTags tags = MediaTags.open(mFile);
+        if (!tags.setPanorama(metadata)) {
+            throw new IOException("The photo sphere metadata did not fit the picture");
+        }
+        tags.save();
         return true;
     }
 
@@ -872,47 +877,47 @@ public final class PanoramaSession implements GuideState.Source {
      * left, which viewers do not follow. The heading says where the middle is instead.</p>
      */
     @NonNull
-    private GPanoMetadata metadata(int fullWidth, int fullHeight, float yawOrigin, int photos,
-            @NonNull int[] region) {
+    private MediaTags.Panorama metadata(int fullWidth, int fullHeight, float yawOrigin,
+            int photos, @NonNull int[] region) {
         int width = region[2];
         int height = region[3];
-        GPanoMetadata metadata = new GPanoMetadata();
-        metadata.usePanoramaViewer = true;
-        metadata.captureSoftware = applicationName();
-        metadata.stitchingSoftware = "CameraView";
-        metadata.projectionType = GPanoMetadata.EQUIRECTANGULAR;
-        metadata.croppedAreaImageWidthPixels = width;
-        metadata.croppedAreaImageHeightPixels = height;
-        metadata.fullPanoWidthPixels = fullWidth;
-        metadata.fullPanoHeightPixels = fullHeight;
-        metadata.croppedAreaLeftPixels = (fullWidth - width) / 2;
-        metadata.croppedAreaTopPixels = region[1];
+        int left = (fullWidth - width) / 2;
+        MediaTags.Panorama.Builder metadata = new MediaTags.Panorama.Builder()
+                .setUsePanoramaViewer(true)
+                .setCaptureSoftware(applicationName())
+                .setStitchingSoftware("CameraView")
+                .setProjectionType(MediaTags.Panorama.PROJECTION_EQUIRECTANGULAR)
+                .setCroppedAreaImageWidthPixels(width)
+                .setCroppedAreaImageHeightPixels(height)
+                .setFullPanoWidthPixels(fullWidth)
+                .setFullPanoHeightPixels(fullHeight)
+                .setCroppedAreaLeftPixels(left)
+                .setCroppedAreaTopPixels(region[1]);
 
         float degreesPerPixel = 360f / fullWidth;
         float middleYaw = yawOrigin
                 + (region[0] + width / 2f - fullWidth / 2f) * degreesPerPixel;
         // The middle of the full panorama, which is up to half a pixel from the picture's own.
-        float fullMiddleYaw = middleYaw + (fullWidth / 2f
-                - (metadata.croppedAreaLeftPixels + width / 2f)) * degreesPerPixel;
+        float fullMiddleYaw = middleYaw + (fullWidth / 2f - (left + width / 2f)) * degreesPerPixel;
         float offset = mSensor.getHeadingOffset();
         if (!Float.isNaN(offset)) {
-            metadata.poseHeadingDegrees = degrees360(fullMiddleYaw + offset);
-            metadata.initialViewHeadingDegrees = Math.round(degrees360(middleYaw + offset)) % 360;
+            metadata.setPoseHeadingDegrees(degrees360(fullMiddleYaw + offset))
+                    .setInitialViewHeadingDegrees(Math.round(degrees360(middleYaw + offset)) % 360);
         }
         // The canvas is levelled by gravity, so the panorama is neither tipped nor rolled.
-        metadata.posePitchDegrees = 0f;
-        metadata.poseRollDegrees = 0f;
-        metadata.initialViewPitchDegrees =
-                Math.round(90f - (region[1] + height / 2f) * 180f / fullHeight);
-        metadata.initialViewRollDegrees = 0;
-        metadata.initialHorizontalFovDegrees = mUprightHorizontalFov;
-        metadata.initialVerticalFovDegrees = mUprightVerticalFov;
-        metadata.firstPhotoDate = mFirstPhotoMillis;
-        metadata.lastPhotoDate = mLastPhotoMillis;
-        metadata.sourcePhotosCount = photos;
-        metadata.exposureLockUsed = false;
-        metadata.initialCameraDolly = 0f;
-        return metadata;
+        return metadata.setPosePitchDegrees(0f)
+                .setPoseRollDegrees(0f)
+                .setInitialViewPitchDegrees(
+                        Math.round(90f - (region[1] + height / 2f) * 180f / fullHeight))
+                .setInitialViewRollDegrees(0)
+                .setInitialHorizontalFovDegrees(mUprightHorizontalFov)
+                .setInitialVerticalFovDegrees(mUprightVerticalFov)
+                .setFirstPhotoDate(mFirstPhotoMillis)
+                .setLastPhotoDate(mLastPhotoMillis)
+                .setSourcePhotosCount(photos)
+                .setExposureLockUsed(false)
+                .setInitialCameraDolly(0f)
+                .build();
     }
 
     @Nullable

@@ -13,6 +13,8 @@ import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 import androidx.exifinterface.media.ExifInterface;
 
+import com.xlythe.view.camera.MediaTags;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -102,12 +104,14 @@ final class ImageSources {
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
             throw new IOException(location + " is not a picture this device can decode");
         }
-        int orientation = orientation(context, location);
+        int orientation = ExifInterface.ORIENTATION_NORMAL;
         GPano gpano = null;
-        try (InputStream input = location.open(context)) {
-            gpano = GPano.read(input, bounds.outWidth, bounds.outHeight);
-        } catch (IOException e) {
-            Log.w(TAG, "Unable to read the photo sphere metadata of " + location, e);
+        try {
+            MediaTags tags = location.openTags(context);
+            orientation = Orientation.exifOrientation(tags.getRotation(), tags.isMirrored());
+            gpano = GPano.from(tags.getPanorama(), bounds.outWidth, bounds.outHeight);
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "Unable to read the metadata of " + location, e);
         }
         RegionSource source;
         try {
@@ -117,21 +121,6 @@ final class ImageSources {
             source = copy(context, location, bounds.outWidth, bounds.outHeight, MAX_COPY_PIXELS);
         }
         return new Opened(source, orientation, gpano);
-    }
-
-    /** The Exif orientation, or normal when the picture has none or it cannot be read. */
-    @WorkerThread
-    private static int orientation(@NonNull Context context, @NonNull ImageLocation location) {
-        try (InputStream input = location.open(context)) {
-            int orientation = new ExifInterface(input).getAttributeInt(
-                    ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
-            return orientation >= ExifInterface.ORIENTATION_NORMAL
-                    && orientation <= ExifInterface.ORIENTATION_ROTATE_270
-                    ? orientation : ExifInterface.ORIENTATION_NORMAL;
-        } catch (IOException | RuntimeException e) {
-            Log.w(TAG, "Unable to read the orientation of " + location, e);
-            return ExifInterface.ORIENTATION_NORMAL;
-        }
     }
 
     /**

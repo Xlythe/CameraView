@@ -10,6 +10,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.WorkerThread;
 
+import com.xlythe.view.camera.MediaTags;
+
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
@@ -64,6 +66,13 @@ final class ImageLocation {
             throw new FileNotFoundException("Nothing to read at " + mUri);
         }
         return stream;
+    }
+
+    /** The picture's metadata, to read. */
+    @WorkerThread
+    @NonNull
+    MediaTags openTags(@NonNull Context context) throws IOException {
+        return mFile != null ? MediaTags.open(mFile) : MediaTags.open(context, uri());
     }
 
     /** A descriptor to read from, which for a provider's pipe cannot seek. */

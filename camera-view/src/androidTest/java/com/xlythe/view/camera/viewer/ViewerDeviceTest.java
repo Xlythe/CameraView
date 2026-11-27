@@ -244,7 +244,8 @@ public class ViewerDeviceTest {
         File jpeg = new File(mDirectory, "band.jpg");
         writeJpeg(jpeg, compass(1024, 342, 2048, 1024, 512, 341), "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">"
                 + "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
-                + "<rdf:Description rdf:about=\"\" xmlns:GPano=\"" + GPano.NAMESPACE + "\""
+                + "<rdf:Description rdf:about=\"\""
+                + " xmlns:GPano=\"http://ns.google.com/photos/1.0/panorama/\""
                 + " GPano:ProjectionType=\"equirectangular\""
                 + " GPano:CroppedAreaImageWidthPixels=\"1024\""
                 + " GPano:CroppedAreaImageHeightPixels=\"342\""
@@ -290,7 +291,8 @@ public class ViewerDeviceTest {
     private static String stripXmp() {
         return "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">"
                 + "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\">"
-                + "<rdf:Description rdf:about=\"\" xmlns:GPano=\"" + GPano.NAMESPACE + "\""
+                + "<rdf:Description rdf:about=\"\""
+                + " xmlns:GPano=\"http://ns.google.com/photos/1.0/panorama/\""
                 + " GPano:UsePanoramaViewer=\"True\" GPano:ProjectionType=\"equirectangular\""
                 + " GPano:PoseHeadingDegrees=\"0\" GPano:InitialViewHeadingDegrees=\"0\""
                 + " GPano:CroppedAreaImageWidthPixels=\"3032\""
