@@ -95,7 +95,8 @@ public class MainFragment extends CameraFragment {
                     R.layout.zoom_preset, mZoomPresets, false);
             button.setText(getString(R.string.zoom_preset, preset.getLabel()));
             button.setTag(preset.getRatio());
-            button.setOnClickListener(v -> cameraView.setZoomRatio(preset.getRatio()));
+            button.setOnClickListener(
+                    v -> cameraView.setZoomRatio(preset.getRatio(), true /* animate */));
             mZoomPresets.addView(button);
         }
         highlightZoomPreset(cameraView.getZoomRatio());

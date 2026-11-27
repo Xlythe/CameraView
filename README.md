@@ -60,9 +60,8 @@ Camera(
 ```
 
 Camera also accepts zoomRatio [minZoomRatio to maxZoomRatio, or null to leave the zoom to
-pinchToZoom], zoomLevel [0 to maxZoomLevel, the same range on a log scale for a slider],
-shutterSoundEnabled [boolean], shutterSound [raw resource], pictureQuality [1 to 100],
-colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr],
+pinchToZoom], animateZoom [boolean], shutterSoundEnabled [boolean], shutterSound [raw resource],
+pictureQuality [1 to 100], colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr],
 exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
 extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
 lowLightBoostEnabled [boolean]. Not every camera can do all of these, so CameraState below says
@@ -87,20 +86,22 @@ if (camera != null && camera.hasFlash) {
 ```
 
 CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, isZoomSupported,
-maxZoomLevel, minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
+minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
 minExposureCompensation, maxExposureCompensation, supportedColorSpaces, supportedPictureFormats,
 supportedDynamicRanges, supportedExtensions, isStabilizationSupported, isLowLightBoostSupported,
 isSnapshotWhileRecordingSupported, isFaceDetectionSupported, horizontalFieldOfView,
 verticalFieldOfView, isRecording and isAnalyzingFrames.
 
 Pass onZoomChanged to hear the zoom ratio whenever it changes, a pinch included, so that buttons
-for zoomPresets can follow it.
+for zoomPresets can follow it. Writing it back into zoomRatio is safe, and animateZoom eases over
+to each new ratio rather than jumping to it.
 ```kotlin
 var zoom by remember { mutableStateOf(1f) }
 Camera(
     controller = cameraController,
     state = cameraState,
     zoomRatio = zoom,
+    animateZoom = true,
     onZoomChanged = { zoom = it }
 )
 
@@ -392,11 +393,15 @@ step with a pinch. Each preset has the exact ratio to zoom to and a rounded labe
 for (ZoomPreset preset : mCameraView.getZoomPresets()) {
   Button button = new Button(context);
   button.setText(preset.getLabel() + "x");
-  button.setOnClickListener(v -> mCameraView.setZoomRatio(preset.getRatio()));
+  button.setOnClickListener(v -> mCameraView.setZoomRatio(preset.getRatio(), true));
   zoomBar.addView(button);
 }
 mCameraView.setOnZoomChangedListener(ratio -> highlightNearest(ratio));
 ```
+setZoomRatio(ratio, true) eases over to the ratio rather than jumping, passing through the lenses
+on the way as a phone's camera app does, and the listener hears each step. A pinch takes over from
+wherever it has got to.
+
 setZoomLevel and getZoomLevel cover the same range as a position from 0 to getMaxZoomLevel, on a
 log scale, for a slider.
 
