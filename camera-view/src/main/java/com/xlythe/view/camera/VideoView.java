@@ -10,6 +10,7 @@ import android.graphics.SurfaceTexture;
 import android.media.MediaMetadataRetriever;
 import android.media.AudioAttributes;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
@@ -48,7 +49,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     // The view we draw the video on to
     private TextureView mTextureView;
-    // Whether to play a file or a stream
+    // Whether to play a file (or a uri, which plays the same way) or a stream
     private InputType mInputType = InputType.UNKNOWN;
     // If true, the texture view is ready to be drawn on
     private boolean mIsAvailable;
@@ -75,6 +76,8 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     @Nullable private MediaPlayer mMediaPlayer;
     // The file of the video to play
     @Nullable private File mFile;
+    // The uri of the video to play, such as one MediaStore handed back. Set instead of mFile.
+    @Nullable private Uri mUri;
     // An optional listener for when videos have reached the end
     @Nullable private MediaPlayer.OnCompletionListener mOnCompletionListener;
     // If true, the video should loop
@@ -172,7 +175,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     }
 
     public void setFile(@Nullable File file) {
-        if (Objects.equals(file, mFile) && mInputType == InputType.FILE) {
+        if (Objects.equals(file, mFile) && mUri == null && mInputType == InputType.FILE) {
             return;
         }
 
@@ -183,10 +186,36 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             releaseMediaPlayer();
         }
         mFile = file;
+        mUri = null;
         mVideoStream = null;
         mInputType = InputType.FILE;
         createTextureView();
         if (file != null && mIsAvailable) {
+            prepare();
+        }
+    }
+
+    /**
+     * Plays a video by uri rather than by file, such as the content uri
+     * {@link CameraView.OnVideoCapturedListener#onVideoSaved(Uri)} reports.
+     */
+    public void setUri(@Nullable Uri uri) {
+        if (Objects.equals(uri, mUri) && mFile == null && mInputType == InputType.FILE) {
+            return;
+        }
+
+        if (DEBUG) Log.d(TAG, "Uri set to " + uri);
+        if (mInputType == InputType.STREAM) {
+            releaseStreamPlayback(true);
+        } else {
+            releaseMediaPlayer();
+        }
+        mUri = uri;
+        mFile = null;
+        mVideoStream = null;
+        mInputType = InputType.FILE;
+        createTextureView();
+        if (uri != null && mIsAvailable) {
             prepare();
         }
     }
@@ -217,6 +246,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
         mVideoStream = videoStream;
         mFile = null;
+        mUri = null;
         mInputType = InputType.STREAM;
         createTextureView();
         if (mIsAvailable) {
@@ -229,7 +259,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     public void onSurfaceTextureAvailable(SurfaceTexture texture, int width, int height) {
         if (DEBUG) Log.d(TAG, "Texture available");
         mIsAvailable = true;
-        if (mFile != null || mVideoStream != null) {
+        if (mFile != null || mUri != null || mVideoStream != null) {
             if (DEBUG) Log.d(TAG, "Preparing file or stream");
             prepare();
         }
@@ -310,8 +340,9 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     protected void prepareFile() {
         if (DEBUG) Log.d(TAG, "Preparing video");
         File file = mFile;
+        Uri uri = mUri;
         SurfaceTexture surfaceTexture = mTextureView == null ? null : mTextureView.getSurfaceTexture();
-        if (file == null || surfaceTexture == null) {
+        if ((file == null && uri == null) || surfaceTexture == null) {
             Log.w(TAG, "Cannot prepare video without a file and surface");
             return;
         }
@@ -321,7 +352,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         // worker, then configure the player and let it prepare asynchronously.
         int generation = ++mPrepareGeneration;
         prepareExecutor().execute(() -> {
-            VideoMetadata metadata = readMetadata(file);
+            VideoMetadata metadata = readMetadata(file, uri);
             mMainHandler.post(() -> {
                 if (generation != mPrepareGeneration) {
                     if (DEBUG) Log.d(TAG, "Discarding metadata for a replaced video");
@@ -331,7 +362,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                     setPlayingState(false);
                     return;
                 }
-                startPreparing(file, surfaceTexture, metadata, generation);
+                startPreparing(file, uri, surfaceTexture, metadata, generation);
             });
         });
     }
@@ -347,11 +378,16 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
     }
 
+    /** Reads the file's metadata, or the uri's when there is no file. */
     @Nullable
-    private VideoMetadata readMetadata(File file) {
+    private VideoMetadata readMetadata(@Nullable File file, @Nullable Uri uri) {
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
-        try (FileInputStream inputStream = new FileInputStream(file)) {
-            retriever.setDataSource(inputStream.getFD());
+        try (FileInputStream inputStream = file == null ? null : new FileInputStream(file)) {
+            if (inputStream != null) {
+                retriever.setDataSource(inputStream.getFD());
+            } else {
+                retriever.setDataSource(getContext(), uri);
+            }
             int width = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
             int height = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
             int rotation = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
@@ -361,7 +397,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                     ? new VideoMetadata(height, width)
                     : new VideoMetadata(width, height);
         } catch (IOException | RuntimeException e) {
-            Log.e(TAG, "Failed to read video metadata from " + file, e);
+            Log.e(TAG, "Failed to read video metadata from " + (file == null ? uri : file), e);
             return null;
         } finally {
             try {
@@ -372,9 +408,11 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
     }
 
+    /** Prepares the player on the file, or on the uri when there is no file. */
     @UiThread
-    private void startPreparing(File file, SurfaceTexture surfaceTexture,
-            VideoMetadata metadata, int generation) {
+    private void startPreparing(@Nullable File file, @Nullable Uri uri,
+            SurfaceTexture surfaceTexture, VideoMetadata metadata, int generation) {
+        Object source = file == null ? uri : file;
         ensureMediaPlayer();
         transformPreview(metadata.width, metadata.height);
 
@@ -388,12 +426,15 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             }
             mMediaPlayer.reset();
 
-            // MediaPlayer reads from the descriptor until it finishes preparing, so unlike the
-            // synchronous path this stream cannot be closed when the call returns.
-            FileInputStream inputStream = new FileInputStream(file);
-            mPreparingInputStream = inputStream;
-
-            mMediaPlayer.setDataSource(inputStream.getFD());
+            if (file != null) {
+                // MediaPlayer reads from the descriptor until it finishes preparing, so unlike
+                // the synchronous path this stream cannot be closed when the call returns.
+                FileInputStream inputStream = new FileInputStream(file);
+                mPreparingInputStream = inputStream;
+                mMediaPlayer.setDataSource(inputStream.getFD());
+            } else {
+                mMediaPlayer.setDataSource(getContext(), uri);
+            }
             mMediaPlayer.setSurface(surface);
             mMediaPlayer.setAudioAttributes(new AudioAttributes.Builder()
                     .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
@@ -411,7 +452,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 }
             });
             mMediaPlayer.setOnErrorListener((mediaPlayer, what, extra) -> {
-                Log.e(TAG, "Failed to prepare video file " + file
+                Log.e(TAG, "Failed to prepare video " + source
                         + " (what=" + what + ", extra=" + extra + ")");
                 closePreparingInputStream();
                 setPlayingState(false);
@@ -419,7 +460,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             });
             mMediaPlayer.prepareAsync();
         } catch (IllegalStateException | IOException e) {
-            Log.e(TAG, "Failed to prepare video file " + file, e);
+            Log.e(TAG, "Failed to prepare video " + source, e);
             closePreparingInputStream();
             setPlayingState(false);
         } finally {
