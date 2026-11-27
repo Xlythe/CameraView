@@ -15,6 +15,7 @@ import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
 import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
@@ -806,6 +807,67 @@ public abstract class ICameraModule {
             return;
         }
         new Handler(Looper.getMainLooper()).post(action);
+    }
+
+    /**
+     * Places an anchor where the scene is under a point of the view, for a camera that is
+     * tracking the room. Every other camera has nothing to place it in.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    @Nullable
+    public ArAnchor addArAnchor(float x, float y) {
+        return null;
+    }
+
+    /** Whether this camera measures how far away the scene is while it tracks the room. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public boolean isArDepthSupported() {
+        return false;
+    }
+
+    /**
+     * Tells the view how AR is tracking, on the main thread and always posted, since the view may
+     * end AR in answer and this can be called from inside opening the camera.
+     */
+    protected final void onArTrackingChanged(@NonNull CameraView.ArTracking tracking) {
+        new Handler(Looper.getMainLooper()).post(
+                () -> getView().onArTrackingChanged(this, tracking));
+    }
+
+    /**
+     * Lets go of whatever outlives a close, for a camera the view is done with. Called once the
+     * camera is closed.
+     */
+    @MainThread
+    protected void release() {}
+
+    /**
+     * Takes on every setting the app made on another camera, for one that stands in for it.
+     * Called before this camera opens, so each is read as it would be had the app set it here.
+     */
+    @MainThread
+    void copySettingsFrom(@NonNull ICameraModule other) {
+        mQuality = other.mQuality;
+        mPictureQuality = other.mPictureQuality;
+        mMaxVideoDuration = other.mMaxVideoDuration;
+        mMaxVideoSize = other.mMaxVideoSize;
+        mFlash = other.mFlash;
+        mDynamicRange = other.mDynamicRange;
+        mExtension = other.mExtension;
+        mStabilizationEnabled = other.mStabilizationEnabled;
+        mExposureCompensation = other.mExposureCompensation;
+        mTorchEnabled = other.mTorchEnabled;
+        mLowLightBoostEnabled = other.mLowLightBoostEnabled;
+        mShutterSoundEnabled = other.mShutterSoundEnabled;
+        mSounds.setShutterSound(other.mSounds.getShutterSound());
+        mOnImageCapturedListener = other.mOnImageCapturedListener;
+        mOnVideoCapturedListener = other.mOnVideoCapturedListener;
+        mMatchPreviewAspectRatio = other.mMatchPreviewAspectRatio;
+        mColorSpace = other.mColorSpace;
+        mPictureFormat = other.mPictureFormat;
+        mFrameRenderer = other.mFrameRenderer;
+        mCameraTextureProvider = other.mCameraTextureProvider;
     }
 
     public boolean hasFlash() {

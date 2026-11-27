@@ -41,11 +41,13 @@ import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 import androidx.annotation.VisibleForTesting;
 
+import com.xlythe.view.camera.ar.ArSupport;
 import com.xlythe.view.camera.gl.BackgroundReplacer;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.gl.SegmentationMask;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
+import com.xlythe.view.camera.v2.ArCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
@@ -484,6 +486,21 @@ public class CameraView extends FrameLayout {
 
     private ICameraModule mCameraModule;
 
+    /**
+     * The camera the app chose, set aside while AR runs the camera in its place, or null outside
+     * AR. Kept rather than rebuilt so it comes back as it was left.
+     */
+    @Nullable
+    private ICameraModule mModuleOutsideAr;
+
+    /** Told how AR is tracking, or null outside AR. */
+    @Nullable
+    private ArListener mArListener;
+
+    /** How AR last said it was tracking, or null outside AR. */
+    @Nullable
+    private ArTracking mArTracking;
+
     /** Follows the device's location while the camera is open, for the backend to tag captures. */
     private final LocationTracker mLocationTracker = new LocationTracker(getContext());
 
@@ -683,7 +700,9 @@ public class CameraView extends FrameLayout {
     protected Parcelable onSaveInstanceState() {
         Bundle state = new Bundle();
         state.putParcelable(EXTRA_SUPER, super.onSaveInstanceState());
-        state.putParcelable(EXTRA_MODULE, mCameraModule.onSaveInstanceState());
+        // The camera the app chose, which is the one a restored view starts with.
+        ICameraModule chosen = mModuleOutsideAr != null ? mModuleOutsideAr : mCameraModule;
+        state.putParcelable(EXTRA_MODULE, chosen.onSaveInstanceState());
         state.putInt(EXTRA_QUALITY, getQuality().id);
         state.putFloat(EXTRA_ZOOM_RATIO,
                 mZoomAnimator != null ? mZoomAnimationTarget : getZoomRatio());
@@ -1507,6 +1526,8 @@ public class CameraView extends FrameLayout {
      * Starts a video stream. The stream will continue until {@link VideoStream#close} is called.
      *
      * @return A stream that can be shared to a remote device.
+     * @throws IllegalStateException for a stream with video, if the camera is not open or AR is
+     *     running
      */
     @RequiresPermission(allOf = {
             Manifest.permission.CAMERA,
@@ -1516,6 +1537,9 @@ public class CameraView extends FrameLayout {
     public VideoStream stream(VideoStream.Params params) {
         if (params.isVideoEnabled() && !isOpen()) {
             throw new IllegalStateException("Camera must be open before starting a video stream");
+        }
+        if (params.isVideoEnabled() && isInAr()) {
+            throw new IllegalStateException("Video cannot be streamed while AR is running");
         }
 
         return new VideoStream.Builder().attach(mCameraModule).setParams(params).build();
@@ -1545,6 +1569,11 @@ public class CameraView extends FrameLayout {
 
         if (mReplacingBackground) {
             Log.w(TAG, "Barcodes cannot be scanned while the background is being replaced");
+            return false;
+        }
+
+        if (isInAr()) {
+            Log.w(TAG, "Barcodes cannot be scanned while AR is running");
             return false;
         }
 
@@ -1693,6 +1722,212 @@ public class CameraView extends FrameLayout {
         mFrameStream = new FrameStream(mCameraModule.getCanvas(), this, params, analyzer);
         mFrameStream.start();
         return true;
+    }
+
+    /**
+     * How well AR is following the phone through the room. Every state but {@link #TRACKING} is a
+     * moment where anchors, the view matrix and the depth are not current, and the reason is
+     * there to tell someone what to do about it.
+     */
+    public enum ArTracking {
+        /** The frame's view matrix, its depth and every anchor are current. */
+        TRACKING,
+        /** Starting or recovering, which takes a moment of moving the phone slowly. */
+        INITIALIZING,
+        /** Too dark to see the room by. */
+        INSUFFICIENT_LIGHT,
+        /** Moving too fast to follow. */
+        EXCESSIVE_MOTION,
+        /** Pointed at something too plain to follow, such as a blank wall or the floor up close. */
+        INSUFFICIENT_FEATURES,
+        /**
+         * AR has ended without {@link #exitAr()}: it could not start, or lost the camera. The
+         * camera the app chose is back, open if the camera was open.
+         */
+        STOPPED
+    }
+
+    /** Hears how AR is tracking. */
+    public interface ArListener {
+        /**
+         * Called on the main thread whenever tracking changes, starting soon after the camera
+         * opens.
+         */
+        void onArTrackingChanged(@NonNull ArTracking tracking);
+    }
+
+    /**
+     * Whether {@link #enterAr} can run here, now.
+     *
+     * <p>AR needs Android 7.0, a phone Google supports for AR with Google Play Services for AR
+     * installed, the app's own {@code com.google.ar:core} dependency, and the
+     * {@code com.google.ar.core} meta-data in the app's manifest. Never blocks: the first answer
+     * after the app starts can be false while the phone is still being checked, so ask again
+     * when it matters.</p>
+     */
+    public boolean isArSupported() {
+        return ArSupport.availability(getContext()) == ArSupport.READY;
+    }
+
+    /**
+     * Runs the camera with AR following the phone through the room, until {@link #exitAr()}.
+     *
+     * <p>Every {@link com.xlythe.view.camera.gl.GlFrame} a {@link #setFrameRenderer frame
+     * renderer} draws then carries the view matrix that brings the room into the camera's space,
+     * beside its projection, and on a phone that measures depth, how far away the scene is - so
+     * something drawn in the room stays where it was put and passes behind what stands in front
+     * of it. {@link #addArAnchor} finds places in the room to draw at. Pictures are drawn as the
+     * preview shows them, at the preview's resolution, with whatever the renderer draws.</p>
+     *
+     * <p>AR uses the back camera and reopens it. While it runs the camera does not record,
+     * stream, analyze or scan frames, replace the background, zoom, light its flash or torch,
+     * compensate exposure, focus on a tapped point, report faces, steady the picture, brighten it
+     * in low light or switch lenses; it takes JPEG pictures in sRGB only, and a
+     * {@link #setCameraTextureProvider texture provider} is set aside. Each of these reports
+     * itself unsupported, and comes back when AR ends.</p>
+     *
+     * @return whether AR is starting. False, changing nothing, where it cannot run here, while
+     *     recording, analyzing frames, scanning barcodes or replacing the background.
+     * @throws IllegalStateException if AR is already running
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public boolean enterAr(@NonNull ArListener listener) {
+        if (mModuleOutsideAr != null) {
+            throw new IllegalStateException("AR cannot be entered twice");
+        }
+        if (isRecording() || isReadingFrames() || mReplacingBackground) {
+            Log.w(TAG, "AR cannot start while frames are recorded, read or composited");
+            return false;
+        }
+        ICameraModule ar = sArModuleFactory.create(this);
+        if (ar == null) {
+            return false;
+        }
+        mArListener = listener;
+        mArTracking = ArTracking.INITIALIZING;
+        mModuleOutsideAr = mCameraModule;
+        switchModule(ar);
+        return true;
+    }
+
+    /** Makes the camera module AR runs on. */
+    @VisibleForTesting
+    interface ArModuleFactory {
+        /** Returns the module, or null where AR cannot run here. */
+        @Nullable
+        ICameraModule create(@NonNull CameraView view);
+    }
+
+    /** Makes AR's camera module, which a test replaces with one that needs no ARCore. */
+    @VisibleForTesting
+    static ArModuleFactory sArModuleFactory = CameraView::createArModule;
+
+    /** A module sharing the camera with ARCore, or null where it cannot run here. */
+    @Nullable
+    private static ICameraModule createArModule(@NonNull CameraView view) {
+        if (Build.VERSION.SDK_INT < 24
+                || ArSupport.availability(view.getContext()) == ArSupport.UNSUPPORTED) {
+            Log.w(TAG, "AR is unavailable here");
+            return null;
+        }
+        try {
+            return ArCameraModule.create(view);
+        } catch (RuntimeException | LinkageError error) {
+            // ARCore's classes are there, as checked, but not the version this library expects.
+            Log.w(TAG, "AR is unavailable", error);
+            return null;
+        }
+    }
+
+    /** Ends AR and gives the camera back to the one the app chose, reopening it if it was open. */
+    public void exitAr() {
+        ICameraModule outside = mModuleOutsideAr;
+        if (outside == null) {
+            return;
+        }
+        ICameraModule ar = mCameraModule;
+        mModuleOutsideAr = null;
+        mArListener = null;
+        mArTracking = null;
+        switchModule(outside);
+        ar.release();
+    }
+
+    /** Whether AR is running the camera. */
+    public boolean isInAr() {
+        return mModuleOutsideAr != null;
+    }
+
+    /** How AR last said it was tracking, as its listener heard, or null outside AR. */
+    @Nullable
+    public ArTracking getArTracking() {
+        return mArTracking;
+    }
+
+    /**
+     * Whether AR measures how far away the scene is here, which is what lets a real object hide
+     * something drawn behind it. False outside AR. The phone has to move a little before the
+     * first measurement, so frames can be without depth for a moment.
+     *
+     * @see com.xlythe.view.camera.gl.GlFrame#getDepthTextureName()
+     */
+    public boolean isArDepthSupported() {
+        return mCameraModule.isArDepthSupported();
+    }
+
+    /**
+     * Places an anchor on the first surface AR finds under a point of this view: a floor, a wall
+     * or a table it has seen, or anything it has measured the depth of.
+     *
+     * <p>Waits up to half a second on the main thread for the next frame, which is where the
+     * surfaces are looked for.</p>
+     *
+     * @param x in pixels from the left of this view
+     * @param y in pixels from the top of this view
+     * @return the anchor, or null outside AR, while it is not {@link ArTracking#TRACKING
+     *     tracking}, and where nothing is under the point
+     */
+    @Nullable
+    public ArAnchor addArAnchor(float x, float y) {
+        return mCameraModule.addArAnchor(x, y);
+    }
+
+    /**
+     * Puts another camera in the current one's place, carrying every setting across, and closes
+     * and reopens around the change so that the preview starts clean.
+     */
+    @UiThread
+    private void switchModule(@NonNull ICameraModule next) {
+        Status status = getStatus();
+        boolean open = status == Status.OPEN || status == Status.OPENING
+                || status == Status.WAITING_FOR_SURFACE;
+        if (open) {
+            closeOnMainThread();
+        }
+        next.copySettingsFrom(mCameraModule);
+        mCameraModule = next;
+        if (open) {
+            openOnMainThread();
+        }
+    }
+
+    /**
+     * Called by a camera module, on the main thread, whenever AR tracking changes. A module the
+     * view has already set aside is not listened to.
+     */
+    @UiThread
+    void onArTrackingChanged(@NonNull ICameraModule source, @NonNull ArTracking tracking) {
+        if (source != mCameraModule || mModuleOutsideAr == null) {
+            return;
+        }
+        ArListener listener = mArListener;
+        mArTracking = tracking;
+        if (tracking == ArTracking.STOPPED) {
+            exitAr();
+        }
+        if (listener != null) {
+            listener.onArTrackingChanged(tracking);
+        }
     }
 
     /**

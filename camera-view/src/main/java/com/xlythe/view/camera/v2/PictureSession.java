@@ -837,7 +837,7 @@ class PictureSession extends PreviewSession {
 
     /** The drawn frame as a bitmap, which is RGBA and so needs no conversion beyond the stride. */
     @NonNull
-    private static Bitmap toBitmap(@NonNull Image drawn) {
+    static Bitmap toBitmap(@NonNull Image drawn) {
         Image.Plane plane = drawn.getPlanes()[0];
         int rowStride = plane.getRowStride();
         int pixelStride = plane.getPixelStride();
@@ -862,7 +862,7 @@ class PictureSession extends PreviewSession {
      * records is normal, where a camera frame's records the turn and the mirror a viewer still
      * has to apply.</p>
      */
-    private static class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
+    static class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
         /** The application, whose name and version the picture records as its software. */
         private final Context mContext;
 

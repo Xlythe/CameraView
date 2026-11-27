@@ -412,10 +412,10 @@ public class Camera2Module extends ICameraModule {
      */
     private void applyFrameEffect() {
         if (!isFrameEffectSupported()) {
-            // A subclass that draws the frames itself, which the AR backend does.
+            // GL has already failed here, and the camera carries on without it.
             return;
         }
-        boolean wanted = getFrameRenderer() != null || getCameraTextureProvider() != null;
+        boolean wanted = wantsEffect();
         boolean running = mEffect != null;
         if (wanted == running) {
             if (mEffect != null) {
@@ -425,9 +425,7 @@ public class Camera2Module extends ICameraModule {
         }
         if (wanted) {
             FrameRenderThread effect = new FrameRenderThread("CameraViewCamera2Renderer");
-            effect.setCameraTextureProvider(getCameraTextureProvider());
-            effect.setFrameRenderer(getFrameRenderer());
-            effect.setGeometrySource(mLensGeometry);
+            configureEffect(effect);
             if (!effect.start()) {
                 // A device whose driver will not give us a context is a device the camera still
                 // has to work on, so the effect is refused and not offered again.
@@ -443,6 +441,48 @@ public class Camera2Module extends ICameraModule {
             }
         }
         restartActiveSession();
+    }
+
+    /** Whether the frames have to go through GL, which they do while anything draws them. */
+    @MainThread
+    boolean wantsEffect() {
+        return getFrameRenderer() != null || getCameraTextureProvider() != null;
+    }
+
+    /** Readies a pipeline that has not started yet, which is when its texture is decided. */
+    @MainThread
+    void configureEffect(@NonNull FrameRenderThread effect) {
+        effect.setCameraTextureProvider(getCameraTextureProvider());
+        effect.setFrameRenderer(getFrameRenderer());
+        effect.setGeometrySource(mLensGeometry);
+    }
+
+    /** The session a camera runs while it is neither recording nor streaming. */
+    @MainThread
+    @NonNull
+    Session createIdleSession() {
+        return new PictureSession(this);
+    }
+
+    /**
+     * What the camera device reports to, given the callback this module would use. A camera
+     * shared with another client wraps it in that client's.
+     */
+    @NonNull
+    CameraDevice.StateCallback wrapDeviceCallback(@NonNull CameraDevice.StateCallback callback) {
+        return callback;
+    }
+
+    /** The open camera, or null while none is. */
+    @Nullable
+    CameraDevice getCameraDevice() {
+        return mCameraDevice;
+    }
+
+    /** The session the camera is running, or null while none is configured. */
+    @Nullable
+    Session getActiveSession() {
+        return mActiveSession;
     }
 
     /** The pipeline, for the sessions that have to point the camera at it. */
@@ -682,7 +722,7 @@ public class Camera2Module extends ICameraModule {
                 }
 
                 mCameraDevice = cameraDevice;
-                setSession(new PictureSession(Camera2Module.this));
+                setSession(createIdleSession());
             }
 
             @Override
@@ -716,7 +756,8 @@ public class Camera2Module extends ICameraModule {
         try {
             mActiveCamera = getActiveCamera();
             if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
-            mCameraManager.openCamera(mActiveCamera, createStateCallback(generation), mHandler);
+            mCameraManager.openCamera(
+                    mActiveCamera, wrapDeviceCallback(createStateCallback(generation)), mHandler);
         } catch (CameraAccessException | RuntimeException e) {
             mIsOpen = false;
             closeCameraResources();
@@ -889,7 +930,7 @@ public class Camera2Module extends ICameraModule {
      * on uses, and it has nothing to gain from being rewritten for a feature that is not in
      * play.</p>
      */
-    private void createCaptureSession(@NonNull List<Surface> surfaces,
+    void createCaptureSession(@NonNull List<Surface> surfaces,
             @NonNull CameraCaptureSession.StateCallback callback) throws CameraAccessException {
         CameraDevice device = mCameraDevice;
         if (device == null) {
@@ -1563,7 +1604,7 @@ public class Camera2Module extends ICameraModule {
         // recording or streaming, which a rebuild would end. The session after it is built with
         // the new quality.
         if (mActiveSession != null && !isRecordingOrStreaming()) {
-            setSession(new PictureSession(this));
+            setSession(createIdleSession());
         }
     }
 
@@ -2111,7 +2152,7 @@ public class Camera2Module extends ICameraModule {
                 capturePendingPicture();
                 return;
             }
-            setSession(new PictureSession(this));
+            setSession(createIdleSession());
         });
     }
 
@@ -2384,7 +2425,7 @@ public class Camera2Module extends ICameraModule {
     @Override
     public void stopRecording() {
         mIsRecording = false;
-        setSession(new PictureSession(this));
+        setSession(createIdleSession());
     }
 
     @Override
@@ -2411,7 +2452,7 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-        setSession(new PictureSession(this));
+        setSession(createIdleSession());
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {
