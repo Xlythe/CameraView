@@ -14,5 +14,8 @@
             android:name="com.xlythe.view.camera.test.CameraTestActivity"
             android:exported="false"
             android:screenOrientation="fullSensor" />
+        <activity
+            android:name="com.xlythe.view.camera.viewer.ViewerTestActivity"
+            android:exported="false" />
     </application>
 </manifest>
