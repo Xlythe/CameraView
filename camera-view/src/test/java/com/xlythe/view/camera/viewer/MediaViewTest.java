@@ -297,7 +297,16 @@ public class MediaViewTest {
         return false;
     }
 
+    /** Before Android 14 a gain map is only extra bytes, so the picture holds nothing. */
     @Test
+    public void aGainMapIsSdrBeforeAndroid14() throws IOException {
+        show(file(MediaTestFiles.gainMapJpeg(), ".jpg"));
+        assertEquals(MediaView.PICTURE, mView.getMediaType());
+        assertFalse(mView.isHoldingHdr());
+    }
+
+    @Test
+    @Config(sdk = 34)
     public void hdrHoldsTheWindowOnlyWhileItShows() throws IOException {
         int before = mActivity.getWindow().getColorMode();
         show(file(MediaTestFiles.gainMapJpeg(), ".jpg"));

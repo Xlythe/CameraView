@@ -102,7 +102,9 @@ final class MediaDetector {
         float[] wholeFrame = {0, 0, 1, 1};
         switch (kind) {
             case MediaTags.KIND_IMAGE: {
-                boolean hdr = tags != null && tags.getGainMap() != MediaTags.GAIN_MAP_NONE;
+                // Bitmaps carry a gain map from Android 14; before it one is only extra bytes.
+                boolean hdr = Build.VERSION.SDK_INT >= 34 && tags != null
+                        && tags.getGainMap() != MediaTags.GAIN_MAP_NONE;
                 MediaTags.MotionPhoto motion = tags == null ? null : tags.getMotionPhoto();
                 if (motion != null) {
                     return new Detection(MediaView.MOTION_PHOTO, hdr, motion, null, wholeFrame,
