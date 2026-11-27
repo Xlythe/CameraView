@@ -333,7 +333,8 @@ class CameraComposableTest {
         val published = requireNotNull(state.value) { "an open camera has answers to give" }
         assertEquals(1f, published.minZoomRatio, 0f)
         assertEquals("the fake camera crops to 4x at most", 4f, published.maxZoomRatio, 0f)
-        assertEquals(listOf(1f), published.zoomPresets)
+        assertEquals(listOf(1f), published.zoomPresets.map { it.ratio })
+        assertEquals(listOf("1"), published.zoomPresets.map { it.label })
     }
 
     /** And the ones left out keep the camera's own defaults rather than a zeroed version. */

@@ -13,9 +13,10 @@ import android.widget.Toast;
 import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ZoomPreset;
 
 import java.io.File;
-import java.text.DecimalFormat;
+import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -26,9 +27,6 @@ import androidx.annotation.Nullable;
  * background thread operations, permissions, and UI binding to layout controls.
  */
 public class MainFragment extends CameraFragment {
-    /** Labels a preset the way a camera app does: 0.6x, 1x, 2.7x. */
-    private final DecimalFormat mZoomFormat = new DecimalFormat("0.#");
-
     /** The CameraView the zoom presets drive, held while the view exists. */
     @Nullable
     private CameraView mCameraView;
@@ -81,18 +79,18 @@ public class MainFragment extends CameraFragment {
             return;
         }
         mZoomPresets.removeAllViews();
-        float[] presets = cameraView.getZoomPresets();
-        if (presets.length < 2) {
+        List<ZoomPreset> presets = cameraView.getZoomPresets();
+        if (presets.size() < 2) {
             // A single stop is no choice at all.
             return;
         }
         LayoutInflater inflater = getLayoutInflater();
-        for (float preset : presets) {
+        for (ZoomPreset preset : presets) {
             TextView button = (TextView) inflater.inflate(
                     R.layout.zoom_preset, mZoomPresets, false);
-            button.setText(getString(R.string.zoom_preset, mZoomFormat.format(preset)));
-            button.setTag(preset);
-            button.setOnClickListener(v -> cameraView.setZoomRatio(preset));
+            button.setText(getString(R.string.zoom_preset, preset.getLabel()));
+            button.setTag(preset.getRatio());
+            button.setOnClickListener(v -> cameraView.setZoomRatio(preset.getRatio()));
             mZoomPresets.addView(button);
         }
         highlightZoomPreset(cameraView.getZoomRatio());

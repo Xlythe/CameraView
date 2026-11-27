@@ -237,7 +237,10 @@ public abstract class ICameraModule {
     /** 1 on a camera that cannot zoom. */
     public abstract float getMaxZoomRatio();
 
-    /** The stops worth a button, in increasing order. See {@link ZoomMath#presets}. */
+    /**
+     * The exact ratios worth a button, in increasing order. See {@link ZoomMath#presets}.
+     * CameraView labels them.
+     */
     @NonNull
     public abstract float[] getZoomPresets();
 

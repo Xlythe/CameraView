@@ -30,6 +30,12 @@ public final class ZoomMath {
     /** The crop {@link #canCropTo2x} asks the main sensor about. */
     private static final float CROP_STOP = 2f;
 
+    /** The most decimal places {@link #labels} gives, enough to part any two distinct stops. */
+    public static final int MAX_LABEL_DECIMALS = 2;
+
+    /** From here up, a label is a whole number: 2.74 reads 3, as phone camera apps show it. */
+    private static final float WHOLE_LABEL_FROM = 2f;
+
     private ZoomMath() {}
 
     /**
@@ -145,6 +151,52 @@ public final class ZoomMath {
         }
         Arrays.sort(presets);
         return presets;
+    }
+
+    /**
+     * Rounds each ratio for a button's label: to a whole number from 2 up, so that a 2.74x lens
+     * reads 3, and to one decimal place below that, so that an ultra-wide reads 0.6.
+     *
+     * <p>Where two ratios would round to the same label, both get another decimal place, up to
+     * {@link #MAX_LABEL_DECIMALS}; a 2x crop beside a 2.3x lens reads 2 and 2.3 rather than 2 and
+     * 2.</p>
+     */
+    @NonNull
+    public static float[] labels(@NonNull float[] ratios) {
+        int[] decimals = new int[ratios.length];
+        for (int i = 0; i < ratios.length; i++) {
+            decimals[i] = ratios[i] >= WHOLE_LABEL_FROM ? 0 : 1;
+        }
+        float[] labels = new float[ratios.length];
+        boolean changed = true;
+        while (changed) {
+            changed = false;
+            for (int i = 0; i < ratios.length; i++) {
+                labels[i] = round(ratios[i], decimals[i]);
+            }
+            for (int i = 0; i < ratios.length; i++) {
+                for (int j = i + 1; j < ratios.length; j++) {
+                    if (labels[i] != labels[j]) {
+                        continue;
+                    }
+                    if (decimals[i] < MAX_LABEL_DECIMALS) {
+                        decimals[i]++;
+                        changed = true;
+                    }
+                    if (decimals[j] < MAX_LABEL_DECIMALS) {
+                        decimals[j]++;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        return labels;
+    }
+
+    /** Rounds half up to the given number of decimal places. */
+    private static float round(float value, int decimals) {
+        double scale = Math.pow(10, decimals);
+        return (float) (Math.floor(value * scale + 0.5) / scale);
     }
 
     /** Adds a stop unless one already there is close enough to stand for it. */

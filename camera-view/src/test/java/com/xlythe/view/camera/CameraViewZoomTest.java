@@ -1,6 +1,5 @@
 package com.xlythe.view.camera;
 
-import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 
@@ -136,7 +135,7 @@ public class CameraViewZoomTest {
     public void aSingleLensHasOnePreset() throws Exception {
         open(false /* logicalBackCamera */);
 
-        assertArrayEquals(new float[] {1f}, cameraView.getZoomPresets(), 0f);
+        assertEquals(List.of(new ZoomPreset(1f, "1")), cameraView.getZoomPresets());
     }
 
     /** A ratio that is not one is refused rather than handed to the camera. */

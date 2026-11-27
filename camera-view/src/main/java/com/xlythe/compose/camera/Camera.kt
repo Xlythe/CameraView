@@ -33,6 +33,7 @@ import com.xlythe.view.camera.Face
 import com.xlythe.view.camera.FrameStream
 import com.xlythe.view.camera.ICameraModule
 import com.xlythe.view.camera.VideoStream
+import com.xlythe.view.camera.ZoomPreset
 import java.io.File
 
 private const val TAG = "Camera"
@@ -111,10 +112,11 @@ data class CameraState(
     /** The furthest [Camera]'s zoomRatio reaches, or 1 on a camera that cannot zoom. */
     val maxZoomRatio: Float = 1f,
     /**
-     * The zoom ratios worth a button each, in increasing order. Always holds 1, the main lens, and
+     * The zoom stops worth a button each, in increasing order. Always holds 1, the main lens, and
      * otherwise one stop per lens and 2 where the main sensor can crop to it without upscaling.
+     * Each has the exact ratio to pass as zoomRatio and a rounded label to show.
      */
-    val zoomPresets: List<Float> = emptyList(),
+    val zoomPresets: List<ZoomPreset> = emptyList(),
     val isExposureCompensationSupported: Boolean = false,
     val minExposureCompensation: Int = 0,
     val maxExposureCompensation: Int = 0,
@@ -371,7 +373,7 @@ private fun CameraView.readCameraState(): CameraState {
         maxZoomLevel = maxZoomLevel,
         minZoomRatio = minZoomRatio,
         maxZoomRatio = maxZoomRatio,
-        zoomPresets = zoomPresets.toList(),
+        zoomPresets = zoomPresets,
         isExposureCompensationSupported = isExposureCompensationSupported,
         minExposureCompensation = minExposureCompensation,
         maxExposureCompensation = maxExposureCompensation,

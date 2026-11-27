@@ -177,6 +177,29 @@ public class ZoomMathTest {
                 ZoomMath.presets(1f, 10f, new float[] {3.33f, 3f}, false), 0.001f);
     }
 
+    /** A lens reads as phone camera apps label it: whole numbers from 2x, a decimal below. */
+    @Test
+    public void labelsRoundLikeACameraApp() {
+        assertArrayEquals("the S25 Ultra's lenses", new float[] {0.6f, 1f, 3f, 5f},
+                ZoomMath.labels(new float[] {0.6f, 1f, 2.7408f, 5.0612f}), 0f);
+        assertArrayEquals("halves round up", new float[] {1.5f, 2f, 3f, 8f},
+                ZoomMath.labels(new float[] {1.5f, 1.95f, 2.5f, 7.99f}), 0f);
+        assertArrayEquals(new float[0], ZoomMath.labels(new float[0]), 0f);
+    }
+
+    /** Two stops that would round to one label each get another decimal place. */
+    @Test
+    public void labelsThatWouldMatchGetADecimal() {
+        assertArrayEquals("a 2x crop beside a 2.3x lens", new float[] {1f, 2f, 2.3f},
+                ZoomMath.labels(new float[] {1f, 2f, 2.3f}), 0f);
+        assertArrayEquals("eleven percent apart", new float[] {1f, 3f, 3.3f},
+                ZoomMath.labels(new float[] {1f, 3f, 3.33f}), 0f);
+        assertArrayEquals("two ultra-wides need two places", new float[] {0.3f, 0.33f},
+                ZoomMath.labels(new float[] {0.3f, 0.33f}), 0f);
+        assertArrayEquals("and identical stops stop at two places",
+                new float[] {2f, 2f}, ZoomMath.labels(new float[] {2f, 2f}), 0f);
+    }
+
     /** A stop outside the range is pulled into it, where it merges with the end it reached. */
     @Test
     public void stopsAreClampedToTheRange() {

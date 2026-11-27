@@ -103,7 +103,7 @@ Camera(
 )
 
 cameraState.value?.zoomPresets?.forEach { preset ->
-    Button(onClick = { zoom = preset }) { Text("${preset}x") }
+    Button(onClick = { zoom = preset.ratio }) { Text("${preset.label}x") }
 }
 ```
 
@@ -357,12 +357,13 @@ Zoom is a ratio in the camera's own terms, where 1 is the main lens. getMinZoomR
 a phone with an ultra-wide lens, and setZoomRatio switches between the lenses by itself where the
 phone allows it. getZoomPresets returns the stops worth a button each - one per lens, plus 2x where the
 main sensor can crop to it without upscaling - and setOnZoomChangedListener keeps those buttons in
-step with a pinch.
+step with a pinch. Each preset has the exact ratio to zoom to and a rounded label to show, so a
+2.74x lens is labelled 3.
 ```java
-for (float preset : mCameraView.getZoomPresets()) {
+for (ZoomPreset preset : mCameraView.getZoomPresets()) {
   Button button = new Button(context);
-  button.setText(preset + "x");
-  button.setOnClickListener(v -> mCameraView.setZoomRatio(preset));
+  button.setText(preset.getLabel() + "x");
+  button.setOnClickListener(v -> mCameraView.setZoomRatio(preset.getRatio()));
   zoomBar.addView(button);
 }
 mCameraView.setOnZoomChangedListener(ratio -> highlightNearest(ratio));

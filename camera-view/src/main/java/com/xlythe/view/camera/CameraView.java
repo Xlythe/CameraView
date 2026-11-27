@@ -39,6 +39,7 @@ import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
 import java.util.List;
+import java.util.Locale;
 
 /**
  * A {@link View} that displays a preview of the camera with methods {@link #takePicture(File)},
@@ -1897,7 +1898,8 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * The zoom ratios worth a button each, in increasing order, such as {0.6, 1, 2, 5}.
+     * The zoom stops worth a button each, in increasing order, such as 0.6, 1, 3 and 5. Each has
+     * the exact ratio to zoom to and a rounded label to show, so a 2.74x lens is labelled "3".
      *
      * <p>Android does not publish the stops a phone's own camera app offers, so these are worked
      * out from its lenses: always 1, the wide end when it is below 1, one stop per lens, and 2
@@ -1905,8 +1907,8 @@ public class CameraView extends FrameLayout {
      * read them again after switching.</p>
      */
     @NonNull
-    public float[] getZoomPresets() {
-        return mCameraModule.getZoomPresets();
+    public List<ZoomPreset> getZoomPresets() {
+        return ZoomPreset.of(mCameraModule.getZoomPresets(), Locale.getDefault());
     }
 
     /**

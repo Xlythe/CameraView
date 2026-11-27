@@ -21,6 +21,7 @@ import androidx.test.rule.GrantPermissionRule;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.FrameStream;
 import com.xlythe.view.camera.VideoStream;
+import com.xlythe.view.camera.ZoomPreset;
 
 import org.junit.After;
 import org.junit.Assume;
@@ -33,6 +34,7 @@ import org.junit.runners.Parameterized;
 import java.io.File;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -330,6 +332,7 @@ public final class BackendMatrixDeviceTest {
     public void theZoomAnswersInRatios() throws Exception {
         AtomicReference<float[]> range = new AtomicReference<>();
         AtomicReference<float[]> presets = new AtomicReference<>();
+        AtomicReference<List<ZoomPreset>> labelled = new AtomicReference<>();
         AtomicReference<Float> target = new AtomicReference<>();
         AtomicReference<Float> zoomed = new AtomicReference<>();
 
@@ -337,7 +340,12 @@ public final class BackendMatrixDeviceTest {
             CountDownLatch changed = new CountDownLatch(1);
             InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
                 range.set(new float[] {camera.getMinZoomRatio(), camera.getMaxZoomRatio()});
-                presets.set(camera.getZoomPresets());
+                labelled.set(camera.getZoomPresets());
+                float[] ratios = new float[labelled.get().size()];
+                for (int i = 0; i < ratios.length; i++) {
+                    ratios[i] = labelled.get().get(i).getRatio();
+                }
+                presets.set(ratios);
                 // The longest preset reaches a telephoto where there is one, which is the switch
                 // most worth seeing happen; a camera with a single stop is asked for 2x instead.
                 float[] stops = presets.get();
@@ -350,7 +358,7 @@ public final class BackendMatrixDeviceTest {
                 });
             });
             Log.i(TAG, backend + " zooms " + range.get()[0] + "x to " + range.get()[1]
-                    + "x with presets " + Arrays.toString(presets.get()));
+                    + "x with presets " + labelled.get());
             if (target.get() <= camera.getZoomRatio()) {
                 return;
             }
