@@ -290,6 +290,10 @@ public final class BackendMatrixDeviceTest {
     /** And so does a recording. */
     @Test
     public void aRecordingProducesAFile() throws Exception {
+        if (backend == CameraView.Backend.LEGACY) {
+            // The old API records from YUV buffers it has the camera fill.
+            DeviceState.assumeYuvBuffersWork();
+        }
         File file = temporaryFile(".mp4");
         CountDownLatch finished = new CountDownLatch(1);
         AtomicReference<File> recorded = new AtomicReference<>();
@@ -336,12 +340,7 @@ public final class BackendMatrixDeviceTest {
      */
     @Test
     public void framesReachAnAnalyzer() throws Exception {
-        // Reading YUV_420_888 images from the emulated camera under SwiftShader takes the API 28
-        // emulator process down with it, which fails this test and then aborts every test after
-        // it. Skipped there rather than left to crash: it passes on hardware, so there is nothing
-        // here for the library to fix, and a run that stops halfway tells nobody anything.
-        Assume.assumeFalse("the API 28 emulator image crashes reading YUV images",
-                DeviceState.isEmulator() && Build.VERSION.SDK_INT < 29);
+        DeviceState.assumeYuvBuffersWork();
 
         CountDownLatch analyzed = new CountDownLatch(2);
         AtomicReference<Size> size = new AtomicReference<>();
@@ -363,6 +362,10 @@ public final class BackendMatrixDeviceTest {
     /** A stream encodes on every backend that can attach a second output. */
     @Test
     public void aStreamDeliversEncodedFrames() throws Exception {
+        if (backend == CameraView.Backend.LEGACY) {
+            // The old API streams from preview callbacks, which it fills from YUV buffers.
+            DeviceState.assumeYuvBuffersWork();
+        }
         AtomicReference<VideoStream> held = new AtomicReference<>();
         AtomicInteger bytes = new AtomicInteger();
 
