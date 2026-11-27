@@ -239,17 +239,14 @@ public class Exif {
         attachMandatoryTags();
         mExifInterface.saveAttributes();
         restoreUndefinedTypes();
-        IOException tagsError = null;
         try {
             saveTags();
         } catch (IOException error) {
-            // Held until the thumbnail is saved, so failing to fit the tags costs nothing else.
-            tagsError = error;
+            // As with the thumbnail: a picture without these tags is still a picture, and a save
+            // that otherwise succeeded is never failed over metadata that did not fit.
+            Log.w(TAG, "Unable to save the Exif 3.0 tags", error);
         }
         saveThumbnail();
-        if (tagsError != null) {
-            throw tagsError;
-        }
     }
 
     /**
@@ -798,7 +795,8 @@ public class Exif {
     /**
      * Sets tags the standard defines but {@code ExifInterface} has no name for, to be written by
      * {@link #save()} as {@link #setAttribute} is. A null value removes the tag. Saving writes
-     * them after the rest of the block, so this may be called at any point before.
+     * them after the rest of the block, so this may be called at any point before. If the block
+     * has no room left for them, the save leaves them out and keeps everything else.
      *
      * @return true if saving will write them; false, with nothing changed, when a value does not
      *     suit its tag, such as a word for a number, or this was opened on a stream or on a file

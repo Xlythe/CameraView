@@ -550,11 +550,11 @@ public class ExifMetadataTest {
     }
 
     /**
-     * A block with no room left for the tags fails the save rather than dropping them quietly,
-     * and keeps everything else the save wrote.
+     * A block with no room left for the tags leaves them out and keeps everything else the save
+     * wrote, rather than failing a save, such as a capture's, over metadata.
      */
     @Test
-    public void aBlockWithNoRoomForTheSpecTagsFailsTheSave() throws IOException {
+    public void aBlockWithNoRoomForTheSpecTagsLeavesThemOut() throws IOException {
         new Exif(file).save();
         int used = ExifSegment.find(readAll(file)).payloadLength;
         // A maker note that leaves the segment a few hundred bytes short of its limit.
@@ -568,7 +568,7 @@ public class ExifMetadataTest {
         exif.setAttribute(ExifInterface.TAG_MAKER_NOTE, makerNote);
         exif.setTags(new ExifTags.Builder().set(ExifTags.Tag.IMAGE_TITLE, new String(title)));
 
-        assertThrows(IOException.class, exif::save);
+        exif.save();
         Exif saved = new Exif(file);
         assertEquals(makerNote, saved.getAttribute(ExifInterface.TAG_MAKER_NOTE));
         assertNull(saved.getTag(ExifTags.Tag.IMAGE_TITLE));
