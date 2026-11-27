@@ -32,7 +32,7 @@ The following permissions are required in your AndroidManfiest.xml
 ```xml
 <uses-permission android:name="android.permission.CAMERA" />
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
-<!-- Below API 29, takePicture() and startRecording() need this to file captures in the gallery -->
+<!-- Below API 29, takePicture(), startRecording() and startPanorama() need this to file captures in the gallery -->
 <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
 <!-- Optional camera permissions -->
