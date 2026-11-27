@@ -32,7 +32,8 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
  * moment the camera opens gives the radio the time the user spends framing the shot instead.</p>
  *
  * <p>We never ask for a permission. We listen only if the app already holds one, and a capture is
- * only tagged while it still does.</p>
+ * only tagged while it still does. A permission granted while the camera is open is picked up by
+ * {@link #refresh}.</p>
  */
 final class LocationTracker {
     /**
@@ -100,8 +101,11 @@ final class LocationTracker {
      */
     @Nullable private volatile Location mBestLocation;
 
-    /** Whether we are registered for updates. Main thread only. */
+    /** Whether the camera is open, so that we follow whatever we have the permission for. */
     private boolean mStarted;
+
+    /** The providers we are registered with. Main thread only. */
+    private final List<String> mFollowed = new ArrayList<>(PROVIDERS.length);
 
     LocationTracker(@NonNull Context context) {
         Context application = context.getApplicationContext();
@@ -109,16 +113,24 @@ final class LocationTracker {
         mLocationManager = (LocationManager) mContext.getSystemService(Context.LOCATION_SERVICE);
     }
 
-    /** Starts listening, if the app already holds a location permission. */
+    /** Starts listening to every provider the app already holds the permission for. */
     @MainThread
     void start() {
-        if (mStarted || mLocationManager == null || !hasLocationPermission()) {
+        if (mLocationManager == null) {
             return;
         }
         mStarted = true;
-        for (String provider : getUsableProviders()) {
-            offer(getLastKnownLocation(provider));
-            requestUpdates(provider);
+        follow();
+    }
+
+    /**
+     * Listens to any provider the app has been granted the permission for since we started, such
+     * as GPS once approximate location becomes precise. Does nothing while stopped.
+     */
+    @MainThread
+    void refresh() {
+        if (mStarted) {
+            follow();
         }
     }
 
@@ -129,17 +141,34 @@ final class LocationTracker {
             return;
         }
         mStarted = false;
-        removeUpdates();
+        if (!mFollowed.isEmpty()) {
+            removeUpdates();
+            mFollowed.clear();
+        }
         mBestLocation = null;
+    }
+
+    /** Registers with each usable provider we are not yet registered with. */
+    @MainThread
+    private void follow() {
+        for (String provider : getUsableProviders()) {
+            if (mFollowed.contains(provider)) {
+                continue;
+            }
+            offer(getLastKnownLocation(provider));
+            if (requestUpdates(provider)) {
+                mFollowed.add(provider);
+            }
+        }
     }
 
     /**
      * Where to tag a capture, or null when that is not known or not ours to read.
      *
      * <p>The best fix we have heard since starting, or the best the system already has when we
-     * have heard nothing: we may not be listening, because the permission was granted after the
-     * camera opened. Either way it is no more than two hours old, and it comes from a provider the
-     * app still has the permission for. Never waits for a fix.</p>
+     * have heard nothing, as straight after a permission is granted. Either way it is no more than
+     * two hours old, and it comes from a provider the app still has the permission for. Never
+     * waits for a fix.</p>
      */
     @AnyThread
     @Nullable
@@ -227,13 +256,6 @@ final class LocationTracker {
         return usable;
     }
 
-    @AnyThread
-    private boolean hasLocationPermission() {
-        return PermissionChecker.hasPermissions(mContext, Manifest.permission.ACCESS_FINE_LOCATION)
-                || PermissionChecker.hasPermissions(
-                        mContext, Manifest.permission.ACCESS_COARSE_LOCATION);
-    }
-
     /** Whether we hold the permission a provider needs: fine for GPS, and either for the rest. */
     @AnyThread
     private boolean canUse(@Nullable String provider) {
@@ -246,23 +268,25 @@ final class LocationTracker {
     }
 
     /**
-     * Asks a provider to keep us told, on the main thread.
+     * Asks a provider to keep us told, on the main thread, and returns whether it agreed.
      *
      * <p>Suppressed because we check the permission ourselves, through {@link #canUse}, and lint
      * cannot follow that check. Without the permission we do nothing.</p>
      */
     @SuppressLint("MissingPermission")
     @MainThread
-    private void requestUpdates(@NonNull String provider) {
+    private boolean requestUpdates(@NonNull String provider) {
         if (!canUse(provider)) {
-            return;
+            return false;
         }
         try {
             mLocationManager.requestLocationUpdates(provider, UPDATE_INTERVAL_MILLIS,
                     UPDATE_DISTANCE_METERS, mListener, Looper.getMainLooper());
+            return true;
         } catch (SecurityException e) {
             // The permission can be withdrawn between the check and the call.
             Log.w(TAG, "Lost the permission to follow " + provider, e);
+            return false;
         }
     }
 

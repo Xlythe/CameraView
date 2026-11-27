@@ -1040,6 +1040,18 @@ public class CameraView extends FrameLayout {
         mLocationTracker.start();
     }
 
+    /**
+     * Picks up a location permission granted while the camera is open. A permission dialog takes
+     * the window's focus and gives it back once answered, as returning from Settings does.
+     */
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        if (hasWindowFocus) {
+            mLocationTracker.refresh();
+        }
+    }
+
     protected void onClose() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             exitBarcodeScanner();

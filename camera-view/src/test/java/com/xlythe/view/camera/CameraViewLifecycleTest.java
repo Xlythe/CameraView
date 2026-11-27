@@ -120,6 +120,35 @@ public class CameraViewLifecycleTest {
         assertEquals(0, FakeLocation.listeners(context));
     }
 
+    /**
+     * A location permission granted while the camera is open is followed once the window has its
+     * focus back, which is when the permission dialog has been answered.
+     */
+    @Test
+    public void aLocationPermissionGrantedWhileOpenIsFollowed() {
+        FakeLocation.addProviders(context);
+        cameraView.open();
+        idle();
+        assertEquals(0, FakeLocation.listeners(context));
+
+        FakeLocation.grantFine(context);
+        cameraView.onWindowFocusChanged(true);
+
+        assertEquals(1, FakeLocation.listeners(context, LocationManager.GPS_PROVIDER));
+        assertEquals(1, FakeLocation.listeners(context, LocationManager.NETWORK_PROVIDER));
+    }
+
+    /** Focus with the camera closed follows nothing. */
+    @Test
+    public void focusWithTheCameraClosedFollowsNothing() {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+
+        cameraView.onWindowFocusChanged(true);
+
+        assertEquals(0, FakeLocation.listeners(context));
+    }
+
     /** Opening twice is one open, because an app cannot always tell. */
     @Test
     public void openingAnAlreadyOpenCameraIsIgnored() {

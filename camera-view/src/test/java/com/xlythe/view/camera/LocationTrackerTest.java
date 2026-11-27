@@ -239,6 +239,39 @@ public class LocationTrackerTest {
         assertEquals(LATITUDE, location.getLatitude(), 1e-6);
     }
 
+    /** A permission granted while the camera is open is followed from the next refresh. */
+    @Test
+    public void aPermissionGrantedWhileStartedIsFollowedOnRefresh() {
+        tracker.start();
+        assertEquals(0, FakeLocation.listeners(context));
+
+        FakeLocation.grantCoarse(context);
+        tracker.refresh();
+        assertEquals(1, FakeLocation.listeners(context, LocationManager.NETWORK_PROVIDER));
+        assertEquals(0, FakeLocation.listeners(context, LocationManager.GPS_PROVIDER));
+
+        FakeLocation.grantFine(context);
+        tracker.refresh();
+        assertEquals("precise adds GPS",
+                1, FakeLocation.listeners(context, LocationManager.GPS_PROVIDER));
+        assertEquals("without listening to the network twice",
+                1, FakeLocation.listeners(context, LocationManager.NETWORK_PROVIDER));
+    }
+
+    /** A refresh never starts a tracker the camera has not started, or has stopped. */
+    @Test
+    public void refreshingWhileStoppedDoesNothing() {
+        FakeLocation.grantFine(context);
+
+        tracker.refresh();
+        assertEquals(0, FakeLocation.listeners(context));
+
+        tracker.start();
+        tracker.stop();
+        tracker.refresh();
+        assertEquals(0, FakeLocation.listeners(context));
+    }
+
     /** The permission can go between our check and the call that needs it. */
     @Test
     public void aPermissionLostMidCallIsSurvived() {
