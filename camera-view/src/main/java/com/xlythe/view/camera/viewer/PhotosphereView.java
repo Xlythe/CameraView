@@ -321,6 +321,14 @@ public class PhotosphereView extends FrameLayout {
         mExecutor = executor;
     }
 
+    /** Where the picture or video shown sits on the sphere, or null before one shows. */
+    @VisibleForTesting
+    @MainThread
+    @Nullable
+    GPano getGPano() {
+        return mGPano;
+    }
+
     @VisibleForTesting
     void setOpener(@NonNull ImageSources.Opener opener) {
         mOpener = opener;
