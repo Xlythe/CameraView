@@ -441,6 +441,9 @@ class CameraComposableTest {
         @Suppress("DEPRECATION")
         assertEquals(100, published.maxZoomLevel)
         assertTrue(published.isFaceDetectionSupported)
+        assertFalse("the plain fake camera cannot compensate exposure",
+                published.isExposureCompensationSupported)
+        assertEquals(0f, published.exposureCompensationStep, 0f)
         assertTrue("a FULL camera2 device can hold a still alongside a recording",
                 published.isSnapshotWhileRecordingSupported)
         assertEquals(setOf(DynamicRange.SDR), published.supportedDynamicRanges)
@@ -471,6 +474,7 @@ class CameraComposableTest {
         assertTrue(published.isExposureCompensationSupported)
         assertEquals(-12, published.minExposureCompensation)
         assertEquals(12, published.maxExposureCompensation)
+        assertEquals(1 / 6f, published.exposureCompensationStep, 1e-6f)
         assertTrue(published.isStabilizationSupported)
         assertFalse(published.isLowLightBoostSupported)
     }

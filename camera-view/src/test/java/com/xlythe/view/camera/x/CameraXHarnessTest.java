@@ -313,6 +313,8 @@ public class CameraXHarnessTest {
         assertEquals("no usable exposure range means no room above zero",
                 0, module.getMaxExposureCompensation());
         assertEquals("and none below", 0, module.getMinExposureCompensation());
+        assertEquals("nor a step, although the camera publishes one",
+                0f, module.getExposureCompensationStep(), 0f);
 
         int orientation = module.getRelativeCameraOrientation();
         assertTrue("a camera orientation is one of four right angles: " + orientation,
@@ -385,6 +387,9 @@ public class CameraXHarnessTest {
         module.setLensFacing(CameraView.LensFacing.BACK);
         assertTrue(FakeCameraXHost.awaitBind(module));
         assertTrue("the back camera publishes a range", module.isExposureCompensationSupported());
+        assertEquals(-12, module.getMinExposureCompensation());
+        assertEquals(12, module.getMaxExposureCompensation());
+        assertEquals("and a step of its own", 1 / 6f, module.getExposureCompensationStep(), 1e-6f);
 
         module.setExposureCompensation(3);
         settle();

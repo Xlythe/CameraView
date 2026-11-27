@@ -1925,6 +1925,22 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getMaxExposureCompensation();
     }
 
+    /**
+     * Returns how many EV (stops of light) one exposure compensation index is worth on the active
+     * camera, or 0 where {@link #isExposureCompensationSupported()} is false.
+     *
+     * <p>Cameras usually step in thirds or sixths of a stop. Multiply an index by the step for the
+     * shift it makes in EV: with a step of 1/3, index -2 darkens by 2/3 EV, and with a step of 1/6,
+     * index 6 brightens by 1 EV. That is the number to show a user, since an index on its own
+     * means something different on each camera.</p>
+     *
+     * <p>The step belongs to the active camera, so read it once the camera has opened, and again
+     * after a lens switch: two cameras on one device can step differently.</p>
+     */
+    public float getExposureCompensationStep() {
+        return mCameraModule.getExposureCompensationStep();
+    }
+
     /** Returns whether the active camera supports exposure compensation. */
     public boolean isExposureCompensationSupported() {
         return mCameraModule.isExposureCompensationSupported();

@@ -335,6 +335,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private int mSnapshotMinExposure;
     /** Snapshot of maximum exposure compensation guarded by mSnapshotLock. */
     private int mSnapshotMaxExposure;
+    /** Snapshot of the EV one exposure compensation index is worth guarded by mSnapshotLock. */
+    private float mSnapshotExposureStep;
     /** Snapshot of low-light boost availability guarded by mSnapshotLock. */
     private boolean mSnapshotLowLightBoostSupported;
     /** Snapshot of supported vendor extensions guarded by mSnapshotLock. */
@@ -392,6 +394,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         boolean exposureSupported = false;
         int minExposure = 0;
         int maxExposure = 0;
+        float exposureStep = 0f;
         boolean lowLightBoostSupported = false;
         if (cameraInfo != null) {
             // Each of these asks the camera a separate question, and a camera that cannot answer
@@ -426,6 +429,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 maxExposure = query(cameraInfo, "maximum exposure",
                         info -> info.getExposureState().getExposureCompensationRange().getUpper(),
                         0);
+                exposureStep = query(cameraInfo, "exposure step",
+                        info -> info.getExposureState().getExposureCompensationStep().floatValue(),
+                        0f);
             }
             lowLightBoostSupported = query(cameraInfo, "low-light boost",
                     CameraInfo::isLowLightBoostSupported, false);
@@ -446,6 +452,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mSnapshotExposureSupported = exposureSupported;
             mSnapshotMinExposure = minExposure;
             mSnapshotMaxExposure = maxExposure;
+            mSnapshotExposureStep = exposureStep;
             mSnapshotLowLightBoostSupported = lowLightBoostSupported;
             mSnapshotExtensions = Collections.unmodifiableSet(EnumSet.copyOf(supportedExtensions));
         }
@@ -1103,6 +1110,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Override public int getMaxExposureCompensation() {
         synchronized (mSnapshotLock) {
             return mSnapshotMaxExposure;
+        }
+    }
+
+    @Override public float getExposureCompensationStep() {
+        synchronized (mSnapshotLock) {
+            return mSnapshotExposureStep;
         }
     }
 

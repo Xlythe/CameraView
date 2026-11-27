@@ -230,6 +230,7 @@ public class LegacyCameraModuleTest {
         assertFalse(module.isExposureCompensationSupported());
         assertEquals(0, module.getMinExposureCompensation());
         assertEquals(0, module.getMaxExposureCompensation());
+        assertEquals(0f, module.getExposureCompensationStep(), 0f);
 
         module.open();
 
@@ -237,6 +238,7 @@ public class LegacyCameraModuleTest {
         assertTrue(module.isExposureCompensationSupported());
         assertEquals(-6, module.getMinExposureCompensation());
         assertEquals(6, module.getMaxExposureCompensation());
+        assertEquals(0.5f, module.getExposureCompensationStep(), 0f);
     }
 
     /** An index lands on the camera's parameters, held to its range. */
@@ -280,6 +282,8 @@ public class LegacyCameraModuleTest {
         assertFalse(module.isExposureCompensationSupported());
         assertEquals(0, module.getMinExposureCompensation());
         assertEquals(0, module.getMaxExposureCompensation());
+        assertEquals("the step it publishes is not one it can use",
+                0f, module.getExposureCompensationStep(), 0f);
 
         module.setExposureCompensation(3);
         assertEquals(0, module.getExposureCompensation());

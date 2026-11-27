@@ -10,6 +10,7 @@ import android.content.Context;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CaptureRequest;
 import android.util.Range;
+import android.util.Rational;
 
 import androidx.exifinterface.media.ExifInterface;
 
@@ -74,6 +75,24 @@ public class ExposureCompensationTest {
                 module.getMinExposureCompensation());
         assertEquals((int) FakeCamera2.EXPOSURE_RANGE.getUpper(),
                 module.getMaxExposureCompensation());
+        assertEquals(FakeCamera2.EXPOSURE_STEP.floatValue(),
+                module.getExposureCompensationStep(), 0f);
+    }
+
+    /** The step is the active camera's, so a lens that steps differently reports its own. */
+    @Test
+    public void theStepIsTheActiveCamerasOwn() {
+        givenControls();
+        FakeCamera2.setCharacteristic(context, FakeCamera2.FRONT_ID,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP, new Rational(1, 3));
+        open();
+        assertEquals(1 / 6f, module.getExposureCompensationStep(), 1e-6f);
+
+        module.setLensFacing(CameraView.LensFacing.FRONT);
+        FakeCamera2.idleMainLooper();
+
+        assertTrue(module.isUsingFrontFacingCamera());
+        assertEquals(1 / 3f, module.getExposureCompensationStep(), 1e-6f);
     }
 
     /** A camera that publishes no range cannot compensate, and an open one refuses the request. */
@@ -82,6 +101,7 @@ public class ExposureCompensationTest {
         assertFalse(module.isExposureCompensationSupported());
         assertEquals(0, module.getMinExposureCompensation());
         assertEquals(0, module.getMaxExposureCompensation());
+        assertEquals(0f, module.getExposureCompensationStep(), 0f);
         open();
 
         module.setExposureCompensation(3);
@@ -100,10 +120,13 @@ public class ExposureCompensationTest {
     public void aRangeThatStopsAtZeroIsUnsupported() {
         FakeCamera2.setCharacteristic(context, FakeCamera2.BACK_ID,
                 CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, new Range<>(0, 4));
+        FakeCamera2.setCharacteristic(context, FakeCamera2.BACK_ID,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP, FakeCamera2.EXPOSURE_STEP);
 
         assertFalse(module.isExposureCompensationSupported());
         assertEquals(0, module.getMinExposureCompensation());
         assertEquals(0, module.getMaxExposureCompensation());
+        assertEquals(0f, module.getExposureCompensationStep(), 0f);
     }
 
     @Test

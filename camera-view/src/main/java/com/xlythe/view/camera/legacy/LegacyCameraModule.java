@@ -579,6 +579,13 @@ public class LegacyCameraModule extends ICameraModule {
 
     @MainThread
     @Override
+    public float getExposureCompensationStep() {
+        Camera.Parameters parameters = exposureParameters();
+        return parameters == null ? 0f : parameters.getExposureCompensationStep();
+    }
+
+    @MainThread
+    @Override
     public boolean isExposureCompensationSupported() {
         return exposureParameters() != null;
     }

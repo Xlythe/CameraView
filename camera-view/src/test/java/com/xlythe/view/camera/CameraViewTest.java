@@ -99,6 +99,7 @@ public class CameraViewTest {
         assertTrue(cameraView.isExtensionSupported(CameraView.Extension.NONE));
         assertFalse(cameraView.isStabilizationSupported());
         assertFalse(cameraView.isExposureCompensationSupported());
+        assertEquals(0f, cameraView.getExposureCompensationStep(), 0f);
         assertFalse(cameraView.isLowLightBoostSupported());
     }
     @Test

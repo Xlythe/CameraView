@@ -30,6 +30,7 @@ import android.os.Parcelable;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.Range;
+import android.util.Rational;
 import android.util.Size;
 import android.util.SizeF;
 import android.view.Surface;
@@ -1297,6 +1298,17 @@ public class Camera2Module extends ICameraModule {
     public int getMaxExposureCompensation() {
         Range<Integer> range = exposureCompensationRange(getActiveCharacteristics());
         return range == null ? 0 : range.getUpper();
+    }
+
+    /** CONTROL_AE_COMPENSATION_STEP, or 0 for a camera that cannot compensate. */
+    @Override
+    public float getExposureCompensationStep() {
+        CameraCharacteristics characteristics = getActiveCharacteristics();
+        if (exposureCompensationRange(characteristics) == null) {
+            return 0f;
+        }
+        Rational step = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
+        return step == null ? 0f : step.floatValue();
     }
 
     @Override

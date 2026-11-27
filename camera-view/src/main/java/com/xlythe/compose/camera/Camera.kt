@@ -121,9 +121,20 @@ data class CameraState(
      * Each has the exact ratio to pass as zoomRatio and a rounded label to show.
      */
     val zoomPresets: List<ZoomPreset> = emptyList(),
+    /**
+     * Whether [Camera]'s exposureCompensation does anything on this camera. Where it is false the
+     * range and the step are all 0.
+     */
     val isExposureCompensationSupported: Boolean = false,
+    /** The lowest index exposureCompensation accepts, which darkens the picture furthest. */
     val minExposureCompensation: Int = 0,
+    /** The highest index exposureCompensation accepts, which brightens the picture furthest. */
     val maxExposureCompensation: Int = 0,
+    /**
+     * How many EV one exposure compensation index is worth, such as 1/3 or 1/6, or 0 where the
+     * camera cannot compensate. An index times the step is the shift in EV to show a user.
+     */
+    val exposureCompensationStep: Float = 0f,
     /** Always holds at least [ColorSpace.SRGB], which every camera can produce. */
     val supportedColorSpaces: Set<ColorSpace> = emptySet(),
     /** Always holds at least [PictureFormat.JPEG], which every camera can write. */
@@ -411,6 +422,7 @@ private fun CameraView.readCameraState(): CameraState {
         isExposureCompensationSupported = isExposureCompensationSupported,
         minExposureCompensation = minExposureCompensation,
         maxExposureCompensation = maxExposureCompensation,
+        exposureCompensationStep = exposureCompensationStep,
         supportedColorSpaces = supported(ColorSpace.entries) {
             isColorSpaceSupported(it.toCameraView())
         },

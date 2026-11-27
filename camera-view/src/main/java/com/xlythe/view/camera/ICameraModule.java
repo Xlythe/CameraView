@@ -525,6 +525,11 @@ public abstract class ICameraModule {
         return 0;
     }
 
+    /** How many EV one exposure compensation index is worth, or 0 where there is none. */
+    public synchronized float getExposureCompensationStep() {
+        return 0f;
+    }
+
     public synchronized boolean isExposureCompensationSupported() {
         return false;
     }
