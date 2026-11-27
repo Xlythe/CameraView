@@ -1,5 +1,7 @@
 package com.xlythe.view.camera.x;
 
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.SurfaceTexture;
 import android.util.Log;
 import android.util.Size;
@@ -8,6 +10,7 @@ import android.view.Surface;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.WorkerThread;
 import androidx.camera.core.CameraEffect;
 import androidx.camera.core.ProcessingException;
 import androidx.camera.core.SurfaceOutput;
@@ -47,14 +50,15 @@ final class FrameEffect extends CameraEffect {
     private static final boolean DEBUG = ICameraModule.DEBUG;
 
     /**
-     * Every output a frame can reach: the preview, the recording and the still.
+     * The outputs CameraX draws through the effect: the preview and the recording.
      *
-     * <p>CameraX accepts only certain combinations - a target set has to be one use case, or the
-     * preview and the recording, or all three - so this is the one value that covers the whole
-     * pipeline. Anything a caller draws therefore lands in the file as well as on the screen,
-     * which is the point of putting the frames through GL in the first place.</p>
+     * <p>The still is left out. CameraX would share one camera stream between all three, which
+     * makes every photograph the preview's resolution, so a still is taken from the camera at its
+     * own and drawn through the renderer afterwards, by {@link #drawStill}. Anything a caller
+     * draws therefore lands in both files as well as on the screen, which is the point of putting
+     * the frames through GL in the first place.</p>
      */
-    static final int ALL_TARGETS = PREVIEW | VIDEO_CAPTURE | IMAGE_CAPTURE;
+    static final int TARGETS = PREVIEW | VIDEO_CAPTURE;
 
     /** What CameraX hands its surfaces to. */
     private final Processor mProcessor;
@@ -93,11 +97,11 @@ final class FrameEffect extends CameraEffect {
         // option or a transformation is RestrictTo(LIBRARY_GROUP), as are the constants. Both of
         // its defaults turn out to be the ones to want.
         //
-        // One output shared by every target, rather than one each. One each would give the still
-        // its own resolution instead of the preview's, which is the better picture, but it
-        // aborts the process in the platform's media code the moment the effect binds on a
-        // Pixel 7 Pro: "RGBA override BLOB format buffer should have height == width", that
-        // still output being allocated as a BLOB the driver accepts only square.
+        // One output shared by the preview and the recording, rather than one each. A still
+        // target is not offered one either way: given its own output, the still aborts the
+        // process in the platform's media code the moment the effect binds on a Pixel 7 Pro,
+        // "RGBA override BLOB format buffer should have height == width", that output being
+        // allocated as a BLOB the driver accepts only square. Hence drawStill.
         //
         // TRANSFORMATION_ARBITRARY rather than CAMERA_AND_SURFACE_ROTATION. The latter describes
         // the processor more exactly - it draws with the matrix CameraX hands each output, so
@@ -135,8 +139,8 @@ final class FrameEffect extends CameraEffect {
     /**
      * How the camera's frames are shown, so that a renderer draws them the right way up.
      *
-     * <p>Needed because the effect has one output for the preview, the recording and the still,
-     * and CameraX turns it for each of them after it is drawn. That output is held in whatever
+     * <p>Needed because the effect has one output for the preview and the recording, and CameraX
+     * turns it for each of them after it is drawn. That output is held in whatever
      * orientation CameraX chose, and only how the frames end up shown says how to turn a
      * renderer's drawing onto it.</p>
      *
@@ -145,6 +149,63 @@ final class FrameEffect extends CameraEffect {
      */
     void setShownOrientation(@GlMath.Rotation int rotationDegrees, boolean mirrored) {
         mProcessor.mRenderThread.setShownOrientation(rotationDegrees, mirrored);
+    }
+
+    /**
+     * Draws a still the camera took through the renderer, at the still's own size, into the given
+     * surface - as Camera2 draws one the camera writes into the renderer itself.
+     *
+     * <p>The frame goes into the renderer's still input as the camera's buffer, neither turned nor
+     * mirrored, and is drawn with the matrix that shows it the right way up. So a renderer is
+     * handed a still exactly as it is handed every preview frame, and draws on it what it draws
+     * on them.</p>
+     *
+     * @param frame the camera's frame, cropped to what the preview showed
+     * @param rotationDegrees how far the frame is turned clockwise to be shown
+     * @param mirrored whether it is then shown mirrored left to right, as a front camera's is
+     * @param into what to draw into, the size of the frame once turned
+     * @param onDrawn called on the render thread once the still has been drawn
+     * @return whether the still went in, which it cannot once the renderer has stopped
+     */
+    @WorkerThread
+    boolean drawStill(@NonNull Bitmap frame, @GlMath.Rotation int rotationDegrees,
+            boolean mirrored, @NonNull Surface into, @NonNull Runnable onDrawn) {
+        FrameRenderThread renderThread = mProcessor.mRenderThread;
+        Size size = new Size(frame.getWidth(), frame.getHeight());
+        Surface input = renderThread.createStillInput(size);
+        if (input == null) {
+            return false;
+        }
+        boolean armed = renderThread.drawStillInto(into, shownSize(size, rotationDegrees),
+                GlMath.ScaleType.FILL_CENTER,
+                (surfaceTextureMatrix, matrix) -> System.arraycopy(
+                        GlMath.uprightMatrix(surfaceTextureMatrix, rotationDegrees, mirrored), 0,
+                        matrix, 0, matrix.length),
+                onDrawn);
+        if (!armed) {
+            return false;
+        }
+        Canvas canvas;
+        try {
+            canvas = input.lockCanvas(null);
+        } catch (IllegalArgumentException | IllegalStateException
+                | Surface.OutOfResourcesException error) {
+            Log.w(TAG, "The renderer's still input would not take the frame", error);
+            renderThread.cancelStill();
+            return false;
+        }
+        try {
+            canvas.drawBitmap(frame, 0f, 0f, null);
+        } finally {
+            input.unlockCanvasAndPost(canvas);
+        }
+        return true;
+    }
+
+    /** The size of a frame of the given size once it is turned to be shown. */
+    @NonNull
+    static Size shownSize(@NonNull Size frame, @GlMath.Rotation int rotationDegrees) {
+        return rotationDegrees % 180 == 0 ? frame : new Size(frame.getHeight(), frame.getWidth());
     }
 
     /** Stops drawing, closes every output and gives the GL context back. */
