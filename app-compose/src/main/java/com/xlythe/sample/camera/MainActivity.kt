@@ -417,7 +417,7 @@ fun PanoramaDemoScreen() {
     val cameraState = remember { mutableStateOf<CameraState?>(null) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
     var mode by remember { mutableStateOf(PanoramaMode.PANORAMA) }
-    var status by remember { mutableStateOf("Turn on the spot, keeping the dot in the circle") }
+    var status by remember { mutableStateOf("Turn on the spot; for a photosphere, hold the circle on each dot") }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
         hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }

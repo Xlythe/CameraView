@@ -9,8 +9,8 @@
     <string name="app_name_panorama">Panorama Demo</string>
     <string name="panorama_mode_flat">Panorama</string>
     <string name="panorama_mode_sphere">Photosphere</string>
-    <string name="panorama_hint_flat">Turn slowly on the spot, keeping the dot in the circle</string>
-    <string name="panorama_hint_sphere">Turn on the spot and put each dot in the circle, up and down too</string>
+    <string name="panorama_hint_flat">Turn slowly on the spot, keeping the arrows on the line</string>
+    <string name="panorama_hint_sphere">Hold the circle on each dot until it fills, up and down too</string>
     <string name="panorama_progress">%1$d%% covered</string>
     <string name="panorama_failed">Nothing was captured</string>
     <string name="panorama_unsupported">This device cannot report which way it is pointing</string>

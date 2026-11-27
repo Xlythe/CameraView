@@ -1740,12 +1740,14 @@ public class CameraView extends FrameLayout {
     /**
      * Sweeps a panorama or a photosphere, and saves it to a file.
      *
-     * <p>CameraView draws the guide over its preview while the sweep runs: the target to aim at
-     * next, how much is covered, and which way to turn. Frames are placed by where the phone points,
-     * so the person should turn on the spot rather than walk. A panorama finishes once it has gone
-     * all the way round and a photosphere once the whole sphere is covered, poles included; either
-     * is also saved, with whatever it covered, when {@link #stopPanorama} is called or the camera
-     * closes.</p>
+     * <p>CameraView draws the guide over its preview while the sweep runs, with no words in it.
+     * For a panorama it shows the panorama so far in a strip, a line to keep level on and arrows
+     * the way to turn, turning orange when the phone tips or turns too fast. For a photosphere it
+     * puts dots on everything still to take; holding the circle in the middle on a dot until it
+     * fills takes it. The person should turn on the spot rather than walk. A panorama finishes once
+     * it has gone all the way round and a photosphere once every dot is taken, straight up and down
+     * included; either is also saved, with whatever it covered, when {@link #stopPanorama} is
+     * called or the camera closes.</p>
      *
      * <p>The file is a JPEG with the Exif any picture has, the device's location included when the
      * app holds a location permission, and photo sphere XMP metadata, so a gallery or a panorama

@@ -45,16 +45,6 @@ class PanoramaGuideScreenshotTest {
         facing = 160f to 2f)
 
     @Test
-    fun panoramaOnTarget() {
-        val state = sweep(photosphere = false, painted = (0..150 step 15).map { it.toFloat() to 0f })
-        val target = state.targetYaws[state.nextTarget]
-        val bitmap = shoot("PanoramaGuide_panorama_on_target", state, facing = target - 2f to 0f)
-        val off = render(state, facing = target - 20f to 0f)
-        // On the target the reticle fills; off it, it is the preview showing through.
-        assertNotEquals(bitmap.getPixel(SIZE_W / 2, SIZE_H / 2), off.getPixel(SIZE_W / 2, SIZE_H / 2))
-    }
-
-    @Test
     fun panoramaTooFast() = capture("PanoramaGuide_panorama_too_fast",
         sweep(photosphere = false, painted = (0..60 step 15).map { it.toFloat() to 0f })
             .withStatus(GuideState.TOO_FAST),
@@ -67,8 +57,38 @@ class PanoramaGuideScreenshotTest {
         facing = 0f to 0f)
 
     @Test
+    fun panoramaOffLevel() = capture("PanoramaGuide_panorama_off_level",
+        sweep(photosphere = false, painted = (0..90 step 15).map { it.toFloat() to 0f }),
+        facing = 95f to 9f)
+
+    @Test
+    fun panoramaStalled() = capture("PanoramaGuide_panorama_stalled",
+        sweep(photosphere = false, painted = (0..150 step 15).map { it.toFloat() to 0f },
+            speed = 0f),
+        facing = 152f to 0f)
+
+    @Test
+    fun settling() = capture("PanoramaGuide_settling",
+        GuideState(false, GuideState.SETTLING, 0f, FRAME_W, FRAME_H, 90, false, FOCAL, 0f, 0f,
+            FloatArray(0), FloatArray(0), BooleanArray(0), -1, null, 0, 0, 0f, 0f, 0f, 0f),
+        facing = 0f to 0f)
+
+    @Test
     fun photosphereStart() = capture("PanoramaGuide_photosphere_start",
         sweep(photosphere = true, painted = listOf(0f to 0f)), facing = 3f to 0f)
+
+    @Test
+    fun photosphereHolding() {
+        val state = sweep(photosphere = true, painted = listOf(0f to 0f), hold = 0.6f)
+        val target = state.targetYaws[state.nextTarget] to state.targetPitches[state.nextTarget]
+        val bitmap = shoot("PanoramaGuide_photosphere_holding", state,
+            facing = target.first + 1f to target.second)
+        val idle = render(sweep(photosphere = true, painted = listOf(0f to 0f)),
+            facing = target.first + 1f to target.second)
+        // Held, the reticle fills from the top clockwise; the hold has not reached its left.
+        val above = SIZE_H / 2 - 20
+        assertNotEquals(bitmap.getPixel(SIZE_W / 2 + 6, above), idle.getPixel(SIZE_W / 2 + 6, above))
+    }
 
     @Test
     fun photospherePartway() = capture("PanoramaGuide_photosphere_partway",
@@ -159,7 +179,7 @@ class PanoramaGuideScreenshotTest {
      * them: into a canvas, with coverage marked and the thumbnail brought up to date.
      */
     private fun sweep(photosphere: Boolean, painted: List<Pair<Float, Float>>,
-                      front: Boolean = false): GuideState {
+                      front: Boolean = false, hold: Float = 0f, speed: Float = 20f): GuideState {
         val rotation = if (front) 270 else 90
         val poses = painted.map { (yaw, pitch) ->
             CameraPose(SphereMathTest.matrixOf(SphereMathTest.uprightFacing(yaw, pitch)), rotation,
@@ -170,13 +190,22 @@ class PanoramaGuideScreenshotTest {
         val canvas = SphereCanvas(1742, start)
         val coverage = if (photosphere) SweepCoverage.forPhotosphere(start, 46.8f)
         else SweepCoverage.forPanorama(start, 0f, 46.8f)
-        val thumbnail = IntArray(720 * 360)
+        val thumbnailWidth = if (photosphere) 720 else 1440
+        val thumbnail = IntArray(thumbnailWidth * thumbnailWidth / 2)
         var last: CameraPose? = null
+        var offset = 0f
+        var left = 0f
+        var right = 0f
         for (pose in poses) {
             canvas.paint(room(pose), pose)
             coverage.cover(pose)
-            canvas.updateThumbnail(thumbnail, 720, 360)
+            canvas.updateThumbnail(thumbnail, thumbnailWidth, thumbnailWidth / 2)
             last = pose
+            // How far the frames reach either side of the start, as a sweep follows it.
+            val raw = SphereMath.wrap(pose.yaw() - start)
+            offset = raw + 360f * Math.round((offset - raw) / 360f)
+            left = minOf(left, offset - 23.4f)
+            right = maxOf(right, offset + 23.4f)
         }
         val next = coverage.nextTarget(last!!.forward, -1)
         val targets = coverage.targetCount
@@ -185,7 +214,7 @@ class PanoramaGuideScreenshotTest {
             FloatArray(targets) { coverage.getTargetYaw(it) },
             FloatArray(targets) { coverage.getTargetPitch(it) },
             BooleanArray(targets) { coverage.isTargetComplete(it) },
-            next, thumbnail, 720, painted.size)
+            next, thumbnail, thumbnailWidth, painted.size, hold, speed, left, right)
     }
 
     /**
