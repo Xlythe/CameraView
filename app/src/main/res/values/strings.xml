@@ -7,6 +7,7 @@
     <string name="app_name_qr_code">QR Code Demo</string>
     <string name="app_name_wear">Wear Companion</string>
     <string name="app_name_effect">Effect Demo</string>
+    <string name="app_name_viewer">Viewer Demo</string>
     <string name="wear_status_idle">Open the companion app on your watch</string>
     <string name="wear_status_opening">Connecting to the watch…</string>
     <string name="wear_status_streaming">Streaming to the watch</string>
@@ -22,6 +23,25 @@
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_resize">Resize</string>
+    <!-- Opens the last picture taken in the viewer -->
+    <string name="btn_view">View</string>
+    <!-- Takes a DNG beside each JPEG -->
+    <string name="raw">RAW</string>
+
+    <!-- The viewer before a picture is picked -->
+    <string name="viewer_empty">Take a picture, or open one to view it</string>
+    <!-- Picks a picture to view -->
+    <string name="viewer_open">Open</string>
+    <!-- Shows the picture flat, to zoom into -->
+    <string name="viewer_mode_picture">Picture</string>
+    <!-- Shows the picture as a strip to pan along -->
+    <string name="viewer_mode_panorama">Panorama</string>
+    <!-- Shows the picture from the inside of a sphere -->
+    <string name="viewer_mode_photosphere">Sphere</string>
+    <!-- Looks around the sphere by turning the phone -->
+    <string name="viewer_gyroscope">Gyro</string>
+    <!-- The picture could not be shown -->
+    <string name="viewer_failed">This device cannot show this picture</string>
     <!-- A zoom preset button, such as 0.6x or 2x -->
     <string name="zoom_preset">%1$sx</string>
     <!-- How far exposure compensation shifts the exposure, in stops, such as +0.7 EV -->
