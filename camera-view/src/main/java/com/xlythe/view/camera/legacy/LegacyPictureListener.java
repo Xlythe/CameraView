@@ -53,7 +53,7 @@ class LegacyPictureListener implements Camera.PictureCallback {
                     if (mIsReversed) {
                         exif.flipHorizontally();
                     }
-                    Location location = LegacyCameraModule.getLocation(mModule.getContext());
+                    Location location = mModule.getLocation();
                     if (location != null) {
                         exif.attachLocation(location);
                     }

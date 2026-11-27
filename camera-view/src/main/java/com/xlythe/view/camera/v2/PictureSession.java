@@ -1,6 +1,5 @@
 package com.xlythe.view.camera.v2;
 
-import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
@@ -158,7 +157,9 @@ class PictureSession extends PreviewSession {
      * image rather than by throwing, which no end-to-end assertion notices.
      */
     static class ImageSaver extends AsyncTask<Void, Void, Boolean> {
-        private final Context mContext;
+        // Where the picture was taken, or null to leave it untagged
+        @Nullable
+        private final Location mLocation;
 
         // The image that was captured
         private final Image mImage;
@@ -173,8 +174,9 @@ class PictureSession extends PreviewSession {
         // The file to save the image to
         private final File mFile;
 
-        ImageSaver(Context context, Image image, int orientation, boolean reversed, File file) {
-            mContext = context.getApplicationContext();
+        ImageSaver(@Nullable Location location, Image image, int orientation, boolean reversed,
+                File file) {
+            mLocation = location;
             mImage = image;
             mOrientation = orientation;
             mIsReversed = reversed;
@@ -214,9 +216,8 @@ class PictureSession extends PreviewSession {
                 if (mIsReversed) {
                     exif.flipHorizontally();
                 }
-                Location location = SessionImpl.CameraSurface.getLocation(mContext);
-                if (location != null) {
-                    exif.attachLocation(location);
+                if (mLocation != null) {
+                    exif.attachLocation(mLocation);
                 }
                 exif.save();
             } catch (IOException e) {
@@ -348,7 +349,7 @@ class PictureSession extends PreviewSession {
                         }
                         final File file = mFile;
                         new ImageSaver(
-                                mCameraView.getContext(),
+                                getLocation(),
                                 image,
                                 mCameraView.getRelativeCameraOrientation(),
                                 isUsingFrontFacingCamera(),
