@@ -59,8 +59,16 @@ class ComposeControllersTest {
         val cameraView = CameraView(context)
 
         val controller = object : CameraController {
+            override fun takePicture() {
+                cameraView.takePicture()
+            }
+
             override fun takePicture(file: File) {
                 cameraView.takePicture(file)
+            }
+
+            override fun startRecording() {
+                cameraView.startRecording()
             }
 
             override fun startRecording(file: File) {

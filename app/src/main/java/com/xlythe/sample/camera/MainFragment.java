@@ -2,6 +2,7 @@ package com.xlythe.sample.camera;
 
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -13,7 +14,8 @@ import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 
-import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -24,6 +26,8 @@ import androidx.annotation.Nullable;
  * background thread operations, permissions, and UI binding to layout controls.
  */
 public class MainFragment extends CameraFragment {
+    /** How long the preview takes to come back after blinking for a picture. */
+    private static final long SHUTTER_BLINK_MILLIS = 150;
 
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
@@ -33,28 +37,40 @@ public class MainFragment extends CameraFragment {
     }
 
     /**
-     * Callback triggered by the library when a picture has been successfully taken and saved.
-     * The picture is initially written to a temporary cache file.
+     * Callback triggered as the picture is exposed. The library has already played the shutter
+     * click; blinking the preview shows the moment too, as camera apps do.
      */
     @Override
-    public void onImageCaptured(final File file) {
-        // Print out metadata (EXIF data) about the captured picture using the library's Exif
-        // helper, while the capture is still the cache file we were handed.
-        Log.d(TAG, Exif.describe(file));
-
-        CaptureSaver.save(requireContext(), file, false /* isVideo */, uri -> {
-            report(uri == null ? "Could not save the picture" : "Picture saved to " + uri);
-        });
+    public void onShutter() {
+        View camera = requireView().findViewById(R.id.camera);
+        camera.animate().cancel();
+        camera.setAlpha(0f);
+        camera.animate().alpha(1f).setDuration(SHUTTER_BLINK_MILLIS);
     }
 
     /**
-     * Callback triggered by the library when a video recording successfully completes.
+     * Callback triggered once the library has taken a picture and filed it in the gallery.
      */
     @Override
-    public void onVideoCaptured(final File file) {
-        CaptureSaver.save(requireContext(), file, true /* isVideo */, uri -> {
-            report(uri == null ? "Could not save the video" : "Video saved to " + uri);
-        });
+    public void onImageSaved(@NonNull Uri uri) {
+        report("Picture saved to " + uri);
+
+        // Print out metadata (EXIF data) about the picture using the library's Exif helper.
+        try (InputStream input = requireContext().getContentResolver().openInputStream(uri)) {
+            if (input != null) {
+                Log.d(TAG, new Exif(input).toString());
+            }
+        } catch (IOException e) {
+            Log.w(TAG, "Could not read the metadata of " + uri, e);
+        }
+    }
+
+    /**
+     * Callback triggered once the library has recorded a video and filed it in the gallery.
+     */
+    @Override
+    public void onVideoSaved(@NonNull Uri uri) {
+        report("Video saved to " + uri);
     }
 
     /**

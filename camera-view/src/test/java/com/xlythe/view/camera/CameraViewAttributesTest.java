@@ -194,6 +194,15 @@ public class CameraViewAttributesTest {
         assertEquals(CameraView.DynamicRange.SDR, view.getDynamicRange());
         assertEquals(CameraView.Extension.NONE, view.getExtension());
         assertEquals(ICameraModule.DEFAULT_PICTURE_QUALITY, view.getPictureQuality());
+        assertTrue(view.isShutterSoundEnabled());
+    }
+
+    @Test
+    public void aLayoutCanSilenceTheShutter() {
+        CameraView view = from(builder -> builder
+                .addAttribute(R.attr.shutterSoundEnabled, "false"));
+
+        assertFalse(view.isShutterSoundEnabled());
     }
 
     /** Builds a CameraView from the attributes a layout would have set on it. */

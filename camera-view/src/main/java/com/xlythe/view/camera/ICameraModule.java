@@ -6,12 +6,14 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.location.Location;
+import android.media.MediaActionSound;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -56,6 +58,10 @@ public abstract class ICameraModule {
     private boolean mTorchEnabled;
     /** Whether CameraX low-light boost is requested. */
     private boolean mLowLightBoostEnabled;
+    /** Whether the camera's sounds are wanted. Set from any thread, read on the camera's. */
+    private volatile boolean mShutterSoundEnabled = true;
+    /** The click and recording tones, for a backend the platform plays none for. */
+    private final CameraSounds mSounds = new CameraSounds();
     /** Listener receiving still-image terminal callbacks. */
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;
     /** Listener receiving video terminal callbacks. */
@@ -224,6 +230,75 @@ public abstract class ICameraModule {
 
     public void onImageFailed() {
         mView.onImageFailed();
+    }
+
+    /** Called as a picture is exposed: the click plays, and the listener hears of it. */
+    public void onShutter() {
+        if (playsOwnClick()) {
+            mSounds.play(getContext(), MediaActionSound.SHUTTER_CLICK, mShutterSoundEnabled);
+        }
+        mView.onShutter();
+    }
+
+    /**
+     * Called just before the recorder starts. The tone plays first so that as little of it as
+     * possible ends up in the recording.
+     */
+    public void onRecordingStarting() {
+        if (!playsSystemSounds()) {
+            mSounds.play(getContext(), MediaActionSound.START_VIDEO_RECORDING,
+                    mShutterSoundEnabled);
+        }
+    }
+
+    /** Called once the recorder has stopped, so the tone is not in the recording. */
+    public void onRecordingStopped() {
+        if (!playsSystemSounds()) {
+            mSounds.play(getContext(), MediaActionSound.STOP_VIDEO_RECORDING,
+                    mShutterSoundEnabled);
+        }
+    }
+
+    /** Whether the platform plays this backend's camera sounds, as it does for the old API. */
+    protected boolean playsSystemSounds() {
+        return false;
+    }
+
+    /**
+     * Whether the library plays the shutter click. A backend whose platform plays its own may
+     * still hand the click over, to play the app's sound in its place.
+     */
+    protected boolean playsOwnClick() {
+        return !playsSystemSounds();
+    }
+
+    /** Sets a sound of the app's own for the shutter, or 0 for the platform's click. */
+    public void setShutterSound(@RawRes int soundRes) {
+        mSounds.setShutterSound(soundRes);
+    }
+
+    @RawRes
+    public int getShutterSound() {
+        return mSounds.getShutterSound();
+    }
+
+    public void setShutterSoundEnabled(boolean enabled) {
+        mShutterSoundEnabled = enabled;
+    }
+
+    public boolean isShutterSoundEnabled() {
+        return mShutterSoundEnabled;
+    }
+
+    /** Loads the sounds as the camera opens, so the first picture's click is not late. */
+    void loadSounds() {
+        if (playsOwnClick() && (mShutterSoundEnabled || CameraSounds.isRequired())) {
+            mSounds.load(getContext());
+        }
+    }
+
+    void releaseSounds() {
+        mSounds.release();
     }
 
     /**

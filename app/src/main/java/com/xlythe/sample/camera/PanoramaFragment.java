@@ -130,12 +130,6 @@ public class PanoramaFragment extends CameraFragment implements CameraView.Panor
         showSweeping(false);
         showHint();
         showResult(file);
-        // Into the gallery, as a still is, where a viewer that reads the metadata finds it.
-        CaptureSaver.save(requireContext(), file, false, uri -> {
-            if (uri != null && isAdded()) {
-                mResultText.append("\n" + getString(R.string.panorama_saved));
-            }
-        });
     }
 
     @Override

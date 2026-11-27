@@ -2,11 +2,9 @@ package com.xlythe.sample.camera
 
 import android.Manifest
 import android.annotation.SuppressLint
-import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Environment
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -82,10 +80,6 @@ import com.xlythe.compose.camera.VideoController
 import com.xlythe.sample.camera.ui.theme.CameraViewTheme
 import kotlinx.coroutines.launch
 import java.io.File
-import java.io.IOException
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 
 enum class DemoScreen(val title: String) {
     SIMPLE("Simple Demo"),
@@ -198,16 +192,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@Throws(IOException::class)
-private fun createImageFile(context: Context): File {
-    val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-    val storageDir = context.getExternalFilesDir(Environment.DIRECTORY_PICTURES)
-    if (storageDir == null || (!storageDir.exists() && !storageDir.mkdirs())) {
-        throw IOException("Cannot create directory for image file.")
-    }
-    return File.createTempFile("JPEG_${timeStamp}_", ".jpg", storageDir)
-}
-
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
 fun SimpleDemoScreen() {
@@ -256,8 +240,8 @@ fun SimpleDemoScreen() {
                     modifier = Modifier.fillMaxSize(),
                     controller = cameraController,
                     onImageConfirmation = { uiStatusText = "Confirm Image?" },
-                    onImageCaptured = { savedFile ->
-                        uiStatusText = "Saved: ${savedFile.name}"
+                    onImageSaved = { uri ->
+                        uiStatusText = "Saved: $uri"
                         Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
                     },
                     onImageCaptureFailed = { uiStatusText = "Capture Failed" }
@@ -285,13 +269,8 @@ fun SimpleDemoScreen() {
 
                 Button(
                     onClick = {
-                        try {
-                            val file = createImageFile(context)
-                            uiStatusText = "Capturing..."
-                            cameraController.value?.takePicture(file)
-                        } catch (e: Exception) {
-                            uiStatusText = "Error creating file"
-                        }
+                        uiStatusText = "Capturing..."
+                        cameraController.value?.takePicture()
                     },
                     enabled = cameraController.value != null,
                     shape = RoundedCornerShape(20.dp),
