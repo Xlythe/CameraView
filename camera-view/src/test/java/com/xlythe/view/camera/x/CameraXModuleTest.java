@@ -11,6 +11,9 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.Size;
 
+import androidx.annotation.OptIn;
+import androidx.camera.core.ExperimentalZeroShutterLag;
+import androidx.camera.core.ImageCapture;
 import androidx.camera.core.resolutionselector.AspectRatioStrategy;
 import androidx.camera.core.resolutionselector.ResolutionSelector;
 import androidx.camera.core.resolutionselector.ResolutionStrategy;
@@ -213,6 +216,26 @@ public final class CameraXModuleTest {
             assertEquals(format + " otherwise", format,
                     CameraXModule.boundPictureFormat(format, false));
         }
+    }
+
+    /**
+     * A drawn still is never taken from kept frames. The effect shares one stream between every
+     * use case, CameraX allows each of them a single surface, and keeping frames takes more, so
+     * asking for both throws out of the bind and the camera never opens.
+     */
+    @OptIn(markerClass = ExperimentalZeroShutterLag.class)
+    @Test
+    public void aDrawnStillIsNotTakenFromKeptFrames() {
+        assertEquals(ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, true, CameraView.PictureFormat.JPEG, false));
+        assertEquals(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, true, CameraView.PictureFormat.JPEG, true));
+        assertEquals(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, false, CameraView.PictureFormat.JPEG, false));
+        assertEquals(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, true, CameraView.PictureFormat.RAW, false));
+        assertEquals(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY, CameraXModule.captureMode(
+                CameraView.Quality.MAX, true, CameraView.PictureFormat.JPEG, true));
     }
 
     /**
