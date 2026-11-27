@@ -32,12 +32,14 @@ import android.util.SizeF;
 import android.view.Surface;
 import android.view.View;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
@@ -98,6 +100,7 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifNoRoomException;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.CameraXFrameAnalyzer;
@@ -606,6 +609,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mState = State.CLOSED;
     }
 
+    /**
+     * Moves this module's lifecycle, unless it is destroyed. A recording the host's end stopped
+     * still reports afterwards, and the registry throws rather than leave DESTROYED.
+     */
+    @MainThread
+    private void moveLifecycleTo(@NonNull Lifecycle.State state) {
+        if (mDestroyed) return;
+        mLifecycleRegistry.setCurrentState(state);
+    }
+
     private void onHostActivityStartedChanged(@NonNull Activity activity, boolean started) {
 
         if (activity != mHostActivity) return;
@@ -636,11 +649,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private void updateBackendLifecycle() {
         if (mDestroyed) return;
         if (!mOpenRequested) {
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+            moveLifecycleTo(Lifecycle.State.CREATED);
             return;
         }
         if (isHostActive()) {
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.STARTED);
+            moveLifecycleTo(Lifecycle.State.STARTED);
             if (mCameraProvider != null && mVideoRecording == null
                     && mBoundUseCases.isEmpty() && !mPaused) {
                 reconcileUseCases(true);
@@ -652,7 +665,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         unbindCurrentUseCases();
-        mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+        moveLifecycleTo(Lifecycle.State.CREATED);
         mState = State.SUSPENDED;
     }
 
@@ -691,7 +704,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         releaseAllUseCases();
-        mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+        moveLifecycleTo(Lifecycle.State.CREATED);
         mState = State.CLOSED;
         publishSnapshot();
     }
@@ -1419,9 +1432,23 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         runOnMainThread(() -> takePictureOnMainThread(file));
     }
 
+    /**
+     * Whether a picture may be taken now. A recording does not stand in the way: the still output
+     * bound beside it is the one a snapshot uses, and it is bound exactly when
+     * {@link #isSnapshotWhileRecordingSupported} says so.
+     */
+    @AnyThread
+    @VisibleForTesting
+    static boolean acceptsPicture(boolean open, boolean hasStillOutput, boolean picturePending,
+            boolean recording, boolean snapshotWhileRecording) {
+        return open && hasStillOutput && !picturePending
+                && (!recording || snapshotWhileRecording);
+    }
+
     private void takePictureOnMainThread(@NonNull File file) {
         ImageCapture imageCapture = mImageCapture;
-        if (!mOpenRequested || imageCapture == null || isRecording() || mPendingImageFile != null) {
+        if (!acceptsPicture(mOpenRequested, imageCapture != null, mPendingImageFile != null,
+                isRecording(), mSnapshotWhileRecording)) {
             Log.w(TAG, "Cannot take a picture in the current CameraX state: " + mState);
             onImageFailed();
             return;
@@ -1693,21 +1720,32 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private void finishExif(@NonNull File file, @Nullable Location location,
             @NonNull ExifCaptureParameters exifParameters, @NonNull Runnable then) {
         AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
-            try {
-                Exif exif = new Exif(file);
-                exif.attachTimestamp();
-                exif.attachCaptureDevice(getContext());
-                exif.attachThumbnail();
-                exifParameters.applyTo(exif);
-                if (location != null) {
-                    exif.attachLocation(location);
-                }
-                exif.save();
-            } catch (IOException | RuntimeException error) {
-                Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
-            }
+            writeExif(getContext(), file, location, exifParameters);
             mMainHandler.post(then);
         });
+    }
+
+    /** The Exif {@link #finishExif} writes, which never fails the capture. */
+    @VisibleForTesting
+    @WorkerThread
+    static void writeExif(@NonNull Context context, @NonNull File file,
+            @Nullable Location location, @NonNull ExifCaptureParameters exifParameters) {
+        try {
+            Exif exif = new Exif(file);
+            exif.attachTimestamp();
+            exif.attachCaptureDevice(context);
+            exif.attachThumbnail();
+            exifParameters.applyTo(exif);
+            if (location != null) {
+                exif.attachLocation(location);
+            }
+            exif.save();
+        } catch (ExifNoRoomException error) {
+            // The picture keeps everything else, and is never failed over its metadata.
+            Log.w(TAG, "Saved the picture without some of its Exif tags", error);
+        } catch (IOException | RuntimeException error) {
+            Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
+        }
     }
 
     /**
@@ -1861,6 +1899,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         if (!(event instanceof VideoRecordEvent.Finalize)) return;
         VideoRecordEvent.Finalize finalized = (VideoRecordEvent.Finalize) event;
+        boolean success = isSuccessfulFinalize(finalized) && file.exists();
+        if (!success) {
+            Log.e(TAG, "CameraX recording failed: " + describeFinalize(finalized),
+                    finalized.getCause());
+        }
+        onRecordingFinalized(file, success);
+    }
+
+    /**
+     * Settles the camera once a recording has ended, and tells the caller how it went. It can
+     * arrive after the camera closed, and after the host is gone, since a close stops the
+     * recording rather than waiting for it.
+     */
+    @MainThread
+    @VisibleForTesting
+    void onRecordingFinalized(@NonNull File file, boolean success) {
         if (mVideoStarted) {
             mVideoStarted = false;
             onRecordingStopped();
@@ -1872,24 +1926,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mVideoCapture = null;
         mVideoFile = null;
         applyPendingLensFacing();
-        boolean success = isSuccessfulFinalize(finalized) && file.exists();
         if (mCriticalCameraFailure) {
             releaseAllUseCases();
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+            moveLifecycleTo(Lifecycle.State.CREATED);
             mState = State.ERROR;
         } else if (mOpenRequested && isHostActive()) {
             mState = State.OPEN;
             if (!mPaused) reconcileUseCases(false);
         } else {
             releaseAllUseCases();
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+            moveLifecycleTo(Lifecycle.State.CREATED);
             mState = mOpenRequested ? State.SUSPENDED : State.CLOSED;
         }
         publishSnapshot();
         if (success) {
             showVideoConfirmation(file);
         } else {
-            Log.e(TAG, "CameraX recording failed: " + describeFinalize(finalized), finalized.getCause());
             onVideoFailed();
         }
     }
@@ -1933,7 +1985,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 if (!mPaused) reconcileUseCases(false);
             } else {
                 releaseAllUseCases();
-                mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+                moveLifecycleTo(Lifecycle.State.CREATED);
                 mState = mCriticalCameraFailure ? State.ERROR
                         : (mOpenRequested ? State.SUSPENDED : State.CLOSED);
             }
@@ -1981,7 +2033,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 if (!mPaused) reconcileUseCases(false);
             } else {
                 releaseAllUseCases();
-                mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+                moveLifecycleTo(Lifecycle.State.CREATED);
                 mState = mCriticalCameraFailure ? State.ERROR
                         : (mOpenRequested ? State.SUSPENDED : State.CLOSED);
             }
@@ -2884,16 +2936,46 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @NonNull private ResolutionSelector createImageResolutionSelector() {
-        return new ResolutionSelector.Builder()
-                .setAspectRatioStrategy(getAspectRatioStrategy())
-                .setResolutionStrategy(new ResolutionStrategy(imageTargetSize(getQuality()),
+        return imageResolutionSelector(getQuality(), getAspectRatioStrategy());
+    }
+
+    /**
+     * How a still is sized for a quality.
+     *
+     * <p>MAX takes the largest picture the camera gives, whatever its shape: the view port crops
+     * every output to the view, and a crop of the whole sensor holds more than a frame already
+     * cut to the view's shape. The higher-resolution mode adds the sizes a camera only delivers
+     * slowly, which is the trade a MAX picture makes.</p>
+     */
+    @NonNull static ResolutionSelector imageResolutionSelector(
+            @NonNull CameraView.Quality quality, @NonNull AspectRatioStrategy aspectRatioStrategy) {
+        ResolutionSelector.Builder builder =
+                new ResolutionSelector.Builder().setAspectRatioStrategy(aspectRatioStrategy);
+        if (quality == CameraView.Quality.MAX) {
+            return builder
+                    .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                    .setResolutionFilter((sizes, rotationDegrees) -> largestFirst(sizes))
+                    .setAllowedResolutionMode(
+                            ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
+                    .build();
+        }
+        return builder
+                .setResolutionStrategy(new ResolutionStrategy(imageTargetSize(quality),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
                 .build();
     }
 
+    /** The sizes by area, largest first, which is the order CameraX then tries them in. */
+    @NonNull static List<Size> largestFirst(@NonNull List<Size> sizes) {
+        List<Size> sorted = new ArrayList<>(sizes);
+        Collections.sort(sorted, (a, b) -> Long.compare(
+                (long) b.getWidth() * b.getHeight(), (long) a.getWidth() * a.getHeight()));
+        return sorted;
+    }
+
+    /** The bound a still is held to at every quality but MAX, which has none. */
     @NonNull static Size imageTargetSize(@NonNull CameraView.Quality quality) {
         switch (quality) {
-            case MAX: return new Size(3840, 2160);
             case HIGH: return new Size(1920, 1080);
             case MEDIUM: return new Size(1280, 720);
             case LOW:

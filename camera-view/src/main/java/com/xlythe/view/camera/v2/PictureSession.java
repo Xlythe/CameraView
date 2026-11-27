@@ -10,6 +10,7 @@ import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
@@ -28,6 +29,7 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifNoRoomException;
 import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.RawCapturePairer;
 import com.xlythe.view.camera.gl.FrameRenderThread;
@@ -132,18 +134,24 @@ class PictureSession extends PreviewSession {
         // then capped to it.
         onPreviewInitialized(map);
         if (hasStillCapture()) {
-            mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr());
-            // Once the still has a size, and once only: asking the renderer for an input makes
-            // one, so asking twice leaves the session configured around a surface that nothing
-            // is drawing into - which is a capture that configures and then never arrives.
-            mEffectStillInput = createEffectStillInput();
             // Asked of the camera again rather than trusted from the request, because a lens
             // change can leave a format accepted for the back camera in front of a front camera
             // that cannot write it. A drawn picture is a JPEG, so no RAW output is configured
             // while frames are drawn.
             CameraView.PictureFormat format = getPictureFormat();
-            if (mEffectStillInput == null && allowsRaw() && writesRaw(format)
-                    && isPictureFormatSupported(format)) {
+            boolean drawing = getModule().getEffect() != null;
+            boolean raw = !drawing && allowsRaw() && writesRaw(format)
+                    && isPictureFormatSupported(format);
+            // One request reads all of its outputs in one pixel mode, and the RAW output is
+            // sized for the binned one, so a session that writes a DNG keeps its JPEG binned. A
+            // drawn picture keeps it binned too, since the renderer reads a binned stream.
+            mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr(),
+                    allowsMaximumResolution() && !raw && !drawing);
+            // Once the still has a size, and once only: asking the renderer for an input makes
+            // one, so asking twice leaves the session configured around a surface that nothing
+            // is drawing into - which is a capture that configures and then never arrives.
+            mEffectStillInput = createEffectStillInput();
+            if (raw) {
                 mRawSurface.initialize(map);
             }
         }
@@ -204,6 +212,14 @@ class PictureSession extends PreviewSession {
      * preview, a full-size JPEG and a full-size RAW together, and nothing with an encoder in it.
      */
     protected boolean allowsRaw() {
+        return true;
+    }
+
+    /**
+     * Whether a MAX still may read the sensor out unbinned, on a camera that offers it. The
+     * readout stalls the repeating frames while it happens, which a recording cannot afford.
+     */
+    protected boolean allowsMaximumResolution() {
         return true;
     }
 
@@ -398,18 +414,28 @@ class PictureSession extends PreviewSession {
             if (drawn != null) {
                 builder.addTarget(drawn.mInput);
             }
-            if (mMeteringRectangle != null) {
-                builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
-                builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
+            MeteringRectangle metering = mMeteringRectangle;
+            Rect cropRegion = mCropRegion;
+            if (Build.VERSION.SDK_INT >= 31 && mPictureSurface.isMaximumResolution()) {
+                builder.set(CaptureRequest.SENSOR_PIXEL_MODE,
+                        CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
+                metering = toMaximumResolution(metering);
+                cropRegion = toMaximumResolution(cropRegion);
             }
-            applyZoom(builder);
+            if (metering != null) {
+                builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{metering});
+                builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{metering});
+            }
+            applyZoom(builder, cropRegion);
             applyStabilization(builder);
             builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
             if (Build.VERSION.SDK_INT >= 26 && isZeroShutterLagSupported()) {
                 // Set either way, since some still templates turn it on themselves. A RAW frame
                 // taken from the buffer carries that frame's timestamp, and so does its result,
-                // so the two still pair.
-                builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, fromBuffer);
+                // so the two still pair. An unbinned still never comes from the buffer, whose
+                // frames are binned.
+                builder.set(CaptureRequest.CONTROL_ENABLE_ZSL,
+                        fromBuffer && !mPictureSurface.isMaximumResolution());
             }
             // A DNG is written from the capture result as much as from the frame, so only a RAW
             // capture hands the result on.
@@ -905,6 +931,21 @@ class PictureSession extends PreviewSession {
     }
 
     /**
+     * A metering region moved onto the unbinned sensor, or null when it cannot be: a request in
+     * maximum resolution mode reads its regions against the larger array.
+     */
+    @RequiresApi(31)
+    @Nullable
+    private MeteringRectangle toMaximumResolution(@Nullable MeteringRectangle metering) {
+        if (metering == null) {
+            return null;
+        }
+        Rect region = toMaximumResolution(metering.getRect());
+        return region == null ? null
+                : new MeteringRectangle(region, metering.getMeteringWeight());
+    }
+
+    /**
      * Package-private, and so is the conversion below it, so that the planes-to-NV21 arithmetic
      * can be asserted directly. It is the kind of code that fails by tinting or striping an
      * image rather than by throwing, which no end-to-end assertion notices.
@@ -985,6 +1026,9 @@ class PictureSession extends PreviewSession {
                     exif.attachLocation(mLocation);
                 }
                 exif.save();
+            } catch (ExifNoRoomException e) {
+                // The picture keeps everything else, and is never failed over its metadata.
+                Log.w(TAG, "Saved the picture without some of its Exif tags", e);
             } catch (IOException e) {
                 Log.e(TAG, "Failed to update EXIF", e);
             }
@@ -1101,6 +1145,38 @@ class PictureSession extends PreviewSession {
             return Arrays.asList(sizes);
         }
 
+        /**
+         * The JPEG sizes a MAX still gains from reading the sensor out unbinned. Empty for any
+         * other quality or format: the guaranteed unbinned combination is a JPEG beside a
+         * preview, so an Ultra HDR still stays binned.
+         */
+        private List<Size> getMaximumResolutionSizes(List<Size> binned) {
+            List<Size> unbinned = new ArrayList<>();
+            if (Build.VERSION.SDK_INT < 31 || getQuality() != CameraView.Quality.MAX
+                    || mImageFormat != ImageFormat.JPEG) {
+                return unbinned;
+            }
+            StreamConfigurationMap map = mCameraView.getMaximumResolutionMap();
+            if (map == null) {
+                return unbinned;
+            }
+            for (Size[] group : new Size[][] {
+                    map.getOutputSizes(ImageFormat.JPEG),
+                    map.getHighResolutionOutputSizes(ImageFormat.JPEG)}) {
+                if (group == null) {
+                    continue;
+                }
+                for (Size size : group) {
+                    // A size both maps list is configured for the binned mode, so it is never a
+                    // reason to switch.
+                    if (!binned.contains(size) && !unbinned.contains(size)) {
+                        unbinned.add(size);
+                    }
+                }
+            }
+            return unbinned;
+        }
+
         private final SafeCloseImageReader.OnImageAvailableListener mOnImageAvailableListener =
                 new SafeCloseImageReader.OnImageAvailableListener() {
             @Override
@@ -1156,6 +1232,12 @@ class PictureSession extends PreviewSession {
         /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
         private int mImageFormat = IMAGE_FORMAT_DEFAULT;
 
+        /**
+         * Whether {@link #mImageReader} has a size only the unbinned sensor offers, so a capture
+         * into it has to ask for maximum resolution mode. See {@link PictureSession#takePicture}.
+         */
+        private boolean mMaximumResolution;
+
         PictureSurface(Camera2Module camera2Module, CameraSurface previewSurface) {
             super(camera2Module);
             mPreviewSurface = previewSurface;
@@ -1163,14 +1245,21 @@ class PictureSession extends PreviewSession {
 
         @Override
         void initialize(StreamConfigurationMap map) {
-            initialize(map, null /* maxSize */, true /* ultraHdrAllowed */);
+            initialize(map, null /* maxSize */, true /* ultraHdrAllowed */,
+                    true /* maximumResolutionAllowed */);
         }
 
-        void initialize(
-                StreamConfigurationMap map, @Nullable Size maxSize, boolean ultraHdrAllowed) {
+        void initialize(StreamConfigurationMap map, @Nullable Size maxSize,
+                boolean ultraHdrAllowed, boolean maximumResolutionAllowed) {
             if (DEBUG) Log.d(TAG, "Initializing PictureSession");
             mImageFormat = chooseImageFormat(ultraHdrAllowed);
-            super.initialize(chooseSize(within(getSizes(map), maxSize), mPreviewSurface.mSize));
+            List<Size> sizes = getSizes(map);
+            List<Size> unbinned = maximumResolutionAllowed
+                    ? getMaximumResolutionSizes(sizes) : new ArrayList<>();
+            List<Size> choices = new ArrayList<>(sizes);
+            choices.addAll(unbinned);
+            super.initialize(chooseSize(within(choices, maxSize), mPreviewSurface.mSize));
+            mMaximumResolution = unbinned.contains(mSize);
             if (mImageReader != null) {
                 // Initialized again - a session can be, when the camera is reconfigured - and an
                 // ImageReader holds native buffers the collector cannot reclaim, so the one being
@@ -1217,6 +1306,10 @@ class PictureSession extends PreviewSession {
             if (file != null && picture != null) {
                 picture.onWritten(file, false);
             }
+        }
+
+        boolean isMaximumResolution() {
+            return mMaximumResolution;
         }
 
         @Override

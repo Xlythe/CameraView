@@ -2,6 +2,8 @@ package com.xlythe.view.camera.x;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.graphics.Matrix;
@@ -9,15 +11,26 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.Size;
 
+import androidx.camera.core.resolutionselector.AspectRatioStrategy;
+import androidx.camera.core.resolutionselector.ResolutionSelector;
+import androidx.camera.core.resolutionselector.ResolutionStrategy;
 import androidx.camera.video.Quality;
+import androidx.exifinterface.media.ExifInterface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifFixtures;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.Arrays;
 
 @RunWith(RobolectricTestRunner.class)
@@ -173,7 +186,6 @@ public final class CameraXModuleTest {
 
     @Test
     public void imageQualityTargetsAreDistinct() {
-        assertEquals(new Size(3840, 2160), CameraXModule.imageTargetSize(CameraView.Quality.MAX));
         assertEquals(new Size(1920, 1080), CameraXModule.imageTargetSize(CameraView.Quality.HIGH));
         assertEquals(new Size(1280, 720), CameraXModule.imageTargetSize(CameraView.Quality.MEDIUM));
         assertEquals(new Size(720, 480), CameraXModule.imageTargetSize(CameraView.Quality.LOW));
@@ -201,6 +213,89 @@ public final class CameraXModuleTest {
             assertEquals(format + " otherwise", format,
                     CameraXModule.boundPictureFormat(format, false));
         }
+
+    /**
+     * A capture whose Exif has no room for the camera's own tags keeps the picture and the rest
+     * of its metadata, rather than passing the save's complaint on.
+     */
+    @Test
+    public void aCaptureIsKeptWhenItsTagsDoNotFit() throws IOException {
+        File file = File.createTempFile("camerax", ".jpg");
+        file.deleteOnExit();
+        Files.write(file.toPath(), ExifFixtures.overfullCapture());
+
+        CameraXModule.writeExif(RuntimeEnvironment.getApplication(), file, null,
+                new ExifCaptureParameters());
+
+        Exif saved = new Exif(file);
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertNull(saved.getTag(ExifFixtures.TAG_UNDEFINED_BY_ANY_STANDARD));
+    }
+
+    /**
+     * MAX asks for the largest still the camera gives, slow sizes included, whatever the view's
+     * shape: on a 4:3 view held to a 4K bound it used to settle for 1920x1440 on a 12 MP sensor.
+     */
+    @Test
+    public void aMaxStillIsTheLargestOfAnyShape() {
+        ResolutionSelector selector = CameraXModule.imageResolutionSelector(
+                CameraView.Quality.MAX, AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY);
+
+        assertEquals(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY,
+                selector.getResolutionStrategy());
+        assertEquals(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE,
+                selector.getAllowedResolutionMode());
+        assertEquals(Arrays.asList(new Size(4080, 3060), new Size(4000, 2252),
+                        new Size(3840, 2160), new Size(1920, 1440)),
+                selector.getResolutionFilter().filter(Arrays.asList(new Size(4000, 2252),
+                        new Size(3840, 2160), new Size(1920, 1440), new Size(4080, 3060)), 90));
+    }
+
+    /** Every other quality stays bounded, at the rate the camera streams at. */
+    @Test
+    public void otherStillsKeepTheirBound() {
+        ResolutionSelector selector = CameraXModule.imageResolutionSelector(
+                CameraView.Quality.HIGH, AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY);
+
+        assertEquals(new Size(1920, 1080), selector.getResolutionStrategy().getBoundSize());
+        assertEquals(ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                selector.getResolutionStrategy().getFallbackRule());
+        assertEquals(ResolutionSelector.PREFER_CAPTURE_RATE_OVER_HIGHER_RESOLUTION,
+                selector.getAllowedResolutionMode());
+        assertNull(selector.getResolutionFilter());
+        assertEquals(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY,
+                selector.getAspectRatioStrategy());
+    }
+
+    @Test
+    public void largestFirstKeepsEverySize() {
+        assertEquals(Arrays.asList(new Size(640, 480), new Size(480, 640), new Size(320, 240)),
+                CameraXModule.largestFirst(Arrays.asList(
+                        new Size(320, 240), new Size(640, 480), new Size(480, 640))));
+    }
+
+    /**
+     * A recording leaves a picture to the still output bound beside it, so it is refused only
+     * where none could be bound: the same answer isSnapshotWhileRecordingSupported gives.
+     */
+    @Test
+    public void aSnapshotIsTakenWhileRecordingWhereItIsSupported() {
+        assertTrue("a snapshot the camera says it can take",
+                CameraXModule.acceptsPicture(true, true, false, true, true));
+        assertFalse("a recording with no still beside it",
+                CameraXModule.acceptsPicture(true, true, false, true, false));
+        assertTrue("no recording at all",
+                CameraXModule.acceptsPicture(true, true, false, false, false));
+    }
+
+    /** Whatever the recording, a closed camera, a missing still or a picture in flight refuses. */
+    @Test
+    public void aPictureNeedsAnOpenCameraAndAFreeStill() {
+        assertFalse("closed", CameraXModule.acceptsPicture(false, true, false, false, false));
+        assertFalse("no still output",
+                CameraXModule.acceptsPicture(true, false, false, true, true));
+        assertFalse("a picture already in flight",
+                CameraXModule.acceptsPicture(true, true, true, true, true));
     }
 
     @Test

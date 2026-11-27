@@ -2,6 +2,7 @@ package com.xlythe.view.camera.x;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -14,7 +15,9 @@ import androidx.camera.core.ImageInfo;
 import androidx.camera.core.ImageProxy;
 import androidx.exifinterface.media.ExifInterface;
 
+import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifFixtures;
 import com.xlythe.view.camera.ExifMetadataTest;
 
 import org.junit.Test;
@@ -53,6 +56,25 @@ public class JpegSaverTest {
         assertNotNull("the app is the software", saved.getAttribute(ExifInterface.TAG_SOFTWARE));
         assertEquals("how it was taken", 1.0,
                 saved.getAttributeDouble(ExifInterface.TAG_DIGITAL_ZOOM_RATIO, 0), 0.0001);
+    }
+
+    /**
+     * A JPEG whose Exif has no room for the camera's own tags is still written and reported,
+     * with the rest of its metadata.
+     */
+    @Test
+    public void aJpegIsKeptWhenItsTagsDoNotFit() throws IOException {
+        Context context = RuntimeEnvironment.getApplication();
+        File file = new File(context.getCacheDir(), "IMG_2.jpg");
+        JpegSaver saver = new JpegSaver(context, image(ExifFixtures.overfullCapture()),
+                90 /* quality */, false /* mirrored */, file, new ExifCaptureParameters());
+
+        assertTrue(saver.doInBackground());
+
+        assertTrue(file.isFile());
+        Exif saved = new Exif(file);
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertNull(saved.getTag(ExifFixtures.TAG_UNDEFINED_BY_ANY_STANDARD));
     }
 
     /** An uncropped, upright image holding these bytes as its JPEG. */

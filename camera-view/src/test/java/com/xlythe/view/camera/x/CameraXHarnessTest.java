@@ -15,6 +15,8 @@ import android.util.Range;
 import android.util.Rational;
 
 import com.xlythe.view.camera.Barcode;
+import androidx.lifecycle.Lifecycle;
+
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAnnouncingCameraManager;
@@ -23,13 +25,15 @@ import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
 import com.xlythe.view.camera.v2.FakeCamera2;
 
 import org.junit.Test;
+
+import java.io.File;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.List;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
-import java.io.File;
-import java.util.List;
 
 /**
  * The CameraX backend driven against Robolectric's camera2 shadows.
@@ -141,6 +145,34 @@ public class CameraXHarnessTest {
             FakeCameraXHost.idle();
             host.release();
         }
+        exerciseLateRecordingEnd(module, host);
+    }
+
+    /**
+     * A recording's end can arrive after its host is gone, because a close stops the recording
+     * rather than waiting for it. The caller still hears how it ended, and the module stays
+     * destroyed: its lifecycle throws rather than leave DESTROYED, on the main thread.
+     */
+    private static void exerciseLateRecordingEnd(CameraXModule module, FakeCameraXHost host)
+            throws Exception {
+        assertEquals("releasing the host destroys the module",
+                Lifecycle.State.DESTROYED, module.getLifecycle().getCurrentState());
+        AtomicBoolean heard = new AtomicBoolean();
+        host.getCameraView().setOnVideoCapturedListener(new CameraView.OnVideoCapturedListener() {
+            @Override public void onVideoConfirmation() {}
+
+            @Override public void onFailure() {
+                heard.set(true);
+            }
+        });
+        File video = File.createTempFile("harness", ".mp4");
+        video.deleteOnExit();
+
+        module.onRecordingFinalized(video, false /* success */);
+        FakeCameraXHost.idle();
+
+        assertTrue("the caller hears how the recording ended", heard.get());
+        assertEquals(Lifecycle.State.DESTROYED, module.getLifecycle().getCurrentState());
     }
 
     /**

@@ -353,11 +353,23 @@ abstract class SessionImpl implements Camera2Module.Session {
      * sensor of the lens already in use, so it is the fallback for older devices.</p>
      */
     void applyZoom(@NonNull CaptureRequest.Builder builder) {
+        applyZoom(builder, mCropRegion);
+    }
+
+    /** Applies zoom with a crop region already in the coordinates the request reads. */
+    void applyZoom(@NonNull CaptureRequest.Builder builder, @Nullable Rect cropRegion) {
         if (Build.VERSION.SDK_INT >= 30 && mZoomRatio != null) {
             builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, mZoomRatio);
-        } else if (mCropRegion != null) {
-            builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
+        } else if (cropRegion != null) {
+            builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion);
         }
+    }
+
+    /** See {@link Camera2Module#toMaximumResolution}. */
+    @RequiresApi(31)
+    @Nullable
+    Rect toMaximumResolution(@Nullable Rect region) {
+        return mCamera2Module.toMaximumResolution(region);
     }
 
     @Override
