@@ -198,7 +198,6 @@ dependencies {
     // wants a newer androidx than we happened to build against should not have to override
     // us to get it. The floors are the versions whose APIs the code actually uses.
     api fileTree(include: ['*.jar'], dir: 'libs')
-    api 'androidx.concurrent:concurrent-futures:[1.3.0,)'
     if (coreOnly) {
         // The core build is the exception: these have a ceiling too, at releases that declare a
         // minSdk the core build supports, because a dependency's floor becomes the app's. An app
