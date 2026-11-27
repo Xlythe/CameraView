@@ -41,17 +41,17 @@ public class AudioRecorder {
   /** The background thread recording audio for us. */
   private volatile Thread mThread;
 
-  /**
-   * A simple audio recorder.
-   *
-   * @param pfd The output stream of the recording.
-   */
   /** The rate asked for, which the buffer may not be able to honour. */
   private final int mPreferredSampleRate;
 
   /** The channel count asked for, likewise. */
   private final int mPreferredChannelCount;
 
+  /**
+   * A simple audio recorder.
+   *
+   * @param pfd The output stream of the recording.
+   */
   public AudioRecorder(ParcelFileDescriptor pfd) {
     this(new ParcelFileDescriptor.AutoCloseOutputStream(pfd),
             AudioBuffer.DEFAULT_SAMPLE_RATE, AudioBuffer.DEFAULT_CHANNEL_COUNT);

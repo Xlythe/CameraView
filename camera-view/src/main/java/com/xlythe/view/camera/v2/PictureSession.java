@@ -8,7 +8,10 @@ import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
+import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.location.Location;
@@ -35,6 +38,7 @@ import java.util.List;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
+import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
@@ -60,7 +64,18 @@ class PictureSession extends PreviewSession {
      */
     private static final int IMAGE_FORMAT_MAX = IMAGE_FORMAT_DEFAULT;
 
+    /** How long a flash picture waits on metering before it is taken regardless. */
+    @VisibleForTesting
+    static final long METERING_TIMEOUT_MILLIS = 3_000;
+
+    /** Frames after the trigger in which metering has to start, for a camera that skips it. */
+    private static final int METERING_START_FRAMES = 3;
+
     private final PictureSurface mPictureSurface;
+
+    /** A flash picture waiting on auto-exposure to meter, or null. */
+    @Nullable
+    private volatile Metering mMetering;
 
     PictureSession(Camera2Module camera2Module) {
         super(camera2Module);
@@ -124,7 +139,46 @@ class PictureSession extends PreviewSession {
     @Override
     public void close() {
         super.close();
+        Metering metering = mMetering;
+        if (metering != null) {
+            mMetering = null;
+            getHandler().removeCallbacks(metering);
+        }
         mPictureSurface.close();
+    }
+
+    /** Whether a flash picture may run auto-exposure's metering, with its pre-flash, first. */
+    protected boolean metersForFlash() {
+        return true;
+    }
+
+    /**
+     * Whether the flash fires for the next picture: always when it is on, and for auto flash
+     * when the preview's exposure has said it needs to.
+     */
+    @VisibleForTesting
+    static boolean flashWillFire(
+            boolean hasFlash, @NonNull CameraView.Flash flash, @Nullable Integer aeState) {
+        if (!hasFlash) {
+            return false;
+        }
+        switch (flash) {
+            case ON:
+                return true;
+            case AUTO:
+                return aeState != null && aeState == CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED;
+            default:
+                return false;
+        }
+    }
+
+    @Override
+    void onPreviewCaptured(@NonNull CaptureResult result) {
+        super.onPreviewCaptured(result);
+        Metering metering = mMetering;
+        if (metering != null && metering.mTriggered) {
+            metering.onResult(result);
+        }
     }
 
     void takePicture(@NonNull File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
@@ -133,7 +187,33 @@ class PictureSession extends PreviewSession {
             onImageFailed();
             return;
         }
+        if (mMetering != null) {
+            Log.w(TAG, "Ignoring a picture asked for while another meters for its flash");
+            onImageFailed();
+            return;
+        }
         mPictureSurface.initializePicture(file, exifCaptureParameters());
+        if (flashWillFire(hasFlash(), getFlash(), getAeState())) {
+            if (metersForFlash()) {
+                meterForFlash(device, session);
+            } else {
+                captureStill(device, session, false /* fromBuffer */, false /* metered */);
+            }
+        } else {
+            captureStill(device, session, true /* fromBuffer */, false /* metered */);
+        }
+    }
+
+    /**
+     * Sends the still request.
+     *
+     * @param fromBuffer whether the picture may be a frame the camera already has, taken as the
+     *     request was made rather than after it arrived. Never for a flash picture, whose frame
+     *     has to be lit by the flash.
+     * @param metered whether a precapture sequence ran for this picture, to be ended after it
+     */
+    private void captureStill(@NonNull CameraDevice device, @NonNull CameraCaptureSession session,
+            boolean fromBuffer, boolean metered) {
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
@@ -145,11 +225,137 @@ class PictureSession extends PreviewSession {
             }
             applyZoom(builder);
             builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
-            session.capture(builder.build(), null /* callback */, getHandler());
+            if (Build.VERSION.SDK_INT >= 26 && isZeroShutterLagSupported()) {
+                // Set either way, since some still templates turn it on themselves.
+                builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, fromBuffer);
+            }
+            session.capture(builder.build(), new CameraCaptureSession.CaptureCallback() {
+                @Override
+                public void onCaptureStarted(@NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request, long timestamp, long frameNumber) {
+                    onShutter();
+                }
+
+                @Override
+                public void onCaptureCompleted(@NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
+                    if (metered) {
+                        endMetering(device, session);
+                    }
+                }
+            }, getHandler());
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
             // Crashes if the Camera is interacted with while still loading
             Log.e(TAG, "Failed to create capture request", e);
             onImageFailed();
+        }
+    }
+
+    /**
+     * Starts auto-exposure's precapture sequence, which meters the scene with a pre-flash, and
+     * takes the picture once it finishes. Without it the flash fires on an exposure chosen for
+     * the dark.
+     */
+    private void meterForFlash(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
+        Metering metering = new Metering(device, session);
+        try {
+            CaptureRequest.Builder builder = newPreviewRequest(device);
+            builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START);
+            mMetering = metering;
+            getHandler().postDelayed(metering, METERING_TIMEOUT_MILLIS);
+            session.capture(builder.build(), new CameraCaptureSession.CaptureCallback() {
+                @Override
+                public void onCaptureCompleted(@NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
+                    metering.mTriggered = true;
+                    metering.onResult(result);
+                }
+
+                @Override
+                public void onCaptureFailed(@NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request, @NonNull CaptureFailure failure) {
+                    Log.w(TAG, "Metering for the flash failed; taking the picture without it");
+                    metering.finish();
+                }
+            }, getHandler());
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+            Log.e(TAG, "Failed to meter for the flash", e);
+            mMetering = null;
+            getHandler().removeCallbacks(metering);
+            onImageFailed();
+        }
+    }
+
+    /**
+     * Ends a precapture sequence once its picture is taken. A camera may hold the exposure it
+     * metered for the flash until told otherwise, which would leave the preview stuck on it.
+     */
+    private void endMetering(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
+        if (Build.VERSION.SDK_INT < 23) {
+            return;
+        }
+        try {
+            CaptureRequest.Builder builder = newPreviewRequest(device);
+            builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
+                    CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_CANCEL);
+            session.capture(builder.build(), null /* callback */, getHandler());
+        } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+            Log.w(TAG, "Failed to end metering for the flash", e);
+        }
+    }
+
+    /**
+     * A flash picture waiting on auto-exposure's precapture sequence.
+     *
+     * <p>Runs as the timeout too: a camera that never finishes metering still takes the
+     * picture, late, rather than never.</p>
+     */
+    private final class Metering implements Runnable {
+        private final CameraDevice mDevice;
+        private final CameraCaptureSession mSession;
+
+        /** Whether the trigger's own frame is back. Results before it predate the sequence. */
+        volatile boolean mTriggered;
+
+        /** Whether auto-exposure has been seen metering. */
+        private boolean mStarted;
+
+        /** Frames since the trigger in which metering has not started. */
+        private int mFramesWaiting;
+
+        Metering(@NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
+            mDevice = device;
+            mSession = session;
+        }
+
+        void onResult(@NonNull CaptureResult result) {
+            Integer aeState = result.get(CaptureResult.CONTROL_AE_STATE);
+            if (aeState == null) {
+                // A camera that does not report its exposure cannot be waited on.
+                finish();
+            } else if (aeState == CaptureResult.CONTROL_AE_STATE_PRECAPTURE) {
+                mStarted = true;
+            } else if (mStarted || ++mFramesWaiting >= METERING_START_FRAMES) {
+                finish();
+            }
+        }
+
+        @Override
+        public void run() {
+            if (mMetering == this) {
+                Log.w(TAG, "Metering for the flash timed out; taking the picture anyway");
+                finish();
+            }
+        }
+
+        void finish() {
+            if (mMetering != this) {
+                return;
+            }
+            mMetering = null;
+            getHandler().removeCallbacks(this);
+            captureStill(mDevice, mSession, false /* fromBuffer */, true /* metered */);
         }
     }
 
