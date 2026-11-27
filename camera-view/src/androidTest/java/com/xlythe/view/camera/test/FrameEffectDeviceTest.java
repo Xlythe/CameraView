@@ -12,6 +12,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.media.MediaMetadataRetriever;
 import android.opengl.GLES20;
+import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
 
@@ -93,6 +94,12 @@ public final class FrameEffectDeviceTest {
     /** How near to 255 a clamped channel has to land, allowing for JPEG. */
     private static final int WHITE_FLOOR = 243;
     private static final String FILTER_TAG = "FrameEffect";
+    /** How long the preview is given to show what the renderer drew, once the camera is open. */
+    private static final long PREVIEW_WAIT_MILLIS = 10_000;
+    /** How often the screen is looked at while waiting for it. */
+    private static final long PREVIEW_POLL_MILLIS = 250;
+    /** Brighter than any channel of the dark window that shows before the first frame. */
+    private static final int UNDRAWN_CEILING = 64;
 
     @Rule
     public final GrantPermissionRule permissions = GrantPermissionRule.grant(
@@ -236,7 +243,7 @@ public final class FrameEffectDeviceTest {
                 });
                 camera.startRecording(file);
                 Thread.sleep(1_500);
-                preview.set(ShownFrames.onScreen(camera));
+                preview.set(drawnPreview(camera));
                 Thread.sleep(1_500);
                 camera.stopRecording();
                 assertTrue("the recording never reported",
@@ -338,7 +345,7 @@ public final class FrameEffectDeviceTest {
                     }
                 });
                 Thread.sleep(1_000);
-                preview.set(ShownFrames.onScreen(camera));
+                preview.set(drawnPreview(camera));
                 camera.takePicture(picture);
                 assertTrue("the capture never reported",
                         pictured.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
@@ -426,7 +433,7 @@ public final class FrameEffectDeviceTest {
                     }
                 });
                 Thread.sleep(1_000);
-                preview.set(ShownFrames.onScreen(camera));
+                preview.set(drawnPreview(camera));
                 camera.takePicture(file);
                 assertTrue("the capture never reported",
                         finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
@@ -805,6 +812,32 @@ public final class FrameEffectDeviceTest {
                 Math.abs(Color.red(pixel) - 255) <= TOLERANCE
                         && Color.green(pixel) <= TOLERANCE
                         && Math.abs(Color.blue(pixel) - 255) <= TOLERANCE);
+    }
+
+    /**
+     * The preview on screen, once the renderer has drawn into it.
+     *
+     * <p>Waited for rather than taken after a fixed pause, because a camera that has just opened
+     * with an effect reconfigures before its first frame, and on a slow device a screenshot taken
+     * too early shows only the window behind the view. Both renderers here paint the middle of
+     * the picture something lighter than that.</p>
+     */
+    @NonNull
+    private static Bitmap drawnPreview(@NonNull CameraView camera) throws InterruptedException {
+        long deadline = SystemClock.uptimeMillis() + PREVIEW_WAIT_MILLIS;
+        Bitmap shown = ShownFrames.onScreen(camera);
+        while (isUndrawn(shown) && SystemClock.uptimeMillis() < deadline) {
+            shown.recycle();
+            Thread.sleep(PREVIEW_POLL_MILLIS);
+            shown = ShownFrames.onScreen(camera);
+        }
+        return shown;
+    }
+
+    private static boolean isUndrawn(@NonNull Bitmap shown) {
+        int middle = shown.getPixel(shown.getWidth() / 2, shown.getHeight() / 2);
+        return Math.max(Color.red(middle), Math.max(Color.green(middle), Color.blue(middle)))
+                < UNDRAWN_CEILING;
     }
 
     /**
