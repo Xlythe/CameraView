@@ -13,7 +13,6 @@ import android.hardware.SensorEvent;
 import android.hardware.SensorEventListener;
 import android.hardware.SensorManager;
 import android.net.Uri;
-import android.opengl.GLSurfaceView;
 import android.opengl.Matrix;
 import android.os.Build;
 import android.os.Handler;
@@ -68,8 +67,7 @@ import java.util.concurrent.TimeUnit;
  * fit. While it loads, the app holds at most one tile's decode at a time, under 6 MP (24 MB);
  * once loaded it holds none.</p>
  *
- * <p>This draws with OpenGL ES 2.0 on a surface of its own, which every Android device has. Being
- * a surface, it is not clipped to a parent's rounded corners nor faded with its alpha.</p>
+ * <p>It draws with OpenGL ES 2.0, which every Android device has.</p>
  */
 public class PhotosphereView extends FrameLayout {
     /** The field of view across the view's shorter side, when the picture does not say. */
@@ -87,8 +85,8 @@ public class PhotosphereView extends FrameLayout {
     /** Posts the worker's results back to the main thread. */
     private final Handler mHandler = new Handler(Looper.getMainLooper());
 
-    /** The surface the sphere is drawn on. */
-    private final GLSurfaceView mSurface;
+    /** What the sphere is drawn on. */
+    private final GlTextureView mSurface;
 
     /** Draws the sphere on the GL thread. */
     private final SphereRenderer mRenderer;
@@ -228,11 +226,7 @@ public class PhotosphereView extends FrameLayout {
                 });
             }
         });
-        mSurface = new GLSurfaceView(context);
-        mSurface.setEGLContextClientVersion(2);
-        mSurface.setPreserveEGLContextOnPause(true);
-        mSurface.setRenderer(mRenderer);
-        mSurface.setRenderMode(GLSurfaceView.RENDERMODE_WHEN_DIRTY);
+        mSurface = new GlTextureView(context, mRenderer);
         addView(mSurface, new LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
         mScroller = new OverScroller(context);
@@ -398,7 +392,8 @@ public class PhotosphereView extends FrameLayout {
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
         mAttached = true;
-        // The surface makes a new GL context once attached, and the picture is uploaded to it.
+        // The view makes a new GL context once it has a surface, and the picture is uploaded to
+        // it.
         updateSensor();
     }
 
@@ -406,7 +401,7 @@ public class PhotosphereView extends FrameLayout {
     protected void onDetachedFromWindow() {
         super.onDetachedFromWindow();
         mAttached = false;
-        // The GL thread ends on detach, and its context with it.
+        // The surface goes on detach, and the GL context with it.
         cancelJob();
         mContextReady = false;
         mScroller.forceFinished(true);
