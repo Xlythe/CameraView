@@ -10,6 +10,8 @@ import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.view.Surface;
 
+import com.xlythe.view.camera.shadow.ShadowSlowStartingMediaCodec;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -23,6 +25,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -49,6 +52,7 @@ public class VideoPlayerTest {
 
     @Before
     public void setUp() {
+        ShadowSlowStartingMediaCodec.reset();
         // A passthrough decoder: the bytes in are the bytes out, which is all the player needs of
         // it. What the player does with them is the surface's business, not this test's.
         ShadowMediaCodec.addDecoder(MIME_TYPE, new ShadowMediaCodec.CodecConfig(
@@ -60,6 +64,9 @@ public class VideoPlayerTest {
 
     @After
     public void tearDown() {
+        // A test that failed while a decoder was held mid-start would otherwise leave its thread
+        // waiting forever.
+        ShadowSlowStartingMediaCodec.finishStarting();
         ShadowMediaCodec.clearCodecs();
         surfaceTexture.release();
     }
@@ -177,6 +184,36 @@ public class VideoPlayerTest {
         player.stop();
         player.stop();
 
+        assertFalse(player.isPlaying());
+    }
+
+    /**
+     * Stopping while the decoder is still starting waits for the start to finish.
+     *
+     * <p>A view stops playback from the main thread whenever it is detached, which can be the
+     * moment the header arrives. Before API 29, a MediaCodec released while a start is completing
+     * on another thread aborts the process, so the release has to come after.</p>
+     */
+    @Test
+    @Config(shadows = ShadowSlowStartingMediaCodec.class)
+    public void stoppingWhileTheDecoderStartsWaitsForTheStart() throws Exception {
+        VideoPlayer player = new VideoPlayer(surface, stream(
+                header(320, 240, 0),
+                data(new byte[] {1, 2, 3, 4})));
+        player.start();
+        assertTrue("the decoder has to begin starting",
+                ShadowSlowStartingMediaCodec.awaitStarting(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+
+        Thread stopper = new Thread(player::stop, "Stopper");
+        stopper.start();
+        VideoRecorderTest.awaitBlockedOrFinished(stopper);
+        ShadowSlowStartingMediaCodec.finishStarting();
+        stopper.join(TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS));
+
+        assertFalse("stop() has to return once the decoder has started", stopper.isAlive());
+        assertEquals("the decoder is stopped and released only after it has started",
+                Arrays.asList("started", "stopped", "released"),
+                ShadowSlowStartingMediaCodec.getEvents());
         assertFalse(player.isPlaying());
     }
 

@@ -138,10 +138,19 @@ public class VideoPlayer {
 
                   // Create a MediaCodec for the decoder, just based on the MIME type.
                   // The various format details will be passed through the csd-0 meta-data later on.
-                  MediaCodec decoder = MediaCodec.createDecoderByType(MIME_TYPE);
-                  mDecoder = decoder;
-                  decoder.configure(format, mSurface, null, 0);
-                  decoder.start();
+                  MediaCodec decoder;
+                  // Held until start() returns, because closeDecoder() takes the same lock.
+                  // Before API 29, MediaCodec aborts the whole process when a release() overtakes
+                  // a start() that is still completing on another thread.
+                  synchronized (VideoPlayer.this) {
+                    if (!isPlaying()) {
+                      return;
+                    }
+                    decoder = MediaCodec.createDecoderByType(MIME_TYPE);
+                    mDecoder = decoder;
+                    decoder.configure(format, mSurface, null, 0);
+                    decoder.start();
+                  }
                   Log.d(TAG, "Started playing video");
 
                   VideoFrame dataFrame = new VideoFrame.Builder().build();
