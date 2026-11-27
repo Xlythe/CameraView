@@ -12,6 +12,7 @@ import android.os.SystemClock;
 import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 
 /**
  * The device's rotation, read into an {@link OrientationHistory} for as long as a sweep runs.
@@ -25,6 +26,7 @@ import androidx.annotation.Nullable;
  *
  * <p>Events arrive on a thread of their own, so a busy main thread cannot hold them back.</p>
  */
+@RequiresApi(19)
 final class RotationSensor implements SensorEventListener {
     /** A reading every ten milliseconds, so a frame is never more than five from one. */
     private static final int SAMPLING_PERIOD_MICROS = 10_000;

@@ -606,8 +606,10 @@ public class CameraView extends FrameLayout {
         addView(mImagePreview = new ImageView(getContext()));
         addView(mVideoPreview = new VideoView(getContext()));
         addView(mFocusReticle = new FocusReticle(getContext()));
-        addView(mPanoramaGuide = new PanoramaGuideView(getContext()));
-        mPanoramaGuide.setVisibility(View.GONE);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            addView(mPanoramaGuide = new PanoramaGuideView(getContext()));
+            mPanoramaGuide.setVisibility(View.GONE);
+        }
         mFocusReticle.setColors(mFocusReticleColor, mFocusReticleLockedColor);
         mImagePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
         mImagePreview.setVisibility(View.GONE);
@@ -1456,7 +1458,7 @@ public class CameraView extends FrameLayout {
      * shows it as a panorama rather than as a very wide picture.</p>
      *
      * @return whether the sweep started. False on a device that cannot report its rotation, or a
-     *     camera that does not publish its angle of view.
+     *     camera that does not publish its angle of view, and before API 19.
      * @throws IllegalStateException if the camera is not open, a sweep is already running, or the
      *     camera's frames are already going to a barcode scanner, a frame analyzer or a recording
      */
@@ -1464,6 +1466,9 @@ public class CameraView extends FrameLayout {
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean startPanorama(@NonNull File file, @NonNull PanoramaMode mode,
             @NonNull PanoramaListener listener) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
+            return false;
+        }
         if (!isOpen()) {
             throw new IllegalStateException("Camera must be open before sweeping a panorama");
         }
@@ -1516,7 +1521,7 @@ public class CameraView extends FrameLayout {
      */
     @UiThread
     public void stopPanorama() {
-        if (mPanoramaSession != null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && mPanoramaSession != null) {
             mPanoramaSession.finish();
         }
     }
@@ -1525,7 +1530,7 @@ public class CameraView extends FrameLayout {
     @UiThread
     public void cancelPanorama() {
         PanoramaSession session = mPanoramaSession;
-        if (session == null) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT || session == null) {
             return;
         }
         session.cancel();
@@ -1538,6 +1543,7 @@ public class CameraView extends FrameLayout {
         return mPanoramaSession != null;
     }
 
+    @RequiresApi(19)
     private void stopPanoramaFrames() {
         if (mPanoramaFrames != null) {
             mPanoramaFrames.close();
@@ -1546,6 +1552,7 @@ public class CameraView extends FrameLayout {
         mCameraModule.setPreviewFrameListener(null);
     }
 
+    @RequiresApi(19)
     private void endPanorama(@NonNull PanoramaSession session) {
         if (mPanoramaSession != session) {
             return;
@@ -1558,6 +1565,7 @@ public class CameraView extends FrameLayout {
     }
 
     /** Connects a sweep to the frames it is fed and the listener it reports to. */
+    @RequiresApi(19)
     private final class PanoramaCallback implements PanoramaSession.Callback {
         /** The app's listener. */
         private final PanoramaListener mListener;

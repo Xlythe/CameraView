@@ -5,6 +5,7 @@ import android.media.Image;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.WorkerThread;
 
@@ -21,6 +22,7 @@ import java.nio.ByteBuffer;
  * <p>A frame wrapping an {@link Image} reads the image's own buffers, so it is only valid until
  * the image is closed; the sweep converts it before then.</p>
  */
+@RequiresApi(19)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class PanoramaFrame {
     /** The frame's width, as the sensor wrote it. */

@@ -9,6 +9,7 @@ import android.util.Log;
 import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 import androidx.annotation.VisibleForTesting;
@@ -47,6 +48,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * the main thread and is handed over rather than processed there. Saving happens on the same
  * worker once the sweep is over.</p>
  */
+@RequiresApi(19)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class PanoramaSession implements GuideState.Source {
     /** Told how the sweep is going, always on the main thread. */

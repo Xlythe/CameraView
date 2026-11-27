@@ -17,6 +17,7 @@ import android.view.View;
 import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 import androidx.annotation.VisibleForTesting;
@@ -44,6 +45,7 @@ import com.xlythe.view.camera.TransformMath;
  *       are painted, with the view's outline on it.</li>
  * </ul>
  */
+@RequiresApi(19)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class PanoramaGuideView extends View {
     /** The colour everything is drawn in by default. */
