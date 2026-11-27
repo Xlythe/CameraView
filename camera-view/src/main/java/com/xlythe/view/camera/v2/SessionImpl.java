@@ -6,6 +6,7 @@ import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
@@ -52,6 +53,13 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Nullable
     Float mZoomRatio;
 
+    /**
+     * The auto-exposure state the preview last reported, which says whether auto flash will
+     * fire. Written on the camera's thread, read on whichever takes the picture.
+     */
+    @Nullable
+    private volatile Integer mAeState;
+
     SessionImpl(Camera2Module camera2Module) {
         mCamera2Module = camera2Module;
     }
@@ -73,21 +81,15 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getFlash();
     }
 
-    /**
-     * Applies the requested flash strategy to a capture request.
-     *
-     * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
-     * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
-     * on the repeating preview request, because that is the only stream auto-exposure can converge
-     * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
-     * reason.</p>
-     */
-    /**
-     * Asks the camera for the faces it is tracking, when something wants them.
-     *
-     * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
-     * the repeating preview request; the results then arrive with each completed frame.</p>
-     */
+    boolean isZeroShutterLagSupported() {
+        return mCamera2Module.isZeroShutterLagSupported();
+    }
+
+    @Nullable
+    Integer getAeState() {
+        return mAeState;
+    }
+
     /**
      * The sizes that fit inside a bound, or all of them when none do.
      *
@@ -108,6 +110,12 @@ abstract class SessionImpl implements Camera2Module.Session {
         return fitting.isEmpty() ? sizes : fitting;
     }
 
+    /**
+     * Asks the camera for the faces it is tracking, when something wants them.
+     *
+     * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
+     * the repeating preview request; the results then arrive with each completed frame.</p>
+     */
     void applyFaceDetection(@NonNull CaptureRequest.Builder builder) {
         Integer mode = mCamera2Module.getFaceDetectMode();
         if (mode != null) {
@@ -123,7 +131,8 @@ abstract class SessionImpl implements Camera2Module.Session {
      */
     @Nullable
     CameraCaptureSession.CaptureCallback repeatingCallback() {
-        if (mCamera2Module.getFaceDetectMode() == null && !mCamera2Module.isFocusPending()) {
+        if (mCamera2Module.getFaceDetectMode() == null && !mCamera2Module.isFocusPending()
+                && !tracksExposure()) {
             return null;
         }
         return new CameraCaptureSession.CaptureCallback() {
@@ -134,14 +143,37 @@ abstract class SessionImpl implements Camera2Module.Session {
                     mCamera2Module.onFacesCaptured(result);
                 }
                 mCamera2Module.onFocusCaptured(result);
+                onPreviewCaptured(result);
             }
         };
+    }
+
+    /**
+     * Whether the preview's exposure has to be watched: to know whether auto flash will fire,
+     * and to follow the metering a flash picture waits on.
+     */
+    private boolean tracksExposure() {
+        return hasFlash() && getFlash() != CameraView.Flash.OFF;
+    }
+
+    /** Hears each preview frame's result, while anything is listening for them. */
+    void onPreviewCaptured(@NonNull CaptureResult result) {
+        mAeState = result.get(CaptureResult.CONTROL_AE_STATE);
     }
 
     int getPictureQuality() {
         return mCamera2Module.getPictureQuality();
     }
 
+    /**
+     * Applies the requested flash strategy to a capture request.
+     *
+     * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
+     * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
+     * on the repeating preview request, because that is the only stream auto-exposure can converge
+     * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
+     * reason.</p>
+     */
     void applyFlash(@NonNull CaptureRequest.Builder builder) {
         if (!hasFlash()) {
             return;
@@ -234,6 +266,10 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     void onImageFailed() {
         mCamera2Module.onImageFailed();
+    }
+
+    void onShutter() {
+        mCamera2Module.onShutter();
     }
 
     void onVideoFailed() {

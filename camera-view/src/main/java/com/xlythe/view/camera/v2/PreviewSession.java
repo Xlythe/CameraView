@@ -53,6 +53,13 @@ class PreviewSession extends SessionImpl {
     }
 
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
+        return newPreviewRequest(device).build();
+    }
+
+    /** The preview's request, which a one-off request such as a metering trigger starts from. */
+    @NonNull
+    CaptureRequest.Builder newPreviewRequest(@NonNull CameraDevice device)
+            throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
         applyFlash(builder);
@@ -63,7 +70,7 @@ class PreviewSession extends SessionImpl {
         applyZoom(builder);
         applyFaceDetection(builder);
         builder.addTarget(mPreviewSurface.getSurface());
-        return builder.build();
+        return builder;
     }
 
     @Override
