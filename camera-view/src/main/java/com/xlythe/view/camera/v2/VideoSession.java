@@ -1,7 +1,6 @@
 package com.xlythe.view.camera.v2;
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
@@ -26,12 +25,13 @@ import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 class VideoSession extends PictureSession {
     /** Floor for a rescaled bit rate, below which even a small frame looks broken. */
     private static final int MIN_VIDEO_BIT_RATE = 64_000;
@@ -84,6 +84,11 @@ class VideoSession extends PictureSession {
     }
 
     @Override
+    protected boolean allowsRaw() {
+        return false;
+    }
+
+    @Override
     @SuppressLint({"WrongThread", "ThreadConstraint"})
     protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
             throws CameraAccessException {
@@ -97,15 +102,23 @@ class VideoSession extends PictureSession {
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+        applyAeMode(builder, false /* withFlashStrategy */);
+        applyExposureCompensation(builder);
         if (mMeteringRectangle != null) {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
         applyZoom(builder);
+        applyStabilization(builder);
         applyFaceDetection(builder);
         builder.addTarget(getPreviewSurface().getSurface());
         builder.addTarget(mVideoSurface.getSurface());
         return builder.build();
+    }
+
+    @Override
+    boolean feedsAnEncoder() {
+        return true;
     }
 
     @Override

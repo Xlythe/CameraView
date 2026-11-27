@@ -12,6 +12,7 @@ import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.xlythe.view.camera.CameraView
 import com.xlythe.view.camera.CaptureDelivery
@@ -24,6 +25,7 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -32,10 +34,13 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
-import org.robolectric.shadows.ShadowSensor
+import org.robolectric.shadows.ShadowChoreographer
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowPausedAsyncTask
+import org.robolectric.shadows.ShadowSensor
 import java.io.File
+import java.time.Duration
+import java.util.concurrent.TimeUnit
 
 /**
  * The Compose wrapper, composed.
@@ -64,6 +69,13 @@ class CameraComposableTest {
         Shadows.shadowOf(RuntimeEnvironment.getApplication())
             .grantPermissions(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
         FakeCamera2.addBackAndFrontCameras(RuntimeEnvironment.getApplication())
+    }
+
+    @After
+    fun tearDown() {
+        // The rule waits for a frame as it disposes of the composition, which a choreographer
+        // paused by stepFramesByHand would never give it.
+        ShadowChoreographer.setPaused(false)
     }
 
     @Test
@@ -281,28 +293,105 @@ class CameraComposableTest {
 
         compose.setContent {
             Camera(
-                zoomLevel = 50,
+                zoomRatio = 2f,
                 exposureCompensation = 2,
                 torchEnabled = true,
                 dynamicRange = DynamicRange.HDR,
                 extension = Extension.BOKEH,
                 pictureQuality = 60,
                 stabilizationEnabled = true,
-                lowLightBoostEnabled = true,
                 controller = controller,
             )
         }
         compose.waitForIdle()
 
         val camera = requireCameraView()
-        assertEquals(50, camera.zoomLevel)
+        assertEquals(2f, camera.zoomRatio, 0f)
         assertEquals(2, camera.exposureCompensation)
         assertTrue(camera.isTorchEnabled)
         assertEquals(CameraView.DynamicRange.HDR, camera.dynamicRange)
         assertEquals(CameraView.Extension.BOKEH, camera.extension)
         assertEquals(60, camera.pictureQuality)
         assertTrue(camera.isStabilizationEnabled)
-        assertTrue(camera.isLowLightBoostEnabled)
+    }
+
+    /** Low-light boost on its own, since it and the torch turn each other off. */
+    @Test
+    fun lowLightBoostReachesTheCamera() {
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent { Camera(lowLightBoostEnabled = true, controller = controller) }
+        compose.waitForIdle()
+
+        assertTrue(requireCameraView().isLowLightBoostEnabled)
+    }
+
+    /**
+     * A caller written before zoomRatio still compiles, against the deprecated overload, and
+     * still zooms.
+     */
+    @Test
+    fun anOldCallWithAZoomLevelStillZooms() {
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent {
+            @Suppress("DEPRECATION")
+            Camera(zoomLevel = 50, controller = controller)
+        }
+        compose.waitForIdle()
+
+        assertEquals(50, requireCameraView().zoomLevel)
+        assertEquals("halfway from 1x to 4x", 2f, requireCameraView().zoomRatio, 0.0001f)
+    }
+
+    /**
+     * A call naming neither zoom takes the current overload, which the compiler settles: the
+     * deprecated overload has no default for zoomLevel, so a call without one cannot reach it.
+     * Were zoomLevel defaulted, the deprecated overload would win this call, because it leaves
+     * fewer parameters to their defaults. Both overloads leave an unstated zoom to the camera, so
+     * that is all there is to see at runtime.
+     */
+    @Test
+    fun aCallWithNeitherZoomTakesTheCurrentOverload() {
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent { Camera(controller = controller) }
+        compose.waitForIdle()
+        requireCameraView().zoomRatio = 3f
+        compose.waitForIdle()
+
+        assertEquals(3f, requireCameraView().zoomRatio, 0f)
+    }
+
+    /**
+     * Each zoom change reaches the callback, and the published state carries the range and the
+     * presets to offer within it.
+     */
+    @Test
+    fun zoomChangesReachTheCallback() {
+        val zoom = mutableStateOf(1.5f)
+        val heard = mutableListOf<Float>()
+        val state = mutableStateOf<CameraState?>(null)
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent {
+            Camera(
+                zoomRatio = zoom.value,
+                controller = controller,
+                state = state,
+                onZoomChanged = { heard.add(it) },
+            )
+        }
+        compose.waitForIdle()
+        zoom.value = 3f
+        compose.waitForIdle()
+
+        assertEquals(listOf(1.5f, 3f), heard)
+        val published = requireNotNull(state.value) { "an open camera has answers to give" }
+        assertEquals(1f, published.minZoomRatio, 0f)
+        assertEquals("the fake camera crops to 4x at most", 4f, published.maxZoomRatio, 0f)
+        assertEquals(listOf(1f), published.zoomPresets.map { it.ratio })
+        assertEquals(listOf("1"), published.zoomPresets.map { it.label })
     }
 
     /** And the ones left out keep the camera's own defaults rather than a zeroed version. */
@@ -353,8 +442,12 @@ class CameraComposableTest {
         assertTrue(published.hasFrontFacingCamera)
         assertFalse(published.isUsingFrontFacingCamera)
         assertTrue(published.isZoomSupported)
+        @Suppress("DEPRECATION")
         assertEquals(100, published.maxZoomLevel)
         assertTrue(published.isFaceDetectionSupported)
+        assertFalse("the plain fake camera cannot compensate exposure",
+                published.isExposureCompensationSupported)
+        assertEquals(0f, published.exposureCompensationStep, 0f)
         assertTrue("a FULL camera2 device can hold a still alongside a recording",
                 published.isSnapshotWhileRecordingSupported)
         assertEquals(setOf(DynamicRange.SDR), published.supportedDynamicRanges)
@@ -364,6 +457,30 @@ class CameraComposableTest {
         assertFalse(published.isAnalyzingFrames)
         assertTrue("the fake camera publishes its optics",
                 published.horizontalFieldOfView > 0f && published.verticalFieldOfView > 0f)
+    }
+
+    /**
+     * And the optional controls, for a camera that offers them. Low-light boost needs API 35, so
+     * at the level this class composes at it is reported missing even though the camera lists it.
+     */
+    @Test
+    fun theStateReportsTheControlsTheCameraOffers() {
+        val application = RuntimeEnvironment.getApplication()
+        FakeCamera2.addExposureAndStabilization(application, FakeCamera2.BACK_ID)
+        FakeCamera2.addExposureAndStabilization(application, FakeCamera2.FRONT_ID)
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+
+        val published = requireNotNull(state.value) { "an open camera has answers to give" }
+        assertTrue(published.isExposureCompensationSupported)
+        assertEquals(-12, published.minExposureCompensation)
+        assertEquals(12, published.maxExposureCompensation)
+        assertEquals(1 / 6f, published.exposureCompensationStep, 1e-6f)
+        assertTrue(published.isStabilizationSupported)
+        assertFalse(published.isLowLightBoostSupported)
     }
 
     /** A closed camera has nothing to report, which is not the same as reporting false. */
@@ -399,7 +516,7 @@ class CameraComposableTest {
 
     /** Zoom left out belongs to the camera, so a gesture is not undone by a recomposition. */
     @Test
-    fun zoomIsLeftToTheCameraWhenNoLevelIsGiven() {
+    fun zoomIsLeftToTheCameraWhenNoRatioIsGiven() {
         val flash = mutableStateOf(Flash.AUTO)
         val controller = mutableStateOf<CameraController?>(null)
         compose.setContent { Camera(flash = flash.value, controller = controller) }
@@ -413,12 +530,15 @@ class CameraComposableTest {
                 25, requireCameraView().zoomLevel)
     }
 
-    /** Zoom asked for belongs to the caller, and is asserted again on every recomposition. */
+    /** A level is asserted again on every recomposition, as it always was. */
     @Test
     fun aStatedZoomLevelIsReapplied() {
         val flash = mutableStateOf(Flash.AUTO)
         val controller = mutableStateOf<CameraController?>(null)
-        compose.setContent { Camera(flash = flash.value, zoomLevel = 10, controller = controller) }
+        compose.setContent {
+            @Suppress("DEPRECATION")
+            Camera(flash = flash.value, zoomLevel = 10, controller = controller)
+        }
         compose.waitForIdle()
         requireCameraView().zoomLevel = 25
 
@@ -426,6 +546,142 @@ class CameraComposableTest {
         compose.waitForIdle()
 
         assertEquals(10, requireCameraView().zoomLevel)
+    }
+
+    /**
+     * A ratio is pushed when it changes, not on every recomposition, so a pinch away from it
+     * survives a recomposition for something else.
+     */
+    @Test
+    fun aStatedZoomRatioDoesNotUndoAPinch() {
+        val flash = mutableStateOf(Flash.AUTO)
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent { Camera(flash = flash.value, zoomRatio = 2f, controller = controller) }
+        compose.waitForIdle()
+        assertEquals(2f, requireCameraView().zoomRatio, 0f)
+        requireCameraView().zoomRatio = 3f
+
+        flash.value = Flash.ON
+        compose.waitForIdle()
+
+        assertEquals(3f, requireCameraView().zoomRatio, 0f)
+    }
+
+    /**
+     * A pinch written back into the caller's state is not pushed back at the camera, and a tap on
+     * the preset the pinch left is pushed although it is the ratio last pushed.
+     */
+    @Test
+    fun aPresetTappedAfterAPinchIsPushedAgain() {
+        val zoom = mutableStateOf(3f)
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent {
+            Camera(
+                zoomRatio = zoom.value,
+                controller = controller,
+                onZoomChanged = { zoom.value = it },
+            )
+        }
+        compose.waitForIdle()
+        requireCameraView().zoomRatio = 1.5f
+        compose.waitForIdle()
+        assertEquals("the pinch is written back", 1.5f, zoom.value, 0f)
+        assertEquals(1.5f, requireCameraView().zoomRatio, 0f)
+
+        zoom.value = 3f
+        compose.waitForIdle()
+
+        assertEquals(3f, requireCameraView().zoomRatio, 0f)
+    }
+
+    /** With animateZoom, a new ratio is eased over to rather than jumped to. */
+    @Test
+    fun anAnimatedZoomRatioEasesOver() {
+        val zoom = mutableStateOf(1f)
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent {
+            Camera(zoomRatio = zoom.value, animateZoom = true, controller = controller)
+        }
+        compose.waitForIdle()
+        stepFramesByHand()
+
+        zoom.value = 4f
+        recompose()
+        assertEquals("nothing moves before the first frame", 1f, requireCameraView().zoomRatio, 0f)
+        advanceFrames(3)
+        val partWay = requireCameraView().zoomRatio
+        advanceFrames(ANIMATION_FRAMES)
+
+        assertTrue("part of the way after three frames, not $partWay", partWay > 1f && partWay < 4f)
+        assertEquals(4f, requireCameraView().zoomRatio, 0f)
+    }
+
+    /**
+     * The loop every caller keeping the zoom in state sets up: each step of the animation is
+     * reported, written back into the state, and recomposed into zoomRatio. None of that may
+     * reach the camera as a new request, or the first step would stop the animation it came from.
+     */
+    @Test
+    fun echoingTheZoomBackDoesNotInterruptTheAnimation() {
+        val zoom = mutableStateOf(1f)
+        val composed = mutableListOf<Float>()
+        val heard = mutableListOf<Float>()
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent {
+            composed.add(zoom.value)
+            Camera(
+                zoomRatio = zoom.value,
+                animateZoom = true,
+                controller = controller,
+                onZoomChanged = {
+                    heard.add(it)
+                    zoom.value = it
+                },
+            )
+        }
+        compose.waitForIdle()
+        stepFramesByHand()
+
+        zoom.value = 4f
+        recompose()
+        advanceFrames(ANIMATION_FRAMES)
+
+        assertTrue("the steps have to come back in as zoomRatio for this to test anything: " +
+                composed, composed.any { it > 1f && it < 4f })
+        assertTrue("several steps: $heard", heard.size > 5)
+        assertTrue("each further than the last, so nothing restarted or stopped it: $heard",
+                heard.zipWithNext().all { (before, after) -> after > before })
+        assertEquals(4f, heard.last(), 0f)
+        assertEquals(4f, requireCameraView().zoomRatio, 0f)
+        assertEquals(4f, zoom.value, 0f)
+    }
+
+    /** A different ratio mid-animation does reach the camera, which turns around for it. */
+    @Test
+    fun aNewRatioMidAnimationTakesOver() {
+        val zoom = mutableStateOf(1f)
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent {
+            Camera(
+                zoomRatio = zoom.value,
+                animateZoom = true,
+                controller = controller,
+                onZoomChanged = { zoom.value = it },
+            )
+        }
+        compose.waitForIdle()
+        stepFramesByHand()
+        zoom.value = 4f
+        recompose()
+        advanceFrames(5)
+        val reached = requireCameraView().zoomRatio
+        assertTrue(reached > 1f && reached < 4f)
+
+        zoom.value = 1f
+        recompose()
+        advanceFrames(ANIMATION_FRAMES)
+
+        assertEquals(1f, requireCameraView().zoomRatio, 0f)
     }
 
     /** Frame analysis is driven through the controller and reported in the state. */
@@ -559,6 +815,29 @@ class CameraComposableTest {
         assertTrue(captured.isEmpty())
     }
 
+    /** A RAW_JPEG picture without a file reaches onImageSaved twice, the JPEG first. */
+    @Test
+    fun aRawJpegPictureWithoutAFileIsReportedByBothUris() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val saved = mutableListOf<Uri>()
+        compose.setContent {
+            Camera(controller = controller, onImageSaved = { saved.add(it) })
+        }
+        compose.waitForIdle()
+
+        CaptureDelivery.deliverOwnRawJpeg(requireCameraView(), JPEG_BYTES, DNG_BYTES)
+        awaitUntil { saved.isNotEmpty() }
+
+        assertEquals(2, saved.size)
+        assertEquals("image/jpeg", mimeTypeInserted(0))
+        assertEquals("image/x-adobe-dng", mimeTypeInserted(1))
+    }
+
+    /** The MIME type of the nth row filed, as handed to MediaStore. */
+    private fun mimeTypeInserted(index: Int): String? =
+        Shadows.shadowOf(compose.activity.contentResolver).insertStatements[index]
+            .contentValues.getAsString(MediaStore.MediaColumns.MIME_TYPE)
+
     /** The controller's recording without a file reaches the camera like one with a file. */
     @Test
     fun theControllerRecordsWithoutAFile() {
@@ -599,6 +878,34 @@ class CameraComposableTest {
             .startsWith(MediaStore.Video.Media.EXTERNAL_CONTENT_URI.toString()))
     }
 
+    /**
+     * Pauses Robolectric's choreographer, so that it waits for the clock to reach each frame.
+     * Otherwise it advances the clock itself and runs a whole animation in one pass of the looper,
+     * before anything has had the chance to recompose.
+     */
+    private fun stepFramesByHand() {
+        ShadowChoreographer.setPaused(true)
+        ShadowChoreographer.setFrameDelay(Duration.ofMillis(FRAME_MILLIS))
+    }
+
+    /**
+     * Recomposes from Compose's own test clock. waitForIdle would also wait for a choreographer
+     * frame, which a paused choreographer gives only as the looper's clock moves on.
+     */
+    private fun recompose() {
+        ShadowLooper.idleMainLooper()
+        Snapshot.sendApplyNotifications()
+        compose.mainClock.advanceTimeByFrame()
+    }
+
+    /** Runs the clock forward a frame at a time, recomposing after each one. */
+    private fun advanceFrames(frames: Int) {
+        repeat(frames) {
+            ShadowLooper.idleMainLooper(FRAME_MILLIS, TimeUnit.MILLISECONDS)
+            recompose()
+        }
+    }
+
     /** Runs the main looper until [done], for work that finishes on a thread of its own. */
     private fun awaitUntil(done: () -> Boolean) {
         val deadline = System.currentTimeMillis() + 5_000
@@ -632,5 +939,14 @@ class CameraComposableTest {
     private companion object {
         /** Stands in for an encoded picture; nothing on the way to MediaStore parses it. */
         val JPEG_BYTES = "not-really-a-jpeg".toByteArray()
+
+        /** Stands in for a DNG, distinct from [JPEG_BYTES]. */
+        val DNG_BYTES = "not-really-a-dng".toByteArray()
+
+        /** One display frame, as the animator sees it. */
+        const val FRAME_MILLIS = 16L
+
+        /** Comfortably more frames than a 300ms zoom animation takes. */
+        const val ANIMATION_FRAMES = 30
     }
 }

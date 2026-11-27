@@ -1,3 +1,5 @@
+import groovy.xml.XmlSlurper
+
 plugins {
     id 'com.android.library'
     id 'maven-publish'
@@ -18,12 +20,10 @@ if (localPropertiesFile.exists()) {
 }
 
 // Builds without the optional backends, for an app whose minSdk is older than the newest
-// androidx.camera, Compose and media3 releases support. CameraView's own floor is API 21, which
-// the camera2 and legacy backends cover on their own; what forces a higher one is the
-// dependencies CameraX, the Compose wrapper and the media3 video editor bring with them. Set
-// -Pcameraview.core=true to leave them out: the source directories and their dependencies go
-// together, so what is left is a library that compiles and links against nothing newer than
-// API 21.
+// androidx.camera, Compose and media3 releases support. Set -Pcameraview.core=true to leave them
+// out: the source directories and their dependencies go together, so what is left is a library
+// that needs nothing newer than API 14. Below 21 it drives the legacy backend, and what that
+// cannot do reports itself unsupported.
 boolean coreOnly = project.hasProperty('cameraview.core')
         && project.property('cameraview.core').toString().toBoolean()
 
@@ -31,7 +31,7 @@ android {
     compileSdkVersion 37
 
     defaultConfig {
-        minSdkVersion 21
+        minSdkVersion coreOnly ? 14 : 21
         targetSdkVersion 37
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
@@ -51,12 +51,16 @@ android {
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/x/**'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
+        sourceSets.test.kotlin.filter.exclude '**/com/xlythe/compose/**'
     }
 
     lint {
         abortOnError = true
         checkReleaseBuilds = true
         targetSdk 37
+        if (coreOnly) {
+            lintConfig = file('lint-core.xml')
+        }
     }
     buildTypes {
         debug {
@@ -188,18 +192,68 @@ signing {
     sign publishing.publications
 }
 
+// The modules declared below with a version range. A range resolves to the newest version a
+// repository offers, pre-releases included, so for these this library's own builds turn
+// pre-releases down. An exact version another library asks for, such as ML Kit's own beta
+// dependency, is that library's choice and is left alone.
+def rangedModules = [
+        'androidx.legacy:legacy-support-v4',
+        'androidx.core:core',
+        'androidx.annotation:annotation',
+        'androidx.exifinterface:exifinterface',
+        'com.google.mlkit:barcode-scanning',
+        'com.google.guava:guava',
+        'androidx.camera:camera-core',
+        'androidx.camera:camera-camera2',
+        'androidx.camera:camera-lifecycle',
+        'androidx.camera:camera-extensions',
+        'androidx.camera:camera-video',
+        'androidx.activity:activity-compose',
+        'androidx.lifecycle:lifecycle-runtime-ktx',
+        'androidx.media3:media3-transformer',
+        'androidx.media3:media3-effect',
+] as Set
+configurations.configureEach {
+    resolutionStrategy.componentSelection.all { selection ->
+        def candidate = selection.candidate
+        if ("${candidate.group}:${candidate.module}" in rangedModules
+                && candidate.version ==~ /(?i).*[.-](alpha|beta|rc|dev|snapshot|eap)\d*([.-].*)?/) {
+            selection.reject('a pre-release')
+        }
+    }
+}
+
 dependencies {
     // A floor and no ceiling, for everything this library exposes. An exact version in a
     // published library is a version the consuming app has to agree to, and an app that
     // wants a newer androidx than we happened to build against should not have to override
-    // us to get it. The floors are the versions whose APIs the code actually uses.
+    // us to get it. Each floor is the latest stable release, so that is what an app gets unless
+    // it asks for newer.
     api fileTree(include: ['*.jar'], dir: 'libs')
-    api 'androidx.legacy:legacy-support-v4:[1.0.0,)'
-    api 'androidx.exifinterface:exifinterface:[1.4.1,)'
-    api 'androidx.concurrent:concurrent-futures:[1.3.0,)'
-    api 'com.google.guava:guava:[31.1-android,)'
-    api 'com.google.mlkit:barcode-scanning:[17.3.0,)'
-    if (!coreOnly) {
+    if (coreOnly) {
+        // The core build is the exception: these have a ceiling too, at releases that declare a
+        // minSdk the core build supports, because a dependency's floor becomes the app's. An app
+        // that wants a newer release still gets it by asking for one. verifyCoreMinSdk checks
+        // these and everything they pull in.
+        api 'androidx.legacy:legacy-support-v4:[1.0.0,1.1)'
+        // Named for CameraFragment's registerReceiver flags, rather than left to whichever
+        // version something else happens to bring.
+        api 'androidx.core:core:[1.9.0,1.10)'
+        // Named because the library's own sources use these annotations throughout. A plain jar
+        // that sets no minSdk, so it needs no ceiling.
+        api 'androidx.annotation:annotation:[1.11.0,)'
+        api 'androidx.exifinterface:exifinterface:[1.3.7,1.4)'
+        // ML Kit needs API 21, so the core build only compiles against it and leaves adding it to
+        // the app. CameraView#enterBarcodeScanner returns false when it is missing.
+        compileOnly 'com.google.mlkit:barcode-scanning:[17.3.0,)'
+        testImplementation 'com.google.mlkit:barcode-scanning:[17.3.0,)'
+    } else {
+        api 'com.google.mlkit:barcode-scanning:[17.3.0,)'
+        api 'androidx.legacy:legacy-support-v4:[1.0.0,)'
+        // Below 1.5, whose releases need API 24 where this build declares 21.
+        api 'androidx.exifinterface:exifinterface:[1.4.2,1.5)'
+        // CameraX's futures and media3's lists are Guava types, so only this build needs it.
+        api 'com.google.guava:guava:[33.8.0-android,)'
         // 1.7.0 rather than the older floor the rest keep: the slow-motion and frame-effect
         // paths call SessionConfig and CameraEffect, which arrived in it.
         api 'androidx.camera:camera-core:[1.7.0,)'
@@ -207,8 +261,8 @@ dependencies {
         api 'androidx.camera:camera-lifecycle:[1.7.0,)'
         api 'androidx.camera:camera-extensions:[1.7.0,)'
         api 'androidx.camera:camera-video:[1.7.0,)'
-        api 'androidx.activity:activity-compose:[1.10.1,)'
-        api 'androidx.lifecycle:lifecycle-runtime-ktx:[2.8.7,)'
+        api 'androidx.activity:activity-compose:[1.13.0,)'
+        api 'androidx.lifecycle:lifecycle-runtime-ktx:[2.11.1,)'
         api 'androidx.media3:media3-transformer:[1.11.1,)'
         api 'androidx.media3:media3-effect:[1.11.1,)'
     }
@@ -231,6 +285,37 @@ dependencies {
         }
         implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.21") {
             because("kotlin-stdlib-jdk8 is now a part of kotlin-stdlib")
+        }
+    }
+}
+
+// A dependency's minSdk becomes the app's, so one release raising its floor would quietly raise
+// the core build's along with it. This fails the build instead, naming the dependency. Jars
+// declare no minSdk, so only Android libraries are read.
+if (coreOnly) {
+    tasks.register('verifyCoreMinSdk') {
+        int coreMinSdk = android.defaultConfig.minSdk
+        def manifests = configurations.releaseRuntimeClasspath.incoming.artifactView {
+            attributes { attribute(Attribute.of('artifactType', String), 'android-manifest') }
+        }.artifacts
+        group = 'verification'
+        description = "Fails if a dependency of the core build needs more than API ${coreMinSdk}."
+        inputs.files(manifests.artifactFiles)
+        doLast {
+            List<String> tooNew = []
+            manifests.artifacts.each { artifact ->
+                def usesSdk = new XmlSlurper(false, false).parse(artifact.file).'uses-sdk'
+                String declared = usesSdk.@'android:minSdkVersion'.text()
+                int minSdk = declared ? declared.toInteger() : 1
+                logger.info("${artifact.id.componentIdentifier.displayName}: minSdk ${minSdk}")
+                if (minSdk > coreMinSdk) {
+                    tooNew << "${artifact.id.componentIdentifier.displayName} (minSdk ${minSdk})"
+                }
+            }
+            if (!tooNew.isEmpty()) {
+                throw new GradleException("The core build supports API ${coreMinSdk}, but these "
+                        + "dependencies need more: ${tooNew.join(', ')}")
+            }
         }
     }
 }

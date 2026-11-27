@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- One zoom preset, which MainFragment adds to @id/zoom_presets for each the camera suggests. -->
+<TextView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="48dp"
+    android:layout_height="48dp"
+    android:layout_marginHorizontal="4dp"
+    android:background="@drawable/zoom_preset_background"
+    android:gravity="center"
+    android:textColor="@color/zoom_preset_text"
+    android:textSize="13sp"
+    android:textStyle="bold" />

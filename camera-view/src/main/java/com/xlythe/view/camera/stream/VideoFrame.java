@@ -3,14 +3,12 @@ package com.xlythe.view.camera.stream;
 import androidx.annotation.IntDef;
 import androidx.annotation.RestrictTo;
 
-import com.google.common.primitives.Ints;
-import com.google.common.primitives.Longs;
-
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.nio.BufferUnderflowException;
 import java.nio.ByteBuffer;
 
 /**
@@ -110,40 +108,41 @@ class VideoFrame {
       try {
         switch (frameType) {
           case FIELD_TYPE:
-            builder.type(Ints.fromByteArray(data));
+            builder.type(readInt(data));
             break;
           case FIELD_WIDTH:
-            builder.width(Ints.fromByteArray(data));
+            builder.width(readInt(data));
             break;
           case FIELD_HEIGHT:
-            builder.height(Ints.fromByteArray(data));
+            builder.height(readInt(data));
             break;
           case FIELD_ORIENTATION:
-            builder.orientation(Ints.fromByteArray(data));
+            builder.orientation(readInt(data));
             break;
           case FIELD_FLIPPED:
             builder.flipped(data[0] == 1);
             break;
           case FIELD_BIT_RATE:
-            builder.bitRate(Ints.fromByteArray(data));
+            builder.bitRate(readInt(data));
             break;
           case FIELD_FRAME_RATE:
-            builder.frameRate(Ints.fromByteArray(data));
+            builder.frameRate(readInt(data));
             break;
           case FIELD_I_FRAME_INTERVAL:
-            builder.iframeInterval(Ints.fromByteArray(data));
+            builder.iframeInterval(readInt(data));
             break;
           case FIELD_DATA:
             builder.data(data);
             break;
           case FIELD_PRESENTATION_TIME_US:
-            builder.presentationTimeUs(Longs.fromByteArray(data));
+            builder.presentationTimeUs(readLong(data));
             break;
           case FIELD_FLAGS:
-            builder.flags(Ints.fromByteArray(data));
+            builder.flags(readInt(data));
             break;
         }
-      } catch (IllegalArgumentException | ArrayIndexOutOfBoundsException e) {
+      } catch (IllegalArgumentException | ArrayIndexOutOfBoundsException
+              | BufferUnderflowException e) {
         // skip
       }
     }
@@ -155,20 +154,20 @@ class VideoFrame {
     try {
       switch (type) {
         case Type.HEADER:
-          write(os, FIELD_TYPE, Ints.toByteArray(type));
-          write(os, FIELD_WIDTH, Ints.toByteArray(width));
-          write(os, FIELD_HEIGHT, Ints.toByteArray(height));
-          write(os, FIELD_ORIENTATION, Ints.toByteArray(orientation));
+          write(os, FIELD_TYPE, intBytes(type));
+          write(os, FIELD_WIDTH, intBytes(width));
+          write(os, FIELD_HEIGHT, intBytes(height));
+          write(os, FIELD_ORIENTATION, intBytes(orientation));
           write(os, FIELD_FLIPPED, new byte[] { (byte) (flipped ? 1 : 0) });
-          write(os, FIELD_BIT_RATE, Ints.toByteArray(bitRate));
-          write(os, FIELD_FRAME_RATE, Ints.toByteArray(frameRate));
-          write(os, FIELD_I_FRAME_INTERVAL, Ints.toByteArray(iframeInterval));
+          write(os, FIELD_BIT_RATE, intBytes(bitRate));
+          write(os, FIELD_FRAME_RATE, intBytes(frameRate));
+          write(os, FIELD_I_FRAME_INTERVAL, intBytes(iframeInterval));
           break;
         case Type.DATA:
-          write(os, FIELD_TYPE, Ints.toByteArray(type));
+          write(os, FIELD_TYPE, intBytes(type));
           write(os, FIELD_DATA, data);
-          write(os, FIELD_PRESENTATION_TIME_US, Longs.toByteArray(presentationTimeUs));
-          write(os, FIELD_FLAGS, Ints.toByteArray(flags));
+          write(os, FIELD_PRESENTATION_TIME_US, longBytes(presentationTimeUs));
+          write(os, FIELD_FLAGS, intBytes(flags));
           break;
       }
     } catch (IOException e) {
@@ -179,11 +178,28 @@ class VideoFrame {
 
   private void write(OutputStream outputStream, byte field, byte[] data) throws IOException {
     // LENGTH
-    outputStream.write(Ints.toByteArray(data.length + 1));
+    outputStream.write(intBytes(data.length + 1));
     // FIELD
     outputStream.write(field);
     // DATA
     outputStream.write(data);
+  }
+
+  /** Every number in a frame is big-endian, as {@link #readInt} and {@link #readLong} expect. */
+  private static byte[] intBytes(int value) {
+    return ByteBuffer.allocate(Integer.BYTES).putInt(value).array();
+  }
+
+  private static byte[] longBytes(long value) {
+    return ByteBuffer.allocate(Long.BYTES).putLong(value).array();
+  }
+
+  private static int readInt(byte[] data) {
+    return ByteBuffer.wrap(data).getInt();
+  }
+
+  private static long readLong(byte[] data) {
+    return ByteBuffer.wrap(data).getLong();
   }
 
   @Type

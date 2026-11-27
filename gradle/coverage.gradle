@@ -44,10 +44,22 @@ def allProductionClasses = classTrees(javaClassDirectories + kotlinClassDirector
 def coreCoverageIncludes = [
         'com/xlythe/view/camera/Exif.class',
         'com/xlythe/view/camera/Exif$*.class',
+        'com/xlythe/view/camera/ExifCaptureParameters.class',
+        'com/xlythe/view/camera/ExifCaptureParameters$*.class',
+        'com/xlythe/view/camera/VideoMetadata.class',
+        'com/xlythe/view/camera/VideoMetadata$*.class',
+        'com/xlythe/view/camera/PendingPicture.class',
         'com/xlythe/view/camera/PermissionChecker.class',
+        'com/xlythe/view/camera/RawCapturePairer.class',
+        'com/xlythe/view/camera/RawCapturePairer$*.class',
         'com/xlythe/view/camera/TransformMath.class',
+        'com/xlythe/view/camera/ZoomMath.class',
+        'com/xlythe/view/camera/ZoomPreset.class',
+        'com/xlythe/view/camera/v2/SafeCloseImageReader.class',
+        'com/xlythe/view/camera/v2/SafeCloseImageReader$*.class',
         'com/xlythe/view/camera/x/CameraXMath.class',
         'com/xlythe/view/camera/stream/AudioBuffer.class',
+        'com/xlythe/view/camera/stream/AudioCatchUp.class',
         'com/xlythe/view/camera/stream/AudioStreamHeader.class',
         'com/xlythe/view/camera/stream/AudioStreamHeader$*.class',
         'com/xlythe/view/camera/stream/LossyPipedOutputStream.class',
@@ -104,6 +116,11 @@ def instrumentedCoverageData = files(
 
 def allCoverageData = files(unitCoverageData, instrumentedCoverageData)
 
+// The core build leaves out the Compose sources, which are all of the library's Kotlin, so it has
+// no Kotlin classes to find.
+boolean expectKotlinClasses = !(project.hasProperty('cameraview.core')
+        && project.property('cameraview.core').toString().toBoolean())
+
 /**
  * Fails when a configured class directory produced nothing, so a moved AGP intermediate path
  * surfaces as a build failure rather than as a silently smaller report.
@@ -131,7 +148,9 @@ tasks.register('jacocoTestReport', JacocoReport) {
 
     doFirst {
         assertClassesFound('Java', javaClassDirectories)
-        assertClassesFound('Kotlin', kotlinClassDirectories)
+        if (expectKotlinClasses) {
+            assertClassesFound('Kotlin', kotlinClassDirectories)
+        }
     }
 
     reports {
@@ -152,7 +171,9 @@ tasks.register('jacocoCoreCoverageVerification', JacocoCoverageVerification) {
 
     doFirst {
         assertClassesFound('Java', javaClassDirectories)
-        assertClassesFound('Kotlin', kotlinClassDirectories)
+        if (expectKotlinClasses) {
+            assertClassesFound('Kotlin', kotlinClassDirectories)
+        }
     }
 
     violationRules {

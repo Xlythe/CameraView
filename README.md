@@ -2,9 +2,10 @@ Camera View
 ====================
 
 CameraView provides a simple wrapper around the Android camera APIs, with backwards compatibility
-to API 21. Rather than directly manipulating the camera, here you have an Android View that can be
-placed within your app. This View displays a preview and has the methods takePicture(),
-startRecording() and stopRecording(). For simple use cases, CameraFragment exists as well.
+to API 21, or to API 14 with the core build described below. Rather than directly manipulating the
+camera, here you have an Android View that can be placed within your app. This View displays a
+preview and has the methods takePicture(), startRecording() and stopRecording(). For simple use
+cases, CameraFragment exists as well.
 If you inflate a CameraFragment with Views that have the correct ids (eg. @id/capture),
 CameraFragment will bind to them to control the CameraView.
 
@@ -18,9 +19,12 @@ dependencies {
 ```
 
 If your minSdk is below 24, build with `-Pcameraview.core=true`, which leaves out the parts that
-cannot reach that far back and covers API 21 and up. This is not hypothetical: `camera-camera2`
+cannot reach that far back and covers API 14 and up. This is not hypothetical: `camera-camera2`
 pulls in `camera-camera2-pipe`, which declares a minSdk of 24, and a dependency's floor becomes
-your app's floor whatever this library declares.
+your app's floor whatever this library declares. In that build, barcode scanning needs API 21 and
+`com.google.mlkit:barcode-scanning` in your own dependencies, frame analysis needs API 21,
+streaming API 18 and recording API 16. Without them, `enterBarcodeScanner` and `startFrameAnalysis`
+return false and `startRecording` reports `onFailure`.
 
 Permissions
 -----------------
@@ -59,12 +63,14 @@ Camera(
 )
 ```
 
-Camera also accepts zoomLevel [0 to maxZoomLevel, or null to leave the zoom to pinchToZoom],
-shutterSoundEnabled [boolean], shutterSound [raw resource], pictureQuality [1 to 100], colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr],
-exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
-extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
-lowLightBoostEnabled [boolean]. Not every camera can do all of these, so CameraState below says
-which this one supports.
+Camera also accepts zoomRatio [minZoomRatio to maxZoomRatio, or null to leave the zoom to
+pinchToZoom], animateZoom [boolean], shutterSoundEnabled [boolean], shutterSound [raw resource],
+pictureQuality [1 to 100], colorSpace [srgb, displayP3],
+pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [minExposureCompensation to
+maxExposureCompensation, in steps of exposureCompensationStep EV], torchEnabled [boolean],
+dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
+stabilizationEnabled [boolean] and lowLightBoostEnabled [boolean]. Not every camera can do all of
+these, so CameraState below says which this one supports.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
 opens, and is republished when the camera reconfigures, so ask it before offering a control: a
@@ -85,11 +91,30 @@ if (camera != null && camera.hasFlash) {
 ```
 
 CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, isZoomSupported,
-maxZoomLevel, isExposureCompensationSupported, minExposureCompensation, maxExposureCompensation,
-supportedColorSpaces, supportedPictureFormats, supportedDynamicRanges, supportedExtensions,
-isStabilizationSupported, isLowLightBoostSupported, isSnapshotWhileRecordingSupported,
-isFaceDetectionSupported, horizontalFieldOfView, verticalFieldOfView, isRecording,
-isAnalyzingFrames and isCapturingPanorama.
+minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
+minExposureCompensation, maxExposureCompensation, exposureCompensationStep, supportedColorSpaces,
+supportedPictureFormats, supportedDynamicRanges, supportedExtensions, isStabilizationSupported,
+isLowLightBoostSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
+horizontalFieldOfView, verticalFieldOfView, isRecording, isAnalyzingFrames and
+isCapturingPanorama.
+
+Pass onZoomChanged to hear the zoom ratio whenever it changes, a pinch included, so that buttons
+for zoomPresets can follow it. Writing it back into zoomRatio is safe, and animateZoom eases over
+to each new ratio rather than jumping to it.
+```kotlin
+var zoom by remember { mutableStateOf(1f) }
+Camera(
+    controller = cameraController,
+    state = cameraState,
+    zoomRatio = zoom,
+    animateZoom = true,
+    onZoomChanged = { zoom = it }
+)
+
+cameraState.value?.zoomPresets?.forEach { preset ->
+    Button(onClick = { zoom = preset.ratio }) { Text("${preset.label}x") }
+}
+```
 
 Camera's methods are rather straight forward.
 
@@ -104,6 +129,8 @@ cameraController.startRecording()
 ```
 Only these calls without a file put anything in the gallery, and they report where it went.
 Given a file, takePicture(file) and startRecording(file) write there instead and report the file.
+A raw picture is filed as a DNG. A rawJpeg picture files both, under the same name, and
+onImageSaved hears each: the JPEG, then the DNG.
 ```kotlin
 Camera(
     controller = cameraController,
@@ -261,6 +288,10 @@ each also has a companion that reports whether the camera now open supports it, 
 isDynamicRangeSupported(DynamicRange) or isLowLightBoostSupported(). Ask before relying on one; an
 unsupported request is logged and dropped rather than applied.
 
+exposureCompensation is an index rather than a number of stops, from
+getMinExposureCompensation() to getMaxExposureCompensation(). Each step is worth
+getExposureCompensationStep() EV, so with a step of 1/6, index 6 brightens by 1 EV.
+
 CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
 handle binding the Views to the appropriate methods on CameraView.
 
@@ -281,7 +312,8 @@ Only these overloads without a file put anything in the gallery, and the listene
 went in onImageSaved(Uri) and onVideoSaved(Uri). Given a file, takePicture(file) and
 startRecording(file) write there instead, and report the file in onImageCaptured(File) and
 onVideoCaptured(File). Every method but the confirmation and failure ones has a default, so
-override the ones you use.
+override the ones you use. A RAW picture is filed as a DNG. A RAW_JPEG picture files both, under
+the same name, and onImageSaved(Uri) hears each: the JPEG, then the DNG.
 ```java
 mCameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
   @Override public void onImageConfirmation() {}
@@ -307,7 +339,7 @@ mCameraView.setOnCameraStateChangedListener(listener);
 ```
 With confirmation enabled, a capture is shown in CameraView's own preview and onImageConfirmation()
 or onVideoConfirmation() fires before it is reported. Accept or discard it to continue; rejecting
-also deletes the file, and files nothing in the gallery. Enable matchPreviewAspectRatio alongside
+also deletes every file it wrote, and files nothing in the gallery. Enable matchPreviewAspectRatio alongside
 this so the capture and the preview are framed the same.
 ```java
 mCameraView.setImageConfirmationEnabled(true);
@@ -368,6 +400,30 @@ mCameraView.setFaceDetectionListener((faces, faceToView) -> {
 });
 mCameraView.setFaceDetectionListener(null);
 ```
+
+Zoom
+-----------------
+Zoom is a ratio in the camera's own terms, where 1 is the main lens. getMinZoomRatio is below 1 on
+a phone with an ultra-wide lens, and setZoomRatio switches between the lenses by itself where the
+phone allows it. getZoomPresets returns the stops worth a button each - one per lens, plus 2x where the
+main sensor can crop to it without upscaling - and setOnZoomChangedListener keeps those buttons in
+step with a pinch. Each preset has the exact ratio to zoom to and a rounded label to show, so a
+2.74x lens is labelled 3.
+```java
+for (ZoomPreset preset : mCameraView.getZoomPresets()) {
+  Button button = new Button(context);
+  button.setText(preset.getLabel() + "x");
+  button.setOnClickListener(v -> mCameraView.setZoomRatio(preset.getRatio(), true));
+  zoomBar.addView(button);
+}
+mCameraView.setOnZoomChangedListener(ratio -> highlightNearest(ratio));
+```
+setZoomRatio(ratio, true) eases over to the ratio rather than jumping, passing through the lenses
+on the way as a phone's camera app does, and the listener hears each step. A pinch takes over from
+wherever it has got to.
+
+setZoomLevel and getZoomLevel cover the same range as a position from 0 to getMaxZoomLevel, on a
+log scale, for a slider.
 
 Field of view
 -----------------

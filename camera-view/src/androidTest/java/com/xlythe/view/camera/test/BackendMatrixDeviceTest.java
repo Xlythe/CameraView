@@ -22,6 +22,7 @@ import androidx.test.rule.GrantPermissionRule;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.FrameStream;
 import com.xlythe.view.camera.VideoStream;
+import com.xlythe.view.camera.ZoomPreset;
 
 import org.junit.After;
 import org.junit.Assume;
@@ -35,6 +36,8 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -58,8 +61,17 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @RunWith(Parameterized.class)
 public final class BackendMatrixDeviceTest {
+    /** Log tag for what a run found, which is the evidence when comparing two devices. */
     private static final String TAG = "BackendMatrixDeviceTest";
     private static final long TIMEOUT_SECONDS = 30;
+
+    /**
+     * How far a zoom may read back from the one asked for.
+     *
+     * <p>The old camera API zooms in steps of its own table, so it lands on the nearest entry
+     * rather than on the ratio; the other two land on it exactly.</p>
+     */
+    private static final float ZOOM_TOLERANCE = 0.05f;
 
     /** Long enough for exposure and focus to settle, and a zero-shutter-lag buffer to fill. */
     private static final long SETTLE_MILLIS = 2_000;
@@ -432,6 +444,258 @@ public final class BackendMatrixDeviceTest {
                 CameraView.Flash.ON, flash.get());
         assertEquals("and it has to change back on " + backend,
                 CameraView.Flash.OFF, flashAfterOff.get());
+    }
+
+    /**
+     * Camera2 offers the same controls as CameraX on the same camera.
+     *
+     * <p>An app is not meant to know which backend it has, so a control one of them offers and the
+     * other does not, on the same hardware, is a defect in the one that does not. Each lens is
+     * asked under both backends; the comparison runs once, under the Camera2 parameter.</p>
+     */
+    @Test
+    public void camera2OffersTheSameControlsAsCameraX() throws Exception {
+        Assume.assumeTrue("one comparison covers both backends",
+                backend == CameraView.Backend.CAMERA2);
+
+        Map<CameraView.LensFacing, String> camera2 = controlsOffered(CameraView.Backend.CAMERA2);
+        Map<CameraView.LensFacing, String> cameraX = controlsOffered(CameraView.Backend.CAMERA_X);
+
+        assertEquals("Camera2 and CameraX disagree about what this device's cameras can do",
+                cameraX, camera2);
+    }
+
+    /**
+     * A capture still works with every control the camera offers turned on.
+     *
+     * <p>Exposure, stabilization and low-light boost all change the requests a capture is made
+     * from, and stabilization rebuilds the session, so each is a way to break a picture or a
+     * recording that the plain capture tests never exercise. The torch is left to
+     * {@link #aCaptureSurvivesTheTorch}, so that a dark run can skip it alone.</p>
+     */
+    @Test
+    public void aCaptureSurvivesTheControls() throws Exception {
+        AtomicReference<File> picture = new AtomicReference<>();
+        AtomicReference<File> video = new AtomicReference<>();
+        AtomicReference<String> accepted = new AtomicReference<>();
+        AtomicReference<String> offered = new AtomicReference<>();
+
+        withOpenCamera(camera -> {
+            int exposure = camera.getMaxExposureCompensation() / 2;
+            if (camera.isExposureCompensationSupported()) {
+                camera.setExposureCompensation(exposure);
+            }
+            if (camera.isLowLightBoostSupported()) {
+                camera.setLowLightBoostEnabled(true);
+            }
+            // Stabilization last, because it rebuilds the session and what was set before it has
+            // to survive that, including a request the camera has not confirmed yet.
+            if (camera.isStabilizationSupported()) {
+                camera.setStabilizationEnabled(true);
+            }
+            // Long enough for the rebuilt session to be configured and confirm the others.
+            sleep(3_000);
+            offered.set("exposure=" + (camera.isExposureCompensationSupported() ? exposure : 0)
+                    + " stabilization=" + camera.isStabilizationSupported()
+                    + " lowLightBoost=" + camera.isLowLightBoostSupported());
+            accepted.set("exposure=" + camera.getExposureCompensation()
+                    + " stabilization=" + camera.isStabilizationEnabled()
+                    + " lowLightBoost=" + camera.isLowLightBoostEnabled());
+            Log.i(TAG, backend + " controls offered: " + offered.get());
+
+            picture.set(takePicture(camera, temporaryFile(".jpg")));
+            video.set(record(camera, temporaryFile(".mp4")));
+        });
+
+        assertEquals("every control the camera offers has to be accepted on " + backend,
+                offered.get(), accepted.get());
+        assertNotNull("the controls cost the picture on " + backend, picture.get());
+        assertTrue(picture.get().length() > 0);
+        // As in aRecordingProducesAFile: whether an encoder behind a software-rendered surface
+        // writes anything is not the library's to promise.
+        Assume.assumeTrue(backend + " produced no video on this device's encoder",
+                video.get() != null);
+        assertTrue("a reported recording has to have bytes in it", video.get().length() > 0);
+    }
+
+    /** And with the torch lit, which a dark run skips. */
+    @Test
+    public void aCaptureSurvivesTheTorch() throws Exception {
+        DeviceState.assumeTheLampMayBeLit();
+        AtomicBoolean lit = new AtomicBoolean();
+        AtomicReference<File> picture = new AtomicReference<>();
+
+        withOpenCamera(camera -> {
+            Assume.assumeTrue("this camera has no flash to light", camera.hasFlash());
+            camera.setTorchEnabled(true);
+            sleep(500);
+            lit.set(camera.isTorchEnabled());
+            try {
+                picture.set(takePicture(camera, temporaryFile(".jpg")));
+            } finally {
+                camera.setTorchEnabled(false);
+            }
+        });
+
+        assertTrue("a camera with a flash has to accept the torch on " + backend, lit.get());
+        assertNotNull("the torch cost the picture on " + backend, picture.get());
+        assertTrue(picture.get().length() > 0);
+    }
+
+    /** Opens each lens under a backend and describes the controls it offers. */
+    private Map<CameraView.LensFacing, String> controlsOffered(CameraView.Backend which)
+            throws Exception {
+        CameraView.setDefaultBackend(which);
+        Map<CameraView.LensFacing, String> controls = new LinkedHashMap<>();
+        withOpenCamera(camera -> {
+            Assume.assumeTrue(which + " cannot run here", camera.getBackend() == which);
+            controls.put(CameraView.LensFacing.BACK, describeControls(which, camera));
+            if (!camera.hasFrontFacingCamera()) {
+                return;
+            }
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(
+                    () -> camera.setLensFacing(CameraView.LensFacing.FRONT));
+            long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS);
+            while (!(camera.isUsingFrontFacingCamera() && camera.isOpen())
+                    && System.currentTimeMillis() < deadline) {
+                sleep(100);
+            }
+            assertTrue(which + " never reached the front camera",
+                    camera.isUsingFrontFacingCamera());
+            // What a camera reports is read once it is configured, not as soon as it is chosen.
+            sleep(2_000);
+            controls.put(CameraView.LensFacing.FRONT, describeControls(which, camera));
+        });
+        return controls;
+    }
+
+    private static String describeControls(CameraView.Backend which, CameraView camera) {
+        String controls = "torch=" + camera.hasFlash()
+                + " exposure=" + camera.isExposureCompensationSupported()
+                + "[" + camera.getMinExposureCompensation()
+                + ", " + camera.getMaxExposureCompensation() + "]"
+                + " stabilization=" + camera.isStabilizationSupported()
+                + " lowLightBoost=" + camera.isLowLightBoostSupported();
+        Log.i(TAG, which + " " + (camera.isUsingFrontFacingCamera() ? "front" : "back")
+                + " camera offers " + controls);
+        return controls;
+    }
+
+    /** Takes a picture and waits for it, returning the file or null if the capture failed. */
+    private File takePicture(CameraView camera, File file) throws InterruptedException {
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<File> captured = new AtomicReference<>();
+        camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onImageConfirmation() {}
+
+            @Override public void onImageCaptured(File saved) {
+                captured.set(saved);
+                finished.countDown();
+            }
+
+            @Override public void onFailure() {
+                finished.countDown();
+            }
+        });
+        camera.takePicture(file);
+        assertTrue("the capture never reported on " + backend,
+                finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        return captured.get();
+    }
+
+    /** Records a few seconds and waits for the result, returning the file or null. */
+    private File record(CameraView camera, File file) throws InterruptedException {
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicReference<File> recorded = new AtomicReference<>();
+        camera.setOnVideoCapturedListener(new CameraView.OnVideoCapturedListener() {
+            @Override public void onVideoConfirmation() {}
+
+            @Override public void onVideoCaptured(File saved) {
+                recorded.set(saved);
+                finished.countDown();
+            }
+
+            @Override public void onFailure() {
+                finished.countDown();
+            }
+        });
+        camera.startRecording(file);
+        sleep(4_000);
+        camera.stopRecording();
+        assertTrue("the recording never reported on " + backend,
+                finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        return recorded.get();
+    }
+
+    /**
+     * Zoom answers in the camera's own terms on every backend: 1x is inside the range, the
+     * presets are inside it too, and a ratio reads back as the one asked for.
+     *
+     * <p>The presets are logged, since what each backend makes of the lenses is the part only a
+     * real phone can show.</p>
+     */
+    @Test
+    public void theZoomAnswersInRatios() throws Exception {
+        AtomicReference<float[]> range = new AtomicReference<>();
+        AtomicReference<float[]> presets = new AtomicReference<>();
+        AtomicReference<List<ZoomPreset>> labelled = new AtomicReference<>();
+        AtomicReference<Float> target = new AtomicReference<>();
+        AtomicReference<Float> zoomed = new AtomicReference<>();
+
+        withOpenCamera(camera -> {
+            CountDownLatch changed = new CountDownLatch(1);
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                range.set(new float[] {camera.getMinZoomRatio(), camera.getMaxZoomRatio()});
+                labelled.set(camera.getZoomPresets());
+                float[] ratios = new float[labelled.get().size()];
+                for (int i = 0; i < ratios.length; i++) {
+                    ratios[i] = labelled.get().get(i).getRatio();
+                }
+                presets.set(ratios);
+                // The longest preset reaches a telephoto where there is one, which is the switch
+                // most worth seeing happen; a camera with a single stop is asked for 2x instead.
+                float[] stops = presets.get();
+                target.set(stops.length > 1
+                        ? stops[stops.length - 1] : Math.min(2f, camera.getMaxZoomRatio()));
+                camera.setOnZoomChangedListener(ratio -> {
+                    if (Math.abs(ratio - target.get()) <= ZOOM_TOLERANCE * target.get()) {
+                        changed.countDown();
+                    }
+                });
+            });
+            Log.i(TAG, backend + " zooms " + range.get()[0] + "x to " + range.get()[1]
+                    + "x with presets " + labelled.get());
+            if (target.get() <= camera.getZoomRatio()) {
+                return;
+            }
+
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(
+                    () -> camera.setZoomRatio(target.get()));
+            assertTrue("the zoom never reported reaching " + target.get() + "x on " + backend,
+                    changed.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            zoomed.set(camera.getZoomRatio());
+            Log.i(TAG, backend + " asked for " + target.get() + "x and reads "
+                    + zoomed.get() + "x");
+        });
+
+        float min = range.get()[0];
+        float max = range.get()[1];
+        assertTrue("1x has to be inside " + min + "-" + max + " on " + backend,
+                min <= 1f && 1f <= max);
+        float[] stops = presets.get();
+        assertFalse("there is always a preset on " + backend, stops.length == 0);
+        boolean hasOne = false;
+        for (int i = 0; i < stops.length; i++) {
+            assertTrue(stops[i] + "x is outside " + min + "-" + max + " on " + backend,
+                    min <= stops[i] && stops[i] <= max);
+            assertTrue("presets increase on " + backend, i == 0 || stops[i] > stops[i - 1]);
+            hasOne |= stops[i] == 1f;
+        }
+        assertTrue("1x is always a preset on " + backend, hasOne);
+        if (zoomed.get() != null) {
+            assertEquals("the zoom reads back as asked on " + backend,
+                    target.get(), zoomed.get(), ZOOM_TOLERANCE * target.get());
+        }
     }
 
     /** What a test does with an open camera. */
