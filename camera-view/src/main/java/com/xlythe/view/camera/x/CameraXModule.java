@@ -1566,6 +1566,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 exifCaptureParameters().setFlash(CameraView.Flash.OFF, hasFlash());
         imageCapture.takePicture(outputOptions(file, location), mMainExecutor,
                 new ImageCapture.OnImageSavedCallback() {
+            @Override public void onCaptureStarted() {
+                onBurstShutter();
+            }
             @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
                 requestBurstPicture(burst, imageCapture);
                 finishExif(file, location, exifParameters, burst.getExecutor(),

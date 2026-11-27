@@ -13,10 +13,12 @@ import android.location.Location;
 import android.location.LocationManager;
 import android.media.FakeImage;
 import android.media.ImageReader;
+import android.media.MediaActionSound;
 
 import androidx.annotation.NonNull;
 
 import com.xlythe.view.camera.Burst;
+import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.FakeLocation;
@@ -31,6 +33,8 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowCamera;
+import org.robolectric.shadows.ShadowMediaActionSound;
 import org.robolectric.shadows.ShadowPausedAsyncTask;
 
 import java.io.File;
@@ -64,6 +68,8 @@ public class BurstCaptureTest {
     private File directory;
     private final Heard heard = new Heard();
     private int failures;
+    /** How many times the picture listener heard a shutter. */
+    private int shutters;
 
     /** Everything the burst reported. */
     private static final class Heard implements Burst.Callback {
@@ -85,10 +91,12 @@ public class BurstCaptureTest {
     public void setUp() {
         ShadowCallbackCameraCaptureSession.reset();
         ShadowInjectableImageReader.reset();
+        CameraSoundsTest.resetSounds();
         context = RuntimeEnvironment.getApplication();
         FakeCamera2.addBackAndFrontCameras(context);
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
         cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onShutter() { shutters++; }
             @Override public void onImageConfirmation() {}
             @Override public void onFailure() { failures++; }
         });
@@ -105,6 +113,7 @@ public class BurstCaptureTest {
         cameraView.close();
         FakeCamera2.idleMainLooper();
         cameraView.release();
+        ShadowCamera.clearCameraInfo();
     }
 
     @Test
@@ -213,6 +222,29 @@ public class BurstCaptureTest {
 
         assertTrue(burst.isFinished());
         assertEquals(PictureSession.BURST_PICTURES_IN_FLIGHT - 1, heard.pictures.size());
+    }
+
+    /** A burst is silent: no click plays and no shutter is reported for any of its pictures. */
+    @Test
+    public void aBurstPlaysNoClickAndReportsNoShutter() {
+        openAndStart(2);
+
+        deliverFrames(2);
+
+        assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+        assertEquals("the picture listener hears of single pictures only", 0, shutters);
+    }
+
+    /** Where the click is required, every picture of a burst plays it, as each single one does. */
+    @Test
+    public void aRequiredClickPlaysForEveryPicture() {
+        CameraSoundsTest.requireSounds();
+        openAndStart(2);
+
+        deliverFrames(2);
+
+        assertEquals(2, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+        assertEquals(0, shutters);
     }
 
     @Test

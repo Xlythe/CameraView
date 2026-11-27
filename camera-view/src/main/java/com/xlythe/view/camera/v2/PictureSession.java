@@ -450,7 +450,9 @@ class PictureSession extends PreviewSession {
                 @Override
                 public void onCaptureStarted(@NonNull CameraCaptureSession session,
                         @NonNull CaptureRequest request, long timestamp, long frameNumber) {
-                    if (!burst) {
+                    if (burst) {
+                        onBurstShutter();
+                    } else {
                         onShutter();
                     }
                 }
@@ -561,8 +563,8 @@ class PictureSession extends PreviewSession {
 
     /**
      * Takes a burst. Each picture is the one {@link #takePicture} would take with the same
-     * settings, written and tagged the same way, except that the flash stays off and no click
-     * plays.
+     * settings, written and tagged the same way, except that the flash stays off and the click
+     * plays only where it is required.
      *
      * <p>The camera's own frames are asked for a few at a time, another as each arrives. A
      * repeating request would be simpler to start, but its frames cannot be told apart from the
@@ -613,6 +615,12 @@ class PictureSession extends PreviewSession {
         /** Hears of pictures of the camera's own frames that no frame will arrive for. */
         private final CameraCaptureSession.CaptureCallback mFrameCallback =
                 new CameraCaptureSession.CaptureCallback() {
+                    @Override
+                    public void onCaptureStarted(@NonNull CameraCaptureSession session,
+                            @NonNull CaptureRequest request, long timestamp, long frameNumber) {
+                        onBurstShutter();
+                    }
+
                     @Override
                     public void onCaptureFailed(@NonNull CameraCaptureSession session,
                             @NonNull CaptureRequest request, @NonNull CaptureFailure failure) {

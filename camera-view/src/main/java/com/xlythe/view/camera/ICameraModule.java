@@ -246,6 +246,16 @@ public abstract class ICameraModule {
     }
 
     /**
+     * Called as each picture of a burst is exposed. A burst is silent, so the click plays only
+     * where it is required, and the image listener is not told: the burst reports its own.
+     */
+    public void onBurstShutter() {
+        if (playsOwnClick()) {
+            mSounds.play(getContext(), MediaActionSound.SHUTTER_CLICK, false /* wanted */);
+        }
+    }
+
+    /**
      * Called just before the recorder starts. The tone plays first so that as little of it as
      * possible ends up in the recording.
      */
@@ -312,7 +322,8 @@ public abstract class ICameraModule {
      * one right now ends it.
      *
      * <p>Every picture is saved and tagged like one from {@link #takePicture}, but without the
-     * flash or the shutter sound.</p>
+     * flash. Each calls {@link #onBurstShutter} rather than {@link #onShutter}, unless the
+     * platform plays the click itself.</p>
      */
     @RestrictTo(RestrictTo.Scope.LIBRARY)
     protected abstract void startBurst(@NonNull Burst burst);
