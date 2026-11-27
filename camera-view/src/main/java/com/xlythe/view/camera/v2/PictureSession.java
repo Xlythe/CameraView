@@ -49,6 +49,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.UiThread;
 import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
+import androidx.exifinterface.media.ExifInterface;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
@@ -426,6 +427,9 @@ class PictureSession extends PreviewSession {
                     if (rawCallback != null) {
                         rawCallback.onCaptureCompleted(session, request, result);
                     }
+                    if (drawn != null) {
+                        drawn.onCaptureCompleted(result);
+                    }
                 }
 
                 @Override
@@ -586,7 +590,8 @@ class PictureSession extends PreviewSession {
      * mask or a replaced background reaches the photograph and not only the preview.</p>
      *
      * <p>Encoded here rather than by the camera: the JPEG comes from a bitmap this writes, so it
-     * does not go through the camera's own encoder. The resolution is the camera's.</p>
+     * does not go through the camera's own encoder, and every tag the camera would have written
+     * is filled in from the frame's capture result instead. The resolution is the camera's.</p>
      *
      * <p>Drawn the right way up and mirrored as it is shown, rather than in the sensor's
      * orientation with an Exif tag to turn it as the camera's own JPEG is. A renderer then draws
@@ -627,7 +632,8 @@ class PictureSession extends PreviewSession {
             picture.fail();
             return null;
         }
-        DrawnPicture drawn = new DrawnPicture(effect, input, reader, file, picture);
+        DrawnPicture drawn = new DrawnPicture(
+                effect, input, reader, file, exifCaptureParameters(), picture);
         mDrawnPicture = drawn;
         reader.setOnImageAvailableListener(drawn::onImageAvailable, getHandler());
         return drawn;
@@ -641,7 +647,13 @@ class PictureSession extends PreviewSession {
         }
     }
 
-    /** A drawn picture on its way to disk. */
+    /**
+     * A drawn picture on its way to disk.
+     *
+     * <p>Written once two things are back, which arrive in either order: the drawing, read back
+     * from the reader, and the camera's capture result for the frame it was drawn from, which is
+     * where the file's exposure, sensitivity, aperture and focus distance come from.</p>
+     */
     private final class DrawnPicture {
         /** The renderer drawing the picture, told to stop waiting if the picture is given up. */
         private final FrameRenderThread mEffect;
@@ -655,6 +667,9 @@ class PictureSession extends PreviewSession {
         /** Where the JPEG goes. */
         private final File mFile;
 
+        /** How the picture was taken, described when it was asked for. */
+        private final ExifCaptureParameters mExifParameters;
+
         /** The shutter press, told once the JPEG is written or lost. */
         private final PendingPicture mPicture;
 
@@ -662,16 +677,24 @@ class PictureSession extends PreviewSession {
         @Nullable
         private Bitmap mBitmap;
 
+        /** Whether the camera has reported the frame, with or without its capture result. */
+        private boolean mCaptured;
+
+        /** The frame's capture result, or null until it arrives or if the camera lost it. */
+        @Nullable
+        private TotalCaptureResult mResult;
+
         /** Whether the picture has gone to its writer or been given up. */
         private boolean mFinished;
 
         DrawnPicture(@NonNull FrameRenderThread effect, @NonNull Surface input,
                 @NonNull SafeCloseImageReader reader, @NonNull File file,
-                @NonNull PendingPicture picture) {
+                @NonNull ExifCaptureParameters exifParameters, @NonNull PendingPicture picture) {
             mEffect = effect;
             mInput = input;
             mReader = reader;
             mFile = file;
+            mExifParameters = exifParameters;
             mPicture = picture;
         }
 
@@ -709,20 +732,30 @@ class PictureSession extends PreviewSession {
         }
 
         @MainThread
+        void onCaptureCompleted(@NonNull TotalCaptureResult result) {
+            mResult = result;
+            mCaptured = true;
+            saveWhenReady();
+        }
+
+        @MainThread
         void onCaptureFailed(@NonNull CaptureFailure failure) {
             if (failure.wasImageCaptured()) {
-                // The frame is on its way all the same.
+                // The frame is on its way without its result, so the file goes without what only
+                // the result could have said.
+                mCaptured = true;
+                saveWhenReady();
                 return;
             }
             Log.e(TAG, "The camera dropped a drawn picture, reason " + failure.getReason());
             abandon();
         }
 
-        /** Hands the picture to its writer. */
+        /** Hands the picture to its writer once both the drawing and the camera's report are in. */
         @MainThread
         private void saveWhenReady() {
             Bitmap bitmap = mBitmap;
-            if (mFinished || bitmap == null) {
+            if (mFinished || bitmap == null || !mCaptured) {
                 return;
             }
             mFinished = true;
@@ -730,12 +763,17 @@ class PictureSession extends PreviewSession {
             if (mDrawnPicture == this) {
                 mDrawnPicture = null;
             }
+            TotalCaptureResult result = mResult;
+            if (result != null) {
+                mExifParameters.setCaptureResult(result);
+            }
             File file = mFile;
             PendingPicture picture = mPicture;
             // Read now rather than on the writer's thread, because the camera can close before
             // the writer runs and the fix it was following goes with it.
             Location location = getModule().getLocation();
-            new DrawnImageSaver(location, bitmap, file, getPictureQuality()) {
+            new DrawnImageSaver(getContext(), location, bitmap, file, getPictureQuality(),
+                    mExifParameters) {
                 @UiThread
                 @Override
                 protected void onPostExecute(Boolean saved) {
@@ -784,12 +822,17 @@ class PictureSession extends PreviewSession {
     }
 
     /**
-     * Writes a drawn picture, and finishes it the way a captured one is finished.
+     * Writes a drawn picture, and tags it as {@link ImageSaver} tags a camera frame.
      *
      * <p>Separate from {@link ImageSaver} because what it is given is already pixels, already the
-     * right way up and mirrored as shown, rather than a camera frame.</p>
+     * right way up and mirrored as shown, rather than a camera frame. So the orientation it
+     * records is normal, where a camera frame's records the turn and the mirror a viewer still
+     * has to apply.</p>
      */
     private static class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
+        /** The application, whose name and version the picture records as its software. */
+        private final Context mContext;
+
         /** Where the picture was taken, or null to leave it untagged. */
         @Nullable
         private final Location mLocation;
@@ -803,12 +846,18 @@ class PictureSession extends PreviewSession {
         /** The JPEG quality, from 0 to 100. */
         private final int mQuality;
 
-        DrawnImageSaver(@Nullable Location location, @NonNull Bitmap bitmap, @NonNull File file,
-                int quality) {
+        /** How the picture was taken, including what the camera reported for its frame. */
+        private final ExifCaptureParameters mExifParameters;
+
+        DrawnImageSaver(@NonNull Context context, @Nullable Location location,
+                @NonNull Bitmap bitmap, @NonNull File file, int quality,
+                @NonNull ExifCaptureParameters exifParameters) {
+            mContext = context.getApplicationContext();
             mLocation = location;
             mBitmap = bitmap;
             mFile = file;
             mQuality = quality;
+            mExifParameters = exifParameters;
         }
 
         /** @return true only when the picture reached disk, so a failure is never reported as one. */
@@ -832,6 +881,11 @@ class PictureSession extends PreviewSession {
             try {
                 Exif exif = new Exif(mFile);
                 exif.attachTimestamp();
+                exif.attachCaptureDevice(mContext);
+                exif.attachThumbnail();
+                mExifParameters.applyTo(exif);
+                exif.setAttribute(ExifInterface.TAG_ORIENTATION,
+                        Integer.toString(ExifInterface.ORIENTATION_NORMAL));
                 if (mLocation != null) {
                     exif.attachLocation(mLocation);
                 }

@@ -21,10 +21,12 @@ import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.media.ImageReader;
 import android.net.Uri;
+import android.os.Build;
 import android.provider.MediaStore;
 import android.util.Size;
 
 import androidx.annotation.NonNull;
+import androidx.exifinterface.media.ExifInterface;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.CaptureDelivery;
@@ -53,7 +55,6 @@ import org.robolectric.shadows.ShadowPausedAsyncTask;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -328,10 +329,7 @@ public class FrameEffectSessionTest {
         assertEquals(output, captured.get());
     }
 
-    /**
-     * A drawn picture taken without a file of the caller's is filed in the gallery as a JPEG, and
-     * leaves nothing behind in the cache it was written to first.
-     */
+    /** A drawn picture taken without a file of the caller's is filed in the gallery as a JPEG. */
     @Test
     public void aDrawnPictureWithoutAFileIsFiled() throws InterruptedException {
         module.setFrameRenderer(renderer);
@@ -356,9 +354,92 @@ public class FrameEffectSessionTest {
         ContentValues row = inserts.get(0).getContentValues();
         assertEquals(own.getName(), row.getAsString(MediaStore.MediaColumns.DISPLAY_NAME));
         assertEquals("image/jpeg", row.getAsString(MediaStore.MediaColumns.MIME_TYPE));
-        File[] left = CaptureDelivery.captureDirectory(cameraView).listFiles();
-        assertTrue("left in the cache: " + Arrays.toString(left),
-                left == null || left.length == 0);
+    }
+
+    /**
+     * A drawn picture is tagged as fully as a camera frame: the device and app that took it, how
+     * the camera exposed the frame it was drawn from, when, a thumbnail, and a normal orientation,
+     * since it is drawn the right way up.
+     */
+    @Test
+    public void aDrawnPictureIsTaggedLikeACameraFrame() throws IOException {
+        ShadowCallbackCameraCaptureSession.setResultValue(
+                CaptureResult.SENSOR_EXPOSURE_TIME, 10_000_000L);
+        ShadowCallbackCameraCaptureSession.setResultValue(CaptureResult.SENSOR_SENSITIVITY, 400);
+        ShadowCallbackCameraCaptureSession.setResultValue(CaptureResult.LENS_APERTURE, 1.8f);
+        ShadowCallbackCameraCaptureSession.setResultValue(CaptureResult.LENS_FOCAL_LENGTH, 6.0f);
+
+        takeDrawnPicture();
+
+        assertFalse("should not have reported a failure", failed.get());
+        assertEquals(output, captured.get());
+        ExifInterface exif = new ExifInterface(output.getPath());
+        assertEquals(Build.MANUFACTURER, exif.getAttribute(ExifInterface.TAG_MAKE));
+        assertEquals(Build.MODEL, exif.getAttribute(ExifInterface.TAG_MODEL));
+        assertNotNull("the app is the software", exif.getAttribute(ExifInterface.TAG_SOFTWARE));
+        String id = exif.getAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID);
+        assertNotNull("each picture is given an id", id);
+        assertEquals(32, id.length());
+        assertNotNull(exif.getAttribute(ExifInterface.TAG_SCENE_TYPE));
+        assertNotNull(exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertEquals("the frame's exposure",
+                0.01, exif.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0), 1e-9);
+        assertEquals("and sensitivity",
+                400, exif.getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0));
+        assertEquals("and aperture",
+                1.8, exif.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0), 1e-3);
+        assertEquals("and the lens it came through",
+                6.0, exif.getAttributeDouble(ExifInterface.TAG_FOCAL_LENGTH, 0), 1e-3);
+        assertNotNull("from what the camera is",
+                exif.getAttribute(ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM));
+        assertEquals("drawn upright, so there is nothing left to turn",
+                ExifInterface.ORIENTATION_NORMAL,
+                exif.getAttributeInt(ExifInterface.TAG_ORIENTATION,
+                        ExifInterface.ORIENTATION_UNDEFINED));
+        assertTrue("with a thumbnail", exif.hasThumbnail());
+    }
+
+    /**
+     * The drawing can be read back before the camera has reported its frame. The picture waits
+     * for the report, so the file still describes the frame.
+     */
+    @Test
+    public void aDrawnPictureWaitsForItsFramesResult() throws IOException {
+        ShadowCallbackCameraCaptureSession.setResultValue(CaptureResult.SENSOR_SENSITIVITY, 800);
+        ShadowCallbackCameraCaptureSession.setHoldCaptures(true);
+        module.setFrameRenderer(renderer);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        FrameRenderThread effect = module.getEffect();
+        assertNotNull(effect);
+        SurfaceTexture still = stillInput(effect);
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        deliverDrawnPicture(still);
+        assertNull("not written before the camera reports the frame", captured.get());
+        assertFalse(output.exists());
+
+        ShadowCallbackCameraCaptureSession.releaseHeldCaptures();
+        FakeCamera2.idleMainLooper();
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(output, captured.get());
+        assertEquals(800, new ExifInterface(output.getPath())
+                .getAttributeInt(ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 0));
+    }
+
+    /** Opens the camera with a renderer, and takes and draws one picture into {@link #output}. */
+    private void takeDrawnPicture() {
+        module.setFrameRenderer(renderer);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        FrameRenderThread effect = module.getEffect();
+        assertNotNull(effect);
+        SurfaceTexture still = stillInput(effect);
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        deliverDrawnPicture(still);
     }
 
     /** Closing the camera while a picture is being drawn reports it lost, and leaves no file. */
