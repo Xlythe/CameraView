@@ -1,5 +1,6 @@
 package com.xlythe.view.camera;
 
+import android.Manifest;
 import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.Rect;
@@ -11,6 +12,7 @@ import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.RequiresApi;
+import androidx.annotation.RequiresPermission;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
@@ -106,6 +108,7 @@ public abstract class ICameraModule {
      * of frames while the preview keeps running, which is what an ImageAnalysis use case is
      * for and what the other two have no equivalent of.</p>
      */
+    @RequiresPermission(Manifest.permission.CAMERA)
     protected boolean startSegmentation(CameraView.SegmentationListener listener) {
         return false;
     }

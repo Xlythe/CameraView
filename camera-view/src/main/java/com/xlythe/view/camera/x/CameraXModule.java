@@ -1174,6 +1174,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
     }
 
+    @RequiresPermission(Manifest.permission.CAMERA)
     @Override protected boolean startSegmentation(CameraView.SegmentationListener listener) {
         if (listener == null) throw new NullPointerException("listener cannot be null");
         CameraXSegmentationAnalyzer analyzer;

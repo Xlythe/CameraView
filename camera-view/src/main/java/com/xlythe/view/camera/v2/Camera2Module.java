@@ -401,7 +401,7 @@ public class Camera2Module extends ICameraModule {
      * Said here rather than discovered later: an app that wants to segment and scan barcodes at
      * once needs its own model for one of them.</p>
      */
-    @SuppressLint("MissingPermission")
+    @RequiresPermission(Manifest.permission.CAMERA)
     @Override
     protected boolean startSegmentation(CameraView.SegmentationListener listener) {
         if (listener == null) {
