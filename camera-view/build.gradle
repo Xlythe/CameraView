@@ -281,6 +281,7 @@ dependencies {
     // leaves adding it to the app. CameraView#isArSupported is false when it is missing.
     compileOnly 'com.google.ar:core:[1.57.0,)'
     testImplementation 'com.google.ar:core:[1.57.0,)'
+    androidTestImplementation 'com.google.ar:core:[1.57.0,)'
     // The test dependencies stay exact. They reach no consumer, and a suite that silently
     // changed runner underneath a failure is a worse trade than one that needs bumping.
     testImplementation 'org.robolectric:robolectric:4.18.1'
