@@ -12,6 +12,7 @@ import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -102,6 +103,62 @@ public abstract class ICameraModule {
 
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
 
+    }
+
+    /**
+     * Starts or stops feeding a motion photo's encoder, as one more output beside the preview and
+     * the still.
+     *
+     * <p>Unlike {@link #attachSurface}, which may give up the still to make room for a stream,
+     * this output only exists alongside the still: a motion photo is a picture first. A backend
+     * that cannot fit it beside the still leaves it out, and the picture is taken without a clip.
+     * It asks the provider for a surface whenever it builds a session that carries the output,
+     * passing whether the frames come from a front camera, so the provider can mirror them to
+     * match the still.</p>
+     *
+     * @param surfaceProvider the encoder, or null to stop feeding it
+     */
+    @MainThread
+    protected void setMotionPhotoSurface(
+            @Nullable VideoRecorder.SurfaceProvider surfaceProvider) {}
+
+    /**
+     * Whether this camera can feed a motion photo's encoder beside its still output.
+     *
+     * <p>False by default, for a backend that has not been taught to; the ones that have can still
+     * say no for a camera that cannot fit a third output beside the preview and the still.</p>
+     */
+    public boolean isMotionPhotoSupported() {
+        return false;
+    }
+
+    /**
+     * How a player has to turn a motion photo's frames to show them as the still is shown, given
+     * the frames reach the encoder as the camera stores them and, from a front camera, mirrored
+     * about their own vertical axis by the encoder's surface.
+     *
+     * <p>This is what the camera2 backend gives it. A backend whose still is oriented differently,
+     * or that mirrors frames itself, says so by overriding this.</p>
+     */
+    protected int getMotionPhotoRotation() {
+        int pictureOrientation = getRelativeCameraOrientation();
+        return isUsingFrontFacingCamera()
+                ? mirroredClipRotation(pictureOrientation) : pictureOrientation;
+    }
+
+    /**
+     * The rotation that shows frames mirrored about their own vertical axis the way a still is
+     * shown that was rotated by {@code pictureOrientation} and then flipped horizontally.
+     *
+     * <p>{@link Exif#flipHorizontally} flips a picture about the vertical of the picture as
+     * displayed, after rotation, while the frames are mirrored before rotation, about their own
+     * vertical. After a half turn those are the same axis; after a quarter turn they are at right
+     * angles, and mirroring about one axis is mirroring about the other followed by a half turn.
+     * </p>
+     */
+    static int mirroredClipRotation(int pictureOrientation) {
+        int orientation = ((pictureOrientation % 360) + 360) % 360;
+        return orientation % 180 == 0 ? orientation : (orientation + 180) % 360;
     }
 
     protected boolean startBarcodeScanner(

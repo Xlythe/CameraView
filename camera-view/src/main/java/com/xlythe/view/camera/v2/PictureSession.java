@@ -60,8 +60,19 @@ class PictureSession extends PreviewSession {
 
     private final PictureSurface mPictureSurface;
 
+    /** The module, for the motion photo encoder and the still size it allows. */
+    private final Camera2Module mCamera2Module;
+
+    /**
+     * Feeds the motion photo encoder every preview frame, or null when motion photos are off or
+     * this session cannot carry them.
+     */
+    @Nullable
+    private MotionSurface mMotionSurface;
+
     PictureSession(Camera2Module camera2Module) {
         super(camera2Module);
+        mCamera2Module = camera2Module;
         mPictureSurface = new PictureSurface(camera2Module, getPreviewSurface());
     }
 
@@ -72,8 +83,57 @@ class PictureSession extends PreviewSession {
         // hook goes between the two: a recording session sizes its video here and the still is
         // then capped to it.
         onPreviewInitialized(map);
+        // Before the still, which a motion photo output may cap.
+        mMotionSurface = createMotionSurface(map);
         if (hasStillCapture()) {
             mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr());
+        }
+    }
+
+    /**
+     * The motion photo output, if motion photos are on and this session takes pictures.
+     *
+     * <p>The provider is read here rather than when the session was made, because a session can
+     * be made and then wait for the one before it to close, and motion photos may have been turned
+     * off in between. A provider that cannot start an encoder costs the session its clip, not its
+     * picture.</p>
+     */
+    @Nullable
+    private MotionSurface createMotionSurface(@NonNull StreamConfigurationMap map) {
+        if (!hasMotionPhoto() || !hasStillCapture()) {
+            return null;
+        }
+        VideoRecorder.SurfaceProvider provider = mCamera2Module.getMotionPhotoSurfaceProvider();
+        if (provider == null) {
+            return null;
+        }
+        MotionSurface surface = new MotionSurface(mCamera2Module, provider, getPreviewSurface());
+        try {
+            surface.initialize(map);
+            return surface;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Taking pictures without motion photos", error);
+            return null;
+        }
+    }
+
+    /**
+     * Whether this session may carry a motion photo output. A recording session cannot: it has
+     * a recording's output in the slot the encoder would take.
+     */
+    protected boolean hasMotionPhoto() {
+        return true;
+    }
+
+    /** Whether this session is feeding the motion photo encoder. */
+    boolean hasMotionSurface() {
+        return mMotionSurface != null;
+    }
+
+    @Override
+    protected void addRepeatingTargets(@NonNull CaptureRequest.Builder builder) {
+        if (mMotionSurface != null) {
+            builder.addTarget(mMotionSurface.getSurface());
         }
     }
 
@@ -98,15 +158,16 @@ class PictureSession extends PreviewSession {
      */
     @Nullable
     protected Size maxPictureSize() {
-        return null;
+        return mMotionSurface == null ? null : mCamera2Module.getMotionPhotoPictureSizeCap();
     }
 
     /**
      * Whether the still may be Ultra HDR. Camera2 verifies JPEG_R beside a preview alone, so a
-     * session that also feeds an encoder keeps its still as JPEG.
+     * session that also feeds an encoder - a recording's or a motion photo's - keeps its still as
+     * JPEG.
      */
     protected boolean allowsUltraHdr() {
-        return true;
+        return mMotionSurface == null;
     }
 
     @NonNull
@@ -116,6 +177,9 @@ class PictureSession extends PreviewSession {
         if (hasStillCapture()) {
             surfaces.add(mPictureSurface.getSurface());
         }
+        if (mMotionSurface != null) {
+            surfaces.add(mMotionSurface.getSurface());
+        }
         return surfaces;
     }
 
@@ -123,6 +187,9 @@ class PictureSession extends PreviewSession {
     public void close() {
         super.close();
         mPictureSurface.close();
+        if (mMotionSurface != null) {
+            mMotionSurface.close();
+        }
     }
 
     void takePicture(@NonNull File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {

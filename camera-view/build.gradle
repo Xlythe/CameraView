@@ -44,6 +44,11 @@ android {
         compose = !coreOnly
     }
 
+    // Helpers both test suites use, such as the motion photo reader that checks files the unit
+    // tests build and files a real camera wrote with the same code.
+    sourceSets.test.java.srcDirs += 'src/sharedTest/java'
+    sourceSets.androidTest.java.srcDirs += 'src/sharedTest/java'
+
     if (coreOnly) {
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/x/**'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
