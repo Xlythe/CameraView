@@ -4,14 +4,17 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.graphics.Rect;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CaptureRequest;
 import android.util.Range;
 import android.util.Rational;
 
+import com.xlythe.view.camera.Barcode;
 import androidx.lifecycle.Lifecycle;
 
 import com.xlythe.view.camera.CameraView;
@@ -30,6 +33,7 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+
 
 /**
  * The CameraX backend driven against Robolectric's camera2 shadows.
@@ -121,6 +125,7 @@ public class CameraXHarnessTest {
 
             exerciseControls(module);
             exerciseQueries(module);
+            exerciseFrameEffectFallback(module);
             exerciseAnalysis(module);
             exerciseRebinds(module);
             exerciseCapture(module);
@@ -277,8 +282,7 @@ public class CameraXHarnessTest {
         // offering the gesture. The answer depends on the bound camera, so asking is a question
         // put to it rather than a constant - and must not disturb what is bound.
         module.isFocusSupported();
-        module.focus(new android.graphics.Rect(-100, -100, 100, 100),
-                new android.graphics.Rect(-200, -200, 200, 200));
+        module.focus(new Rect(-100, -100, 100, 100), new Rect(-200, -200, 200, 200));
         FakeCameraXHost.idle();
         assertTrue("asking about focus must not cost the bind", module.isCameraBoundForTesting());
     }
@@ -294,8 +298,7 @@ public class CameraXHarnessTest {
      */
     private static void exerciseAnalysis(CameraXModule module) {
         assertFalse("without ML Kit the request has to be declined, not thrown",
-                module.startBarcodeScanner(
-                        barcodes -> {}, com.xlythe.view.camera.Barcode.Format.QR_CODE));
+                module.startBarcodeScanner(barcodes -> {}, Barcode.Format.QR_CODE));
 
         // And a stop that matches a start that never happened is harmless.
         module.stopBarcodeScanner();
@@ -359,6 +362,11 @@ public class CameraXHarnessTest {
         // than throw: an app asks them to decide whether to show a button.
         module.isSnapshotWhileRecordingSupported();
 
+        // This backend has somewhere to put a processor between the camera and its outputs, which
+        // is what the probe answers. Whether one can actually be bound here is a different
+        // question, and the answer is no for the reason recorded on this class.
+        assertTrue("the CameraX backend offers frame effects", module.isFrameEffectSupported());
+
         // The contract is that the return value says whether the camera is now in the state that
         // was asked for, so it has to agree with what the camera says it can do - and turning it
         // off has to succeed either way, since a camera that cannot track faces is already not
@@ -376,6 +384,28 @@ public class CameraXHarnessTest {
         FakeCameraXHost.idle();
         module.setTorchEnabled(false);
         FakeCameraXHost.idle();
+    }
+
+    /**
+     * What can honestly be asserted about effects without a GPU, which is less than it looks.
+     *
+     * <p>Binding an effect on a live camera cannot be exercised here. CameraX routes an effect
+     * through its own GL machinery and its stream-sharing adapter, and in a JVM both come apart:
+     * {@code GLUtils}'s static initializer throws on a null {@code EGL_NO_SURFACE}, and once a
+     * bind has failed part way through, the use cases it touched stay attached to a virtual
+     * camera that no later bind can replace. Neither is the library's behaviour and neither
+     * happens on a device - on a Pixel 7 Pro the same path produces a photograph.</p>
+     *
+     * <p>So this asserts the parts that are the library's own: the probe answers before anything
+     * has failed, and the renderer a caller sets is the renderer it gets back. That the frames
+     * actually reach the saved file is proven on hardware, by {@code FrameEffectDeviceTest},
+     * which is the only place it can be.</p>
+     */
+    private static void exerciseFrameEffectFallback(CameraXModule module) {
+        assertTrue("effects are offered until GL has actually failed",
+                module.isFrameEffectSupported());
+        assertNull("no renderer until a caller sets one", module.getFrameRenderer());
+        assertNull("nor a texture provider", module.getCameraTextureProvider());
     }
 
     /** Toggling is the shorthand an app's flip button calls, and it has to rebind. */

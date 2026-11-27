@@ -191,6 +191,30 @@ public final class CameraXModuleTest {
         assertEquals(new Size(720, 480), CameraXModule.imageTargetSize(CameraView.Quality.LOW));
     }
 
+    /** An effect gives way to a custom stream, whose second Preview CameraX cannot tell apart. */
+    @Test
+    public void anEffectGivesWayOnlyToACustomStream() {
+        assertTrue("the ordinary case binds an effect",
+                CameraXModule.canBindFrameEffect(false));
+        assertFalse("a custom stream needs a second Preview CameraX cannot tell apart",
+                CameraXModule.canBindFrameEffect(true));
+    }
+
+    /**
+     * While frames are drawn the still is built as a JPEG whatever format was asked for, as it is
+     * on Camera2. CameraX throws out of a bind that pairs an effect with a raw or Ultra HDR still,
+     * so getting this wrong costs the camera, not the effect.
+     */
+    @Test
+    public void aDrawnStillIsBuiltAsAJpegWhateverTheFormat() {
+        for (CameraView.PictureFormat format : CameraView.PictureFormat.values()) {
+            assertEquals(format + " while drawing", CameraView.PictureFormat.JPEG,
+                    CameraXModule.boundPictureFormat(format, true));
+            assertEquals(format + " otherwise", format,
+                    CameraXModule.boundPictureFormat(format, false));
+        }
+    }
+
     /**
      * A capture whose Exif has no room for the camera's own tags keeps the picture and the rest
      * of its metadata, rather than passing the save's complaint on.

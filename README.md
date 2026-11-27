@@ -22,9 +22,11 @@ If your minSdk is below 24, build with `-Pcameraview.core=true`, which leaves ou
 cannot reach that far back and covers API 14 and up. This is not hypothetical: `camera-camera2`
 pulls in `camera-camera2-pipe`, which declares a minSdk of 24, and a dependency's floor becomes
 your app's floor whatever this library declares. In that build, barcode scanning needs API 21 and
-`com.google.mlkit:barcode-scanning` in your own dependencies, frame analysis needs API 21,
-streaming API 18 and recording API 16. Without them, `enterBarcodeScanner` and `startFrameAnalysis`
-return false and `startRecording` reports `onFailure`.
+`com.google.mlkit:barcode-scanning` in your own dependencies, background replacement API 21 and
+`com.google.mlkit:segmentation-selfie`, frame analysis and frame renderers API 21, streaming API 18
+and recording API 16. Without them, `enterBarcodeScanner`, `enterBackgroundReplacement`,
+`startFrameAnalysis` and `isFrameEffectSupported` return false and `startRecording` reports
+`onFailure`.
 
 Permissions
 -----------------
@@ -69,8 +71,9 @@ pictureQuality [1 to 100], colorSpace [srgb, displayP3],
 pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [minExposureCompensation to
 maxExposureCompensation, in steps of exposureCompensationStep EV], torchEnabled [boolean],
 dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
-stabilizationEnabled [boolean] and lowLightBoostEnabled [boolean]. Not every camera can do all of
-these, so CameraState below says which this one supports.
+stabilizationEnabled [boolean], lowLightBoostEnabled [boolean], frameRenderer [FrameRenderer, see
+Filters and masks below] and cameraTextureProvider [CameraTextureProvider]. Not every camera can
+do all of these, so CameraState below says which this one supports.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
 opens, and is republished when the camera reconfigures, so ask it before offering a control: a
@@ -95,7 +98,8 @@ minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
 minExposureCompensation, maxExposureCompensation, exposureCompensationStep, supportedColorSpaces,
 supportedPictureFormats, supportedDynamicRanges, supportedExtensions, isStabilizationSupported,
 isLowLightBoostSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
-horizontalFieldOfView, verticalFieldOfView, isRecording and isAnalyzingFrames.
+horizontalFieldOfView, verticalFieldOfView, isRecording, isAnalyzingFrames, isFrameEffectSupported
+and isReplacingBackground.
 
 Pass onZoomChanged to hear the zoom ratio whenever it changes, a pinch included, so that buttons
 for zoomPresets can follow it. Writing it back into zoomRatio is safe, and animateZoom eases over
@@ -164,6 +168,12 @@ Reports the faces the camera is already tracking, or stops when given null. Retu
 camera cannot report faces, in which case the listener is never called.
 ```kotlin
 cameraController.setFaceDetectionListener { faces, faceToView -> ... }
+```
+Segments the subject out of each frame and draws it over a colour or an image, in place of
+frameRenderer, until exitBackgroundReplacement. Returns false if this camera cannot.
+```kotlin
+cameraController.enterBackgroundReplacement(BackgroundReplacer().apply { setBackgroundImage(bitmap) })
+cameraController.exitBackgroundReplacement()
 ```
 
 CameraFragment
@@ -433,6 +443,49 @@ float fov = mCameraView.getHorizontalFieldOfView();
 float x = getWidth() * (0.5f + (float) Math.tan(Math.toRadians(bearing))
         / (2f * (float) Math.tan(Math.toRadians(fov / 2))));
 ```
+
+Filters and masks
+-----------------
+setFrameRenderer draws every camera frame through your renderer on its way to the preview, the
+recording and the pictures. isFrameEffectSupported says whether this camera can; where it cannot,
+the renderer is kept but never called. The renderer is called on a GL thread of its own with the
+frame already on a texture, so a filter is a shader.
+```java
+if (mCameraView.isFrameEffectSupported()) {
+    mCameraView.setFrameRenderer(new ColorFilter(ColorMatrix.sepia()));
+}
+mCameraView.setFrameRenderer(null); // back to the camera's own frames
+```
+ColorMatrix has the usual ones (grayscale, sepia, invert, saturation, contrast, brightness and
+tint), concat combines them, and ColorFilter takes any 4x4 matrix of your own. A renderer that
+returns false from onDrawFrame passes the frame through, so one renderer can filter some frames
+and leave others alone.
+
+A renderer draws the picture the right way up as it is shown. Whatever it draws at the top is at
+the top of the preview, the recording and the picture, and left stays left, from either camera
+and however the phone is held; only the camera's own frame turns and mirrors to match the preview.
+frame.getWidth and frame.getHeight are the size of that upright picture.
+
+For a mask rather than a filter, enterBackgroundReplacement segments the subject out of each frame
+and draws it over a colour or an image, in place of any frame renderer. It takes the frames an
+analyzer would, so it returns false while startFrameAnalysis or the barcode scanner is running,
+and they return false while it is.
+```java
+BackgroundReplacer replacer = new BackgroundReplacer();
+replacer.setBackgroundImage(bitmap); // or setBackgroundColor(Color.BLUE)
+mCameraView.enterBackgroundReplacement(replacer);
+mCameraView.exitBackgroundReplacement();
+```
+To use a segmentation model of your own, set a BackgroundReplacer with setFrameRenderer and hand
+it each SegmentationMask with setMask.
+
+setCameraTextureProvider has the camera write its frames into a texture you create, for a library
+whose API takes the name of a texture it made. Changing it briefly restarts the camera.
+
+A picture taken while something is drawing is drawn as the preview shows it and written as a
+JPEG. isPictureFormatSupported reports every other format unsupported until nothing is drawing:
+Ultra HDR chosen beforehand falls back to JPEG, and a picture taken in RAW or RAW_JPEG chosen
+beforehand fails.
 
 Frames
 -----------------

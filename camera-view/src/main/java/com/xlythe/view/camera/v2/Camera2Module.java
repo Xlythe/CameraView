@@ -3,6 +3,7 @@ package com.xlythe.view.camera.v2;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Context;
+import android.graphics.ColorSpace;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
@@ -16,6 +17,7 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
+import android.hardware.camera2.params.ColorSpaceProfiles;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
@@ -38,9 +40,14 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
+import com.xlythe.view.camera.FrameStream;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.SegmentationAnalyzer;
 import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.ZoomMath;
+import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.FrameRenderThread;
+import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
@@ -52,6 +59,7 @@ import java.util.Locale;
 import java.util.Set;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
@@ -336,6 +344,223 @@ public class Camera2Module extends ICameraModule {
      */
     @NonNull
     private final CameraManager mCameraManager;
+
+    /**
+     * The GL pipeline the camera frames go through, or null when nothing is drawing them.
+     *
+     * <p>Only up while a renderer or a texture provider is set, because it costs a thread, an
+     * EGL context and a texture, and because routing frames through it changes what the camera
+     * is asked to write to - a camera that nothing is drawing should go straight to the
+     * preview as it always has.</p>
+     */
+    @Nullable
+    private FrameRenderThread mEffect;
+
+    /** Set once GL has failed here, so the camera carries on without offering effects again. */
+    private boolean mGlUnavailable;
+
+    /**
+     * Whether the recording being made, or the last one made, is mirrored in the file.
+     *
+     * <p>Decided by each recording rather than once for the camera, because a front recording
+     * is only mirrored when it went through GL. It outlives the recording on purpose: the
+     * confirmation that plays the file back asks after the recording has stopped.</p>
+     */
+    private boolean mRecordingMirrored;
+
+    /**
+     * Whether frames can be put through GL on the way out.
+     *
+     * <p>True, which it was not: the frames of a Camera2 session go to the surfaces in that
+     * session, and those surfaces can be the renderer's as easily as the preview's. What makes
+     * it work for the photograph as well as the preview is that a still is taken through a
+     * second input at the camera's own resolution rather than off the preview stream - an
+     * effect that drew the preview into the photograph would quietly turn a twelve megapixel
+     * camera into a two megapixel one.</p>
+     */
+    @Override
+    public boolean isFrameEffectSupported() {
+        return !mGlUnavailable;
+    }
+
+    @Override
+    public void setFrameRenderer(@Nullable FrameRenderer renderer) {
+        super.setFrameRenderer(renderer);
+        mHandler.post(this::applyFrameEffect);
+    }
+
+    @Override
+    public void setCameraTextureProvider(@Nullable CameraTextureProvider provider) {
+        super.setCameraTextureProvider(provider);
+        mHandler.post(this::applyFrameEffect);
+    }
+
+    /**
+     * Brings the pipeline into line with what the caller has asked for.
+     *
+     * <p>Rebuilds the session only when the pipeline comes up or goes down, because that is
+     * when the surfaces the camera writes to change. Changing what is drawn is a field on a
+     * renderer that is already running, and reconfiguring the camera for it would drop frames
+     * for nothing.</p>
+     */
+    private void applyFrameEffect() {
+        if (!isFrameEffectSupported()) {
+            // A subclass that draws the frames itself, which the AR backend does.
+            return;
+        }
+        boolean wanted = getFrameRenderer() != null || getCameraTextureProvider() != null;
+        boolean running = mEffect != null;
+        if (wanted == running) {
+            if (mEffect != null) {
+                mEffect.setFrameRenderer(getFrameRenderer());
+            }
+            return;
+        }
+        if (wanted) {
+            FrameRenderThread effect = new FrameRenderThread("CameraViewCamera2Renderer");
+            effect.setCameraTextureProvider(getCameraTextureProvider());
+            effect.setFrameRenderer(getFrameRenderer());
+            if (!effect.start()) {
+                // A device whose driver will not give us a context is a device the camera still
+                // has to work on, so the effect is refused and not offered again.
+                mGlUnavailable = true;
+                return;
+            }
+            mEffect = effect;
+        } else {
+            FrameRenderThread effect = mEffect;
+            mEffect = null;
+            if (effect != null) {
+                effect.stop();
+            }
+        }
+        restartActiveSession();
+    }
+
+    /** The pipeline, for the sessions that have to point the camera at it. */
+    @Nullable
+    FrameRenderThread getEffect() {
+        return mEffect;
+    }
+
+    /** Whether GL is still worth trying here, which it is until it has failed once. */
+    @MainThread
+    boolean isGlAvailable() {
+        return !mGlUnavailable;
+    }
+
+    /**
+     * Brings up a renderer for a recording to have to itself, while no effect is running.
+     *
+     * <p>A failure here counts against GL as a failed effect does, so neither a later recording
+     * nor an effect tries it again.</p>
+     *
+     * @return the renderer, running, or null when GL will not run here
+     */
+    @MainThread
+    @Nullable
+    FrameRenderThread startRecordingRenderer() {
+        if (mGlUnavailable) {
+            return null;
+        }
+        FrameRenderThread renderer = new FrameRenderThread("CameraViewCamera2Recorder");
+        if (!renderer.start()) {
+            mGlUnavailable = true;
+            return null;
+        }
+        return renderer;
+    }
+
+    /** Called by a recording once it knows whether its file is mirrored. */
+    @MainThread
+    void setRecordingMirrored(boolean mirrored) {
+        mRecordingMirrored = mirrored;
+    }
+
+    /**
+     * True for a front recording that went through GL, which mirrors it as its preview is
+     * mirrored, and false for one that could not, which is left for the confirmation to flip.
+     */
+    @Override
+    public boolean isFrontVideoMirrored() {
+        return mRecordingMirrored;
+    }
+
+    @Override
+    protected boolean isDrawingFrames() {
+        return mEffect != null;
+    }
+
+    /** The frames being segmented, or null when nothing is. */
+    @Nullable
+    private FrameStream mSegmentationStream;
+
+    /** The model the segmented frames go to, or null when nothing is segmenting. */
+    @Nullable
+    private SegmentationAnalyzer mSegmentationAnalyzer;
+
+    /**
+     * Starts segmenting frames, through a stream of this session's own.
+     *
+     * <p>Camera2 has no analysis use case to borrow, so the frames come from a
+     * {@link FrameStream} - the same one an app would use for its own detection - which adds a
+     * reader to the session alongside whatever else is in it. That is a second stream, not a
+     * third: while an effect is running the camera writes one stream into the renderer, so the
+     * reader brings the total to two.</p>
+     *
+     * <p>It takes the frames the way a caller's own analyzer would, so the two cannot both run.
+     * Said here rather than discovered later: an app that wants to segment and scan barcodes at
+     * once needs its own model for one of them.</p>
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    @Override
+    protected boolean startSegmentation(CameraView.SegmentationListener listener) {
+        if (listener == null) {
+            throw new NullPointerException("listener cannot be null");
+        }
+        if (!isFrameAnalysisSupported()) {
+            return false;
+        }
+        stopSegmentation();
+        SegmentationAnalyzer analyzer;
+        try {
+            analyzer = new SegmentationAnalyzer(listener, mHandler::post,
+                    isUsingFrontFacingCamera());
+        } catch (RuntimeException | LinkageError error) {
+            // The model is delivered by Play services and its client is built here, so a device
+            // without it fails at construction. Reported rather than thrown: a camera library
+            // may not take an app down because a vision dependency is missing.
+            Log.w(TAG, "This device cannot segment", error);
+            return false;
+        }
+        try {
+            FrameStream stream = FrameStream.forLibrary(
+                    getCanvas(), new FrameStream.Params(), analyzer);
+            stream.start();
+            mSegmentationStream = stream;
+            mSegmentationAnalyzer = analyzer;
+            return true;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to start segmenting frames", error);
+            analyzer.close();
+            return false;
+        }
+    }
+
+    @Override
+    protected void stopSegmentation() {
+        FrameStream stream = mSegmentationStream;
+        SegmentationAnalyzer analyzer = mSegmentationAnalyzer;
+        mSegmentationStream = null;
+        mSegmentationAnalyzer = null;
+        if (stream != null) {
+            stream.close();
+        }
+        if (analyzer != null) {
+            // After the stream, so no frame arrives for a model that has been released.
+            analyzer.close();
+        }
+    }
 
     /**
      * This is the id of the camera (eg. front or back facing) that we're currently using.
@@ -665,7 +890,7 @@ public class Camera2Module extends ICameraModule {
             device.createCaptureSession(surfaces, callback, mHandler);
             return;
         }
-        android.graphics.ColorSpace.Named named = namedColorSpace(getColorSpace());
+        ColorSpace.Named named = namedColorSpace(getColorSpace());
         if (named == null) {
             device.createCaptureSession(surfaces, callback, mHandler);
             return;
@@ -760,6 +985,11 @@ public class Camera2Module extends ICameraModule {
         if (mIsOpen) {
             return;
         }
+        // Brought back up if a renderer is still set, since close() took it down: an app that
+        // sets a renderer once and then rotates the screen expects it to still be there.
+        if (mEffect == null && !mGlUnavailable) {
+            applyFrameEffect();
+        }
         closeCameraResources();
         mIsOpen = true;
         mReopenAttempts = 0;
@@ -772,6 +1002,14 @@ public class Camera2Module extends ICameraModule {
     public void close() {
         mAwaitingFormatSession = false;
         cancelPendingPicture();
+        stopSegmentation();
+        FrameRenderThread effect = mEffect;
+        mEffect = null;
+        if (effect != null) {
+            // Before the session, because it is drawing into surfaces the session owns and
+            // stopping it blocks until it has.
+            effect.stop();
+        }
         mIsOpen = false;
         mReopenAttempts = 0;
         mPendingOpenGeneration = 0;
@@ -1648,12 +1886,12 @@ public class Camera2Module extends ICameraModule {
             // would silently produce sRGB anyway.
             return false;
         }
-        android.graphics.ColorSpace.Named named = namedColorSpace(colorSpace);
+        ColorSpace.Named named = namedColorSpace(colorSpace);
         if (named == null) {
             return false;
         }
         try {
-            android.hardware.camera2.params.ColorSpaceProfiles profiles =
+            ColorSpaceProfiles profiles =
                     mCameraManager.getCameraCharacteristics(getActiveCamera())
                             .get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES);
             return profiles != null
@@ -1684,13 +1922,12 @@ public class Camera2Module extends ICameraModule {
      */
     @RequiresApi(34)
     @Nullable
-    private static android.graphics.ColorSpace.Named namedColorSpace(
-            CameraView.ColorSpace colorSpace) {
+    private static ColorSpace.Named namedColorSpace(CameraView.ColorSpace colorSpace) {
         switch (colorSpace) {
             case DISPLAY_P3:
-                return android.graphics.ColorSpace.Named.DISPLAY_P3;
+                return ColorSpace.Named.DISPLAY_P3;
             case SRGB:
-                return android.graphics.ColorSpace.Named.SRGB;
+                return ColorSpace.Named.SRGB;
             default:
                 return null;
         }
@@ -1700,12 +1937,13 @@ public class Camera2Module extends ICameraModule {
     public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
         if (format == CameraView.PictureFormat.RAW
                 || format == CameraView.PictureFormat.RAW_JPEG) {
-            return writesRaw(getCameraCharacteristics());
+            // A drawn picture is a JPEG, so there is no sensor frame to write a DNG from.
+            return !isDrawingFrames() && writesRaw(getCameraCharacteristics());
         }
         if (format != CameraView.PictureFormat.ULTRA_HDR) {
             return super.isPictureFormatSupported(format);
         }
-        if (Build.VERSION.SDK_INT < 34) {
+        if (Build.VERSION.SDK_INT < 34 || isDrawingFrames()) {
             return false;
         }
         try {
@@ -1833,8 +2071,8 @@ public class Camera2Module extends ICameraModule {
         if (colorSpace == CameraView.ColorSpace.SRGB) {
             return true;
         }
-        android.graphics.ColorSpace.Named named = namedColorSpace(colorSpace);
-        android.hardware.camera2.params.ColorSpaceProfiles profiles =
+        ColorSpace.Named named = namedColorSpace(colorSpace);
+        ColorSpaceProfiles profiles =
                 characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES);
         return named != null && profiles != null
                 && profiles.getSupportedColorSpaces(ImageFormat.JPEG_R).contains(named);
@@ -2253,6 +2491,13 @@ public class Camera2Module extends ICameraModule {
         }
 
         setTransform(matrix);
+
+        FrameRenderThread effect = mEffect;
+        if (effect != null) {
+            // The preview is turned for the display here, so this is also where how every frame
+            // is shown changes, and with it which way round a renderer's drawing goes.
+            effect.setShownOrientation(getRelativeCameraOrientation(), isUsingFrontFacingCamera());
+        }
     }
 
     @Override

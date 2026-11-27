@@ -49,6 +49,8 @@ android {
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
         sourceSets.main.kotlin.filter.exclude '**/com/xlythe/compose/**'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXSegmentationAnalyzer.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXFrameAnalyzer.java'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/x/**'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
         sourceSets.test.kotlin.filter.exclude '**/com/xlythe/compose/**'
@@ -247,8 +249,15 @@ dependencies {
         // the app. CameraView#enterBarcodeScanner returns false when it is missing.
         compileOnly 'com.google.mlkit:barcode-scanning:[17.3.0,)'
         testImplementation 'com.google.mlkit:barcode-scanning:[17.3.0,)'
+        // The same for the segmenter, which CameraView#enterBackgroundReplacement reports
+        // missing the same way.
+        compileOnly 'com.google.mlkit:segmentation-selfie:[16.0.0-beta6,)'
+        testImplementation 'com.google.mlkit:segmentation-selfie:[16.0.0-beta6,)'
     } else {
         api 'com.google.mlkit:barcode-scanning:[17.3.0,)'
+        // A floor at its latest release like the rest, but left out of rangedModules: it has only
+        // ever shipped betas, so turning pre-releases down would leave nothing to resolve.
+        api 'com.google.mlkit:segmentation-selfie:[16.0.0-beta6,)'
         api 'androidx.legacy:legacy-support-v4:[1.0.0,)'
         // Below 1.5, whose releases need API 24 where this build declares 21.
         api 'androidx.exifinterface:exifinterface:[1.4.2,1.5)'

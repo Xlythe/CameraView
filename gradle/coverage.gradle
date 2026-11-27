@@ -58,6 +58,7 @@ def coreCoverageIncludes = [
         'com/xlythe/view/camera/v2/SafeCloseImageReader.class',
         'com/xlythe/view/camera/v2/SafeCloseImageReader$*.class',
         'com/xlythe/view/camera/x/CameraXMath.class',
+        'com/xlythe/view/camera/gl/GlMath.class',
         'com/xlythe/view/camera/stream/AudioBuffer.class',
         'com/xlythe/view/camera/stream/AudioCatchUp.class',
         'com/xlythe/view/camera/stream/AudioStreamHeader.class',

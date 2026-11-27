@@ -36,6 +36,9 @@ import com.xlythe.view.camera.FrameStream
 import com.xlythe.view.camera.ICameraModule
 import com.xlythe.view.camera.VideoStream
 import com.xlythe.view.camera.ZoomPreset
+import com.xlythe.view.camera.gl.BackgroundReplacer
+import com.xlythe.view.camera.gl.CameraTextureProvider
+import com.xlythe.view.camera.gl.FrameRenderer
 import java.io.File
 
 private const val TAG = "Camera"
@@ -157,7 +160,14 @@ data class CameraState(
     val horizontalFieldOfView: Float = 0f,
     val verticalFieldOfView: Float = 0f,
     val isRecording: Boolean = false,
-    val isAnalyzingFrames: Boolean = false
+    val isAnalyzingFrames: Boolean = false,
+    /**
+     * Whether [Camera]'s frameRenderer and cameraTextureProvider reach the camera's frames. A
+     * camera that cannot draw them takes them and keeps showing its own frames.
+     */
+    val isFrameEffectSupported: Boolean = false,
+    /** Whether [CameraController.enterBackgroundReplacement] is in force. */
+    val isReplacingBackground: Boolean = false
 )
 
 interface CameraController {
@@ -216,7 +226,8 @@ interface CameraController {
      * The frame's image belongs to the camera and is recycled as soon as the call returns, so
      * anything that outlives it has to be copied out.
      *
-     * @return whether analysis started. False on a camera that cannot produce frames to read.
+     * @return whether analysis started. False on a camera that cannot produce frames to read,
+     *     and while [enterBackgroundReplacement] is in force.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
      */
     @RequiresPermission(Manifest.permission.CAMERA)
@@ -239,10 +250,28 @@ interface CameraController {
     fun setFaceDetectionListener(
         listener: ((faces: List<Face>, faceToView: Matrix) -> Unit)?
     ): Boolean
+
+    /**
+     * Segments the subject out of each frame and draws it over [replacer]'s background, in place
+     * of [Camera]'s frameRenderer, until [exitBackgroundReplacement].
+     *
+     * @return whether it started. Returns false, changing nothing, while [startFrameAnalysis] or
+     *     the barcode scanner is running, since it reads the same frames. False also on a camera
+     *     that cannot draw frames, which [CameraState.isFrameEffectSupported] says in advance, and
+     *     where the segmentation model is unavailable.
+     * @throws IllegalStateException if the camera is not open
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    fun enterBackgroundReplacement(replacer: BackgroundReplacer): Boolean
+
+    /** Stops replacing the background, and draws through [Camera]'s frameRenderer again. */
+    fun exitBackgroundReplacement()
 }
 
 private class CameraControllerImpl(
     private val viewProvider: () -> CameraView?,
+    /** [Camera]'s frameRenderer, put back on the view once a background replacement ends. */
+    private val frameEffects: FrameEffectSync,
     /**
      * Called after anything that changes what [CameraState] reports. The queries are pulled from
      * the camera rather than announced by it, so nothing else would notice that a recording has
@@ -342,7 +371,7 @@ private class CameraControllerImpl(
         val requested = if (formats.isNotEmpty()) {
             formats
         } else {
-            intArrayOf(com.xlythe.view.camera.Barcode.Format.QR_CODE)
+            intArrayOf(Barcode.Format.QR_CODE)
         }
         val rest = if (requested.size > 1) {
             requested.sliceArray(1 until requested.size)
@@ -402,6 +431,33 @@ private class CameraControllerImpl(
         }
         return view.setFaceDetectionListener { faces, faceToView -> listener(faces, faceToView) }
     }
+
+    @RequiresPermission(Manifest.permission.CAMERA)
+    override fun enterBackgroundReplacement(replacer: BackgroundReplacer): Boolean {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for enterBackgroundReplacement")
+            return false
+        }
+        val started = view.enterBackgroundReplacement(replacer)
+        if (!started) {
+            // A refusal clears the view's renderer, which was the caller's.
+            frameEffects.restore(view)
+        }
+        onCameraStateChanged()
+        return started
+    }
+
+    override fun exitBackgroundReplacement() {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for exitBackgroundReplacement")
+            return
+        }
+        view.exitBackgroundReplacement()
+        frameEffects.restore(view)
+        onCameraStateChanged()
+    }
 }
 
 /**
@@ -446,7 +502,9 @@ private fun CameraView.readCameraState(): CameraState {
         horizontalFieldOfView = horizontalFieldOfView,
         verticalFieldOfView = verticalFieldOfView,
         isRecording = isRecording,
-        isAnalyzingFrames = isAnalyzingFrames
+        isAnalyzingFrames = isAnalyzingFrames,
+        isFrameEffectSupported = isFrameEffectSupported,
+        isReplacingBackground = isReplacingBackground
     )
 }
 
@@ -550,6 +608,11 @@ private fun Extension.toCameraView() = when (this) {
  * @param shutterSoundEnabled Plays the platform's click and recording tones. Where the law
  *  requires them, they play regardless.
  * @param shutterSound A raw resource played in place of the platform's click, or 0 for the click.
+ * @param frameRenderer Draws every frame on its way to the preview, the recording and the
+ *  pictures, or null for the camera's own frames. [CameraState.isFrameEffectSupported] says
+ *  whether this camera can.
+ * @param cameraTextureProvider Creates the texture the camera writes its frames into, or null for
+ *  the library's own. Changing it restarts the camera; changing [frameRenderer] does not.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
@@ -591,6 +654,8 @@ fun Camera(
     lowLightBoostEnabled: Boolean = false,
     shutterSoundEnabled: Boolean = true,
     @RawRes shutterSound: Int = 0,
+    frameRenderer: FrameRenderer? = null,
+    cameraTextureProvider: CameraTextureProvider? = null,
     controller: MutableState<CameraController?>,
     state: MutableState<CameraState?> = remember { mutableStateOf(null) },
     onShutter: () -> Unit = {},
@@ -619,6 +684,8 @@ fun Camera(
         videoConfirmationEnabled = videoConfirmationEnabled,
         matchPreviewAspectRatioEnabled = matchPreviewAspectRatioEnabled,
         applyZoom = { view -> zoomSync.update(view, zoomRatio, animateZoom) },
+        frameRenderer = frameRenderer,
+        cameraTextureProvider = cameraTextureProvider,
         exposureCompensation = exposureCompensation,
         torchEnabled = torchEnabled,
         colorSpace = colorSpace,
@@ -711,6 +778,8 @@ fun Camera(
         videoConfirmationEnabled = videoConfirmationEnabled,
         matchPreviewAspectRatioEnabled = matchPreviewAspectRatioEnabled,
         applyZoom = { view -> if (zoomLevel != null) view.zoomLevel = zoomLevel },
+        frameRenderer = null,
+        cameraTextureProvider = null,
         exposureCompensation = exposureCompensation,
         torchEnabled = torchEnabled,
         colorSpace = colorSpace,
@@ -776,6 +845,39 @@ private class ZoomSync {
 }
 
 /**
+ * Pushes [Camera]'s frameRenderer and cameraTextureProvider to the view when they change, rather
+ * than on every recomposition. A background replacement draws in the renderer's place, and neither
+ * an unrelated recomposition nor a new renderer may undo it; once it ends, [restore] puts the
+ * latest renderer back.
+ */
+private class FrameEffectSync {
+    /** The frameRenderer [Camera] was last given, which the view starts out matching as null. */
+    private var renderer: FrameRenderer? = null
+
+    /** The cameraTextureProvider [Camera] was last given, null to begin with like the view's. */
+    private var textureProvider: CameraTextureProvider? = null
+
+    /** Pushes whichever of the two changed since the last update. */
+    fun update(view: CameraView, renderer: FrameRenderer?, textureProvider: CameraTextureProvider?) {
+        if (textureProvider !== this.textureProvider) {
+            this.textureProvider = textureProvider
+            view.cameraTextureProvider = textureProvider
+        }
+        if (renderer !== this.renderer) {
+            this.renderer = renderer
+            if (!view.isReplacingBackground) {
+                view.frameRenderer = renderer
+            }
+        }
+    }
+
+    /** Puts the last frameRenderer [Camera] was given back on the view. */
+    fun restore(view: CameraView) {
+        view.frameRenderer = renderer
+    }
+}
+
+/**
  * The camera both [Camera] overloads show. They differ only in how they name the zoom, so each
  * passes its own [applyZoom], which pushes it onto the view along with the other attributes.
  */
@@ -793,6 +895,8 @@ private fun CameraImpl(
     videoConfirmationEnabled: Boolean,
     matchPreviewAspectRatioEnabled: Boolean,
     applyZoom: (CameraView) -> Unit,
+    frameRenderer: FrameRenderer?,
+    cameraTextureProvider: CameraTextureProvider?,
     exposureCompensation: Int,
     torchEnabled: Boolean,
     colorSpace: ColorSpace,
@@ -919,9 +1023,11 @@ private fun CameraImpl(
         }
     }
 
+    val frameEffects = remember { FrameEffectSync() }
+
     // Cache our camera controller.
     val cameraController = remember(cameraView) {
-        CameraControllerImpl({ cameraView }, { publishState(cameraView) })
+        CameraControllerImpl({ cameraView }, frameEffects, { publishState(cameraView) })
     }
     DisposableEffect(cameraController) {
         controller.value = cameraController
@@ -1035,6 +1141,7 @@ private fun CameraImpl(
         view.isLowLightBoostEnabled = lowLightBoostEnabled
         view.isShutterSoundEnabled = shutterSoundEnabled
         view.shutterSound = shutterSound
+        frameEffects.update(view, frameRenderer, cameraTextureProvider)
         // What the camera can do depends on what it has just been asked for - a lens, an extension
         // and a zoom each change the answers - so the snapshot is taken after the settings land.
         publishState(view)

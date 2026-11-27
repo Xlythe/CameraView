@@ -1,5 +1,6 @@
 package com.xlythe.view.camera;
 
+import android.Manifest;
 import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.Rect;
@@ -16,10 +17,13 @@ import android.util.Log;
 import androidx.annotation.AnyThread;
 import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
+import androidx.annotation.RequiresPermission;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
 
+import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
@@ -126,6 +130,18 @@ public abstract class ICameraModule {
 
     protected void stopBarcodeScanner() {}
 
+    /**
+     * Starts handing frames to a segmenter, which reports each mask to {@code listener}.
+     *
+     * @return whether it started. False where this camera cannot segment.
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    protected boolean startSegmentation(CameraView.SegmentationListener listener) {
+        return false;
+    }
+
+    /** Stops handing frames to a segmenter and releases the model. */
+    protected void stopSegmentation() {}
     @RequiresApi(18)
     public VideoRecorder.Canvas getCanvas() {
         return new VideoRecorder.Canvas() {
@@ -501,8 +517,9 @@ public abstract class ICameraModule {
     }
 
     /**
-     * Whether a recording from the user-facing lens is written mirrored, as its preview shows it.
-     * False where the backend cannot yet flip the frames it encodes.
+     * Whether the recording just made from the user-facing lens is written mirrored, as its
+     * preview shows it. False where its frames could not be flipped, which leaves the
+     * confirmation to flip it for display.
      */
     public boolean isFrontVideoMirrored() {
         return false;
@@ -674,6 +691,49 @@ public abstract class ICameraModule {
      */
     public boolean isFrameAnalysisSupported() {
         return true;
+    }
+
+    /** What draws each camera frame on its way out, or null to leave the frames alone. */
+    @Nullable private FrameRenderer mFrameRenderer;
+
+    /** Who owns the texture the camera renders into, or null for the library's own. */
+    @Nullable private CameraTextureProvider mCameraTextureProvider;
+
+    /**
+     * Whether this camera can draw its frames through a renderer or a texture provider on their
+     * way to the preview, the recording and the pictures. One that cannot keeps both and shows its
+     * own frames.
+     */
+    public boolean isFrameEffectSupported() {
+        return false;
+    }
+
+    /**
+     * Whether frames are being drawn now, for a renderer, a filter or a mask, in which case a
+     * picture is drawn as the preview shows it and written as a JPEG.
+     */
+    protected boolean isDrawingFrames() {
+        return false;
+    }
+
+    /** Sets what draws each frame, or null for the camera's own frames. */
+    public void setFrameRenderer(@Nullable FrameRenderer renderer) {
+        mFrameRenderer = renderer;
+    }
+
+    @Nullable
+    public final FrameRenderer getFrameRenderer() {
+        return mFrameRenderer;
+    }
+
+    /** Sets who creates the texture the camera renders into. See {@link CameraTextureProvider}. */
+    public void setCameraTextureProvider(@Nullable CameraTextureProvider provider) {
+        mCameraTextureProvider = provider;
+    }
+
+    @Nullable
+    public final CameraTextureProvider getCameraTextureProvider() {
+        return mCameraTextureProvider;
     }
 
     /** Whether this camera can report the faces it is already tracking. */

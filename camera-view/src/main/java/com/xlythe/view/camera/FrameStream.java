@@ -15,6 +15,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.RestrictTo;
 
 import com.xlythe.view.camera.stream.Handoff;
 import com.xlythe.view.camera.stream.VideoRecorder;
@@ -217,6 +218,20 @@ public final class FrameStream implements Closeable {
     /** Whether frames are being delivered. */
     public boolean isAnalyzing() {
         return mIsAlive.get();
+    }
+
+    /**
+     * A stream the library reads for itself. An app starts one with
+     * {@link CameraView#startFrameAnalysis(Analyzer)} instead.
+     *
+     * @hide
+     */
+    @RequiresApi(19)
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @NonNull
+    public static FrameStream forLibrary(@NonNull VideoRecorder.Canvas canvas,
+            @NonNull Params params, @NonNull Analyzer analyzer) {
+        return new FrameStream(canvas, null /* view */, params, analyzer);
     }
 
     /** Starts delivering frames. Does nothing if already started. */
