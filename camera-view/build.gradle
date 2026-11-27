@@ -250,12 +250,14 @@ dependencies {
         compileOnly 'com.google.mlkit:barcode-scanning:[17.3.0,)'
         testImplementation 'com.google.mlkit:barcode-scanning:[17.3.0,)'
         // The same for the segmenter, which CameraView#enterBackgroundReplacement reports
-        // missing the same way.
-        compileOnly 'com.google.mlkit:segmentation-selfie:[16.0.0-beta6,)'
-        testImplementation 'com.google.mlkit:segmentation-selfie:[16.0.0-beta6,)'
+        // missing the same way. Exact, as in the full build, because it has no stable release.
+        compileOnly 'com.google.mlkit:segmentation-selfie:16.0.0-beta6'
+        testImplementation 'com.google.mlkit:segmentation-selfie:16.0.0-beta6'
     } else {
         api 'com.google.mlkit:barcode-scanning:[17.3.0,)'
-        api 'com.google.mlkit:segmentation-selfie:[16.0.0-beta6,)'
+        // Exact rather than a range: it has no stable release, and a range would take whichever
+        // beta comes next.
+        api 'com.google.mlkit:segmentation-selfie:16.0.0-beta6'
         api 'androidx.legacy:legacy-support-v4:[1.0.0,)'
         // Below 1.5, whose releases need API 24 where this build declares 21.
         api 'androidx.exifinterface:exifinterface:[1.4.2,1.5)'
