@@ -2,6 +2,7 @@ package com.xlythe.sample.camera;
 
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -15,7 +16,8 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ZoomPreset;
 
-import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 
 import androidx.annotation.NonNull;
@@ -121,28 +123,28 @@ public class MainFragment extends CameraFragment {
     }
 
     /**
-     * Callback triggered by the library when a picture has been successfully taken and saved.
-     * The picture is initially written to a temporary cache file.
+     * Callback triggered once the library has taken a picture and filed it in the gallery.
      */
     @Override
-    public void onImageCaptured(final File file) {
-        // Print out metadata (EXIF data) about the captured picture using the library's Exif
-        // helper, while the capture is still the cache file we were handed.
-        Log.d(TAG, Exif.describe(file));
+    public void onImageSaved(@NonNull Uri uri) {
+        report("Picture saved to " + uri);
 
-        CaptureSaver.save(requireContext(), file, false /* isVideo */, uri -> {
-            report(uri == null ? "Could not save the picture" : "Picture saved to " + uri);
-        });
+        // Print out metadata (EXIF data) about the picture using the library's Exif helper.
+        try (InputStream input = requireContext().getContentResolver().openInputStream(uri)) {
+            if (input != null) {
+                Log.d(TAG, new Exif(input).toString());
+            }
+        } catch (IOException e) {
+            Log.w(TAG, "Could not read the metadata of " + uri, e);
+        }
     }
 
     /**
-     * Callback triggered by the library when a video recording successfully completes.
+     * Callback triggered once the library has recorded a video and filed it in the gallery.
      */
     @Override
-    public void onVideoCaptured(final File file) {
-        CaptureSaver.save(requireContext(), file, true /* isVideo */, uri -> {
-            report(uri == null ? "Could not save the video" : "Video saved to " + uri);
-        });
+    public void onVideoSaved(@NonNull Uri uri) {
+        report("Video saved to " + uri);
     }
 
     /**

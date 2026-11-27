@@ -2,12 +2,16 @@ package com.xlythe.compose.camera
 
 import android.Manifest
 import android.graphics.Rect
+import android.media.FakeImage
+import android.net.Uri
+import android.provider.MediaStore
 import android.view.View
 import android.view.ViewGroup
 import androidx.activity.ComponentActivity
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import com.xlythe.view.camera.CameraView
+import com.xlythe.view.camera.CaptureDelivery
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader
 import com.xlythe.view.camera.v2.FakeCamera2
@@ -25,6 +29,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowLooper
+import org.robolectric.shadows.ShadowPausedAsyncTask
 import java.io.File
 
 /**
@@ -521,6 +527,87 @@ class CameraComposableTest {
         assertTrue("focusing is not a reason to lose the camera", requireCameraView().isOpen)
     }
 
+    /**
+     * A picture taken without a file goes through the camera, is filed where the gallery looks,
+     * and arrives at onImageSaved rather than onImageCaptured.
+     */
+    @Test
+    fun aPictureWithoutAFileIsReportedByUri() {
+        // The JPEG is written on AsyncTask's pool. Inline, the capture completes within the test.
+        ShadowPausedAsyncTask.overrideExecutor { it.run() }
+        val controller = mutableStateOf<CameraController?>(null)
+        val saved = mutableListOf<Uri>()
+        val captured = mutableListOf<File>()
+        compose.setContent {
+            Camera(
+                controller = controller,
+                onImageCaptured = { captured.add(it) },
+                onImageSaved = { saved.add(it) }
+            )
+        }
+        compose.waitForIdle()
+
+        requireNotNull(controller.value).takePicture()
+        compose.waitForIdle()
+        val reader = requireNotNull(ShadowInjectableImageReader.latestReader())
+        ShadowInjectableImageReader.offerImage(reader, FakeImage.jpeg(1920, 1080, JPEG_BYTES))
+        awaitUntil { saved.isNotEmpty() }
+
+        assertEquals(1, saved.size)
+        assertTrue(saved[0].toString()
+            .startsWith(MediaStore.Images.Media.EXTERNAL_CONTENT_URI.toString()))
+        assertTrue(captured.isEmpty())
+    }
+
+    /** The controller's recording without a file reaches the camera like one with a file. */
+    @Test
+    fun theControllerRecordsWithoutAFile() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+
+        requireNotNull(controller.value).startRecording()
+        compose.waitForIdle()
+
+        assertTrue(requireCameraView().isRecording)
+        assertEquals(true, state.value?.isRecording)
+        requireNotNull(controller.value).stopRecording()
+        compose.waitForIdle()
+    }
+
+    /** A filed recording reaches the onVideoSaved the latest composition passed. */
+    @Test
+    fun aRecordingWithoutAFileIsReportedByUriToTheLatestCallback() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val which = mutableStateOf("first")
+        val saved = mutableListOf<Pair<String, Uri>>()
+        compose.setContent {
+            val label = which.value
+            Camera(controller = controller, onVideoSaved = { saved.add(label to it) })
+        }
+        compose.waitForIdle()
+        which.value = "second"
+        compose.waitForIdle()
+
+        CaptureDelivery.deliverOwnVideo(requireCameraView(), JPEG_BYTES)
+        awaitUntil { saved.isNotEmpty() }
+
+        assertEquals(1, saved.size)
+        assertEquals("second", saved[0].first)
+        assertTrue(saved[0].second.toString()
+            .startsWith(MediaStore.Video.Media.EXTERNAL_CONTENT_URI.toString()))
+    }
+
+    /** Runs the main looper until [done], for work that finishes on a thread of its own. */
+    private fun awaitUntil(done: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + 5_000
+        while (!done() && System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper()
+            Thread.sleep(10)
+        }
+    }
+
     private fun requireCameraView(): CameraView {
         val found = findCameraView(compose.activity.window.decorView)
         assertNotNull("the composable should have added a CameraView", found)
@@ -540,5 +627,10 @@ class CameraComposableTest {
             }
         }
         return null
+    }
+
+    private companion object {
+        /** Stands in for an encoded picture; nothing on the way to MediaStore parses it. */
+        val JPEG_BYTES = "not-really-a-jpeg".toByteArray()
     }
 }
