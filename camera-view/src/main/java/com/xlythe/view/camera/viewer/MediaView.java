@@ -59,6 +59,7 @@ import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -147,6 +148,12 @@ public class MediaView extends FrameLayout {
     /** Works out what files are, and opens them to play, off the main thread. */
     private Executor mExecutor = new ThreadPoolExecutor(
             0, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
+
+    /**
+     * Decodes animations, each on a thread of its own, so a decode a platform decoder stalls on
+     * holds nothing else up.
+     */
+    private Executor mAnimationExecutor = Executors.newCachedThreadPool();
 
     /** Taps and holds. */
     private final GestureDetector mGestures;
@@ -429,7 +436,7 @@ public class MediaView extends FrameLayout {
                 showAudio(location, detection);
                 break;
             case ANIMATION: {
-                AnimationView animation = new AnimationView(getContext(), mExecutor);
+                AnimationView animation = new AnimationView(getContext(), mAnimationExecutor);
                 animation.setImageLoadListener(imageListener());
                 setContent(animation);
                 animation.setLocation(location);
@@ -1204,6 +1211,7 @@ public class MediaView extends FrameLayout {
     @VisibleForTesting
     void setExecutor(@NonNull Executor executor) {
         mExecutor = executor;
+        mAnimationExecutor = executor;
     }
 
     /** What shows the file, for tests. */
