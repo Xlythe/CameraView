@@ -92,6 +92,24 @@ public final class DeviceState {
         Assume.assumeTrue("this emulator dies filling YUV_420_888 buffers", canFillYuvBuffers());
     }
 
+    /**
+     * Whether a backend can record or stream here.
+     *
+     * <p>The old camera API records and streams from YUV_420_888 buffers it has the camera fill,
+     * so on an emulator that cannot fill them a recording takes the emulator down: the graphics
+     * allocator logs its experimental path and adb loses the device, along with every test still
+     * to run. The other two backends hand the camera an encoder's surface and record here.</p>
+     */
+    public static boolean canRecord(@NonNull CameraView.Backend backend) {
+        return backend != CameraView.Backend.LEGACY || canFillYuvBuffers();
+    }
+
+    /** Skips a test that records or streams, when {@link #canRecord} says the backend cannot. */
+    public static void assumeTheBackendCanRecord(@NonNull CameraView.Backend backend) {
+        Assume.assumeTrue("this emulator dies when the old camera API fills YUV_420_888 buffers"
+                + " to record or stream", canRecord(backend));
+    }
+
     /** What to tell someone whose camera never opened, which is usually about the screen. */
     static String whyTheCameraMightNotOpen() {
         Context context = ApplicationProvider.getApplicationContext();

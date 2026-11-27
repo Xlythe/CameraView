@@ -117,6 +117,7 @@ public final class VideoMetadataDeviceTest {
     }
 
     private File record() throws Exception {
+        DeviceState.assumeTheBackendCanRecord(backend);
         File file = File.createTempFile("meta", ".mp4",
                 ApplicationProvider.getApplicationContext().getCacheDir());
         assertTrue(file.delete() || !file.exists());
