@@ -30,6 +30,21 @@ public final class FakeImage extends Image {
         return new FakeImage(ImageFormat.RAW10, width, height, new byte[] {1, 2, 3, 4});
     }
 
+    /**
+     * A RAW_SENSOR frame carrying the sensor timestamp its capture result would.
+     *
+     * <p>The timestamp is chosen rather than read from the clock, because it is what a frame is
+     * paired to its result by, and a pairing cannot be asserted against a timestamp the test never
+     * saw.</p>
+     */
+    public static FakeImage raw(int width, int height, long timestamp) {
+        // Sixteen bits a pixel in one plane, which is how a Bayer sensor hands over a frame.
+        return new FakeImage(ImageFormat.RAW_SENSOR, width, height,
+                new Plane[] {new FakePlane(
+                        ByteBuffer.wrap(new byte[width * height * 2]), 2, width * 2)},
+                timestamp);
+    }
+
     /** A frame in the format a camera produces for analysis. */
     public static FakeImage yuv(int width, int height) {
         return new FakeImage(
@@ -128,10 +143,14 @@ public final class FakeImage extends Image {
     }
 
     private FakeImage(int format, int width, int height, Plane[] planes) {
+        this(format, width, height, planes, System.nanoTime());
+    }
+
+    private FakeImage(int format, int width, int height, Plane[] planes, long timestamp) {
         this.format = format;
         this.width = width;
         this.height = height;
-        this.timestamp = System.nanoTime();
+        this.timestamp = timestamp;
         this.planes = planes;
     }
 

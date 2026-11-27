@@ -20,6 +20,7 @@ import org.robolectric.shadows.ShadowTotalCaptureResult;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Delivers capture callbacks from Robolectric's capture-session shadow.
@@ -31,9 +32,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  *
  * <p>Each accepted request produces one {@code onCaptureStarted} followed by one
  * {@code onCaptureCompleted}, posted to the handler the caller supplied so it arrives the way a
- * real callback does rather than re-entering the caller mid-call. The result is an empty
- * {@link TotalCaptureResult}: enough for a caller that only needs to know a frame landed, and the
- * honest answer for a device with no sensor behind it.</p>
+ * real callback does rather than re-entering the caller mid-call. The result carries the sensor
+ * timestamp {@code onCaptureStarted} reported, and the auto-exposure state a test sets: enough for
+ * a caller that only needs to know a frame landed, for one that pairs a frame with its result, and
+ * for one that waits on metering.</p>
  */
 @Implements(className = "android.hardware.camera2.impl.CameraCaptureSessionImpl",
         isInAndroidSdk = false)
@@ -41,6 +43,8 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     private static boolean sDeliverCallbacks = true;
     private static final AtomicInteger sCompletedCaptures = new AtomicInteger();
     private static final AtomicInteger sFrameNumber = new AtomicInteger();
+    /** The sensor timestamp of the last capture reported. */
+    private static final AtomicLong sLastSensorTimestamp = new AtomicLong();
     /** Every one-off request, in the order they were sent. */
     private static final List<CaptureRequest> sCaptures = new ArrayList<>();
     /** The auto-exposure state results report, or null for none. */
@@ -58,6 +62,11 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     /** How many captures have been reported complete. */
     public static int getCompletedCaptureCount() {
         return sCompletedCaptures.get();
+    }
+
+    /** The sensor timestamp of the last capture reported, which its frame has to carry too. */
+    public static long getLastSensorTimestamp() {
+        return sLastSensorTimestamp.get();
     }
 
     /** The one-off requests sent so far, such as stills and metering triggers. */
@@ -82,6 +91,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         sDeliverCallbacks = true;
         sCompletedCaptures.set(0);
         sFrameNumber.set(0);
+        sLastSensorTimestamp.set(0);
         sCaptures.clear();
         sAeState = null;
         sNextRepeatingFrame = null;
@@ -114,8 +124,10 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         }
         Runnable delivery = () -> {
             long frameNumber = sFrameNumber.incrementAndGet();
-            callback.onCaptureStarted(realSession, request, System.nanoTime(), frameNumber);
-            TotalCaptureResult result = newResult();
+            long timestamp = System.nanoTime();
+            callback.onCaptureStarted(realSession, request, timestamp, frameNumber);
+            TotalCaptureResult result = newResult(timestamp);
+            sLastSensorTimestamp.set(timestamp);
             callback.onCaptureCompleted(realSession, request, result);
             sCompletedCaptures.incrementAndGet();
         };
@@ -126,11 +138,12 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         }
     }
 
-    /** An empty result, or one reporting the auto-exposure state a test asked for. */
-    private static TotalCaptureResult newResult() {
+    /** A result carrying its sensor timestamp, and the auto-exposure state a test asked for. */
+    private static TotalCaptureResult newResult(long timestamp) {
         TotalCaptureResult result = ShadowTotalCaptureResult.newTotalCaptureResult();
+        ShadowCaptureResult shadow = Shadow.extract(result);
+        shadow.set(CaptureResult.SENSOR_TIMESTAMP, timestamp);
         if (sAeState != null) {
-            ShadowCaptureResult shadow = Shadow.extract(result);
             shadow.set(CaptureResult.CONTROL_AE_STATE, sAeState);
         }
         return result;

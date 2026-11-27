@@ -35,6 +35,7 @@ import android.util.SizeF;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
@@ -319,6 +320,20 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     private CameraDevice mPendingCloseDevice;
 
+    /** How long a capture waits for the session its format needs before it is failed. */
+    private static final long PENDING_PICTURE_TIMEOUT_MILLIS = 5000;
+
+    /** True between a picture format change and the session built for it being configured. */
+    private boolean mAwaitingFormatSession;
+
+    /** A capture waiting for that session, or null. */
+    @Nullable
+    private File mPendingPictureFile;
+
+    /** Fails {@link #mPendingPictureFile} if the session never configures. */
+    @Nullable
+    private Runnable mPendingPictureTimeout;
+
     private CameraDevice.StateCallback createStateCallback(final int generation) {
         return new CameraDevice.StateCallback() {
             @Override
@@ -501,6 +516,8 @@ public class Camera2Module extends ICameraModule {
                         // The session is configured and targeted, which is the first moment a
                         // capture can succeed.
                         onCameraReady();
+                        mAwaitingFormatSession = false;
+                        capturePendingPicture();
                     } catch (CameraAccessException | RuntimeException e) {
                         failSession(session, cameraCaptureSession,
                                 "Failed to start " + session.getClass().getSimpleName(), e);
@@ -513,6 +530,8 @@ public class Camera2Module extends ICameraModule {
                         cameraCaptureSession.close();
                         return;
                     }
+                    mAwaitingFormatSession = false;
+                    cancelPendingPicture();
                     failSession(session, cameraCaptureSession,
                             "Failed to configure " + session.getClass().getSimpleName(), null);
                 }
@@ -646,6 +665,8 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public void close() {
+        mAwaitingFormatSession = false;
+        cancelPendingPicture();
         mIsOpen = false;
         mReopenAttempts = 0;
         mPendingOpenGeneration = 0;
@@ -1346,6 +1367,10 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        if (format == CameraView.PictureFormat.RAW
+                || format == CameraView.PictureFormat.RAW_JPEG) {
+            return writesRaw(getCameraCharacteristics());
+        }
         if (format != CameraView.PictureFormat.ULTRA_HDR) {
             return super.isPictureFormatSupported(format);
         }
@@ -1366,8 +1391,97 @@ public class Camera2Module extends ICameraModule {
         CameraView.PictureFormat before = getPictureFormat();
         super.setPictureFormat(format);
         if (getPictureFormat() != before) {
-            // The format belongs to the still's reader, which the session is built around.
+            // The format belongs to the still's reader, which the session is built around. Until
+            // the camera configures the new session, a capture in this format has nowhere to go.
+            mAwaitingFormatSession = true;
             restartActiveSession();
+        }
+    }
+
+    /**
+     * Whether a camera can be asked for a DNG.
+     *
+     * <p>It has to say so twice: the RAW capability, which promises the metadata needed to
+     * interpret the sensor's readings, and a RAW_SENSOR output at a size DngCreator accepts. A
+     * camera can publish either without the other.</p>
+     */
+    @VisibleForTesting
+    static boolean writesRaw(@Nullable CameraCharacteristics characteristics) {
+        if (characteristics == null) {
+            return false;
+        }
+        int[] capabilities =
+                characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+        if (capabilities == null) {
+            return false;
+        }
+        for (int capability : capabilities) {
+            if (capability == CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_RAW) {
+                return DngWriter.sensorSize(characteristics) != null;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The active camera's characteristics, or null when they cannot be read.
+     *
+     * <p>DngCreator needs them whole rather than a key at a time, to describe the frame it
+     * writes.</p>
+     */
+    @Nullable
+    CameraCharacteristics getCameraCharacteristics() {
+        try {
+            return mCameraManager.getCameraCharacteristics(getActiveCamera());
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its characteristics", error);
+            return null;
+        }
+    }
+
+    /**
+     * Holds a capture until the session being built for its format is configured.
+     *
+     * <p>One at a time: a second request replaces the first, failing it. The timeout is for a
+     * session that never configures.</p>
+     */
+    private void awaitSessionThenCapture(@NonNull File file) {
+        cancelPendingPicture();
+        mPendingPictureFile = file;
+        mPendingPictureTimeout = () -> {
+            mPendingPictureTimeout = null;
+            if (mPendingPictureFile != null) {
+                Log.w(TAG, "The session for this picture format never configured");
+                mPendingPictureFile = null;
+                onImageFailed();
+            }
+        };
+        mHandler.postDelayed(mPendingPictureTimeout, PENDING_PICTURE_TIMEOUT_MILLIS);
+    }
+
+    /** Takes the picture that was waiting for this session, if there was one. */
+    private void capturePendingPicture() {
+        File file = mPendingPictureFile;
+        if (file == null) {
+            return;
+        }
+        mPendingPictureFile = null;
+        if (mPendingPictureTimeout != null) {
+            mHandler.removeCallbacks(mPendingPictureTimeout);
+            mPendingPictureTimeout = null;
+        }
+        takePicture(file);
+    }
+
+    /** Drops a waiting capture, reporting the failure the caller is owed. */
+    private void cancelPendingPicture() {
+        if (mPendingPictureTimeout != null) {
+            mHandler.removeCallbacks(mPendingPictureTimeout);
+            mPendingPictureTimeout = null;
+        }
+        if (mPendingPictureFile != null) {
+            mPendingPictureFile = null;
+            onImageFailed();
         }
     }
 
@@ -1400,6 +1514,9 @@ public class Camera2Module extends ICameraModule {
         mHandler.post(() -> {
             Session session = mActiveSession;
             if (mCameraDevice == null || session == null || mIsPaused) {
+                // No session is coming, so a capture waiting for one goes to the session there is.
+                mAwaitingFormatSession = false;
+                capturePendingPicture();
                 return;
             }
             setSession(session instanceof PictureSession && !(session instanceof VideoSession)
@@ -1617,6 +1734,14 @@ public class Camera2Module extends ICameraModule {
     public void takePicture(File file) {
         if (file == null) {
             throw new IllegalArgumentException("Picture destination cannot be null");
+        }
+        // A format change rebuilds the session, and the camera configures the new one on its own
+        // schedule, so a caller who sets a format and takes a picture on the next line arrives
+        // before the session that can honour it exists. It waits rather than failing for a reason
+        // the caller cannot see.
+        if (mAwaitingFormatSession) {
+            awaitSessionThenCapture(file);
+            return;
         }
         if (mCaptureSession == null || mActiveSession == null || mCameraDevice == null) {
             Log.w(TAG, "Cannot take picture before Camera2 preview is ready");

@@ -49,6 +49,19 @@ public class ShadowInjectableImageReader extends ShadowImageReader {
         }
     }
 
+    /** The most recently registered reader of a format, or null if there is none. */
+    @Nullable
+    public static ImageReader latestReader(int format) {
+        synchronized (sReaders) {
+            for (int i = sReaders.size() - 1; i >= 0; i--) {
+                if (sReaders.get(i).getImageFormat() == format) {
+                    return sReaders.get(i);
+                }
+            }
+            return null;
+        }
+    }
+
     /**
      * How many readers are open.
      *
