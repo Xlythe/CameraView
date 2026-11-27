@@ -358,9 +358,11 @@ public class CameraXHarnessTest {
         assertTrue("a camera orientation is one of four right angles: " + orientation,
                 orientation == 0 || orientation == 90 || orientation == 180 || orientation == 270);
 
-        // Both are hardware questions this camera answers no to, and both have to answer rather
-        // than throw: an app asks them to decide whether to show a button.
-        module.isSnapshotWhileRecordingSupported();
+        // Answered before any recording starts, as Camera2 answers it: an app asks to decide
+        // whether to show a snapshot button while recording. It used to say no until a
+        // recording had started.
+        assertTrue("the fake camera can hold a preview, a recording and a still",
+                module.isSnapshotWhileRecordingSupported());
 
         // This backend has somewhere to put a processor between the camera and its outputs, which
         // is what the probe answers. Whether one can actually be bound here is a different

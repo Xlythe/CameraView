@@ -35,6 +35,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.List;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {29, 37})
@@ -212,10 +213,43 @@ public final class CameraXModuleTest {
     public void aDrawnStillIsBuiltAsAJpegWhateverTheFormat() {
         for (CameraView.PictureFormat format : CameraView.PictureFormat.values()) {
             assertEquals(format + " while drawing", CameraView.PictureFormat.JPEG,
-                    CameraXModule.boundPictureFormat(format, true));
+                    CameraXModule.boundPictureFormat(format, true, false));
             assertEquals(format + " otherwise", format,
-                    CameraXModule.boundPictureFormat(format, false));
+                    CameraXModule.boundPictureFormat(format, false, false));
         }
+    }
+
+    /**
+     * Beside a recording the still is a JPEG too, as it is on Camera2, which takes neither RAW nor
+     * Ultra HDR while recording. CameraX used to try the format asked for.
+     */
+    @Test
+    public void aStillBesideARecordingIsBuiltAsAJpeg() {
+        for (CameraView.PictureFormat format : CameraView.PictureFormat.values()) {
+            assertEquals(format + " beside a recording", CameraView.PictureFormat.JPEG,
+                    CameraXModule.boundPictureFormat(format, false, true));
+        }
+    }
+
+    /**
+     * Below MAX the sizes within the quality's bound come first, whatever their shape, and the
+     * rest stay behind them in CameraX's order, as a fallback.
+     */
+    @Test
+    public void aQualitysBoundComesBeforeTheShapeCameraXPrefers() {
+        List<Size> sizes = Arrays.asList(new Size(1280, 720), new Size(1920, 1080),
+                new Size(640, 480), new Size(320, 240), new Size(1856, 1392));
+
+        assertEquals(Arrays.asList(new Size(640, 480), new Size(320, 240), new Size(1280, 720),
+                        new Size(1920, 1080), new Size(1856, 1392)),
+                CameraXModule.withinBoundFirst(sizes, CameraXModule.imageBound(
+                        CameraView.Quality.LOW)));
+        assertEquals("a portrait size is held to the bound turned", Arrays.asList(
+                        new Size(480, 640), new Size(1080, 1920)),
+                CameraXModule.withinBoundFirst(Arrays.asList(new Size(1080, 1920),
+                        new Size(480, 640)), new Size(640, 480)));
+        assertEquals(new Size(1920, 1080), CameraXModule.imageBound(CameraView.Quality.HIGH));
+        assertEquals(new Size(1280, 720), CameraXModule.imageBound(CameraView.Quality.MEDIUM));
     }
 
     /**
@@ -275,7 +309,10 @@ public final class CameraXModuleTest {
                         new Size(3840, 2160), new Size(1920, 1440), new Size(4080, 3060)), 90));
     }
 
-    /** Every other quality stays bounded, at the rate the camera streams at. */
+    /**
+     * Every other quality stays bounded, at the rate the camera streams at, with the sizes within
+     * its bound ahead of the shape the aspect ratio strategy prefers.
+     */
     @Test
     public void otherStillsKeepTheirBound() {
         ResolutionSelector selector = CameraXModule.imageResolutionSelector(
@@ -286,7 +323,9 @@ public final class CameraXModuleTest {
                 selector.getResolutionStrategy().getFallbackRule());
         assertEquals(ResolutionSelector.PREFER_CAPTURE_RATE_OVER_HIGHER_RESOLUTION,
                 selector.getAllowedResolutionMode());
-        assertNull(selector.getResolutionFilter());
+        assertEquals(Arrays.asList(new Size(1920, 1080), new Size(4000, 3000)),
+                selector.getResolutionFilter().filter(Arrays.asList(new Size(4000, 3000),
+                        new Size(1920, 1080)), 90));
         assertEquals(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY,
                 selector.getAspectRatioStrategy());
     }

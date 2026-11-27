@@ -160,14 +160,10 @@ public final class PictureSizeDeviceTest {
     /**
      * A LOW picture is no larger than 480p either way, on a camera that lists a size that small,
      * as on every backend. The old API used to take every quality but MAX at the camera's own
-     * default size.
+     * default size, and CameraX the next size up of the shape it preferred.
      */
     @Test
     public void aLowPictureKeepsWithinItsBound() throws Exception {
-        // CameraX sizes a still taken from kept frames by the frames, not by the quality, so it
-        // is held to this bound only once that is fixed.
-        Assume.assumeFalse("CameraX does not yet hold a LOW picture to 480p",
-                backend == CameraView.Backend.CAMERA_X);
         String cameraId = firstCameraFacing(facing);
         Assume.assumeTrue("no " + facing + " camera", cameraId != null);
         List<Size> listed = backend == CameraView.Backend.LEGACY

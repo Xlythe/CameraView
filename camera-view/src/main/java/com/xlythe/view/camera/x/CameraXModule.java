@@ -120,6 +120,7 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -2187,7 +2188,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // combination a camera app's video-snapshot button uses. Barcode analysis is the one
             // thing that genuinely takes the slot, because it needs the frames itself.
             ImageCapture imageCapture = mFrameAnalyzer == null
-                    ? createImageCapture(cameraInfo, drawing) : null;
+                    ? createImageCapture(cameraInfo, drawing, mVideoCapture != null) : null;
             ImageAnalysis imageAnalysis = mVideoCapture == null && mFrameAnalyzer != null
                     ? createImageAnalysis() : null;
             List<UseCase> requested = new ArrayList<>();
@@ -2206,7 +2207,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 requested.remove(imageCapture);
                 imageCapture = null;
             }
-            mSnapshotWhileRecording = mVideoCapture != null && imageCapture != null;
+            mSnapshotWhileRecording = mVideoCapture != null
+                    ? imageCapture != null
+                    : imageCapture != null && canSnapshotWhileRecording(cameraInfo,
+                            displayPreview, drawing, streamPreviews.values());
             if (!streamPreviews.isEmpty()
                     && !provider.getCameraInfo(selector).isSessionConfigSupported(createSessionConfig(requested))) {
                 if (isStabilizationEnabled()) {
@@ -2354,17 +2358,20 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     /**
      * The format the still use case is built for: the one asked for, or JPEG while frames are
-     * drawn.
+     * drawn or a recording is bound beside it.
      *
      * <p>A raw or Ultra HDR still cannot come out of a GL pipeline at all, and CameraX says so by
      * throwing out of the bind rather than by dropping the effect. So the effect wins, as it does
      * on Camera2: the still is a drawn JPEG, Ultra HDR falls back to it, and a capture asked for
-     * as RAW is refused rather than quietly written as something else.</p>
+     * as RAW is refused rather than quietly written as something else. A recording wins the same
+     * way, since a camera promises a RAW or Ultra HDR still beside a preview alone and Camera2
+     * takes neither while recording.</p>
      */
     @NonNull
     static CameraView.PictureFormat boundPictureFormat(
-            @NonNull CameraView.PictureFormat requested, boolean drawing) {
-        return drawing ? CameraView.PictureFormat.JPEG : requested;
+            @NonNull CameraView.PictureFormat requested, boolean drawing,
+            boolean besideRecording) {
+        return drawing || besideRecording ? CameraView.PictureFormat.JPEG : requested;
     }
 
     /**
@@ -2431,6 +2438,29 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             releaseFrameEffect();
             reconcileUseCases(false);
         });
+    }
+
+    /**
+     * Whether this camera could take a picture during a recording, asked before one starts: a
+     * caller decides whether to offer the button then, and Camera2 answers as soon as the camera
+     * opens. Asked of CameraX with the use cases a recording would bind, since that is how the
+     * bind for one decides whether the still gives way.
+     */
+    private boolean canSnapshotWhileRecording(@NonNull CameraInfo cameraInfo,
+            @NonNull Preview preview, boolean drawing,
+            @NonNull Collection<Preview> streamPreviews) {
+        List<UseCase> recording = new ArrayList<>();
+        recording.add(preview);
+        recording.add(VideoCapture.withOutput(
+                new Recorder.Builder().setQualitySelector(createQualitySelector()).build()));
+        recording.add(createImageCapture(cameraInfo, drawing, true /* beside a recording */));
+        recording.addAll(streamPreviews);
+        try {
+            return cameraInfo.isSessionConfigSupported(createSessionConfig(recording));
+        } catch (IllegalArgumentException | IllegalStateException error) {
+            if (DEBUG) Log.d(TAG, "CameraX could not say whether it records with a still", error);
+            return false;
+        }
     }
 
     @NonNull private SessionConfig createSessionConfig(@NonNull List<UseCase> useCases) {
@@ -2696,15 +2726,21 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         });
     }
 
-    /** @param drawing whether the bind puts frames through GL, which makes every still a JPEG */
+    /**
+     * @param drawing whether the bind puts frames through GL, which makes every still a JPEG
+     * @param besideRecording whether the still is bound beside a recording, which also makes it
+     *     a JPEG; see {@link #boundPictureFormat}
+     */
     @NonNull private ImageCapture createImageCapture(
-            @NonNull CameraInfo cameraInfo, boolean drawing) {
-        CameraView.PictureFormat format = boundPictureFormat(getPictureFormat(), drawing);
+            @NonNull CameraInfo cameraInfo, boolean drawing, boolean besideRecording) {
+        boolean plain = drawing || besideRecording;
+        CameraView.PictureFormat format =
+                boundPictureFormat(getPictureFormat(), drawing, besideRecording);
         ImageCapture.Builder builder = new ImageCapture.Builder()
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
-                .setCaptureMode(getCaptureMode(cameraInfo, format, drawing))
+                .setCaptureMode(getCaptureMode(cameraInfo, format, plain))
                 .setJpegQuality(getPictureQuality());
         // Checked against this camera as well as on request, since the lens may have changed.
         if (format == CameraView.PictureFormat.ULTRA_HDR && writesUltraHdr(cameraInfo)) {
@@ -2967,10 +3003,44 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                             ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
                     .build();
         }
+        Size bound = imageBound(quality);
         return builder
                 .setResolutionStrategy(new ResolutionStrategy(imageTargetSize(quality),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
+                .setResolutionFilter((sizes, rotationDegrees) -> withinBoundFirst(sizes, bound))
                 .build();
+    }
+
+    /**
+     * The sizes no larger than a bound either way, in the order CameraX gave them, then the rest.
+     *
+     * <p>CameraX prefers the shape the aspect ratio strategy asks for over the bound, so a LOW
+     * picture on a camera with no small size of that shape came out at the next size of it up -
+     * 1280x720 where 640x480 is listed. Camera2 holds every quality to its bound first, and so
+     * does this; the rest stay as a fallback for a camera with nothing that small.</p>
+     */
+    @NonNull static List<Size> withinBoundFirst(@NonNull List<Size> sizes, @NonNull Size bound) {
+        List<Size> within = new ArrayList<>();
+        List<Size> beyond = new ArrayList<>();
+        int boundLong = Math.max(bound.getWidth(), bound.getHeight());
+        int boundShort = Math.min(bound.getWidth(), bound.getHeight());
+        for (Size size : sizes) {
+            boolean fits = Math.max(size.getWidth(), size.getHeight()) <= boundLong
+                    && Math.min(size.getWidth(), size.getHeight()) <= boundShort;
+            (fits ? within : beyond).add(size);
+        }
+        within.addAll(beyond);
+        return within;
+    }
+
+    /** The largest a still may be at a quality below MAX, the bound Camera2 holds it to. */
+    @NonNull static Size imageBound(@NonNull CameraView.Quality quality) {
+        switch (quality) {
+            case HIGH: return new Size(1920, 1080);
+            case MEDIUM: return new Size(1280, 720);
+            case LOW:
+            default: return new Size(640, 480);
+        }
     }
 
     /** The sizes by area, largest first, which is the order CameraX then tries them in. */
