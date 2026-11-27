@@ -118,6 +118,27 @@ final class ExifSegment {
         return null;
     }
 
+    /**
+     * Finds the Exif block to read: a JPEG's, as {@link #find} does, or a bare TIFF block's own,
+     * as other formats keep their Exif.
+     *
+     * @return the block, or null when the data is neither
+     */
+    @Nullable
+    static Segment findForReading(@NonNull byte[] data) {
+        Segment segment = find(data);
+        if (segment != null || data.length < 8) {
+            return segment;
+        }
+        int order = u16Big(data, 0);
+        boolean little = order == BYTE_ORDER_LITTLE;
+        if ((!little && order != BYTE_ORDER_BIG) || u16(data, 2, little) != TIFF_MAGIC) {
+            return null;
+        }
+        // No segment around it, so it ends where the data does.
+        return new Segment(-2, 0, data.length, little);
+    }
+
     /** Whether the data begins as a JPEG does, with a start-of-image marker. */
     static boolean isJpeg(@NonNull byte[] data) {
         return data.length >= 2 && u8(data, 0) == MARKER && u8(data, 1) == SOI;
