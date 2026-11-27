@@ -1,6 +1,5 @@
 package com.xlythe.view.camera.v2;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
@@ -30,12 +29,13 @@ import java.util.List;
 import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 abstract class SessionImpl implements Camera2Module.Session {
     static final Size SIZE_4K = new Size(3840, 2160);
     static final Size SIZE_1080P = new Size(1920, 1080);
@@ -166,6 +166,14 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getPictureQuality();
     }
 
+    CameraView.PictureFormat getPictureFormat() {
+        return mCamera2Module.getPictureFormat();
+    }
+
+    boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        return mCamera2Module.isPictureFormatSupported(format);
+    }
+
     @NonNull
     ExifCaptureParameters exifCaptureParameters() {
         return mCamera2Module.exifCaptureParameters();
@@ -269,6 +277,15 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     @Override
     public void close() {}
+
+    void showImageConfirmation(File file) {
+        mCamera2Module.showImageConfirmation(file);
+    }
+
+    /** Shows a picture that wrote every one of {@code files}, reported as {@code file}. */
+    void showImageConfirmation(@NonNull File file, @NonNull List<File> files) {
+        mCamera2Module.showImageConfirmation(file, files);
+    }
 
     void onImageFailed() {
         mCamera2Module.onImageFailed();

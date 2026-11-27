@@ -40,6 +40,8 @@ import org.robolectric.shadows.ShadowPausedAsyncTask;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -151,6 +153,44 @@ public class PictureCaptureTest {
         deliverFrame(image);
 
         assertTrue("the Image must be closed", image.isClosed());
+    }
+
+    /**
+     * Closing the camera while a picture is being saved keeps its reader until the save is done.
+     *
+     * <p>Closing an ImageReader frees the buffers behind the frames it handed out, and the save
+     * copies its bytes out of one on another thread.</p>
+     */
+    @Test
+    public void aCloseMidSaveKeepsTheReaderUntilTheFrameIsBack() {
+        List<Runnable> saves = new ArrayList<>();
+        ShadowPausedAsyncTask.overrideExecutor(saves::add);
+        int readersBefore = ShadowInjectableImageReader.openReaderCount();
+        module.open();
+        FakeCamera2.idleMainLooper();
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        ImageReader reader = ShadowInjectableImageReader.latestReader();
+        assertNotNull(reader);
+        FakeImage frame = FakeImage.jpeg(1920, 1080, JPEG_BYTES);
+        ShadowInjectableImageReader.offerImage(reader, frame);
+        FakeCamera2.idleMainLooper();
+        assertEquals("the save should be waiting to run", 1, saves.size());
+
+        module.close();
+        FakeCamera2.idleMainLooper();
+
+        assertEquals("the reader has to outlive the save",
+                readersBefore + 1, ShadowInjectableImageReader.openReaderCount());
+        assertFalse(frame.isClosed());
+
+        saves.remove(0).run();
+        FakeCamera2.idleMainLooper();
+
+        assertTrue(frame.isClosed());
+        assertEquals("and go once the frame is back",
+                readersBefore, ShadowInjectableImageReader.openReaderCount());
+        assertEquals(output, captured.get());
     }
 
     /** A frame arriving with no outstanding request is reported rather than written anywhere. */

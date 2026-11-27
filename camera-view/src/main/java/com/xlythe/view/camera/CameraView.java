@@ -4,7 +4,6 @@ import android.Manifest;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Matrix;
@@ -46,6 +45,8 @@ import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -187,6 +188,8 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_CONFIRM_IMAGE = "confirm_image";
     private static final String EXTRA_CONFIRM_VIDEO = "confirm_video";
     private static final String EXTRA_PENDING_IMAGE_FILE_PATH = "pending_image_file_path";
+    /** Saved-state key for every file the picture awaiting confirmation wrote. */
+    private static final String EXTRA_PENDING_IMAGE_FILE_PATHS = "pending_image_file_paths";
     private static final String EXTRA_PENDING_VIDEO_FILE_PATH = "pending_video_file_path";
     private static final String EXTRA_MATCH_PREVIEW_ASPECT_RATIO = "match_preview_aspect_ratio";
     /** Saved-state key for dynamic range. */
@@ -362,11 +365,20 @@ public class CameraView extends FrameLayout {
      *
      * <p>{@link #ULTRA_HDR} is a JPEG carrying a gain map: an HDR display uses it to brighten the
      * highlights, and anything else shows the JPEG beneath.</p>
+     *
+     * <p>{@link #RAW} is a DNG of the sensor's own readings, before the camera has processed them.
+     * It is several times the size of a JPEG and needs an editor rather than a gallery to open,
+     * which is what {@link #RAW_JPEG} is for: the JPEG at the file given to
+     * {@link #takePicture(File)}, and the DNG beside it under the same name, so {@code IMG_1.jpg}
+     * gets {@code IMG_1.dng}. Either way the capture is reported once, after every file it writes
+     * is on disk. {@link #takePicture()} files both in the gallery, under the same name.</p>
      */
     public enum PictureFormat {
         /** What every camera writes. */
         JPEG,
-        ULTRA_HDR
+        ULTRA_HDR,
+        RAW,
+        RAW_JPEG
     }
 
     /**
@@ -476,6 +488,11 @@ public class CameraView extends FrameLayout {
     private VideoView mVideoPreview;
 
     private File mImagePendingConfirmation;
+    /**
+     * Every file the picture awaiting confirmation wrote, {@link #mImagePendingConfirmation}
+     * first. More than one for {@link PictureFormat#RAW_JPEG}, and empty when nothing is pending.
+     */
+    private List<File> mImagePendingFiles = Collections.emptyList();
     private File mVideoPendingConfirmation;
 
     private boolean mIsImageConfirmationEnabled;
@@ -512,7 +529,7 @@ public class CameraView extends FrameLayout {
         init(context, attrs);
     }
 
-    @TargetApi(21)
+    @RequiresApi(21)
     public CameraView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
         init(context, attrs);
@@ -554,7 +571,9 @@ public class CameraView extends FrameLayout {
             return (ICameraModule) Class.forName("com.xlythe.view.camera.x.CameraXModule")
                     .getConstructor(CameraView.class)
                     .newInstance(this);
-        } catch (ReflectiveOperationException | LinkageError | RuntimeException error) {
+        } catch (Exception | LinkageError error) {
+            // Not ReflectiveOperationException, which is API 19: a handler for a class the platform
+            // lacks fails verification of all of CameraView.
             if (DEBUG) Log.d(TAG, "CameraX is unavailable", error);
             return null;
         }
@@ -563,7 +582,8 @@ public class CameraView extends FrameLayout {
     /** Which implementation this view ended up driving. */
     @NonNull
     public Backend getBackend() {
-        if (mCameraModule instanceof LegacyCameraModule) {
+        // Below 21 there is only legacy, and asking about Camera2Module would load it.
+        if (Build.VERSION.SDK_INT < 21 || mCameraModule instanceof LegacyCameraModule) {
             return Backend.LEGACY;
         }
         if (mCameraModule instanceof Camera2Module) {
@@ -673,6 +693,11 @@ public class CameraView extends FrameLayout {
         state.putInt(EXTRA_SHUTTER_SOUND_RES, getShutterSound());
         if (mImagePendingConfirmation != null) {
             state.putString(EXTRA_PENDING_IMAGE_FILE_PATH, mImagePendingConfirmation.getAbsolutePath());
+            String[] paths = new String[mImagePendingFiles.size()];
+            for (int i = 0; i < paths.length; i++) {
+                paths[i] = mImagePendingFiles.get(i).getAbsolutePath();
+            }
+            state.putStringArray(EXTRA_PENDING_IMAGE_FILE_PATHS, paths);
         }
         if (mVideoPendingConfirmation != null) {
             state.putString(EXTRA_PENDING_VIDEO_FILE_PATH, mVideoPendingConfirmation.getAbsolutePath());
@@ -709,7 +734,8 @@ public class CameraView extends FrameLayout {
             if (state.containsKey(EXTRA_PENDING_IMAGE_FILE_PATH)) {
                 File file = new File(state.getString(EXTRA_PENDING_IMAGE_FILE_PATH));
                 if (file.exists()) {
-                    showImageConfirmation(file);
+                    showImageConfirmation(file,
+                            filesOf(state.getStringArray(EXTRA_PENDING_IMAGE_FILE_PATHS), file));
                 }
             }
             if (state.containsKey(EXTRA_PENDING_VIDEO_FILE_PATH)) {
@@ -943,25 +969,68 @@ public class CameraView extends FrameLayout {
     }
 
     void showImageConfirmation(File file) {
+        showImageConfirmation(file, Collections.singletonList(file));
+    }
+
+    /**
+     * Shows or hands over a finished picture.
+     *
+     * @param file the file the picture is reported as
+     * @param files every file the picture wrote, such as the JPEG and the DNG of
+     *     {@link PictureFormat#RAW_JPEG}. They are filed in this order after {@code file}, and
+     *     rejecting the picture deletes them all.
+     */
+    @UiThread
+    void showImageConfirmation(File file, List<File> files) {
         Log.d(TAG, "Saved the picture to " + file);
+        List<File> written = reportedFirst(file, files);
         if (isImageConfirmationEnabled()) {
             mCameraModule.pause();
             mImagePreview.setVisibility(View.VISIBLE);
             Image.with(getContext()).load(file).into(mImagePreview);
             mImagePendingConfirmation = file;
+            mImagePendingFiles = written;
 
             if (getOnImageCapturedListener() != null) {
                 getOnImageCapturedListener().onImageConfirmation();
             }
         } else {
-            deliverPicture(file);
+            deliverPicture(file, written);
         }
     }
 
-    /** Hands over a finished picture: filed and reported by uri if it is ours, as a file if not. */
-    private void deliverPicture(File file) {
+    /** {@code files} with {@code file} at the front, once, so it is filed and reported first. */
+    private static List<File> reportedFirst(File file, List<File> files) {
+        List<File> ordered = new ArrayList<>(files.size() + 1);
+        ordered.add(file);
+        for (File each : files) {
+            if (!each.equals(file)) {
+                ordered.add(each);
+            }
+        }
+        return Collections.unmodifiableList(ordered);
+    }
+
+    /** The files saved with a pending picture, or the picture alone for state that has none. */
+    private static List<File> filesOf(@Nullable String[] paths, File file) {
+        if (paths == null) {
+            return Collections.singletonList(file);
+        }
+        List<File> files = new ArrayList<>(paths.length);
+        for (String path : paths) {
+            files.add(new File(path));
+        }
+        return files;
+    }
+
+    /**
+     * Hands over a finished picture: filed and reported by uri if it is ours, as a file if not.
+     * A picture given a file is reported by that file alone, since the caller named it and the
+     * others are documented as lying beside it.
+     */
+    private void deliverPicture(File file, List<File> files) {
         if (isOwnCapture(file)) {
-            fileCapture(file, false /* isVideo */);
+            fileCapture(files, false /* isVideo */);
         } else if (getOnImageCapturedListener() != null) {
             getOnImageCapturedListener().onImageCaptured(file);
         }
@@ -1016,7 +1085,7 @@ public class CameraView extends FrameLayout {
     /** Hands over a finished video: filed and reported by uri if it is ours, as a file if not. */
     private void deliverVideo(File file) {
         if (isOwnCapture(file)) {
-            fileCapture(file, true /* isVideo */);
+            fileCapture(Collections.singletonList(file), true /* isVideo */);
         } else if (getOnVideoCapturedListener() != null) {
             getOnVideoCapturedListener().onVideoCaptured(file);
         }
@@ -1028,30 +1097,36 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Files a capture of ours where the gallery looks and reports where it went, or that it could
-     * not be filed. The cache copy goes either way, since the caller never had it.
+     * Files the files of a capture of ours where the gallery looks and reports where each went,
+     * in order, once all of them are filed, or that they could not be. A capture that loses any
+     * of its files is filed nowhere. The cache copies go either way, since the caller never had
+     * them.
      */
-    private void fileCapture(File capture, boolean isVideo) {
-        MediaStoreSaver.save(getContext(), capture, isVideo, uri -> {
+    private void fileCapture(List<File> captures, boolean isVideo) {
+        MediaStoreSaver.save(getContext(), captures, isVideo, uris -> {
             if (isVideo) {
                 OnVideoCapturedListener listener = getOnVideoCapturedListener();
                 if (listener == null) {
                     return;
                 }
-                if (uri == null) {
+                if (uris == null) {
                     listener.onFailure();
                 } else {
-                    listener.onVideoSaved(uri);
+                    for (Uri uri : uris) {
+                        listener.onVideoSaved(uri);
+                    }
                 }
             } else {
                 OnImageCapturedListener listener = getOnImageCapturedListener();
                 if (listener == null) {
                     return;
                 }
-                if (uri == null) {
+                if (uris == null) {
                     listener.onFailure();
                 } else {
-                    listener.onImageSaved(uri);
+                    for (Uri uri : uris) {
+                        listener.onImageSaved(uri);
+                    }
                 }
             }
         });
@@ -1063,15 +1138,29 @@ public class CameraView extends FrameLayout {
         return new File(context.getCacheDir(), CAPTURE_DIRECTORY);
     }
 
-    /** A cache file for a capture that has no destination of its own, named for the moment. */
+    /**
+     * A cache file for a capture that has no destination of its own, named for the moment.
+     *
+     * @param extension what the capture is written as, such as {@code ".jpg"}, which MediaStore
+     *     checks the filed type against
+     */
     @VisibleForTesting
-    static File newCaptureFile(Context context, boolean isVideo) {
+    static File newCaptureFile(Context context, String extension) {
         File directory = captureDirectory(context);
         if (!directory.isDirectory() && !directory.mkdirs()) {
             Log.w(TAG, "Could not create " + directory);
         }
         String name = new SimpleDateFormat(CAPTURE_NAME, Locale.US).format(new Date());
-        return new File(directory, name + (isVideo ? ".mp4" : ".jpg"));
+        return new File(directory, name + extension);
+    }
+
+    /**
+     * What a picture without a destination is first written as. RAW writes only a DNG, so its
+     * cache file is named as one. RAW_JPEG writes its DNG beside the JPEG under the same name.
+     */
+    @VisibleForTesting
+    static String pictureExtension(PictureFormat format) {
+        return format == PictureFormat.RAW ? ".dng" : ".jpg";
     }
 
     void onVideoFailed() {
@@ -1088,7 +1177,6 @@ public class CameraView extends FrameLayout {
     /**
      * Attempts to match image and video outputs to the preview aspect ratio.
      */
-    @TargetApi(21)
     public void setMatchPreviewAspectRatio(boolean enabled) {
         mCameraModule.setMatchPreviewAspectRatio(enabled);
     }
@@ -1192,10 +1280,8 @@ public class CameraView extends FrameLayout {
     }
 
     protected void onClose() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            exitBarcodeScanner();
-            stopFrameAnalysis();
-        }
+        exitBarcodeScanner();
+        stopFrameAnalysis();
         mLocationTracker.stop();
         finishZoomAnimation();
         mCameraModule.close();
@@ -1221,12 +1307,16 @@ public class CameraView extends FrameLayout {
      * {@link OnImageCapturedListener#onImageSaved(Uri)} with where it went. Only this overload
      * files into MediaStore; {@link #takePicture(File)} leaves the picture where it was written.
      *
+     * <p>{@link PictureFormat#RAW} is filed as a DNG. {@link PictureFormat#RAW_JPEG} files both
+     * the JPEG and the DNG under the same name, and calls
+     * {@link OnImageCapturedListener#onImageSaved(Uri)} for each.</p>
+     *
      * <p>Below API 29 that means writing to shared storage, which needs
      * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}. Without it the picture cannot be filed,
      * and {@link OnImageCapturedListener#onFailure()} is called instead.</p>
      */
     public void takePicture() {
-        takePicture(newCaptureFile(getContext(), false /* isVideo */));
+        takePicture(newCaptureFile(getContext(), pictureExtension(getPictureFormat())));
     }
 
     /**
@@ -1274,12 +1364,14 @@ public class CameraView extends FrameLayout {
 
         Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
-        deliverPicture(mImagePendingConfirmation);
+        deliverPicture(mImagePendingConfirmation, mImagePendingFiles);
         mImagePendingConfirmation = null;
+        mImagePendingFiles = Collections.emptyList();
     }
 
     /**
-     * Rejects a picture that is currently being displayed on the preview.
+     * Rejects a picture that is currently being displayed on the preview, and deletes every file
+     * it wrote.
      */
     public void rejectPicture() {
         if (mImagePendingConfirmation == null) {
@@ -1291,10 +1383,13 @@ public class CameraView extends FrameLayout {
 
         Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
-        if (!mImagePendingConfirmation.delete()) {
-            Log.w(TAG, "Attempted to clean up pending image file, but failed");
+        for (File file : mImagePendingFiles) {
+            if (file.exists() && !file.delete()) {
+                Log.w(TAG, "Attempted to clean up pending image file " + file + ", but failed");
+            }
         }
         mImagePendingConfirmation = null;
+        mImagePendingFiles = Collections.emptyList();
     }
 
     /**
@@ -1309,14 +1404,15 @@ public class CameraView extends FrameLayout {
      */
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     public void startRecording() {
-        startRecording(newCaptureFile(getContext(), true /* isVideo */));
+        startRecording(newCaptureFile(getContext(), ".mp4"));
     }
 
     /**
      * Takes a video and calls {@link OnVideoCapturedListener#onVideoCaptured(File)} when done.
      *
      * <p>Records audio alongside the video, so this is where the microphone is needed rather
-     * than at {@link #open()}.</p>
+     * than at {@link #open()}. Needs API 16; below it, {@link OnVideoCapturedListener#onFailure()}
+     * is called instead.</p>
      *
      * @param file The destination.
      */
@@ -1420,10 +1516,10 @@ public class CameraView extends FrameLayout {
     /**
      * Starts reporting the barcodes the camera can see.
      *
-     * @return whether scanning started. False when ML Kit's barcode model is not available on
+     * @return whether scanning started. False below API 21, when the app does not include ML Kit's
+     *     {@code com.google.mlkit:barcode-scanning}, or when its barcode model is not available on
      *     this device.
      */
-    @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean enterBarcodeScanner(BarcodeDetectorListener listener, @Barcode.Format int format, @Barcode.Format int... formats) {
         if (!isOpen()) {
@@ -1432,6 +1528,11 @@ public class CameraView extends FrameLayout {
 
         if (mBarcodeScanner != null || mUsingModuleBarcodeScanner) {
             throw new IllegalStateException("Barcode scanner cannot be started twice");
+        }
+
+        if (Build.VERSION.SDK_INT < 21 || !BarcodeScanner.isAvailable()) {
+            Log.w(TAG, "Barcode scanning needs API 21 and ML Kit's barcode-scanning library");
+            return false;
         }
 
         mUsingModuleBarcodeScanner = mCameraModule.startBarcodeScanner(listener, format, formats);
@@ -1452,9 +1553,8 @@ public class CameraView extends FrameLayout {
         return true;
     }
 
-    @RequiresApi(19)
     public void exitBarcodeScanner() {
-        if (mBarcodeScanner != null) {
+        if (Build.VERSION.SDK_INT >= 21 && mBarcodeScanner != null) {
             mBarcodeScanner.stop();
             mBarcodeScanner = null;
         }
@@ -1475,10 +1575,10 @@ public class CameraView extends FrameLayout {
      * <p>This runs alongside the preview and recording, and stays attached across a lens switch.
      * Call {@link #stopFrameAnalysis()} to let the camera give the buffers back.</p>
      *
-     * @return whether analysis started. False on a backend that cannot produce frames to read.
+     * @return whether analysis started. False below API 21, and on a backend that cannot produce
+     *     frames to read.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
      */
-    @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean startFrameAnalysis(@NonNull FrameStream.Analyzer analyzer) {
         return startFrameAnalysis(analyzer, new FrameStream.Params());
@@ -1489,7 +1589,6 @@ public class CameraView extends FrameLayout {
      *
      * @see FrameStream.Params#setMaxSize
      */
-    @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean startFrameAnalysis(
             @NonNull FrameStream.Analyzer analyzer, @NonNull FrameStream.Params params) {
@@ -1499,7 +1598,7 @@ public class CameraView extends FrameLayout {
         if (mFrameStream != null) {
             throw new IllegalStateException("Frame analysis cannot be started twice");
         }
-        if (!mCameraModule.isFrameAnalysisSupported()) {
+        if (Build.VERSION.SDK_INT < 19 || !mCameraModule.isFrameAnalysisSupported()) {
             Log.w(TAG, "The " + getBackend() + " backend cannot analyze frames");
             return false;
         }
@@ -1531,7 +1630,6 @@ public class CameraView extends FrameLayout {
     }
 
     /** Stops the analyzer started by {@link #startFrameAnalysis}. */
-    @RequiresApi(19)
     public void stopFrameAnalysis() {
         if (mFrameStream != null) {
             mFrameStream.close();
@@ -1540,7 +1638,6 @@ public class CameraView extends FrameLayout {
     }
 
     /** Whether an analyzer is receiving frames. */
-    @RequiresApi(19)
     public boolean isAnalyzingFrames() {
         return mFrameStream != null && mFrameStream.isAnalyzing();
     }
@@ -2298,10 +2395,18 @@ public class CameraView extends FrameLayout {
         /** A picture from {@link CameraView#takePicture(File)} has been written to that file. */
         default void onImageCaptured(File file) {}
 
-        /** A picture from {@link CameraView#takePicture()} has been filed in the gallery. */
+        /**
+         * A picture from {@link CameraView#takePicture()} has been filed in the gallery.
+         *
+         * <p>Called once for each file filed. {@link PictureFormat#RAW_JPEG} files two, and this
+         * hears the JPEG first and then the DNG, only once both are filed.</p>
+         */
         default void onImageSaved(@NonNull Uri uri) {}
 
-        /** The picture could not be taken, or could not be filed. */
+        /**
+         * The picture could not be taken, or could not be filed. A picture of two files that
+         * loses either is filed as neither.
+         */
         void onFailure();
     }
 

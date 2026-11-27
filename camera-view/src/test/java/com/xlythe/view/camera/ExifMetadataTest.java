@@ -69,6 +69,31 @@ public class ExifMetadataTest {
                 saved.getAttribute(ExifInterface.TAG_COMPONENTS_CONFIGURATION));
     }
 
+    /**
+     * The four tags older ExifInterface releases take only as a decimal keep a value set as a
+     * fraction, whichever release is underneath, and replace one the camera wrote.
+     */
+    @Test
+    public void fractionsReachEveryTagWhicheverExifInterfaceRuns() throws IOException {
+        Exif camera = new Exif(file);
+        camera.setAttribute(ExifInterface.TAG_F_NUMBER, "1.4");
+        camera.save();
+
+        Exif exif = new Exif(file);
+        exif.setAttribute(ExifInterface.TAG_F_NUMBER, "18/10");
+        exif.setAttribute(ExifInterface.TAG_EXPOSURE_TIME, "1/120");
+        exif.setAttribute(ExifInterface.TAG_DIGITAL_ZOOM_RATIO, "2/1");
+        exif.setAttribute(ExifInterface.TAG_SUBJECT_DISTANCE, "3/2");
+        exif.save();
+
+        ExifInterface saved = new ExifInterface(file.getPath());
+        assertEquals(1.8, saved.getAttributeDouble(ExifInterface.TAG_F_NUMBER, 0), 0.001);
+        assertEquals(1 / 120.0,
+                saved.getAttributeDouble(ExifInterface.TAG_EXPOSURE_TIME, 0), 0.0001);
+        assertEquals(2.0, saved.getAttributeDouble(ExifInterface.TAG_DIGITAL_ZOOM_RATIO, 0), 0.001);
+        assertEquals(1.5, saved.getAttributeDouble(ExifInterface.TAG_SUBJECT_DISTANCE, 0), 0.001);
+    }
+
     /** A camera that reported its own knows better than this does, and is left alone. */
     @Test
     public void aCameraThatFilledThemInKeepsItsOwnValues() throws IOException {
@@ -429,7 +454,7 @@ public class ExifMetadataTest {
     }
 
     /** The smallest thing androidx will treat as a JPEG it can write Exif into. */
-    static byte[] minimalJpeg() {
+    public static byte[] minimalJpeg() {
         return new byte[] {
                 (byte) 0xFF, (byte) 0xD8,
                 (byte) 0xFF, (byte) 0xDB, 0x00, 0x43, 0x00,

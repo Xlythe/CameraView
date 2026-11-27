@@ -2,9 +2,10 @@ Camera View
 ====================
 
 CameraView provides a simple wrapper around the Android camera APIs, with backwards compatibility
-to API 21. Rather than directly manipulating the camera, here you have an Android View that can be
-placed within your app. This View displays a preview and has the methods takePicture(),
-startRecording() and stopRecording(). For simple use cases, CameraFragment exists as well.
+to API 21, or to API 14 with the core build described below. Rather than directly manipulating the
+camera, here you have an Android View that can be placed within your app. This View displays a
+preview and has the methods takePicture(), startRecording() and stopRecording(). For simple use
+cases, CameraFragment exists as well.
 If you inflate a CameraFragment with Views that have the correct ids (eg. @id/capture),
 CameraFragment will bind to them to control the CameraView.
 
@@ -18,9 +19,12 @@ dependencies {
 ```
 
 If your minSdk is below 24, build with `-Pcameraview.core=true`, which leaves out the parts that
-cannot reach that far back and covers API 21 and up. This is not hypothetical: `camera-camera2`
+cannot reach that far back and covers API 14 and up. This is not hypothetical: `camera-camera2`
 pulls in `camera-camera2-pipe`, which declares a minSdk of 24, and a dependency's floor becomes
-your app's floor whatever this library declares.
+your app's floor whatever this library declares. In that build, barcode scanning needs API 21 and
+`com.google.mlkit:barcode-scanning` in your own dependencies, frame analysis needs API 21,
+streaming API 18 and recording API 16. Without them, `enterBarcodeScanner` and `startFrameAnalysis`
+return false and `startRecording` reports `onFailure`.
 
 Permissions
 -----------------
@@ -61,8 +65,9 @@ Camera(
 
 Camera also accepts zoomRatio [minZoomRatio to maxZoomRatio, or null to leave the zoom to
 pinchToZoom], animateZoom [boolean], shutterSoundEnabled [boolean], shutterSound [raw resource],
-pictureQuality [1 to 100], colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr],
-exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
+pictureQuality [1 to 100], colorSpace [srgb, displayP3],
+pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [integer],
+torchEnabled [boolean], dynamicRange [sdr, hdr],
 extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
 lowLightBoostEnabled [boolean]. Not every camera can do all of these, so CameraState below says
 which this one supports.
@@ -123,6 +128,8 @@ cameraController.startRecording()
 ```
 Only these calls without a file put anything in the gallery, and they report where it went.
 Given a file, takePicture(file) and startRecording(file) write there instead and report the file.
+A raw picture is filed as a DNG. A rawJpeg picture files both, under the same name, and
+onImageSaved hears each: the JPEG, then the DNG.
 ```kotlin
 Camera(
     controller = cameraController,
@@ -293,7 +300,8 @@ Only these overloads without a file put anything in the gallery, and the listene
 went in onImageSaved(Uri) and onVideoSaved(Uri). Given a file, takePicture(file) and
 startRecording(file) write there instead, and report the file in onImageCaptured(File) and
 onVideoCaptured(File). Every method but the confirmation and failure ones has a default, so
-override the ones you use.
+override the ones you use. A RAW picture is filed as a DNG. A RAW_JPEG picture files both, under
+the same name, and onImageSaved(Uri) hears each: the JPEG, then the DNG.
 ```java
 mCameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
   @Override public void onImageConfirmation() {}
@@ -319,7 +327,7 @@ mCameraView.setOnCameraStateChangedListener(listener);
 ```
 With confirmation enabled, a capture is shown in CameraView's own preview and onImageConfirmation()
 or onVideoConfirmation() fires before it is reported. Accept or discard it to continue; rejecting
-also deletes the file, and files nothing in the gallery. Enable matchPreviewAspectRatio alongside
+also deletes every file it wrote, and files nothing in the gallery. Enable matchPreviewAspectRatio alongside
 this so the capture and the preview are framed the same.
 ```java
 mCameraView.setImageConfirmationEnabled(true);
