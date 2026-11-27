@@ -22,6 +22,15 @@ final class Features {
     /** How much brighter or darker than the middle the FAST ring must be, out of 255. */
     static final int FAST_THRESHOLD = 20;
 
+    /**
+     * The threshold a cell of the grid falls back to when the first finds too little in it, as
+     * on a plain wall or a clear sky, where faint corners are all there is to match by.
+     */
+    static final int FAINT_THRESHOLD = 7;
+
+    /** Below this many corners at the first threshold, a cell tries the fainter one. */
+    static final int FEW_IN_CELL = 4;
+
     /** How many of the ring's 16 pixels must agree in a row. */
     private static final int FAST_ARC = 9;
 
@@ -97,14 +106,22 @@ final class Features {
         int[] score = new int[width * height];
         int[] candidates = new int[width * height / 4 + 1];
         int found = 0;
-        for (int y = BORDER; y < height - BORDER; y++) {
-            for (int x = BORDER; x < width - BORDER; x++) {
-                if (isCorner(luma, width, x, y) && found < candidates.length) {
-                    int s = harris(luma, width, x, y);
-                    if (s > 0) {
-                        score[y * width + x] = s;
-                        candidates[found++] = y * width + x;
+        // Each cell of the grid on its own, so a plain one can fall back to fainter corners.
+        for (int cy = 0; cy < GRID_ROWS; cy++) {
+            int y0 = Math.max(BORDER, cy * height / GRID_ROWS);
+            int y1 = Math.min(height - BORDER, (cy + 1) * height / GRID_ROWS);
+            for (int cx = 0; cx < GRID_COLUMNS; cx++) {
+                int x0 = Math.max(BORDER, cx * width / GRID_COLUMNS);
+                int x1 = Math.min(width - BORDER, (cx + 1) * width / GRID_COLUMNS);
+                int before = found;
+                found = corners(luma, width, x0, y0, x1, y1, FAST_THRESHOLD, score, candidates,
+                        found);
+                if (found - before < FEW_IN_CELL) {
+                    for (int i = before; i < found; i++) {
+                        score[candidates[i]] = 0;
                     }
+                    found = corners(luma, width, x0, y0, x1, y1, FAINT_THRESHOLD, score,
+                            candidates, before);
                 }
             }
         }
@@ -171,11 +188,33 @@ final class Features {
         return new Features(n, xs, ys, descriptors, width, height);
     }
 
+    /**
+     * Finds the corners in a rectangle at a threshold, scoring each, and adds them to the list.
+     *
+     * @return how many are listed now
+     */
+    private static int corners(@NonNull byte[] luma, int width, int x0, int y0, int x1, int y1,
+            int threshold, @NonNull int[] score, @NonNull int[] candidates, int found) {
+        for (int y = y0; y < y1; y++) {
+            for (int x = x0; x < x1; x++) {
+                if (found < candidates.length && isCorner(luma, width, x, y, threshold)) {
+                    int s = harris(luma, width, x, y);
+                    if (s > 0) {
+                        score[y * width + x] = s;
+                        candidates[found++] = y * width + x;
+                    }
+                }
+            }
+        }
+        return found;
+    }
+
     /** Whether FAST finds nine of the ring in a row all brighter, or all darker, than the middle. */
-    private static boolean isCorner(@NonNull byte[] luma, int width, int x, int y) {
+    private static boolean isCorner(@NonNull byte[] luma, int width, int x, int y,
+            int threshold) {
         int center = luma[y * width + x] & 0xFF;
-        int high = center + FAST_THRESHOLD;
-        int low = center - FAST_THRESHOLD;
+        int high = center + threshold;
+        int low = center - threshold;
         // A quick reject: of the four compass points, at least three must be on the same side.
         int top = luma[(y - 3) * width + x] & 0xFF;
         int bottom = luma[(y + 3) * width + x] & 0xFF;

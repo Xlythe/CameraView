@@ -31,10 +31,10 @@ final class PairMatcher {
     static final float INLIER_PIXELS = 2.5f;
 
     /** The fewest agreeing matches that make a pair worth trusting. */
-    static final int MIN_INLIERS = 15;
+    static final int MIN_INLIERS = 10;
 
     /** The smallest share of the matches that must agree. */
-    static final float MIN_INLIER_SHARE = 0.25f;
+    static final float MIN_INLIER_SHARE = 0.2f;
 
     /**
      * How far the matched rotation may be from the sensor's before it is a coincidence rather
