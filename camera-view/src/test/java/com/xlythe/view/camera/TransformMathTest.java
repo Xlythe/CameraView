@@ -156,6 +156,34 @@ public class TransformMathTest {
         assertPointMapsTo(transform, 800f, 400f, 200f, 200f);
     }
 
+    /** Fitting inside the view letterboxes the frame instead, and keeps its center centered. */
+    @Test
+    public void fittingInsideLetterboxesRatherThanCrops() {
+        Matrix transform = TransformMath.centerInside(
+                new RectF(0f, 0f, 1600f, 800f), 0, false, 400, 400);
+
+        float[] values = new float[9];
+        transform.getValues(values);
+        assertEquals(values[Matrix.MSCALE_X], values[Matrix.MSCALE_Y], TOLERANCE);
+
+        // Scaled to fit a 400x400 view, the frame is 400 by 200, with 100 bare above and below.
+        assertPointMapsTo(transform, 0f, 0f, 0f, 100f);
+        assertPointMapsTo(transform, 1600f, 800f, 400f, 300f);
+        assertPointMapsTo(transform, 800f, 400f, 200f, 200f);
+    }
+
+    /** A quarter turn is fitted by the turned frame's shape. */
+    @Test
+    public void fittingInsideAppliesTheRotationFirst() {
+        Matrix transform = TransformMath.centerInside(
+                new RectF(0f, 0f, 640f, 480f), 90, false, 960, 640);
+
+        // Upright, the frame is 480 by 640, so it fills the height and leaves 240 at each side.
+        assertPointMapsTo(transform, 0f, 480f, 240f, 0f);
+        assertPointMapsTo(transform, 640f, 0f, 720f, 640f);
+        assertTrue(TransformMath.centerInside(new RectF(), 0, false, 10, 10).isIdentity());
+    }
+
     @Test
     public void mirroringReflectsAcrossTheViewRatherThanMovingTheFrame() {
         RectF frame = new RectF(0f, 0f, 640f, 480f);

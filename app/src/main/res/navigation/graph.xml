@@ -30,10 +30,22 @@
         tools:layout="@layout/fragment_wear" />
 
     <fragment
+        android:id="@+id/panorama_fragment"
+        android:name="com.xlythe.sample.camera.PanoramaFragment"
+        android:label="@string/app_name_panorama"
+        tools:layout="@layout/fragment_panorama" />
+
+    <fragment
         android:id="@+id/qr_code_fragment"
         android:name="com.xlythe.sample.camera.QrCodeFragment"
         android:label="@string/app_name_qr_code"
         tools:layout="@layout/fragment_qr_code" />
+
+    <fragment
+        android:id="@+id/viewer_fragment"
+        android:name="com.xlythe.sample.camera.ViewerFragment"
+        android:label="@string/app_name_viewer"
+        tools:layout="@layout/fragment_viewer" />
 
     <fragment
         android:id="@+id/effect_fragment"

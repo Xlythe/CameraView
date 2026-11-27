@@ -39,6 +39,19 @@
             android:layout_height="match_parent"
             camera:quality="high" />
 
+        <!-- RAW, shown by MainFragment where the camera can write a DNG beside the JPEG -->
+        <CheckBox
+            android:id="@+id/raw"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentTop="true"
+            android:layout_alignParentEnd="true"
+            android:layout_margin="16dp"
+            android:buttonTint="#FFFFFF"
+            android:text="@string/raw"
+            android:textColor="#FFFFFF"
+            android:visibility="gone" />
+
         <!-- Exposure compensation, shown by MainFragment where the camera can compensate -->
         <LinearLayout
             android:id="@+id/exposure_control"
@@ -109,6 +122,16 @@
                 android:text="@string/btn_confirm"
                 android:textColor="#FFFFFF"
                 app:backgroundTint="#388E3C"
+                app:cornerRadius="20dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/view_last"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:enabled="false"
+                android:text="@string/btn_view"
+                android:textColor="#FFFFFF"
                 app:cornerRadius="20dp" />
 
             <com.google.android.material.button.MaterialButton

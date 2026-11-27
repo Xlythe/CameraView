@@ -34,7 +34,7 @@ The following permissions are required in your AndroidManfiest.xml
 ```xml
 <uses-permission android:name="android.permission.CAMERA" />
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
-<!-- Below API 29, takePicture() and startRecording() need this to file captures in the gallery -->
+<!-- Below API 29, takePicture(), startRecording() and startPanorama() need this to file captures in the gallery -->
 <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
 <!-- Optional camera permissions -->
@@ -98,8 +98,8 @@ minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
 minExposureCompensation, maxExposureCompensation, exposureCompensationStep, supportedColorSpaces,
 supportedPictureFormats, supportedDynamicRanges, supportedExtensions, isStabilizationSupported,
 isLowLightBoostSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
-horizontalFieldOfView, verticalFieldOfView, isRecording, isAnalyzingFrames, isFrameEffectSupported
-and isReplacingBackground.
+horizontalFieldOfView, verticalFieldOfView, isRecording, isAnalyzingFrames, isFrameEffectSupported,
+isReplacingBackground and isCapturingPanorama.
 
 Pass onZoomChanged to hear the zoom ratio whenever it changes, a pinch included, so that buttons
 for zoomPresets can follow it. Writing it back into zoomRatio is safe, and animateZoom eases over
@@ -168,6 +168,13 @@ Reports the faces the camera is already tracking, or stops when given null. Retu
 camera cannot report faces, in which case the listener is never called.
 ```kotlin
 cameraController.setFaceDetectionListener { faces, faceToView -> ... }
+```
+Sweeps a panorama or a photosphere, with the guide drawn over the preview, until everything is
+covered or stopPanorama is called, and files it in the gallery. Given a file, it is written there
+and reported to onCaptured instead. See Panoramas below.
+```kotlin
+cameraController.startPanorama(PanoramaMode.PHOTOSPHERE, onSaved = { uri -> ... })
+cameraController.stopPanorama()   // or cancelPanorama()
 ```
 Segments the subject out of each frame and draws it over a colour or an image, in place of
 frameRenderer, until exitBackgroundReplacement. Returns false if this camera cannot.
@@ -501,6 +508,34 @@ mCameraView.startFrameAnalysis(frame -> {
 mCameraView.stopFrameAnalysis();
 ```
 
+Panoramas
+-----------------
+startPanorama sweeps a panorama or a photosphere. CameraView draws the guide over its own
+preview, with no words in it: for a panorama, a strip of what is taken so far, a line to keep
+level on and arrows the way to turn; for a photosphere, dots on everything still to take, each
+taken by holding the circle on it until it fills. A panorama finishes once it has gone all the way
+round, and a photosphere once every dot is taken, straight up and down included. stopPanorama
+saves what was covered so far, and cancelPanorama saves nothing. Once a sweep ends, its frames are
+aligned by what they show and blended into one picture, which takes several seconds before the
+listener hears of it.
+
+The picture is a JPEG with the same Exif as any other picture and photo sphere metadata, so
+galleries and panorama viewers show it as a panorama. Without a file it is filed in the gallery,
+under Pictures, and reported to onPanoramaSaved(Uri); given a file it is written there and
+reported to onPanoramaCaptured(File). startPanorama returns false on a device that cannot report
+which way it is pointing. While a sweep runs, lock the screen's orientation, or turning the phone
+will rotate it, and keep the screen on, or aiming straight up will lay the phone face down and
+turn the screen off.
+```java
+mCameraView.startPanorama(CameraView.PanoramaMode.PHOTOSPHERE,
+    new CameraView.PanoramaListener() {
+      @Override public void onPanoramaProgress(float progress) {}
+      @Override public void onPanoramaSaved(Uri uri) {}
+      @Override public void onPanoramaFailed() {}
+    });
+mCameraView.stopPanorama();
+```
+
 Streaming
 -----------------
 stream() takes parameters when the defaults do not suit the link you are sending over. A stream
@@ -558,6 +593,35 @@ mVideoView.setStream(new VideoStream.Builder().withAudioStream(...).withVideoStr
 mVideoView.play();
 mVideoView.pause();
 ```
+
+Viewing pictures
+-----------------
+Three views show the pictures the camera takes, from a file or from a uri such as the one
+onImageSaved(Uri) reports. None of them ever decodes a picture whole: each holds a bounded amount
+of memory however large the picture is.
+
+LargeImageView shows any picture, a DNG included, and zooms in until its own pixels show: pinch or
+double-tap to zoom, drag or fling to pan. PanoramaView shows a panorama as a strip filling the
+view's height, and one that goes all the way round has no ends. PhotosphereView shows a photo
+sphere from the inside, to drag, fling and pinch around; a partial sphere is shown where it was
+taken and the rest left black.
+```java
+mLargeImageView.setUri(uri);     // or setFile(file)
+mPanoramaView.setUri(uri);
+mPhotosphereView.setUri(uri);
+mPhotosphereView.setGyroscopeEnabled(true); // where isGyroscopeAvailable()
+mPhotosphereView.setImageLoadListener(new ImageLoadListener() {
+  @Override public void onImageLoaded() { ... }
+  @Override public void onImageFailed() { ... }
+});
+```
+```kotlin
+LargeImage(uri = uri, onFailed = { ... })
+Panorama(uri = uri)
+Photosphere(uri = uri, gyroscope = true)
+```
+A DNG is shown on Android 7.0 and newer. The first time, it is decoded once and kept in the app's
+cache as a JPEG, so showing it again is as quick as any other picture.
 
 VideoEditor
 -----------------

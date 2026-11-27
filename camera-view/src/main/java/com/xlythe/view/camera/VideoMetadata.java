@@ -212,6 +212,18 @@ public final class VideoMetadata {
             mMetadataKey = metadataKey;
             mMetadataType = metadataType;
         }
+
+        /** The user-data box type, the copyright sign and three characters, or null. */
+        @Nullable
+        String userDataType() {
+            return mKey == null ? null : keyOf(this);
+        }
+
+        /** The keyed-metadata key, or null. */
+        @Nullable
+        String metadataKey() {
+            return mMetadataKey;
+        }
     }
 
     /** The fields to write, applied together by {@link #write}. */
@@ -241,7 +253,11 @@ public final class VideoMetadata {
         /**
          * Sets {@link Tag#LOCATION} from a latitude and longitude, to four decimal places. From
          * doubles, because the floats {@code MediaRecorder.setLocation} takes lose about a metre.
+         *
+         * @deprecated Use {@link MediaTags#setLocation}, which also writes the altitude and
+         *     works on every format.
          */
+        @Deprecated
         @NonNull
         public Builder setLocation(double latitude, double longitude) {
             return set(Tag.LOCATION, iso6709(latitude, longitude));
@@ -252,7 +268,10 @@ public final class VideoMetadata {
          * BMP. Null leaves the file's as it is.
          *
          * @throws IllegalArgumentException if the image is none of those
+         * @deprecated Use {@link MediaTags#setCoverArt}, which works on every format that
+         *     keeps a cover picture.
          */
+        @Deprecated
         @NonNull
         public Builder setArtwork(@Nullable byte[] image) {
             if (image != null) {
@@ -330,7 +349,10 @@ public final class VideoMetadata {
      * Reads the image that stands for the movie, as it was encoded.
      *
      * @return the JPEG, PNG or BMP, or null when the file has none or is not an MP4
+     * @deprecated Use {@link MediaTags#getCoverArt}, which works on every format that keeps a
+     *     cover picture.
      */
+    @Deprecated
     @Nullable
     public static byte[] readArtwork(@NonNull File file) {
         try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
@@ -449,11 +471,22 @@ public final class VideoMetadata {
             raf.seek(at);
             raf.readFully(header);
             long size = readInt(header, 0);
+            boolean large = size == 1;
+            if (large && at + 2 * HEADER <= length) {
+                // A 64-bit size follows the type, as a recording over 4 GB has for its mdat.
+                byte[] largeSize = new byte[HEADER];
+                raf.readFully(largeSize);
+                size = (readInt(largeSize, 0) << 32) | readInt(largeSize, 4);
+            } else if (size == 0) {
+                // The last box, running to the end of the file.
+                size = length - at;
+            }
             if (size < HEADER || at + size > length) {
                 return null;
             }
             if (BOX_MOOV.equals(type(header, 4))) {
-                return size > MAX_MOOV_BYTES ? null : new long[] {at, size};
+                // The moov is edited as a box with the usual eight-byte header.
+                return size > MAX_MOOV_BYTES || large ? null : new long[] {at, size};
             }
             at += size;
         }
@@ -626,7 +659,7 @@ public final class VideoMetadata {
 
     /** The value stored under a key in a moov's keyed metadata, as its data box, or null. */
     @Nullable
-    private static byte[] findMetadata(@NonNull byte[] moov, @NonNull String key) {
+    static byte[] findMetadata(@NonNull byte[] moov, @NonNull String key) {
         byte[] meta = findChild(moov, BOX_META);
         if (meta == null) {
             return null;
@@ -735,7 +768,7 @@ public final class VideoMetadata {
      * @throws IllegalArgumentException if the tag holds a number and the value is not one
      */
     @NonNull
-    private static byte[] metadataValue(@NonNull Tag tag, @NonNull String value) {
+    static byte[] metadataValue(@NonNull Tag tag, @NonNull String value) {
         switch (tag.mMetadataType) {
             case TYPE_FLOAT32:
                 return typed(TYPE_FLOAT32,
@@ -752,7 +785,7 @@ public final class VideoMetadata {
     }
 
     @NonNull
-    private static byte[] typed(int type, @NonNull byte[] value) {
+    static byte[] typed(int type, @NonNull byte[] value) {
         byte[] typed = new byte[DATA_PREFIX + value.length];
         writeInt(typed, 0, type);
         System.arraycopy(value, 0, typed, DATA_PREFIX, value.length);
@@ -764,7 +797,7 @@ public final class VideoMetadata {
      *
      * @throws IllegalArgumentException if it is not a JPEG, PNG or BMP
      */
-    private static int imageType(@NonNull byte[] image) {
+    static int imageType(@NonNull byte[] image) {
         if (image.length >= 3 && (image[0] & 0xFF) == 0xFF && (image[1] & 0xFF) == 0xD8
                 && (image[2] & 0xFF) == 0xFF) {
             return TYPE_JPEG;
@@ -910,7 +943,7 @@ public final class VideoMetadata {
 
     /** A text field's text, or null if it is malformed. */
     @Nullable
-    private static String textOf(@NonNull byte[] box) {
+    static String textOf(@NonNull byte[] box) {
         if (box.length < HEADER + TEXT_PREFIX) {
             return null;
         }
@@ -923,7 +956,7 @@ public final class VideoMetadata {
 
     /** The box type for a tag: the copyright sign and its three characters. */
     @NonNull
-    private static String keyOf(@NonNull Tag tag) {
+    static String keyOf(@NonNull Tag tag) {
         return (char) COPYRIGHT_SIGN + tag.mKey;
     }
 

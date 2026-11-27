@@ -22,5 +22,8 @@
             android:name="com.xlythe.view.camera.test.CameraHolderActivity"
             android:exported="false"
             android:process=":holder" />
+        <activity
+            android:name="com.xlythe.view.camera.viewer.ViewerTestActivity"
+            android:exported="false" />
     </application>
 </manifest>

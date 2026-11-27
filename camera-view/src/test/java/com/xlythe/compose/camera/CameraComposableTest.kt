@@ -1,8 +1,11 @@
 package com.xlythe.compose.camera
 
 import android.Manifest
+import android.content.Context
 import android.graphics.Rect
 import android.graphics.SurfaceTexture
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import android.media.FakeImage
 import android.net.Uri
 import android.provider.MediaStore
@@ -39,6 +42,7 @@ import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowChoreographer
 import org.robolectric.shadows.ShadowLooper
 import org.robolectric.shadows.ShadowPausedAsyncTask
+import org.robolectric.shadows.ShadowSensor
 import java.io.File
 import java.time.Duration
 import java.util.concurrent.TimeUnit
@@ -819,6 +823,44 @@ class CameraComposableTest {
 
         assertTrue("this camera reports faces", camera.setFaceDetectionListener { _, _ -> })
         assertTrue("letting go always succeeds", camera.setFaceDetectionListener(null))
+    }
+
+    /**
+     * A sweep is started and cancelled through the controller and reported in the state. The
+     * test device has no rotation sensor until one is added.
+     */
+    @Test
+    fun aPanoramaStartsAndStopsThroughTheController() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+        val camera = requireNotNull(controller.value)
+        val file = File(RuntimeEnvironment.getApplication().cacheDir, "sweep.jpg")
+        assertFalse("no sensor, no sweep", camera.startPanorama(file))
+
+        val sensors = RuntimeEnvironment.getApplication()
+            .getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        Shadows.shadowOf(sensors).addSensor(ShadowSensor.newInstance(Sensor.TYPE_ROTATION_VECTOR))
+        var failed = false
+        assertTrue(camera.startPanorama(file, PanoramaMode.PHOTOSPHERE, onFailed = { failed = true }))
+        compose.waitForIdle()
+        assertTrue(requireNotNull(state.value).isCapturingPanorama)
+
+        camera.cancelPanorama()
+        compose.waitForIdle()
+        assertFalse(requireNotNull(state.value).isCapturingPanorama)
+
+        // Stopping with nothing swept saves nothing, and says so.
+        assertTrue(camera.startPanorama(onFailed = { failed = true }))
+        camera.stopPanorama()
+        val deadline = System.currentTimeMillis() + 10_000
+        while (!failed && System.currentTimeMillis() < deadline) {
+            compose.waitForIdle()
+            Thread.sleep(20)
+        }
+        assertTrue(failed)
+        assertFalse(requireNotNull(state.value).isCapturingPanorama)
     }
 
     /** Focus on an area the caller chose, rather than where the preview happened to be tapped. */

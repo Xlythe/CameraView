@@ -2,7 +2,10 @@ package com.xlythe.sample.camera
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -16,6 +19,8 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -32,6 +37,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Panorama
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Transform
 import androidx.compose.material.icons.filled.Videocam
@@ -40,8 +47,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -66,22 +75,63 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.xlythe.view.camera.Barcode
 import com.xlythe.compose.camera.Camera
 import com.xlythe.compose.camera.CameraController
+import com.xlythe.compose.camera.CameraState
+import com.xlythe.compose.camera.PanoramaMode
+import com.xlythe.compose.camera.PictureFormat
 import com.xlythe.compose.camera.Permissions
 import com.xlythe.compose.camera.Video
 import com.xlythe.compose.camera.VideoController
 import com.xlythe.sample.camera.ui.theme.CameraViewTheme
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.io.IOException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.foundation.background
+import com.xlythe.compose.camera.Media
+import com.xlythe.view.camera.MediaTags
+import com.xlythe.view.camera.viewer.MediaView
 
 enum class DemoScreen(val title: String) {
     SIMPLE("Simple Demo"),
     STREAM("Stream Demo"),
     RESIZING("Resizing Demo"),
-    QR_CODE("QR Code Demo")
+    PANORAMA("Panorama Demo"),
+    QR_CODE("QR Code Demo"),
+    VIEWER("Media Demo")
+}
+
+/** What the media demo can show a file as: whatever it is found to be, or one kind. */
+enum class ViewerMode(val label: String, val type: Int) {
+    /** Whatever it is found to be. */
+    AUTO("Auto", MediaView.UNKNOWN),
+    /** Flat, to zoom into. */
+    PICTURE("Picture", MediaView.PICTURE),
+    /** As a strip to pan along. */
+    PANORAMA("Panorama", MediaView.PANORAMA),
+    /** From the inside of a sphere. */
+    PHOTOSPHERE("Sphere", MediaView.PHOTOSPHERE),
+    /** As a video. */
+    VIDEO("Video", MediaView.VIDEO),
+    /** As a motion photo, whose clip plays while held. */
+    MOTION("Motion", MediaView.MOTION_PHOTO),
+    /** As a 360 degree video. */
+    SPHERICAL("360°", MediaView.SPHERICAL_VIDEO),
+    /** As a recording. */
+    AUDIO("Sound", MediaView.AUDIO);
+
+    companion object {
+        /** The choice that names a media type, or AUTO for one no choice names. */
+        fun of(type: Int): ViewerMode = entries.firstOrNull { it.type == type } ?: AUTO
+    }
 }
 
 /**
@@ -99,6 +149,8 @@ class MainActivity : ComponentActivity() {
                 val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
                 val scope = rememberCoroutineScope()
                 var currentScreen by remember { mutableStateOf(DemoScreen.SIMPLE) }
+                // The picture the viewer opens on, from the simple demo's last capture.
+                var viewerUri by remember { mutableStateOf<Uri?>(null) }
 
                 ModalNavigationDrawer(
                     drawerState = drawerState,
@@ -128,7 +180,9 @@ class MainActivity : ComponentActivity() {
                                             DemoScreen.SIMPLE -> Icon(Icons.Default.CameraAlt, contentDescription = null)
                                             DemoScreen.STREAM -> Icon(Icons.Default.Videocam, contentDescription = null)
                                             DemoScreen.RESIZING -> Icon(Icons.Default.Transform, contentDescription = null)
+                                            DemoScreen.PANORAMA -> Icon(Icons.Default.Panorama, contentDescription = null)
                                             DemoScreen.QR_CODE -> Icon(Icons.Default.QrCode, contentDescription = null)
+                                            DemoScreen.VIEWER -> Icon(Icons.Default.PhotoLibrary, contentDescription = null)
                                         }
                                     },
                                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
@@ -172,10 +226,15 @@ class MainActivity : ComponentActivity() {
                                 .padding(innerPadding)
                         ) {
                             when (currentScreen) {
-                                DemoScreen.SIMPLE -> SimpleDemoScreen()
+                                DemoScreen.SIMPLE -> SimpleDemoScreen(onView = { uri ->
+                                    viewerUri = uri
+                                    currentScreen = DemoScreen.VIEWER
+                                })
                                 DemoScreen.STREAM -> StreamDemoScreen()
                                 DemoScreen.RESIZING -> ResizingDemoScreen()
+                                DemoScreen.PANORAMA -> PanoramaDemoScreen()
                                 DemoScreen.QR_CODE -> QrCodeDemoScreen()
+                                DemoScreen.VIEWER -> ViewerDemoScreen(initialUri = viewerUri)
                             }
                         }
                     }
@@ -187,9 +246,15 @@ class MainActivity : ComponentActivity() {
 
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
-fun SimpleDemoScreen() {
+fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
     val context = LocalContext.current
     val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    val cameraState = remember { mutableStateOf<CameraState?>(null) }
+    // A DNG beside each JPEG, where the camera can write one.
+    var raw by remember { mutableStateOf(false) }
+    val rawSupported = cameraState.value?.supportedPictureFormats?.contains(PictureFormat.RAW_JPEG) == true
+    // The last picture filed; with RAW on, the DNG, which is filed after the JPEG.
+    var lastSaved by remember { mutableStateOf<Uri?>(null) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
     var uiStatusText by remember { mutableStateOf("") }
 
@@ -232,9 +297,12 @@ fun SimpleDemoScreen() {
                 Camera(
                     modifier = Modifier.fillMaxSize(),
                     controller = cameraController,
+                    pictureFormat = if (raw && rawSupported) PictureFormat.RAW_JPEG else PictureFormat.JPEG,
+                    state = cameraState,
                     onImageConfirmation = { uiStatusText = "Confirm Image?" },
                     onImageSaved = { uri ->
                         uiStatusText = "Saved: $uri"
+                        lastSaved = uri
                         Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
                     },
                     onImageCaptureFailed = { uiStatusText = "Capture Failed" }
@@ -272,6 +340,30 @@ fun SimpleDemoScreen() {
                     Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Take Picture", fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (rawSupported) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = raw, onCheckedChange = { raw = it })
+                        Text("RAW", color = Color.White)
+                    }
+                }
+                Button(
+                    onClick = { lastSaved?.let(onView) },
+                    enabled = lastSaved != null,
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("View", fontWeight = FontWeight.SemiBold)
                 }
             }
         } else {
@@ -399,6 +491,107 @@ fun ResizingDemoScreen() {
     }
 }
 
+/**
+ * Sweeps a panorama or a photosphere. The camera draws the guide over its own preview, so this is
+ * only the controls and the result.
+ */
+@RequiresPermission(Manifest.permission.CAMERA)
+@Composable
+fun PanoramaDemoScreen() {
+    val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    val cameraState = remember { mutableStateOf<CameraState?>(null) }
+    var hasRequiredPermissions by remember { mutableStateOf(false) }
+    var mode by remember { mutableStateOf(PanoramaMode.PANORAMA) }
+    var status by remember { mutableStateOf("Turn on the spot; for a photosphere, hold the circle on each dot") }
+
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
+        hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }
+    }
+
+    LaunchedEffect(Unit) { permissionLauncher.launch(Permissions.REQUIRED_PERMISSIONS) }
+
+    val sweeping = cameraState.value?.isCapturingPanorama == true
+    // Aiming straight up lays the phone face down, which turns the screen off on a phone that
+    // watches for it, and with it the camera.
+    val view = LocalView.current
+    DisposableEffect(sweeping) {
+        view.keepScreenOn = sweeping
+        onDispose { view.keepScreenOn = false }
+    }
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = status,
+                modifier = Modifier.padding(16.dp).align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = Color.White)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (hasRequiredPermissions) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp))) {
+                Camera(
+                    modifier = Modifier.fillMaxSize(),
+                    controller = cameraController,
+                    state = cameraState
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Button(
+                    onClick = {
+                        mode = if (mode == PanoramaMode.PANORAMA) PanoramaMode.PHOTOSPHERE else PanoramaMode.PANORAMA
+                    },
+                    enabled = !sweeping,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                ) {
+                    Text(if (mode == PanoramaMode.PANORAMA) "Panorama" else "Photosphere", fontWeight = FontWeight.SemiBold)
+                }
+
+                Button(
+                    onClick = {
+                        val controller = cameraController.value ?: return@Button
+                        if (sweeping) {
+                            controller.stopPanorama()
+                            return@Button
+                        }
+                        val started = controller.startPanorama(
+                            mode,
+                            onProgress = { status = "${Math.round(it * 100)}% covered" },
+                            onSaved = { uri -> status = "Saved to $uri" },
+                            onFailed = { status = "Nothing was captured" })
+                        if (!started) {
+                            status = "This device cannot report which way it is pointing"
+                        }
+                    },
+                    enabled = cameraState.value != null,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Icon(Icons.Default.Panorama, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (sweeping) "Done" else "Start", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        } else {
+            Button(onClick = { permissionLauncher.launch(Permissions.REQUIRED_PERMISSIONS) }) {
+                Text("Request Permission")
+            }
+        }
+    }
+}
+
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
 fun QrCodeDemoScreen() {
@@ -513,4 +706,106 @@ fun QrCodeDemoScreen() {
             }
         }
     }
+}
+
+/**
+ * Shows any picture, video or recording in the library's [Media], which works out what it is,
+ * with a picker to open another, a switch to show it as something else, and a line saying what
+ * the library's MediaTags reads from it.
+ */
+@Composable
+fun ViewerDemoScreen(initialUri: Uri?) {
+    val context = LocalContext.current
+    var uri by remember(initialUri) { mutableStateOf(initialUri) }
+    var mode by remember(uri) { mutableStateOf(ViewerMode.AUTO) }
+    var shown by remember(uri) { mutableStateOf(ViewerMode.AUTO) }
+    var gyroscope by remember { mutableStateOf(false) }
+    var status by remember(uri, mode) {
+        mutableStateOf(if (uri == null) "Take a picture, or open any picture, video or recording" else "")
+    }
+    var summary by remember(uri) { mutableStateOf("") }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
+        if (picked != null) {
+            uri = picked
+        }
+    }
+    val hasRotationSensor = remember { hasRotationSensor(context) }
+    LaunchedEffect(uri) {
+        val current = uri ?: return@LaunchedEffect
+        summary = withContext(Dispatchers.IO) { describeMedia(context, current) }
+    }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            Media(
+                modifier = Modifier.fillMaxSize(),
+                uri = uri,
+                type = mode.type,
+                gyroscope = gyroscope,
+                onLoaded = { type -> shown = ViewerMode.of(type); status = "" },
+                onFailed = { status = "This device cannot show this file" }
+            )
+            if (uri != null) {
+                Text(
+                    listOf(shown.label, summary).filter { it.isNotEmpty() }.joinToString(" · "),
+                    color = Color.White,
+                    modifier = Modifier.align(Alignment.TopStart).background(Color(0x80000000)).padding(8.dp)
+                )
+            }
+            if (status.isNotEmpty()) {
+                Text(status, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp))
+            }
+        }
+        // Scrolls rather than wraps where the screen is too narrow for every choice.
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = { picker.launch(arrayOf("image/*", "video/*", "audio/*")) }) { Text("Open") }
+            ViewerMode.entries.forEach { option ->
+                FilterChip(
+                    selected = mode == option,
+                    onClick = { mode = option },
+                    label = { Text(option.label) }
+                )
+            }
+            if ((shown == ViewerMode.PHOTOSPHERE || shown == ViewerMode.SPHERICAL) && hasRotationSensor) {
+                Checkbox(checked = gyroscope, onCheckedChange = { gyroscope = it })
+                Text("Gyro", color = Color.White)
+            }
+        }
+    }
+}
+
+/** What MediaTags reads from a file that is worth a line on screen. */
+private fun describeMedia(context: Context, uri: Uri): String = try {
+    describeMedia(MediaTags.open(context, uri))
+} catch (e: IOException) {
+    "No metadata"
+}
+
+/** When, where, what and how special a file is, as its metadata says. */
+fun describeMedia(tags: MediaTags): String {
+    val parts = mutableListOf<String>()
+    tags.title?.let { parts += it }
+    listOfNotNull(tags.make, tags.model).joinToString(" ").takeIf { it.isNotEmpty() }?.let { parts += it }
+    if (tags.captureTime != -1L) {
+        parts += SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(tags.captureTime))
+    }
+    tags.location?.let { parts += String.format(Locale.US, "%.5f, %.5f", it.latitude, it.longitude) }
+    if (tags.gainMap != MediaTags.GAIN_MAP_NONE || tags.videoTransfer == MediaTags.TRANSFER_HLG
+        || tags.videoTransfer == MediaTags.TRANSFER_PQ) {
+        parts += "HDR"
+    }
+    if (tags.motionPhoto != null) {
+        parts += "Motion photo"
+    }
+    return if (parts.isEmpty()) "No metadata" else parts.joinToString(" · ")
+}
+
+private fun hasRotationSensor(context: Context): Boolean {
+    val sensors = context.getSystemService(SensorManager::class.java) ?: return false
+    return sensors.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR) != null
+        || sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
 }
