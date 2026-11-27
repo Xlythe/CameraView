@@ -1397,8 +1397,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         if (listener == null) throw new NullPointerException("listener cannot be null");
         CameraXSegmentationAnalyzer analyzer;
         try {
-            analyzer = new CameraXSegmentationAnalyzer(
-                    listener, mMainExecutor, isUsingFrontFacingCamera());
+            analyzer = new CameraXSegmentationAnalyzer(listener, mMainExecutor);
         } catch (RuntimeException | LinkageError error) {
             // The model is delivered by Play services and its client is built here, so a device
             // without it fails at construction. Reported rather than thrown, for the same reason
@@ -2184,18 +2183,27 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // Before the still, which is built as a JPEG whenever frames are drawn.
             boolean drawing = prepareFrameEffect(!streamPreviews.isEmpty());
             // A still output is wanted alongside a recording, not instead of it: that is the
-            // combination a camera app's video-snapshot button uses. Barcode analysis is the one
-            // thing that genuinely takes the slot, because it needs the frames itself.
-            ImageCapture imageCapture = mFrameAnalyzer == null
-                    ? createImageCapture(cameraInfo, drawing) : null;
-            ImageAnalysis imageAnalysis = mVideoCapture == null && mFrameAnalyzer != null
-                    ? createImageAnalysis() : null;
+            // combination a camera app's video-snapshot button uses. Analysis is bound beside the
+            // still, which every camera can hold with a preview, and gives way to a recording.
+            boolean analyzing = mVideoCapture == null && mFrameAnalyzer != null;
+            ImageCapture imageCapture = createImageCapture(cameraInfo, drawing, analyzing);
+            ImageAnalysis imageAnalysis = analyzing ? createImageAnalysis() : null;
             List<UseCase> requested = new ArrayList<>();
             requested.add(displayPreview);
             if (mVideoCapture != null) requested.add(mVideoCapture);
-            if (imageCapture != null) requested.add(imageCapture);
-            else if (imageAnalysis != null) requested.add(imageAnalysis);
+            requested.add(imageCapture);
+            if (imageAnalysis != null) requested.add(imageAnalysis);
             requested.addAll(streamPreviews.values());
+
+            // A preview, a still and analysis are guaranteed together, but not beside a stream
+            // as well. Asked for more than it can hold, the bind fails and takes the analysis
+            // with it, so the still is the part that gives way, as it does to a recording.
+            if (imageAnalysis != null && !streamPreviews.isEmpty()
+                    && !cameraInfo.isSessionConfigSupported(createSessionConfig(requested))) {
+                Log.d(TAG, "This camera cannot take a picture while it analyzes a stream");
+                requested.remove(imageCapture);
+                imageCapture = null;
+            }
 
             // Not every camera can hold a preview, a recording and a still at once. Asked for one
             // that cannot, the bind fails and the recording is lost with it, so the still is the
@@ -2222,6 +2230,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 }
             }
             unbindCurrentUseCases();
+            CameraXFrameAnalyzer analyzer = mFrameAnalyzer;
+            if (imageAnalysis != null && analyzer != null) {
+                // After unbinding, so no frame from the last lens arrives labelled as this one's.
+                analyzer.setMirrored(mFrontFacing);
+            }
             // After unbinding, so that an effect being let go is not closing outputs CameraX is
             // still drawing into, and before binding, because the group carries the effect.
             CameraEffect effect = reconcileFrameEffect(drawing);
@@ -2696,15 +2709,21 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         });
     }
 
-    /** @param drawing whether the bind puts frames through GL, which makes every still a JPEG */
+    /**
+     * @param drawing whether the bind puts frames through GL, which makes every still a JPEG
+     * @param analyzing whether analysis is bound beside the still. A camera promises a RAW or
+     *     Ultra HDR still, and the frames zero shutter lag keeps, beside a preview alone, so the
+     *     still is then a JPEG taken as it is asked for, as it is beside a Camera2 stream.
+     */
     @NonNull private ImageCapture createImageCapture(
-            @NonNull CameraInfo cameraInfo, boolean drawing) {
-        CameraView.PictureFormat format = boundPictureFormat(getPictureFormat(), drawing);
+            @NonNull CameraInfo cameraInfo, boolean drawing, boolean analyzing) {
+        boolean plain = drawing || analyzing;
+        CameraView.PictureFormat format = boundPictureFormat(getPictureFormat(), plain);
         ImageCapture.Builder builder = new ImageCapture.Builder()
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
-                .setCaptureMode(getCaptureMode(cameraInfo, format, drawing))
+                .setCaptureMode(getCaptureMode(cameraInfo, format, plain))
                 .setJpegQuality(getPictureQuality());
         // Checked against this camera as well as on request, since the lens may have changed.
         if (format == CameraView.PictureFormat.ULTRA_HDR && writesUltraHdr(cameraInfo)) {
@@ -3042,14 +3061,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      *
      * <p>Nor does a drawn still. An effect makes CameraX share one camera stream between the
      * preview and the still, and each use case it shares has to fit in a single surface; keeping
-     * frames adds the surfaces they are kept and reprocessed through, and the bind throws.</p>
+     * frames adds the surfaces they are kept and reprocessed through, and the bind throws. Nor a
+     * still beside analysis, which a camera promises with a preview, not with those surfaces as
+     * well.</p>
      *
-     * @param drawing whether the bind puts frames through an effect
+     * @param plain whether the still is drawn through an effect or taken beside analysis
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     private int getCaptureMode(@NonNull CameraInfo cameraInfo,
-            @NonNull CameraView.PictureFormat format, boolean drawing) {
-        return captureMode(getQuality(), cameraInfo.isZslSupported(), format, drawing);
+            @NonNull CameraView.PictureFormat format, boolean plain) {
+        return captureMode(getQuality(), cameraInfo.isZslSupported(), format, plain);
     }
 
     /**
