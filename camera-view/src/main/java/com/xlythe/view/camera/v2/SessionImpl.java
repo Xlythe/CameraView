@@ -18,6 +18,7 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.ExifCaptureParameters;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -171,6 +172,11 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     boolean isPictureFormatSupported(CameraView.PictureFormat format) {
         return mCamera2Module.isPictureFormatSupported(format);
+    }
+
+    @NonNull
+    ExifCaptureParameters exifCaptureParameters() {
+        return mCamera2Module.exifCaptureParameters();
     }
 
     /**

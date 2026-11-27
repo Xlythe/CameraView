@@ -1,6 +1,7 @@
 package com.xlythe.view.camera.v2;
 
 import android.annotation.TargetApi;
+import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
@@ -25,6 +26,7 @@ import android.view.Surface;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.RawCapturePairer;
 
@@ -256,7 +258,7 @@ class PictureSession extends PreviewSession {
             }
         });
         if (jpeg) {
-            mPictureSurface.initializePicture(file, picture);
+            mPictureSurface.initializePicture(file, exifCaptureParameters(), picture);
         }
         if (raw) {
             mRawSurface.initializePicture(dng, picture);
@@ -481,6 +483,9 @@ class PictureSession extends PreviewSession {
      * image rather than by throwing, which no end-to-end assertion notices.
      */
     static class ImageSaver extends AsyncTask<Void, Void, Boolean> {
+        // The application, whose name and version the picture records as its software
+        private final Context mContext;
+
         // Where the picture was taken, or null to leave it untagged
         @Nullable
         private final Location mLocation;
@@ -498,13 +503,19 @@ class PictureSession extends PreviewSession {
         // The file to save the image to
         private final File mFile;
 
-        ImageSaver(@Nullable Location location, SafeCloseImageReader.Frame frame,
-                int orientation, boolean reversed, File file) {
+        // How the picture was taken, for the tags the camera's JPEG leaves out
+        private final ExifCaptureParameters mExifParameters;
+
+        ImageSaver(Context context, @Nullable Location location,
+                SafeCloseImageReader.Frame frame, int orientation, boolean reversed, File file,
+                ExifCaptureParameters exifParameters) {
+            mContext = context.getApplicationContext();
             mLocation = location;
             mFrame = frame;
             mOrientation = orientation;
             mIsReversed = reversed;
             mFile = file;
+            mExifParameters = exifParameters;
         }
 
         /** @return true only when the picture reached disk, so a failure is never reported as one. */
@@ -536,6 +547,9 @@ class PictureSession extends PreviewSession {
             try {
                 Exif exif = new Exif(mFile);
                 exif.attachTimestamp();
+                exif.attachCaptureDevice(mContext);
+                exif.attachThumbnail();
+                mExifParameters.applyTo(exif);
                 exif.rotate(mOrientation);
                 if (mIsReversed) {
                     exif.flipHorizontally();
@@ -675,11 +689,13 @@ class PictureSession extends PreviewSession {
                         final File file = mFile;
                         final PendingPicture picture = mPicture;
                         new ImageSaver(
+                                mCameraView.getContext(),
                                 getLocation(),
                                 frame,
                                 mCameraView.getRelativeCameraOrientation(),
                                 isUsingFrontFacingCamera(),
-                                mFile) {
+                                mFile,
+                                mExifParameters) {
                             @UiThread
                             @Override
                             protected void onPostExecute(Boolean saved) {
@@ -706,6 +722,9 @@ class PictureSession extends PreviewSession {
         /** The shutter press {@link #mFile} belongs to, told when it is written or lost. */
         @Nullable
         private PendingPicture mPicture;
+
+        /** How the picture for {@link #mFile} is being taken, described when it was asked for. */
+        private ExifCaptureParameters mExifParameters = new ExifCaptureParameters();
 
         /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
         private int mImageFormat = IMAGE_FORMAT_DEFAULT;
@@ -749,8 +768,10 @@ class PictureSession extends PreviewSession {
             return getImageFormat(getQuality());
         }
 
-        void initializePicture(File file, @NonNull PendingPicture picture) {
+        void initializePicture(File file, ExifCaptureParameters exifParameters,
+                @NonNull PendingPicture picture) {
             mFile = file;
+            mExifParameters = exifParameters;
             mPicture = picture;
             if (mFile.exists()) {
                 Log.w(TAG, "File already exists. Deleting.");

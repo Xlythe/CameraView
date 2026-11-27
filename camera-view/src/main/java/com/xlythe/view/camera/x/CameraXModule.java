@@ -94,6 +94,8 @@ import androidx.lifecycle.ViewTreeLifecycleOwner;
 import com.google.common.util.concurrent.ListenableFuture;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
+import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
@@ -105,6 +107,7 @@ import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.EnumSet;
@@ -1244,7 +1247,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         ImageCapture.Metadata metadata = new ImageCapture.Metadata();
-        metadata.setLocation(getLocation());
+        Location location = getLocation();
+        metadata.setLocation(location);
+        ExifCaptureParameters exifParameters = exifCaptureParameters();
         metadata.setReversedHorizontal(mFrontFacing);
         ImageCapture.OutputFileOptions options = new ImageCapture.OutputFileOptions.Builder(file)
                 .setMetadata(metadata).build();
@@ -1254,7 +1259,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             }
             @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
                 if (!completePendingImage(operationId)) return;
-                showImageConfirmation(file);
+                finishExif(file, location, exifParameters,
+                        () -> showImageConfirmation(file));
             }
             @Override public void onError(@NonNull ImageCaptureException error) {
                 if (!completePendingImage(operationId)) return;
@@ -1476,6 +1482,64 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             this.characteristics = characteristics;
             this.mirrored = mirrored;
         }
+    }
+
+    /**
+     * Writes the Exif CameraX leaves out (timezone offsets, sub-second times, pixel dimensions,
+     * what the fix knows beyond its coordinate, how the picture was taken, and a thumbnail), as
+     * the other two backends do, then runs {@code then} on the main thread. The caller is told
+     * only after, so it never reads a file being rewritten.
+     */
+    private void finishExif(@NonNull File file, @Nullable Location location,
+            @NonNull ExifCaptureParameters exifParameters, @NonNull Runnable then) {
+        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+            try {
+                Exif exif = new Exif(file);
+                exif.attachTimestamp();
+                exif.attachCaptureDevice(getContext());
+                exif.attachThumbnail();
+                exifParameters.applyTo(exif);
+                if (location != null) {
+                    exif.attachLocation(location);
+                }
+                exif.save();
+            } catch (IOException | RuntimeException error) {
+                Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
+            }
+            mMainHandler.post(then);
+        });
+    }
+
+    /**
+     * The Exif a picture taken now should carry about how it was taken: the camera's optics,
+     * read through the camera2 characteristics underneath, and the zoom, exposure compensation,
+     * flash and extension CameraX was asked for.
+     */
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    @NonNull
+    private ExifCaptureParameters exifCaptureParameters() {
+        Camera camera = mActiveCamera;
+        if (camera == null) {
+            return new ExifCaptureParameters();
+        }
+        CameraInfo info = camera.getCameraInfo();
+        ExifCaptureParameters parameters;
+        try {
+            parameters = ExifCaptureParameters.forCamera(
+                    (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE),
+                    Camera2CameraInfo.from(info).getCameraId());
+        } catch (RuntimeException | LinkageError error) {
+            Log.w(TAG, "Unable to describe the camera for a picture's Exif", error);
+            parameters = new ExifCaptureParameters();
+        }
+        ZoomState zoom = info.getZoomState().getValue();
+        if (zoom != null) {
+            parameters.setZoomRatio(zoom.getZoomRatio());
+        }
+        return parameters
+                .setExposureCompensation(info.getExposureState().getExposureCompensationIndex())
+                .setFlash(getFlash(), info.hasFlashUnit())
+                .setExtension(getExtension());
     }
 
     private void scheduleImageTimeout(long operationId) {

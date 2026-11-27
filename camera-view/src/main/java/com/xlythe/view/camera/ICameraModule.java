@@ -7,6 +7,7 @@ import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.location.Location;
 import android.media.MediaActionSound;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
@@ -22,6 +23,9 @@ import androidx.annotation.RestrictTo;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -31,6 +35,9 @@ public abstract class ICameraModule {
     public static final boolean DEBUG = CameraView.DEBUG;
     /** Maximum wait for a backend to detach a custom encoder surface on the main thread. */
     private static final long SURFACE_DETACH_TIMEOUT_SECONDS = 2;
+
+    /** The location role that says a video was recorded there, rather than that it shows it. */
+    private static final String LOCATION_ROLE_SHOOTING = "0";
 
     /** Owning CameraView used for view state and callbacks. */
     private final CameraView mView;
@@ -304,7 +311,47 @@ public abstract class ICameraModule {
      * Informs the CameraView to pause and show the taken video
      */
     public void showVideoConfirmation(File file) {
+        attachVideoMetadata(file);
         mView.showVideoConfirmation(file);
+    }
+
+    /**
+     * Writes which device recorded the video, when, and where if the app may know, which
+     * MediaRecorder leaves out, as both user data and keyed metadata. Done before the caller is
+     * told, so it is handed a finished file.
+     */
+    private void attachVideoMetadata(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        VideoMetadata.Builder metadata = new VideoMetadata.Builder()
+                .set(VideoMetadata.Tag.MAKE, Build.MANUFACTURER)
+                .set(VideoMetadata.Tag.MODEL, Build.MODEL)
+                .set(VideoMetadata.Tag.SOFTWARE, Exif.softwareName(getContext()))
+                .set(VideoMetadata.Tag.CREATION_DATE, isoDate(now))
+                .set(VideoMetadata.Tag.YEAR, year(now));
+        Location location = getLocation();
+        if (location != null) {
+            metadata.setLocation(location.getLatitude(), location.getLongitude())
+                    .set(VideoMetadata.Tag.LOCATION_ROLE, LOCATION_ROLE_SHOOTING);
+            if (location.getTime() > 0) {
+                metadata.set(VideoMetadata.Tag.LOCATION_DATE, isoDate(location.getTime()));
+            }
+        }
+        VideoMetadata.write(file, metadata);
+    }
+
+    /** ISO 8601, which is what a reader expects to find in the creation-date box. */
+    private static String isoDate(long timestamp) {
+        SimpleDateFormat format =
+                new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US);
+        return format.format(new Date(timestamp));
+    }
+
+    /** The year, in the timezone the recording was made in. */
+    private static String year(long timestamp) {
+        return new SimpleDateFormat("yyyy", Locale.US).format(new Date(timestamp));
     }
 
     public void onVideoFailed() {
