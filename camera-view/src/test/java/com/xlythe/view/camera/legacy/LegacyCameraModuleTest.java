@@ -297,6 +297,31 @@ public class LegacyCameraModuleTest {
         assertEquals(0, openCamera().getParameters().getExposureCompensation());
     }
 
+    /**
+     * The torch, stabilization and low-light boost are refused while a camera that cannot do them
+     * is open, as on the other backends, rather than reported on and never acted on. A request
+     * made while closed is kept for the camera that opens.
+     */
+    @Test
+    public void controlsTheCameraCannotDoAreRefusedWhileItIsOpen() {
+        module.setTorchEnabled(true);
+        assertTrue("kept until a camera opens", module.isTorchEnabled());
+        module.setTorchEnabled(false);
+
+        module.open();
+        assertFalse(module.hasFlash());
+        module.setTorchEnabled(true);
+        assertFalse(module.isTorchEnabled());
+
+        assertFalse(module.isStabilizationSupported());
+        module.setStabilizationEnabled(true);
+        assertFalse(module.isStabilizationEnabled());
+
+        assertFalse(module.isLowLightBoostSupported());
+        module.setLowLightBoostEnabled(true);
+        assertFalse(module.isLowLightBoostEnabled());
+    }
+
     /** A picture's Exif reports the index the camera took, times its step. */
     @Test
     public void aPictureRecordsTheExposureBias() throws Exception {

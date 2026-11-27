@@ -591,6 +591,42 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     /**
+     * Refused while a camera without a flash is open, as on the other backends. This backend
+     * drives no flash, so that is every camera it opens; a request made while closed is kept.
+     */
+    @MainThread
+    @Override
+    public void setTorchEnabled(boolean enabled) {
+        if (enabled && mCamera != null && !hasFlash()) {
+            Log.w(TAG, "Ignoring torch request because the active camera has no flash unit");
+            return;
+        }
+        super.setTorchEnabled(enabled);
+    }
+
+    /** Refused while a camera that cannot steady the picture is open, as on the other backends. */
+    @MainThread
+    @Override
+    public void setStabilizationEnabled(boolean enabled) {
+        if (enabled && mCamera != null && !isStabilizationSupported()) {
+            Log.w(TAG, "Ignoring stabilization because the active camera does not support it");
+            return;
+        }
+        super.setStabilizationEnabled(enabled);
+    }
+
+    /** Refused while a camera without low-light boost is open, as on the other backends. */
+    @MainThread
+    @Override
+    public void setLowLightBoostEnabled(boolean enabled) {
+        if (enabled && mCamera != null && !isLowLightBoostSupported()) {
+            Log.w(TAG, "Ignoring low-light boost because the active camera does not support it");
+            return;
+        }
+        super.setLowLightBoostEnabled(enabled);
+    }
+
+    /**
      * Writes the exposure index into a camera's parameters, held to its range.
      *
      * @return the index the camera is at once the parameters are applied, or null for a camera
