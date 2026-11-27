@@ -159,7 +159,12 @@ class PictureSession extends PreviewSession {
      * image rather than by throwing, which no end-to-end assertion notices.
      */
     static class ImageSaver extends AsyncTask<Void, Void, Boolean> {
+        // The application, whose name and version the picture records as its software
         private final Context mContext;
+
+        // Where the picture was taken, or null to leave it untagged
+        @Nullable
+        private final Location mLocation;
 
         // The image that was captured
         private final Image mImage;
@@ -177,9 +182,10 @@ class PictureSession extends PreviewSession {
         // How the picture was taken, for the tags the camera's JPEG leaves out
         private final ExifCaptureParameters mExifParameters;
 
-        ImageSaver(Context context, Image image, int orientation, boolean reversed, File file,
-                ExifCaptureParameters exifParameters) {
+        ImageSaver(Context context, @Nullable Location location, Image image, int orientation,
+                boolean reversed, File file, ExifCaptureParameters exifParameters) {
             mContext = context.getApplicationContext();
+            mLocation = location;
             mImage = image;
             mOrientation = orientation;
             mIsReversed = reversed;
@@ -222,9 +228,8 @@ class PictureSession extends PreviewSession {
                 if (mIsReversed) {
                     exif.flipHorizontally();
                 }
-                Location location = SessionImpl.CameraSurface.getLocation(mContext);
-                if (location != null) {
-                    exif.attachLocation(location);
+                if (mLocation != null) {
+                    exif.attachLocation(mLocation);
                 }
                 exif.save();
                 // After saving, not before: saveAttributes rewrites the Exif block and
@@ -360,6 +365,7 @@ class PictureSession extends PreviewSession {
                         final File file = mFile;
                         new ImageSaver(
                                 mCameraView.getContext(),
+                                getLocation(),
                                 image,
                                 mCameraView.getRelativeCameraOrientation(),
                                 isUsingFrontFacingCamera(),

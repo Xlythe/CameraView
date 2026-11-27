@@ -1,23 +1,22 @@
 package com.xlythe.view.camera;
 
-import android.Manifest.permission;
-import android.annotation.SuppressLint;
 import android.content.Context;
-import android.content.pm.PackageManager;
-import android.location.Location;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.location.Location;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
 import android.util.Log;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
-import androidx.core.content.ContextCompat;
+import androidx.annotation.Nullable;
+import androidx.annotation.RestrictTo;
 
 import com.xlythe.view.camera.stream.VideoRecorder;
 
@@ -34,9 +33,6 @@ public abstract class ICameraModule {
     public static final boolean DEBUG = CameraView.DEBUG;
     /** Maximum wait for a backend to detach a custom encoder surface on the main thread. */
     private static final long SURFACE_DETACH_TIMEOUT_SECONDS = 2;
-
-    /** How old a fix may be and still say where a video that just finished was taken. */
-    private static final long STALE_VIDEO_LOCATION_MILLIS = 60 * 1000;
 
     /** The location role that says a video was recorded there, rather than that it shows it. */
     private static final String LOCATION_ROLE_SHOOTING = "0";
@@ -92,6 +88,19 @@ public abstract class ICameraModule {
 
     public int getHeight() {
         return mView.getHeight();
+    }
+
+    /**
+     * Where to tag a capture, or null when that is unknown or the app holds no location
+     * permission.
+     *
+     * <p>Never waits for a fix, so a capture can ask from whichever thread it finishes on.</p>
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @AnyThread
+    @Nullable
+    public final Location getLocation() {
+        return mView.getLocationTracker().getLocation();
     }
 
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
@@ -225,9 +234,6 @@ public abstract class ICameraModule {
      * MediaRecorder leaves out, as both user data and keyed metadata. Done before the caller is
      * told, so it is handed a finished file.
      */
-    // The location is read only behind the ACCESS_FINE_LOCATION check below, which lint does not
-    // accept as a guard.
-    @SuppressLint("MissingPermission")
     private void attachVideoMetadata(File file) {
         if (file == null || !file.exists()) {
             return;
@@ -239,16 +245,12 @@ public abstract class ICameraModule {
                 .set(VideoMetadata.Tag.SOFTWARE, Exif.softwareName(getContext()))
                 .set(VideoMetadata.Tag.CREATION_DATE, isoDate(now))
                 .set(VideoMetadata.Tag.YEAR, year(now));
-        if (ContextCompat.checkSelfPermission(getContext(), permission.ACCESS_FINE_LOCATION)
-                == PackageManager.PERMISSION_GRANTED) {
-            Location location = LocationProvider.getLastKnownGPSLocation(
-                    getContext(), STALE_VIDEO_LOCATION_MILLIS);
-            if (location != null) {
-                metadata.setLocation(location.getLatitude(), location.getLongitude())
-                        .set(VideoMetadata.Tag.LOCATION_ROLE, LOCATION_ROLE_SHOOTING);
-                if (location.getTime() > 0) {
-                    metadata.set(VideoMetadata.Tag.LOCATION_DATE, isoDate(location.getTime()));
-                }
+        Location location = getLocation();
+        if (location != null) {
+            metadata.setLocation(location.getLatitude(), location.getLongitude())
+                    .set(VideoMetadata.Tag.LOCATION_ROLE, LOCATION_ROLE_SHOOTING);
+            if (location.getTime() > 0) {
+                metadata.set(VideoMetadata.Tag.LOCATION_DATE, isoDate(location.getTime()));
             }
         }
         VideoMetadata.write(file, metadata);
