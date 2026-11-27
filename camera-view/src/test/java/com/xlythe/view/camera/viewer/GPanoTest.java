@@ -10,15 +10,21 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 
-import java.io.ByteArrayInputStream;
+import com.xlythe.view.camera.MediaTags;
+
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 
-/** Reading where a picture sits on the sphere from its photo sphere XMP. */
+/** Working out where a picture sits on the sphere from its photo sphere XMP. */
 @RunWith(RobolectricTestRunner.class)
 public class GPanoTest {
     private static final double EPSILON = 1e-9;
+
+    /** The namespace every property is in. */
+    static final String NAMESPACE = "http://ns.google.com/photos/1.0/panorama/";
 
     /**
      * Word for word what CameraView's panorama sweep writes for a full-circle strip: the XMP of a
@@ -60,7 +66,7 @@ public class GPanoTest {
     /** The sweep writer's strip: all the way round, a band from 33.96 to -29.21 degrees. */
     @Test
     public void readsWhatTheSweepWrites() {
-        GPano gpano = GPano.parse(SWEEP_PANORAMA_XMP, 3032, 532);
+        GPano gpano = parse(SWEEP_PANORAMA_XMP, 3032, 532);
 
         assertNotNull(gpano);
         assertTrue(gpano.isFullCircle());
@@ -83,7 +89,7 @@ public class GPanoTest {
     /** A partial sweep sits in the middle of the full panorama, as the writer centres it. */
     @Test
     public void aPartialSphereKeepsItsPlace() {
-        GPano gpano = GPano.parse(xmp("CroppedAreaImageWidthPixels=\"1000\" "
+        GPano gpano = parse(xmp("CroppedAreaImageWidthPixels=\"1000\" "
                 + "CroppedAreaImageHeightPixels=\"500\" FullPanoWidthPixels=\"4000\" "
                 + "FullPanoHeightPixels=\"2000\" CroppedAreaLeftPixels=\"1500\" "
                 + "CroppedAreaTopPixels=\"750\""), 1000, 500);
@@ -102,7 +108,7 @@ public class GPanoTest {
     /** A picture resized after it was written keeps the same place: only ratios matter. */
     @Test
     public void onlyRatiosMatter() {
-        GPano gpano = GPano.parse(xmp("CroppedAreaImageWidthPixels=\"8000\" "
+        GPano gpano = parse(xmp("CroppedAreaImageWidthPixels=\"8000\" "
                 + "CroppedAreaImageHeightPixels=\"2000\" FullPanoWidthPixels=\"8000\" "
                 + "FullPanoHeightPixels=\"4000\" CroppedAreaLeftPixels=\"0\" "
                 + "CroppedAreaTopPixels=\"1000\""), 2000, 500);
@@ -116,7 +122,7 @@ public class GPanoTest {
     @Test
     public void readsElementsUnderAnyPrefix() {
         String packet = "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description "
-                + "xmlns:pano='" + GPano.NAMESPACE + "'>"
+                + "xmlns:pano='" + NAMESPACE + "'>"
                 + "<pano:ProjectionType>equirectangular</pano:ProjectionType>"
                 + "<pano:CroppedAreaImageWidthPixels>2048</pano:CroppedAreaImageWidthPixels>"
                 + "<pano:CroppedAreaImageHeightPixels>512</pano:CroppedAreaImageHeightPixels>"
@@ -127,7 +133,7 @@ public class GPanoTest {
                 + "<pano:PoseHeadingDegrees>90</pano:PoseHeadingDegrees>"
                 + "</rdf:Description></rdf:RDF></x:xmpmeta>";
 
-        GPano gpano = GPano.parse(packet, 2048, 512);
+        GPano gpano = parse(packet, 2048, 512);
 
         assertNotNull(gpano);
         assertEquals(0.25, gpano.left, EPSILON);
@@ -139,7 +145,7 @@ public class GPanoTest {
     /** Attributes in single quotes, with escaped characters, read like double-quoted ones. */
     @Test
     public void readsSingleQuotedAttributes() {
-        GPano gpano = GPano.parse(xmp("CroppedAreaImageWidthPixels='100' "
+        GPano gpano = parse(xmp("CroppedAreaImageWidthPixels='100' "
                 + "FullPanoWidthPixels='&#32;400' PoseRollDegrees='&quot;5&quot;'"), 100, 50);
 
         assertNotNull(gpano);
@@ -151,7 +157,7 @@ public class GPanoTest {
     /** What a missing property is taken to be, from the rest. */
     @Test
     public void fillsInWhatIsMissing() {
-        GPano gpano = GPano.parse(xmp("UsePanoramaViewer=\"True\""), 4000, 1000);
+        GPano gpano = parse(xmp("UsePanoramaViewer=\"True\""), 4000, 1000);
 
         assertNotNull(gpano);
         // The cropped size is the picture's own, the full width the cropped one, the full
@@ -164,7 +170,7 @@ public class GPanoTest {
     /** A crop that claims more than the whole is held to the whole. */
     @Test
     public void clampsACropLargerThanTheWhole() {
-        GPano gpano = GPano.parse(xmp("CroppedAreaImageWidthPixels=\"4100\" "
+        GPano gpano = parse(xmp("CroppedAreaImageWidthPixels=\"4100\" "
                 + "CroppedAreaImageHeightPixels=\"2100\" FullPanoWidthPixels=\"4096\" "
                 + "FullPanoHeightPixels=\"2048\" CroppedAreaLeftPixels=\"-3\" "
                 + "CroppedAreaTopPixels=\"9\""), 4100, 2100);
@@ -178,26 +184,26 @@ public class GPanoTest {
 
     @Test
     public void refusesAnotherProjection() {
-        assertNull(GPano.parse(xmp("ProjectionType=\"cylindrical\""), 100, 50));
+        assertNull(parse(xmp("ProjectionType=\"cylindrical\""), 100, 50));
     }
 
     @Test
     public void refusesAPacketWithoutTheNamespace() {
-        assertNull(GPano.parse("<x:xmpmeta><dc:title>Hello</dc:title></x:xmpmeta>", 100, 50));
+        assertNull(parse("<x:xmpmeta><dc:title>Hello</dc:title></x:xmpmeta>", 100, 50));
     }
 
     @Test
     public void refusesSizesThatAreNotPositive() {
-        assertNull(GPano.parse(xmp("FullPanoWidthPixels=\"0\""), 100, 50));
-        assertNull(GPano.parse(xmp("CroppedAreaImageHeightPixels=\"-1\""), 100, 50));
-        assertNull(GPano.parse(xmp("FullPanoHeightPixels=\"NaN\" FullPanoWidthPixels=\"0\""),
+        assertNull(parse(xmp("FullPanoWidthPixels=\"0\""), 100, 50));
+        assertNull(parse(xmp("CroppedAreaImageHeightPixels=\"-1\""), 100, 50));
+        assertNull(parse(xmp("FullPanoHeightPixels=\"NaN\" FullPanoWidthPixels=\"0\""),
                 100, 50));
     }
 
     /** Numbers that are not finite are ignored rather than trusted. */
     @Test
     public void ignoresNumbersThatAreNotFinite() {
-        GPano gpano = GPano.parse(xmp("PoseHeadingDegrees=\"Infinity\""), 200, 100);
+        GPano gpano = parse(xmp("PoseHeadingDegrees=\"Infinity\""), 200, 100);
 
         assertNotNull(gpano);
         assertEquals(0f, gpano.poseHeadingDegrees, 0f);
@@ -222,43 +228,15 @@ public class GPanoTest {
     /** The packet is found after the JFIF and Exif segments, past fill bytes. */
     @Test
     public void findsThePacketInAJpeg() throws IOException {
-        byte[] jpeg = jpeg(true, SWEEP_PANORAMA_XMP);
-
-        GPano gpano = GPano.read(new ByteArrayInputStream(jpeg), 3032, 532);
+        GPano gpano = parse(SWEEP_PANORAMA_XMP, 3032, 532);
 
         assertNotNull(gpano);
         assertTrue(gpano.isFullCircle());
-        assertEquals(SWEEP_PANORAMA_XMP, GPano.findXmp(new ByteArrayInputStream(jpeg)));
     }
 
     @Test
     public void findsNothingWithoutAPacket() throws IOException {
-        assertNull(GPano.read(new ByteArrayInputStream(jpeg(false, null)), 10, 10));
-    }
-
-    @Test
-    public void findsNothingInSomethingElse() throws IOException {
-        assertNull(GPano.findXmp(new ByteArrayInputStream(
-                "\u0089PNG\r\n".getBytes(StandardCharsets.ISO_8859_1))));
-        assertNull(GPano.findXmp(new ByteArrayInputStream(new byte[] {(byte) 0xFF})));
-        assertNull(GPano.findXmp(new ByteArrayInputStream(new byte[0])));
-    }
-
-    /** A segment that is not where a marker should be, or that runs short, ends the search. */
-    @Test
-    public void findsNothingInABrokenJpeg() throws IOException {
-        // Something other than a marker after the start of the image.
-        assertNull(GPano.findXmp(new ByteArrayInputStream(new byte[] {
-                (byte) 0xFF, (byte) 0xD8, 0x12, 0x34})));
-        // A length too short to count itself.
-        assertNull(GPano.findXmp(new ByteArrayInputStream(new byte[] {
-                (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE1, 0, 1})));
-        // A segment that runs past the end.
-        assertNull(GPano.findXmp(new ByteArrayInputStream(new byte[] {
-                (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE1, 0, 40, 1, 2})));
-        // The end of the image before any packet.
-        assertNull(GPano.findXmp(new ByteArrayInputStream(new byte[] {
-                (byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9})));
+        assertNull(GPano.from(open(jpeg(false, null)).getPanorama(), 10, 10));
     }
 
     /** An APP1 segment too short to hold the XMP header is not mistaken for one. */
@@ -267,21 +245,41 @@ public class GPanoTest {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(new byte[] {(byte) 0xFF, (byte) 0xD8});
         segment(out, 0xE1, "Exif".getBytes(StandardCharsets.ISO_8859_1));
-        segment(out, 0xE1, ("http://ns.adobe.com/xap/1.0/\u0000" + xmp("PoseRollDegrees=\"3\""))
+        segment(out, 0xE1, ("http://ns.adobe.com/xap/1.0/ " + xmp("PoseRollDegrees=\"3\""))
                 .getBytes(StandardCharsets.UTF_8));
         out.write(new byte[] {(byte) 0xFF, (byte) 0xDA});
 
-        GPano gpano = GPano.read(new ByteArrayInputStream(out.toByteArray()), 200, 100);
+        GPano gpano = GPano.from(open(out.toByteArray()).getPanorama(), 200, 100);
 
         assertNotNull(gpano);
         assertEquals(3f, gpano.poseRollDegrees, 0f);
+    }
+
+    /** Where a picture with this packet sits, read the way the viewers read it. */
+    static GPano parse(String xmp, int width, int height) {
+        try {
+            return GPano.from(open(jpeg(true, xmp)).getPanorama(), width, height);
+        } catch (IOException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    /** The metadata of a file with these bytes. */
+    static MediaTags open(byte[] bytes) throws IOException {
+        File file = File.createTempFile("gpano", ".jpg");
+        try {
+            Files.write(file.toPath(), bytes);
+            return MediaTags.open(file);
+        } finally {
+            file.deleteOnExit();
+        }
     }
 
     /** A packet with the given GPano attributes. */
     static String xmp(String attributes) {
         String prefixed = attributes.replaceAll("(\\w+)=", "GPano:$1=");
         return "<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"><rdf:RDF><rdf:Description "
-                + "xmlns:GPano=\"" + GPano.NAMESPACE + "\" " + prefixed
+                + "xmlns:GPano=\"" + NAMESPACE + "\" " + prefixed
                 + "/></rdf:RDF></x:xmpmeta>";
     }
 

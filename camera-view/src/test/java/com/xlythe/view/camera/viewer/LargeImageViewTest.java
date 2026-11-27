@@ -290,7 +290,7 @@ public class LargeImageViewTest {
     /** A panorama fills the height, opens where it says to and wraps round. */
     @Test
     public void aPanoramaWrapsRound() {
-        GPano gpano = GPano.parse(GPanoTest.SWEEP_PANORAMA_XMP, 3032, 532);
+        GPano gpano = GPanoTest.parse(GPanoTest.SWEEP_PANORAMA_XMP, 3032, 532);
         FakeRegionSource source = new FakeRegionSource(3032, 532, Color.RED);
         PanoramaView view = (PanoramaView) show(new PanoramaView(mActivity), source,
                 ExifInterface.ORIENTATION_NORMAL, gpano);
@@ -315,7 +315,7 @@ public class LargeImageViewTest {
     /** A panorama that does not go all the way round, or says nothing, has ends. */
     @Test
     public void aPartialPanoramaHasEnds() {
-        GPano partial = GPano.parse(GPanoTest.xmp("CroppedAreaImageWidthPixels=\"1000\" "
+        GPano partial = GPanoTest.parse(GPanoTest.xmp("CroppedAreaImageWidthPixels=\"1000\" "
                 + "FullPanoWidthPixels=\"4000\" FullPanoHeightPixels=\"2000\" "
                 + "InitialViewHeadingDegrees=\"170\""), 1000, 300);
         FakeRegionSource source = new FakeRegionSource(1000, 300, Color.RED);

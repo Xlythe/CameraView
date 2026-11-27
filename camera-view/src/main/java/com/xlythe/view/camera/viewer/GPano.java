@@ -2,19 +2,12 @@ package com.xlythe.view.camera.viewer;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
-import androidx.annotation.WorkerThread;
 
-import java.io.DataInputStream;
-import java.io.EOFException;
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import com.xlythe.view.camera.MediaTags;
 
 /**
- * Where an equirectangular picture sits on the sphere, read from its photo sphere (GPano) XMP.
+ * Where an equirectangular picture sits on the sphere, worked out from its photo sphere (GPano)
+ * metadata as {@link MediaTags} reads it.
  *
  * <p>The six cropped-area properties say which part of the whole sphere the stored picture is.
  * They are in the metadata's own pixels, which need not be the stored picture's: a picture that
@@ -22,28 +15,6 @@ import java.util.regex.Pattern;
  * the full panorama, and only the ratios matter.</p>
  */
 final class GPano {
-    /** The namespace every property is in. */
-    static final String NAMESPACE = "http://ns.google.com/photos/1.0/panorama/";
-
-    /** What an XMP segment starts with, terminator included. */
-    private static final String XMP_HEADER = "http://ns.adobe.com/xap/1.0/\u0000";
-
-    /** The only projection this reads; a picture in any other is not placed on the sphere. */
-    private static final String EQUIRECTANGULAR = "equirectangular";
-
-    /** The marker that opens an APP1 segment, where both Exif and XMP live. */
-    private static final int APP1 = 0xE1;
-
-    /** Start of scan: compressed data follows, and there are no more segments to look at. */
-    private static final int START_OF_SCAN = 0xDA;
-
-    /** End of image. */
-    private static final int END_OF_IMAGE = 0xD9;
-
-    /** The prefix a packet binds to the GPano namespace, which is usually but not always GPano. */
-    private static final Pattern PREFIX = Pattern.compile(
-            "xmlns:([\\w.-]+)\\s*=\\s*[\"']" + Pattern.quote(NAMESPACE) + "[\"']");
-
     /** Where the left edge of the stored picture falls, as a fraction of the full width. */
     final double left;
 
@@ -125,94 +96,32 @@ final class GPano {
     }
 
     /**
-     * Reads the metadata out of a JPEG, stopping where the compressed picture starts.
+     * Where a picture sits, from its photo sphere metadata, filling in what the metadata leaves
+     * out: the cropped size from the stored picture's, the full size from the cropped one, and
+     * the crop's position as the middle of the full panorama.
      *
-     * @param imageWidth the stored picture's width, for properties the packet leaves out
+     * @param panorama the metadata, or null if the picture has none
+     * @param imageWidth the stored picture's width
      * @param imageHeight its height
-     * @return where the picture sits, or null if it carries no usable GPano properties
+     * @return where it sits, or null if it has no metadata, names a projection other than
+     *     equirectangular, or gives sizes that are not positive
      */
     @Nullable
-    @WorkerThread
-    static GPano read(@NonNull InputStream jpeg, int imageWidth, int imageHeight)
-            throws IOException {
-        String xmp = findXmp(jpeg);
-        return xmp == null ? null : parse(xmp, imageWidth, imageHeight);
-    }
-
-    /** The XMP packet in a JPEG, or null if it is not a JPEG or has none. */
-    @Nullable
-    @WorkerThread
-    static String findXmp(@NonNull InputStream input) throws IOException {
-        DataInputStream jpeg = new DataInputStream(input);
-        byte[] header = XMP_HEADER.getBytes("ISO-8859-1");
-        try {
-            if (jpeg.readUnsignedByte() != 0xFF || jpeg.readUnsignedByte() != 0xD8) {
-                return null;
-            }
-            while (true) {
-                if (jpeg.readUnsignedByte() != 0xFF) {
-                    return null;
-                }
-                // Any number of 0xFF fill bytes may come before the marker's own byte.
-                int marker;
-                do {
-                    marker = jpeg.readUnsignedByte();
-                } while (marker == 0xFF);
-                if (marker == START_OF_SCAN || marker == END_OF_IMAGE) {
-                    return null;
-                }
-                int length = jpeg.readUnsignedShort() - 2;
-                if (length < 0) {
-                    return null;
-                }
-                byte[] payload = new byte[length];
-                jpeg.readFully(payload);
-                if (marker == APP1 && startsWith(payload, header)) {
-                    return new String(payload, header.length, payload.length - header.length,
-                            "UTF-8");
-                }
-            }
-        } catch (EOFException truncated) {
+    static GPano from(@Nullable MediaTags.Panorama panorama, int imageWidth, int imageHeight) {
+        if (panorama == null) {
             return null;
         }
-    }
-
-    private static boolean startsWith(@NonNull byte[] bytes, @NonNull byte[] prefix) {
-        if (bytes.length < prefix.length) {
-            return false;
-        }
-        for (int i = 0; i < prefix.length; i++) {
-            if (bytes[i] != prefix[i]) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    /**
-     * Reads the properties out of an XMP packet, whichever of the two forms each is written in.
-     *
-     * <p>A property the packet leaves out is filled in from the rest: the cropped size from the
-     * stored picture's, the full size from the cropped one, and the crop's position as the middle
-     * of the full panorama. A packet that names another projection, or none of the namespace's
-     * properties, is not a photo sphere.</p>
-     */
-    @Nullable
-    static GPano parse(@NonNull String xmp, int imageWidth, int imageHeight) {
-        Map<String, String> properties = properties(xmp);
-        if (properties.isEmpty()) {
+        String projection = panorama.getProjectionType();
+        if (projection != null
+                && !MediaTags.Panorama.PROJECTION_EQUIRECTANGULAR.equalsIgnoreCase(projection)) {
             return null;
         }
-        String projection = properties.get("ProjectionType");
-        if (projection != null && !EQUIRECTANGULAR.equalsIgnoreCase(projection.trim())) {
-            return null;
-        }
-        double croppedWidth = number(properties, "CroppedAreaImageWidthPixels", imageWidth);
-        double croppedHeight = number(properties, "CroppedAreaImageHeightPixels", imageHeight);
-        double fullWidth = number(properties, "FullPanoWidthPixels", croppedWidth);
-        double fullHeight = number(properties, "FullPanoHeightPixels", fullWidth / 2);
-        double left = number(properties, "CroppedAreaLeftPixels", (fullWidth - croppedWidth) / 2);
-        double top = number(properties, "CroppedAreaTopPixels", (fullHeight - croppedHeight) / 2);
+        double croppedWidth = number(panorama.getCroppedAreaImageWidthPixels(), imageWidth);
+        double croppedHeight = number(panorama.getCroppedAreaImageHeightPixels(), imageHeight);
+        double fullWidth = number(panorama.getFullPanoWidthPixels(), croppedWidth);
+        double fullHeight = number(panorama.getFullPanoHeightPixels(), fullWidth / 2);
+        double left = number(panorama.getCroppedAreaLeftPixels(), (fullWidth - croppedWidth) / 2);
+        double top = number(panorama.getCroppedAreaTopPixels(), (fullHeight - croppedHeight) / 2);
         if (!(croppedWidth > 0) || !(croppedHeight > 0) || !(fullWidth > 0)
                 || !(fullHeight > 0)) {
             return null;
@@ -226,59 +135,31 @@ final class GPano {
                 clamp(top / fullHeight, 1 - height),
                 width,
                 height,
-                (float) number(properties, "PoseHeadingDegrees", 0),
-                (float) number(properties, "PosePitchDegrees", 0),
-                (float) number(properties, "PoseRollDegrees", 0),
-                (float) number(properties, "InitialViewHeadingDegrees", Double.NaN),
-                (float) number(properties, "InitialViewPitchDegrees", Double.NaN),
-                (float) number(properties, "InitialHorizontalFOVDegrees", Double.NaN));
+                finite(panorama.getPoseHeadingDegrees(), 0),
+                finite(panorama.getPosePitchDegrees(), 0),
+                finite(panorama.getPoseRollDegrees(), 0),
+                number(panorama.getInitialViewHeadingDegrees()),
+                number(panorama.getInitialViewPitchDegrees()),
+                finite(panorama.getInitialHorizontalFovDegrees(), Float.NaN));
     }
 
-    /** Every property under the namespace's prefix, attributes and elements both. */
-    @NonNull
-    private static Map<String, String> properties(@NonNull String xmp) {
-        Map<String, String> properties = new HashMap<>();
-        Matcher bound = PREFIX.matcher(xmp);
-        String prefix = bound.find() ? Pattern.quote(bound.group(1)) : "GPano";
-        Pattern attribute = Pattern.compile(
-                "\\b" + prefix + ":(\\w+)\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)')");
-        Pattern element = Pattern.compile(
-                "<" + prefix + ":(\\w+)\\s*>([^<]*)</" + prefix + ":\\1\\s*>");
-        Matcher matcher = attribute.matcher(xmp);
-        while (matcher.find()) {
-            String value = matcher.group(2) != null ? matcher.group(2) : matcher.group(3);
-            properties.put(matcher.group(1), unescape(value));
-        }
-        matcher = element.matcher(xmp);
-        while (matcher.find()) {
-            properties.put(matcher.group(1), unescape(matcher.group(2)));
-        }
-        return properties;
+    /** A pixel count, or the fallback if it is missing. */
+    private static double number(@Nullable Integer value, double fallback) {
+        return value == null ? fallback : value;
     }
 
-    /** A number property, or the fallback if it is missing or not a finite number. */
-    private static double number(@NonNull Map<String, String> properties, @NonNull String name,
-            double fallback) {
-        String value = properties.get(name);
-        if (value == null) {
-            return fallback;
-        }
-        try {
-            double parsed = Double.parseDouble(value.trim());
-            return Double.isNaN(parsed) || Double.isInfinite(parsed) ? fallback : parsed;
-        } catch (NumberFormatException malformed) {
-            return fallback;
-        }
+    /** An angle in whole degrees, or NaN if it is missing. */
+    private static float number(@Nullable Integer value) {
+        return value == null ? Float.NaN : value;
+    }
+
+    /** A number, or the fallback if it is missing or not finite. */
+    private static float finite(float value, float fallback) {
+        return Float.isNaN(value) || Float.isInfinite(value) ? fallback : value;
     }
 
     /** Holds a fraction between 0 and the most it can be. */
     private static double clamp(double value, double max) {
         return Math.max(0, Math.min(max, value));
-    }
-
-    @NonNull
-    private static String unescape(@NonNull String value) {
-        return value.replace("&quot;", "\"").replace("&lt;", "<").replace("&gt;", ">")
-                .replace("&apos;", "'").replace("&amp;", "&");
     }
 }
