@@ -235,6 +235,22 @@ public class PanoramaSessionTest {
         assertTrue("the panorama is " + wide + " degrees wide", wide > 140f && wide < 168f);
     }
 
+    /** A photosphere measures the lens from the turn between dots, before any is taken. */
+    @Test
+    public void aPhotosphere_measuresTheLens_whileTurning() {
+        PanoramaSession session = new PanoramaSession(context, true, file, 90, 104f, 88f,
+                recorder, mMainExecutor, sensor);
+        assertTrue(session.start());
+        for (int yaw = 0; yaw <= 60; yaw += 3) {
+            readings(yaw, 0f, 0f);
+            session.onFrame(frame(time, yaw, 0f, 0f, false, TRUE_FOCAL));
+            drain();
+        }
+        assertEquals(TRUE_FOCAL, session.getGuideState().focal, TRUE_FOCAL * 0.05f);
+        assertNull("nothing was held on a dot", session.getGuideState().thumbnail);
+        session.cancel();
+    }
+
     @Test
     public void stoppingBeforeAnyFrame_fails() {
         PanoramaSession session = session(false);

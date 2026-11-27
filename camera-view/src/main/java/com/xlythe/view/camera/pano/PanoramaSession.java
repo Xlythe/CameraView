@@ -230,6 +230,9 @@ public final class PanoramaSession implements GuideState.Source {
     /** Where the last painted frame was aimed, relative to the start, unwrapped. */
     private float mLastOffset;
 
+    /** Where the last frame offered to the calibration was aimed, or null before the first. */
+    @Nullable private float[] mLastOffered;
+
     /** The target the guide is pointing at, or -1. */
     private int mNextTarget = -1;
 
@@ -426,6 +429,19 @@ public final class PanoramaSession implements GuideState.Source {
                 }
             }
             painted = true;
+        } else if (mPhotosphere && !tooFast && !mCalibration.isDone()
+                && (mLastOffered == null || SphereMath.angleBetween(mLastOffered, pose.forward)
+                        >= LensCalibration.MIN_TURN_DEGREES)) {
+            // A photosphere takes a frame only at a dot, too far apart for the lens to be
+            // measured from those alone, so it is measured from the turn between them.
+            mLastOffered = pose.forward.clone();
+            mCalibration.offer(frame.toArgb(MAX_FRAME_SIDE, mScratch), rotation, pose);
+            if (mCalibration.isDone()) {
+                pose = recalibrate(pose, rotation);
+                if (mCanvas == null) {
+                    begin(pose);
+                }
+            }
         }
         coverage = mCoverage;
         int previous = mNextTarget;
