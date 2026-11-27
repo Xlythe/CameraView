@@ -224,6 +224,30 @@ public final class CameraXModuleTest {
                         new Size(320, 240), new Size(640, 480), new Size(480, 640))));
     }
 
+    /**
+     * A recording leaves a picture to the still output bound beside it, so it is refused only
+     * where none could be bound: the same answer isSnapshotWhileRecordingSupported gives.
+     */
+    @Test
+    public void aSnapshotIsTakenWhileRecordingWhereItIsSupported() {
+        assertTrue("a snapshot the camera says it can take",
+                CameraXModule.acceptsPicture(true, true, false, true, true));
+        assertFalse("a recording with no still beside it",
+                CameraXModule.acceptsPicture(true, true, false, true, false));
+        assertTrue("no recording at all",
+                CameraXModule.acceptsPicture(true, true, false, false, false));
+    }
+
+    /** Whatever the recording, a closed camera, a missing still or a picture in flight refuses. */
+    @Test
+    public void aPictureNeedsAnOpenCameraAndAFreeStill() {
+        assertFalse("closed", CameraXModule.acceptsPicture(false, true, false, false, false));
+        assertFalse("no still output",
+                CameraXModule.acceptsPicture(true, false, false, true, true));
+        assertFalse("a picture already in flight",
+                CameraXModule.acceptsPicture(true, true, true, true, true));
+    }
+
     @Test
     public void durationLimitWaitsForUsableMedia() {
         assertEquals(-1, CameraXModule.remainingDurationMillis(1_500, 0));

@@ -32,6 +32,7 @@ import android.util.SizeF;
 import android.view.Surface;
 import android.view.View;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
@@ -1332,9 +1333,23 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         runOnMainThread(() -> takePictureOnMainThread(file));
     }
 
+    /**
+     * Whether a picture may be taken now. A recording does not stand in the way: the still output
+     * bound beside it is the one a snapshot uses, and it is bound exactly when
+     * {@link #isSnapshotWhileRecordingSupported} says so.
+     */
+    @AnyThread
+    @VisibleForTesting
+    static boolean acceptsPicture(boolean open, boolean hasStillOutput, boolean picturePending,
+            boolean recording, boolean snapshotWhileRecording) {
+        return open && hasStillOutput && !picturePending
+                && (!recording || snapshotWhileRecording);
+    }
+
     private void takePictureOnMainThread(@NonNull File file) {
         ImageCapture imageCapture = mImageCapture;
-        if (!mOpenRequested || imageCapture == null || isRecording() || mPendingImageFile != null) {
+        if (!acceptsPicture(mOpenRequested, imageCapture != null, mPendingImageFile != null,
+                isRecording(), mSnapshotWhileRecording)) {
             Log.w(TAG, "Cannot take a picture in the current CameraX state: " + mState);
             onImageFailed();
             return;
