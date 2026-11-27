@@ -177,8 +177,12 @@ public class SphereCanvasTest {
         int[] band = canvas.coveredRegion((int) canvas.yOf(0f));
         assertTrue(band[1] > sphere[1]);
         assertEquals(WIDTH, band[2]);
-        // Every row kept is complete.
-        int[] row = new int[WIDTH];
+        assertBandIsComplete(canvas, band);
+    }
+
+    /** Every pixel of a kept rectangle has been painted. */
+    private static void assertBandIsComplete(SphereCanvas canvas, int[] band) {
+        int[] row = new int[band[2]];
         for (int y = band[1]; y < band[1] + band[3]; y++) {
             canvas.readRow(y, band[0], band[2], row, 0, 0);
             for (int colour : row) {
@@ -188,20 +192,39 @@ public class SphereCanvasTest {
     }
 
     @Test
-    public void coveredRegion_withNoCompleteRow_keepsEverything() {
+    public void coveredRegion_ofAPanoramaWithAGap_keepsTheWidestStretch() {
         SphereCanvas canvas = new SphereCanvas(WIDTH, 0f);
         canvas.paint(solid(0xFF808080), pose(0f, 0f, 0f));
-        canvas.paint(solid(0xFF808080), pose(90f, 0f, 0f));
-        int[] sphere = canvas.coveredRegion(-1);
-        assertArrayEquals(sphere, canvas.coveredRegion((int) canvas.yOf(0f)));
+        canvas.paint(solid(0xFF808080), pose(15f, 0f, 0f));
+        canvas.paint(solid(0xFF808080), pose(120f, 0f, 0f));
+        int[] band = canvas.coveredRegion((int) canvas.yOf(0f));
+        // The two frames together, 15 degrees and a frame wide, and not the one on its own.
+        assertEquals(2 * (15 + 46.8), band[2], 4);
+        assertEquals(canvas.xOf(-23.4f), band[0], 3);
+        assertBandIsComplete(canvas, band);
+        // A sphere keeps it all, gap and all.
+        assertTrue(canvas.coveredRegion(-1)[2] > band[2] + 2 * 90);
     }
 
     @Test
-    public void coveredRegion_findsTheBandAwayFromTheSweptRow() {
+    public void coveredRegion_ofAPanoramaSweptOffItsRow_usesTheNearestPaintedOne() {
         SphereCanvas canvas = sweptBand();
         int[] band = canvas.coveredRegion(0);
         assertTrue(band[1] > 0);
-        assertEquals(WIDTH, band[2]);
+        assertBandIsComplete(canvas, band);
+    }
+
+    @Test
+    public void coveredRegion_ofAPanoramaThatNeverReachedItsRow_keepsEverything() {
+        SphereCanvas canvas = new SphereCanvas(WIDTH, 0f);
+        // Two frames, one well above and one well below, with nothing painted between them.
+        canvas.paint(solid(0xFF808080), pose(0f, 60f, 0f));
+        canvas.paint(solid(0xFF808080), pose(0f, -60f, 0f));
+        int middle = (int) canvas.yOf(0f);
+        assertEquals(0, canvas.pixelAt(WIDTH / 2, middle));
+        // Clamped to the painted rows, the swept row is still one with nothing on it in the
+        // middle, so there is no band to keep and everything is.
+        assertArrayEquals(canvas.coveredRegion(-1), canvas.coveredRegion(middle));
     }
 
     @Test

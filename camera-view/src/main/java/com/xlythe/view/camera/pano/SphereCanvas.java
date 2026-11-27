@@ -406,11 +406,14 @@ final class SphereCanvas {
      * The rectangle worth saving, as left, top, width and height in canvas pixels. The left edge
      * may be anywhere, and the rectangle wraps past the right edge of the canvas when it has to.
      *
-     * <p>Across, it is every yaw that was painted: the whole width once the sweep has gone all the
-     * way round, and otherwise everything but the widest gap. Down, it depends on what is being
-     * saved. A sphere keeps every row anything reached. A panorama is a rectangle, and keeps only
-     * the rows painted all the way across, around the pitch it was swept at - the ragged top and
-     * bottom of a sweep that drifted up and down are cut off rather than filled with black.</p>
+     * <p>A sphere keeps everything anything reached: every painted yaw - the whole width once the
+     * sweep has gone all the way round, and otherwise all but the widest gap - and every row from
+     * the highest painted to the lowest.</p>
+     *
+     * <p>A panorama is a rectangle with nothing missing. It keeps the widest stretch of yaws
+     * painted along the row it was swept at, and the rows painted all the way across that stretch,
+     * so the curved top and bottom edges of each frame, and the drift of a hand-held sweep, are
+     * cropped away rather than saved as black.</p>
      *
      * @param bandRow the row a panorama was swept along, or -1 for a sphere
      * @return the rectangle, or null if nothing has been painted
@@ -418,17 +421,17 @@ final class SphereCanvas {
     @Nullable
     int[] coveredRegion(int bandRow) {
         boolean[] paintedColumns = new boolean[width];
-        int[] paintedPerRow = new int[height];
         int top = -1;
         int bottom = -1;
         for (int y = 0; y < height; y++) {
+            boolean any = false;
             for (int x = 0; x < width; x++) {
                 if (pixelAt(x, y) != 0) {
                     paintedColumns[x] = true;
-                    paintedPerRow[y]++;
+                    any = true;
                 }
             }
-            if (paintedPerRow[y] > 0) {
+            if (any) {
                 if (top < 0) {
                     top = y;
                 }
@@ -438,73 +441,88 @@ final class SphereCanvas {
         if (top < 0) {
             return null;
         }
+        if (bandRow < 0) {
+            return everythingPainted(paintedColumns, top, bottom);
+        }
 
-        // The widest run of unpainted columns, going round, is what is left out.
-        int gapStart = 0;
-        int gapLength = 0;
+        // The swept row, or the painted row nearest it if the sweep never quite reached it.
+        int row = Math.max(top, Math.min(bottom, bandRow));
+        boolean[] alongRow = new boolean[width];
+        for (int x = 0; x < width; x++) {
+            alongRow[x] = pixelAt(x, row) != 0;
+        }
+        int[] columns = widestRun(alongRow, true);
+        if (columns[1] == 0) {
+            return everythingPainted(paintedColumns, top, bottom);
+        }
+        int left = columns[0];
+        int count = columns[1];
+        int first = row;
+        int last = row;
+        while (first > 0 && isFull(first - 1, left, count)) {
+            first--;
+        }
+        while (last < height - 1 && isFull(last + 1, left, count)) {
+            last++;
+        }
+        return new int[] {left, first, count, last - first + 1};
+    }
+
+    /** Whether a row is painted all the way across a stretch of columns. */
+    private boolean isFull(int y, int left, int count) {
+        for (int i = 0; i < count; i++) {
+            if (pixelAt((left + i) % width, y) == 0) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /** Every painted column but the widest gap, and every row from top to bottom. */
+    @NonNull
+    private int[] everythingPainted(@NonNull boolean[] paintedColumns, int top, int bottom) {
+        int[] gap = widestRun(paintedColumns, false);
+        int left = (gap[0] + gap[1]) % width;
+        return new int[] {left, top, width - gap[1], bottom - top + 1};
+    }
+
+    /**
+     * The widest run of columns, going round, whose flag is {@code value}.
+     *
+     * @return the first column and how many columns from there, wrapping past the right edge;
+     *     no columns at all when none has the value
+     */
+    @NonNull
+    private int[] widestRun(@NonNull boolean[] columns, boolean value) {
+        int firstOther = -1;
+        for (int x = 0; x < width && firstOther < 0; x++) {
+            if (columns[x] != value) {
+                firstOther = x;
+            }
+        }
+        if (firstOther < 0) {
+            return new int[] {0, width};
+        }
+        // Walked once round from a column that ends any run, so a run across the right edge is
+        // seen whole and the walk's last step closes whatever run is open.
+        int bestStart = 0;
+        int bestLength = 0;
         int runStart = -1;
-        for (int i = 0; i < 2 * width; i++) {
-            boolean painted = paintedColumns[i % width];
-            if (!painted && runStart < 0) {
-                runStart = i;
-            } else if (painted && runStart >= 0) {
-                int length = Math.min(width, i - runStart);
-                if (length > gapLength) {
-                    gapLength = length;
-                    gapStart = runStart % width;
+        for (int step = 1; step <= width; step++) {
+            int x = (firstOther + step) % width;
+            if (columns[x] == value) {
+                if (runStart < 0) {
+                    runStart = step;
+                }
+            } else if (runStart >= 0) {
+                if (step - runStart > bestLength) {
+                    bestLength = step - runStart;
+                    bestStart = (firstOther + runStart) % width;
                 }
                 runStart = -1;
             }
         }
-        int left = gapLength == 0 ? 0 : (gapStart + gapLength) % width;
-        int columns = width - gapLength;
-
-        if (bandRow >= 0) {
-            int[] band = fullBand(left, columns, bandRow);
-            if (band != null) {
-                top = band[0];
-                bottom = band[1];
-            }
-        }
-        return new int[] {left, top, columns, bottom - top + 1};
-    }
-
-    /**
-     * The run of rows painted all the way across, nearest the row a panorama was swept along.
-     *
-     * @return the top and bottom rows, or null when no row is complete
-     */
-    @Nullable
-    private int[] fullBand(int left, int columns, int bandRow) {
-        boolean[] full = new boolean[height];
-        for (int y = 0; y < height; y++) {
-            boolean complete = true;
-            for (int i = 0; i < columns && complete; i++) {
-                complete = pixelAt((left + i) % width, y) != 0;
-            }
-            full[y] = complete;
-        }
-        // Outwards from the swept row to the nearest complete one.
-        int start = -1;
-        for (int distance = 0; distance < height && start < 0; distance++) {
-            if (bandRow - distance >= 0 && full[bandRow - distance]) {
-                start = bandRow - distance;
-            } else if (bandRow + distance < height && full[bandRow + distance]) {
-                start = bandRow + distance;
-            }
-        }
-        if (start < 0) {
-            return null;
-        }
-        int top = start;
-        int bottom = start;
-        while (top > 0 && full[top - 1]) {
-            top--;
-        }
-        while (bottom < height - 1 && full[bottom + 1]) {
-            bottom++;
-        }
-        return new int[] {top, bottom};
+        return new int[] {bestStart, bestLength};
     }
 
     /** Lets the tiles go. Nothing may be painted or read afterwards. */
