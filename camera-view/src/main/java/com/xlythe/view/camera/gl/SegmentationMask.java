@@ -17,9 +17,13 @@ public final class SegmentationMask {
     /** Below this a sample is treated as background, for the callers who want a hard edge. */
     private static final float SUBJECT_THRESHOLD = 0.5f;
 
+    /** One confidence per sample, row major, from 0 to 1. */
     private final FloatBuffer mConfidence;
+    /** The mask's width in samples. */
     private final int mWidth;
+    /** The mask's height in samples. */
     private final int mHeight;
+    /** Whether the mask came from a mirrored frame, so a view lookup is flipped to find it. */
     private final boolean mMirrored;
 
     /**

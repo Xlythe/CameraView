@@ -18,7 +18,9 @@ public final class ColorMatrix {
      * difference between either and the naive average that is the usual mistake.</p>
      */
     private static final float LUMA_RED = 0.299f;
+    /** Green's share of perceived brightness, from Rec. 601. */
     private static final float LUMA_GREEN = 0.587f;
+    /** Blue's share of perceived brightness, from Rec. 601. */
     private static final float LUMA_BLUE = 0.114f;
 
     private ColorMatrix() {}

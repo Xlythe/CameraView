@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit;
  * texture, the transform and the timestamp and has no opinion on what is drawn with them.</p>
  */
 public class EffectFragment extends CameraFragment {
+    /** The camera the band is drawn over. */
     private CameraView mCameraView;
 
     @Override

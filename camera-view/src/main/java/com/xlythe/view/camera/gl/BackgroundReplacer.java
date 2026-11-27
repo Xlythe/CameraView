@@ -26,14 +26,21 @@ import java.util.concurrent.atomic.AtomicReference;
  * unchanged.</p>
  */
 public final class BackgroundReplacer implements FrameRenderer {
+    /** The tag this logs under. */
     private static final String TAG = "BackgroundReplacer";
 
+    /** The bytes in one float of the vertex buffer. */
     private static final int BYTES_PER_FLOAT = 4;
+    /** The floats in each attribute: x and y, or s and t. */
     private static final int COORDINATES_PER_ATTRIBUTE = 2;
+    /** The floats in each vertex: a position and a texture coordinate. */
     private static final int FLOATS_PER_VERTEX = 4;
+    /** The vertices in the quad that covers the output. */
     private static final int VERTEX_COUNT = 4;
+    /** The largest value of an 8-bit colour channel. */
     private static final float BYTE_MAX = 255f;
 
+    /** Positions the quad and passes on both the camera and the mask coordinates. */
     private static final String VERTEX_SHADER =
             "uniform mat4 uTextureMatrix;\n"
             + "attribute vec4 aPosition;\n"
@@ -48,6 +55,7 @@ public final class BackgroundReplacer implements FrameRenderer {
             + "  vMaskCoordinate = aTextureCoordinate.xy;\n"
             + "}\n";
 
+    /** Mixes the camera frame over the background colour or image by the mask. */
     private static final String FRAGMENT_SHADER =
             "#extension GL_OES_EGL_image_external : require\n"
             + "precision mediump float;\n"
@@ -68,25 +76,44 @@ public final class BackgroundReplacer implements FrameRenderer {
             + "  gl_FragColor = mix(background, camera, subject);\n"
             + "}\n";
 
+    /** The newest mask, waiting to be uploaded at the next frame, or null. */
     private final AtomicReference<SegmentationMask> mPendingMask = new AtomicReference<>();
+    /** The newest background image, waiting to be uploaded at the next frame, or null. */
     private final AtomicReference<Bitmap> mPendingBackground = new AtomicReference<>();
+    /** The background colour as RGBA from 0 to 1, guarded by itself. */
     private final float[] mBackgroundColor = {0f, 0f, 0f, 1f};
 
+    /** The compiled program, or 0 before the renderer starts. */
     private int mProgram;
+    /** The location of the vertex position attribute. */
     private int mPositionHandle;
+    /** The location of the texture coordinate attribute. */
     private int mTextureCoordinateHandle;
+    /** The location of the camera texture's transform matrix. */
     private int mTextureMatrixHandle;
+    /** The location of the mask sampler. */
     private int mMaskHandle;
+    /** The location of the background image sampler. */
     private int mBackgroundHandle;
+    /** The location of the background colour. */
     private int mBackgroundColorHandle;
+    /** The location of the flag that says a background image is set. */
     private int mHasBackgroundImageHandle;
+    /** The location of the flag that says a mask has arrived. */
     private int mHasMaskHandle;
+    /** The 2D texture the mask is uploaded into. */
     private int mMaskTexture;
+    /** The 2D texture the background image is uploaded into. */
     private int mBackgroundTexture;
+    /** The width of the mask last uploaded, or 0 before any has been. */
     private int mMaskWidth;
+    /** The height of the mask last uploaded, or 0 before any has been. */
     private int mMaskHeight;
+    /** Whether the background texture holds an image, rather than the colour being drawn. */
     private boolean mHasBackgroundImage;
+    /** The quad's positions and texture coordinates, or null while the renderer is stopped. */
     @Nullable private FloatBuffer mVertices;
+    /** Whether the program failed to build, after which frames go through unchanged. */
     private boolean mFailed;
 
     /** The colour behind the subject until an image is given. */

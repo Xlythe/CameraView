@@ -392,6 +392,7 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     private FrameStream mSegmentationStream;
 
+    /** The model the segmented frames go to, or null when nothing is segmenting. */
     @Nullable
     private SegmentationAnalyzer mSegmentationAnalyzer;
 

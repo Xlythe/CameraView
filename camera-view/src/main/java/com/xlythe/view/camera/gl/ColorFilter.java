@@ -20,13 +20,19 @@ import java.nio.FloatBuffer;
  * <p>The matrix can be changed between frames without restarting anything.</p>
  */
 public final class ColorFilter implements FrameRenderer {
+    /** The tag this logs under. */
     private static final String TAG = "ColorFilter";
 
+    /** The bytes in one float of the vertex buffer. */
     private static final int BYTES_PER_FLOAT = 4;
+    /** The floats in each attribute: x and y, or s and t. */
     private static final int COORDINATES_PER_ATTRIBUTE = 2;
+    /** The floats in each vertex: a position and a texture coordinate. */
     private static final int FLOATS_PER_VERTEX = 4;
+    /** The vertices in the quad that covers the output. */
     private static final int VERTEX_COUNT = 4;
 
+    /** Positions the quad and transforms the camera texture coordinate. */
     private static final String VERTEX_SHADER =
             "uniform mat4 uTextureMatrix;\n"
             + "attribute vec4 aPosition;\n"
@@ -37,8 +43,11 @@ public final class ColorFilter implements FrameRenderer {
             + "  vTextureCoordinate = (uTextureMatrix * aTextureCoordinate).xy;\n"
             + "}\n";
 
-    // The extension directive has to be the first line, before the precision qualifier, or the
-    // compiler rejects the samplerExternalOES that follows it.
+    /**
+     * Puts each camera pixel through the colour matrix. The extension directive has to be the
+     * first line, before the precision qualifier, or the compiler rejects the samplerExternalOES
+     * that follows it.
+     */
     private static final String FRAGMENT_SHADER =
             "#extension GL_OES_EGL_image_external : require\n"
             + "precision mediump float;\n"
@@ -52,14 +61,22 @@ public final class ColorFilter implements FrameRenderer {
             + "  gl_FragColor = clamp(uColorMatrix * vec4(colour.rgb, 1.0), 0.0, 1.0);\n"
             + "}\n";
 
+    /** The colour matrix the next frame is drawn with, guarded by itself. */
     private final float[] mMatrix = ColorMatrix.identity();
 
+    /** The compiled program, or 0 before the renderer starts. */
     private int mProgram;
+    /** The location of the vertex position attribute. */
     private int mPositionHandle;
+    /** The location of the texture coordinate attribute. */
     private int mTextureCoordinateHandle;
+    /** The location of the camera texture's transform matrix. */
     private int mTextureMatrixHandle;
+    /** The location of the colour matrix. */
     private int mColorMatrixHandle;
+    /** The quad's positions and texture coordinates, or null while the renderer is stopped. */
     @Nullable private FloatBuffer mVertices;
+    /** Whether the program failed to build, after which frames go through unchanged. */
     private boolean mFailed;
 
     /** A filter that changes nothing until it is given a matrix. */

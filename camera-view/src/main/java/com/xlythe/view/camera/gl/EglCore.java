@@ -31,8 +31,11 @@ public final class EglCore {
     /** The side of the pbuffer that exists only to have a surface to make current against. */
     private static final int OFFSCREEN_SIZE = 1;
 
+    /** The default display the context belongs to. */
     private final EGLDisplay mDisplay;
+    /** The RGBA, recordable configuration every surface here is made with. */
     private final EGLConfig mConfig;
+    /** The GLES 2 context everything is drawn in. */
     private final EGLContext mContext;
 
     /**
