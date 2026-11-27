@@ -6,7 +6,9 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Point;
 import android.location.Location;
+import android.location.LocationManager;
 import android.os.Build;
+import android.os.Bundle;
 import android.util.Log;
 
 import java.io.ByteArrayOutputStream;
@@ -38,17 +40,28 @@ public class Exif {
     // than one thread. Pictures are saved on AsyncTask's thread pool, so two captures finishing
     // together were formatting and parsing through the same objects: the usual result is a
     // corrupted timestamp, and the unlucky one is an exception thrown from inside the formatter.
-    private static final ThreadLocal<SimpleDateFormat> DATE_FORMAT = formatter("yyyy:MM:dd");
-    private static final ThreadLocal<SimpleDateFormat> TIME_FORMAT = formatter("HH:mm:ss");
     private static final ThreadLocal<SimpleDateFormat> DATETIME_FORMAT =
-            formatter("yyyy:MM:dd HH:mm:ss");
+            formatter("yyyy:MM:dd HH:mm:ss", null);
 
-    /** One formatter per thread, built lazily. */
-    private static ThreadLocal<SimpleDateFormat> formatter(String pattern) {
+    // Every other time Exif records is local, but the GPS ones are UTC.
+    private static final ThreadLocal<SimpleDateFormat> GPS_DATE_FORMAT =
+            formatter("yyyy:MM:dd", TimeZone.getTimeZone("UTC"));
+    private static final ThreadLocal<SimpleDateFormat> GPS_TIME_FORMAT =
+            formatter("HH:mm:ss", TimeZone.getTimeZone("UTC"));
+    private static final ThreadLocal<SimpleDateFormat> GPS_DATETIME_FORMAT =
+            formatter("yyyy:MM:dd HH:mm:ss", TimeZone.getTimeZone("UTC"));
+
+    /** One formatter per thread, built lazily, in the given timezone or else the device's. */
+    private static ThreadLocal<SimpleDateFormat> formatter(
+            String pattern, @Nullable TimeZone timeZone) {
         return new ThreadLocal<SimpleDateFormat>() {
             @Override
             protected SimpleDateFormat initialValue() {
-                return new SimpleDateFormat(pattern, Locale.ENGLISH);
+                SimpleDateFormat format = new SimpleDateFormat(pattern, Locale.ENGLISH);
+                if (timeZone != null) {
+                    format.setTimeZone(timeZone);
+                }
+                return format;
             }
         };
     }
@@ -79,6 +92,47 @@ public class Exif {
     private static final String ALTITUDE_BELOW_SEA_LEVEL = "1";
     /** True north rather than magnetic, which is what Location.getBearing reports. */
     private static final String DIRECTION_TRUE_NORTH = "T";
+    /** A satellite fix that solved for height took four satellites; one that did not, three. */
+    private static final String MEASURE_MODE_3D = "3";
+    private static final String MEASURE_MODE_2D = "2";
+    /** The extra Android's GPS provider counts the satellites used in a fix under. */
+    private static final String EXTRA_SATELLITES = "satellites";
+
+    /** Every tag in the GPS directory, all of which say something about where a picture was. */
+    private static final String[] GPS_TAGS = {
+            ExifInterface.TAG_GPS_VERSION_ID,
+            ExifInterface.TAG_GPS_LATITUDE_REF,
+            ExifInterface.TAG_GPS_LATITUDE,
+            ExifInterface.TAG_GPS_LONGITUDE_REF,
+            ExifInterface.TAG_GPS_LONGITUDE,
+            ExifInterface.TAG_GPS_ALTITUDE_REF,
+            ExifInterface.TAG_GPS_ALTITUDE,
+            ExifInterface.TAG_GPS_TIMESTAMP,
+            ExifInterface.TAG_GPS_SATELLITES,
+            ExifInterface.TAG_GPS_STATUS,
+            ExifInterface.TAG_GPS_MEASURE_MODE,
+            ExifInterface.TAG_GPS_DOP,
+            ExifInterface.TAG_GPS_SPEED_REF,
+            ExifInterface.TAG_GPS_SPEED,
+            ExifInterface.TAG_GPS_TRACK_REF,
+            ExifInterface.TAG_GPS_TRACK,
+            ExifInterface.TAG_GPS_IMG_DIRECTION_REF,
+            ExifInterface.TAG_GPS_IMG_DIRECTION,
+            ExifInterface.TAG_GPS_MAP_DATUM,
+            ExifInterface.TAG_GPS_DEST_LATITUDE_REF,
+            ExifInterface.TAG_GPS_DEST_LATITUDE,
+            ExifInterface.TAG_GPS_DEST_LONGITUDE_REF,
+            ExifInterface.TAG_GPS_DEST_LONGITUDE,
+            ExifInterface.TAG_GPS_DEST_BEARING_REF,
+            ExifInterface.TAG_GPS_DEST_BEARING,
+            ExifInterface.TAG_GPS_DEST_DISTANCE_REF,
+            ExifInterface.TAG_GPS_DEST_DISTANCE,
+            ExifInterface.TAG_GPS_PROCESSING_METHOD,
+            ExifInterface.TAG_GPS_AREA_INFORMATION,
+            ExifInterface.TAG_GPS_DATESTAMP,
+            ExifInterface.TAG_GPS_DIFFERENTIAL,
+            ExifInterface.TAG_GPS_H_POSITIONING_ERROR,
+    };
 
     private static final String KILOMETERS_PER_HOUR = "K";
     private static final String MILES_PER_HOUR = "M";
@@ -1103,7 +1157,7 @@ public class Exif {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_MAP_DATUM, WGS_84);
         if (location.hasAltitude()) {
             // GPSAltitude is unsigned; the sign goes in the reference byte.
-            double altitude = location.getAltitude();
+            double altitude = altitudeAboveSeaLevel(location);
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF,
                     altitude < 0 ? ALTITUDE_BELOW_SEA_LEVEL : ALTITUDE_ABOVE_SEA_LEVEL);
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE,
@@ -1127,33 +1181,48 @@ public class Exif {
             mExifInterface.setAttribute(ExifInterface.TAG_GPS_H_POSITIONING_ERROR,
                     rational(location.getAccuracy()));
         }
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, convertToExifDate(location.getTime()));
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, convertToExifTime(location.getTime()));
+        if (LocationManager.GPS_PROVIDER.equals(location.getProvider())) {
+            // Only a satellite fix has a measurement mode. A fused or network fix is not one,
+            // even when satellites contributed to it.
+            mExifInterface.setAttribute(ExifInterface.TAG_GPS_MEASURE_MODE,
+                    location.hasAltitude() ? MEASURE_MODE_3D : MEASURE_MODE_2D);
+        }
+        Bundle extras = location.getExtras();
+        int satellites = extras == null ? 0 : extras.getInt(EXTRA_SATELLITES, 0);
+        if (satellites > 0) {
+            mExifInterface.setAttribute(
+                    ExifInterface.TAG_GPS_SATELLITES, Integer.toString(satellites));
+        }
+        // A time of zero is a Location nobody set the time on, not a fix taken in 1970.
+        if (location.getTime() > 0) {
+            Date time = new Date(location.getTime());
+            mExifInterface.setAttribute(
+                    ExifInterface.TAG_GPS_DATESTAMP, GPS_DATE_FORMAT.get().format(time));
+            mExifInterface.setAttribute(
+                    ExifInterface.TAG_GPS_TIMESTAMP, GPS_TIME_FORMAT.get().format(time));
+        }
     }
 
     /**
-     * Removes the location from the file.
+     * The fix's height above sea level, which is what GPSAltitude records. Location#getAltitude
+     * is the height above the WGS-84 ellipsoid, up to a hundred metres away from sea level, so
+     * the sea-level height is used wherever the fix carries one.
+     */
+    private static double altitudeAboveSeaLevel(@NonNull Location location) {
+        if (Build.VERSION.SDK_INT >= 34 && location.hasMslAltitude()) {
+            return location.getMslAltitudeMeters();
+        }
+        return location.getAltitude();
+    }
+
+    /**
+     * Removes the location from the file: the whole GPS directory, since a heading, an accuracy
+     * or the time of a fix still says something about where the picture was taken.
      */
     public void removeLocation() {
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_LATITUDE, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_LATITUDE_REF, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_LONGITUDE, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_LONGITUDE_REF, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_ALTITUDE_REF, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_SPEED_REF, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_DATESTAMP, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_TIMESTAMP, null);
-        // The rest of what a fix knows goes too, since a heading and an accuracy still place it.
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_TRACK, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_TRACK_REF, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_H_POSITIONING_ERROR, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_MAP_DATUM, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_VERSION_ID, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_IMG_DIRECTION, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_GPS_IMG_DIRECTION_REF, null);
+        for (String tag : GPS_TAGS) {
+            mExifInterface.setAttribute(tag, null);
+        }
     }
 
     /**
@@ -1173,27 +1242,25 @@ public class Exif {
     }
 
     /**
+     * Reads a GPS date and time, which are UTC.
+     *
      * @return The timestamp (in millis), or -1 if no time is available.
      */
     private long parseTimestamp(@Nullable String date, @Nullable String time) {
         if (date == null && time == null) {
             return -1;
         }
-        if (time == null) {
-            try {
-                return convertFromExifDate(date).getTime();
-            } catch (ParseException e) {
-                return -1;
+        try {
+            if (time == null) {
+                return GPS_DATE_FORMAT.get().parse(date).getTime();
             }
-        }
-        if (date == null) {
-            try {
-                return convertFromExifTime(time).getTime();
-            } catch (ParseException e) {
-                return -1;
+            if (date == null) {
+                return GPS_TIME_FORMAT.get().parse(time).getTime();
             }
+            return GPS_DATETIME_FORMAT.get().parse(date + " " + time).getTime();
+        } catch (ParseException e) {
+            return -1;
         }
-        return parseTimestamp(date + " " + time);
     }
 
     /**
@@ -1227,22 +1294,6 @@ public class Exif {
 
     private static Date convertFromExifDateTime(String dateTime) throws ParseException {
         return DATETIME_FORMAT.get().parse(dateTime);
-    }
-
-    private static String convertToExifDate(long timestamp) {
-        return DATE_FORMAT.get().format(new Date(timestamp));
-    }
-
-    private static Date convertFromExifDate(String date) throws ParseException {
-        return DATE_FORMAT.get().parse(date);
-    }
-
-    private static String convertToExifTime(long timestamp) {
-        return TIME_FORMAT.get().format(new Date(timestamp));
-    }
-
-    private static Date convertFromExifTime(String time) throws ParseException {
-        return TIME_FORMAT.get().parse(time);
     }
 
     private static class Speed {

@@ -320,7 +320,7 @@ public class ExifMetadataTest {
     }
 
     /** The smallest thing androidx will treat as a JPEG it can write Exif into. */
-    private static byte[] minimalJpeg() {
+    static byte[] minimalJpeg() {
         return new byte[] {
                 (byte) 0xFF, (byte) 0xD8,
                 (byte) 0xFF, (byte) 0xDB, 0x00, 0x43, 0x00,

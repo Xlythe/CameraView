@@ -1184,14 +1184,15 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mPendingImageFile = file;
         scheduleImageTimeout(operationId);
         ImageCapture.Metadata metadata = new ImageCapture.Metadata();
-        metadata.setLocation(getLocation());
+        Location location = getLocation();
+        metadata.setLocation(location);
         metadata.setReversedHorizontal(mFrontFacing);
         ImageCapture.OutputFileOptions options = new ImageCapture.OutputFileOptions.Builder(file)
                 .setMetadata(metadata).build();
         imageCapture.takePicture(options, mMainExecutor, new ImageCapture.OnImageSavedCallback() {
             @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
                 if (!completePendingImage(operationId)) return;
-                finishExif(file, () -> showImageConfirmation(file));
+                finishExif(file, location, () -> showImageConfirmation(file));
             }
             @Override public void onError(@NonNull ImageCaptureException error) {
                 if (!completePendingImage(operationId)) return;
@@ -1202,16 +1203,21 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     /**
-     * Writes the Exif CameraX leaves out (timezone offsets, sub-second times, pixel dimensions and
-     * a thumbnail), as the other two backends do, then runs {@code then} on the main thread. The
-     * caller is told only after, so it never reads a file being rewritten.
+     * Writes the Exif CameraX leaves out (timezone offsets, sub-second times, pixel dimensions,
+     * what the fix knows beyond its coordinate, and a thumbnail), as the other two backends do,
+     * then runs {@code then} on the main thread. The caller is told only after, so it never reads
+     * a file being rewritten.
      */
-    private void finishExif(@NonNull File file, @NonNull Runnable then) {
+    private void finishExif(
+            @NonNull File file, @Nullable Location location, @NonNull Runnable then) {
         AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
             try {
                 Exif exif = new Exif(file);
                 exif.attachTimestamp();
                 exif.attachCaptureDevice(getContext());
+                if (location != null) {
+                    exif.attachLocation(location);
+                }
                 exif.save();
                 // After save, because saveAttributes rewrites the block this appends to.
                 exif.attachThumbnail();
