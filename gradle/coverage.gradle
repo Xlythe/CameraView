@@ -68,6 +68,7 @@ def coreCoverageIncludes = [
         'com/xlythe/view/camera/pano/CameraPose.class',
         'com/xlythe/view/camera/pano/Footprint.class',
         'com/xlythe/view/camera/pano/GPanoMetadata.class',
+        'com/xlythe/view/camera/pano/GyroscopeHistory.class',
         'com/xlythe/view/camera/pano/LensCalibration.class',
         'com/xlythe/view/camera/pano/LensCalibration$*.class',
         'com/xlythe/view/camera/pano/OrientationHistory.class',

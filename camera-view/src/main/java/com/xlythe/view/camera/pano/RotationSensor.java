@@ -24,6 +24,10 @@ import androidx.annotation.RequiresApi;
  * vector is read alongside it only to learn how far its north is from the compass's, which is
  * what puts a real heading in the saved metadata.</p>
  *
+ * <p>The fusion behind the game rotation vector can take seconds to settle once it starts,
+ * turning while the device holds still. The gyroscope is read too, and a reading is trusted only
+ * while it turns as fast as the gyroscope says the device does.</p>
+ *
  * <p>Events arrive on a thread of their own, so a busy main thread cannot hold them back.</p>
  */
 @RequiresApi(19)
@@ -34,14 +38,35 @@ final class RotationSensor implements SensorEventListener {
     /** The compass is only consulted for a heading, which a reading a tenth of a second does. */
     private static final int COMPASS_PERIOD_MICROS = 100_000;
 
+    /**
+     * How much faster or slower than the gyroscope a trusted reading may turn, in degrees per
+     * second: the two sensors' noise, with the reading still settling once it is past this.
+     */
+    static final float MAX_DISAGREEMENT_DEGREES_PER_SECOND = 3f;
+
+    /**
+     * The share of the gyroscope's own speed allowed on top, since in a fast turn a reading and
+     * a gyroscope sample a few milliseconds apart see different speeds.
+     */
+    static final float MAX_DISAGREEMENT_SHARE = 0.1f;
+
+    /** The span the gyroscope's speed is averaged over, either side of the time asked about. */
+    private static final long GYROSCOPE_WINDOW_NANOS = 50_000_000L;
+
     /** Where the rotation is kept for the sweep to look up. */
     final OrientationHistory history = new OrientationHistory();
+
+    /** What the gyroscope read, to check the rotation against. */
+    final GyroscopeHistory gyroscope = new GyroscopeHistory();
 
     /** The sensor frames are placed by, or null on a device without one. */
     @Nullable private final Sensor mPlacement;
 
     /** The compass-referenced sensor read alongside it, or null when placement already is one. */
     @Nullable private final Sensor mCompass;
+
+    /** The gyroscope, or null on a device without one or without a rotation sensor. */
+    @Nullable private final Sensor mGyroscope;
 
     /** Null when neither rotation sensor exists. */
     @Nullable private final SensorManager mSensorManager;
@@ -72,6 +97,8 @@ final class RotationSensor implements SensorEventListener {
                 ? null : mSensorManager.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR);
         mPlacement = game != null ? game : full;
         mCompass = game != null ? full : null;
+        mGyroscope = mPlacement == null
+                ? null : mSensorManager.getDefaultSensor(Sensor.TYPE_GYROSCOPE);
     }
 
     /** Whether the device can report its rotation at all. */
@@ -91,6 +118,9 @@ final class RotationSensor implements SensorEventListener {
         mSensorManager.registerListener(this, mPlacement, SAMPLING_PERIOD_MICROS, handler);
         if (mCompass != null) {
             mSensorManager.registerListener(this, mCompass, COMPASS_PERIOD_MICROS, handler);
+        }
+        if (mGyroscope != null) {
+            mSensorManager.registerListener(this, mGyroscope, SAMPLING_PERIOD_MICROS, handler);
         }
     }
 
@@ -126,7 +156,36 @@ final class RotationSensor implements SensorEventListener {
     public void onSensorChanged(@NonNull SensorEvent event) {
         long time = TimeBase.toElapsedRealtime(
                 event.timestamp, SystemClock.elapsedRealtimeNanos(), System.nanoTime());
+        if (event.sensor == mGyroscope) {
+            onGyroscopeReading(time, event.values);
+            return;
+        }
         onReading(event.sensor == mCompass, time, event.values);
+    }
+
+    /** Takes one gyroscope reading: radians per second about each of the device's axes. */
+    void onGyroscopeReading(long timeNanos, @NonNull float[] values) {
+        double radiansPerSecond =
+                Math.sqrt(values[0] * values[0] + values[1] * values[1] + values[2] * values[2]);
+        gyroscope.add(timeNanos, (float) Math.toDegrees(radiansPerSecond));
+    }
+
+    /**
+     * Whether the rotation at a moment can be trusted: it turned as fast as the gyroscope says
+     * the device did. True when there is no gyroscope, or no reading of it then, to say otherwise.
+     */
+    boolean isSettled(long timeNanos) {
+        if (mGyroscope == null) {
+            return true;
+        }
+        float measured = gyroscope.average(
+                timeNanos - GYROSCOPE_WINDOW_NANOS, timeNanos + GYROSCOPE_WINDOW_NANOS);
+        if (Float.isNaN(measured)) {
+            return true;
+        }
+        float reported = history.speed(timeNanos);
+        return Math.abs(reported - measured)
+                <= MAX_DISAGREEMENT_DEGREES_PER_SECOND + MAX_DISAGREEMENT_SHARE * measured;
     }
 
     /** Takes one reading from either sensor. */

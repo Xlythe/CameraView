@@ -338,6 +338,38 @@ public class PanoramaSessionTest {
         assertEquals(file, recorder.saved);
     }
 
+    /**
+     * A rotation that turns while the gyroscope says the phone is still is settling, as the fusion
+     * behind it does when it starts, and nothing is placed by it until it holds still too.
+     */
+    @Test
+    public void aSettlingRotation_placesNothing_untilItAgreesWithTheGyroscope() {
+        addSensor(Sensor.TYPE_GYROSCOPE);
+        sensor = new RotationSensor(context);
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        // The reading swings back thirty degrees a second to where the phone points all along.
+        for (int i = 0; i < 5; i++) {
+            time += FRAME_NANOS;
+            float yaw = 15f - 3f * i;
+            sensor.onReading(false, time - 50_000_000L, vector(uprightFacing(yaw + 1.5f)));
+            sensor.onReading(false, time, vector(uprightFacing(yaw)));
+            gyroscopeStill();
+            session.onFrame(frame(time, false));
+            drain();
+        }
+        assertNull("a frame was placed while the rotation settled", session.getGuideState());
+        assertTrue(recorder.progress.isEmpty());
+
+        readings(0f, 0f, 0f);
+        gyroscopeStill();
+        session.onFrame(frame(time, false));
+        drain();
+        assertNotNull(session.getGuideState());
+        assertEquals(1, recorder.progress.size());
+        session.cancel();
+    }
+
     @Test
     public void displayRotation_isTheNewestReadingWhenNothingIsNewer() {
         PanoramaSession session = session(false);
@@ -405,6 +437,12 @@ public class PanoramaSessionTest {
         sensor.onReading(false, time - 50_000_000L, values);
         sensor.onReading(false, time - 10_000_000L, values);
         sensor.onReading(false, time, values);
+    }
+
+    /** The gyroscope reading nothing either side of the next frame's time. */
+    private void gyroscopeStill() {
+        sensor.onGyroscopeReading(time - 20_000_000L, new float[] {0f, 0f, 0f});
+        sensor.onGyroscopeReading(time, new float[] {0f, 0f, 0f});
     }
 
     /** What the camera sees of the test scene from a pose, through a lens of this focal length. */

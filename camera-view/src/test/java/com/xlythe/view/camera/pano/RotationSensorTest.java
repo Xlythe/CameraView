@@ -71,6 +71,56 @@ public class RotationSensorTest {
         sensor.stop();
     }
 
+    /**
+     * A rotation is trusted only while it turns as fast as the gyroscope says the device does:
+     * one turning while the gyroscope says still is the fusion behind it settling.
+     */
+    @Test
+    public void withAGyroscope_trustsOnlyARotationThatTurnsWithIt() {
+        Sensor game = addSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
+        Sensor gyro = addSensor(Sensor.TYPE_GYROSCOPE);
+        RotationSensor sensor = new RotationSensor(context());
+        sensor.start();
+        assertTrue(shadow().hasListener(sensor, game));
+        assertTrue(shadow().hasListener(sensor, gyro));
+
+        long now = SystemClock.elapsedRealtimeNanos();
+        // A gyroscope event lands in the gyroscope's history, as degrees per second.
+        shadow().sendSensorEventToListeners(SensorEventBuilder.newBuilder()
+                .setSensor(gyro).setTimestamp(now).setValues(new float[] {0f, 0.5f, 0f})
+                .build(), gyro);
+        assertEquals(Math.toDegrees(0.5), sensor.gyroscope.average(now, now), 1e-3);
+        assertTrue("a gyroscope event is no rotation", sensor.history.isEmpty());
+        sensor.stop();
+
+        long ms = 1_000_000L;
+        // Thirty degrees a second.
+        sensor.onReading(false, now + 100 * ms, vector(uprightFacing(0f)));
+        sensor.onReading(false, now + 200 * ms, vector(uprightFacing(3f)));
+        assertTrue("no gyroscope reading then says otherwise", sensor.isSettled(now + 150 * ms));
+
+        sensor.onGyroscopeReading(now + 140 * ms, new float[] {0f, 0f, 0f});
+        sensor.onGyroscopeReading(now + 160 * ms, new float[] {0f, 0f, 0f});
+        assertFalse("the gyroscope says still", sensor.isSettled(now + 150 * ms));
+
+        // Turning together, give or take the sensors' noise.
+        float thirty = (float) Math.toRadians(30);
+        sensor.onReading(false, now + 300 * ms, vector(uprightFacing(6f)));
+        sensor.onGyroscopeReading(now + 240 * ms, new float[] {0f, thirty * 0.95f, 0f});
+        sensor.onGyroscopeReading(now + 260 * ms, new float[] {0f, thirty * 1.05f, 0f});
+        assertTrue(sensor.isSettled(now + 250 * ms));
+    }
+
+    @Test
+    public void withoutAGyroscope_trustsEveryRotation() {
+        addSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
+        RotationSensor sensor = new RotationSensor(context());
+        sensor.onReading(false, 100_000_000L, vector(uprightFacing(0f)));
+        sensor.onReading(false, 200_000_000L, vector(uprightFacing(30f)));
+        sensor.onGyroscopeReading(150_000_000L, new float[] {0f, 0f, 0f});
+        assertTrue(sensor.isSettled(150_000_000L));
+    }
+
     @Test
     public void headingOffset_isACircularMean() {
         addSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);

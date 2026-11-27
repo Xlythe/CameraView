@@ -337,6 +337,10 @@ public final class PanoramaSession implements GuideState.Source {
         if (!mSensor.history.sample(frame.timestampNanos, quaternion)) {
             return;
         }
+        if (!mSensor.isSettled(frame.timestampNanos)) {
+            // The rotation is still settling, so it says nothing yet of where the frame points.
+            return;
+        }
         float[] rotation = new float[9];
         SphereMath.rotationMatrix(quaternion, rotation);
         int step = frame.shrinkFactor(MAX_FRAME_SIDE);
