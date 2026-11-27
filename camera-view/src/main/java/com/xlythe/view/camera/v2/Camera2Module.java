@@ -55,6 +55,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -570,6 +571,17 @@ public class Camera2Module extends ICameraModule {
     private String mActiveCamera;
 
     /**
+     * The stream attached by a caller - frames for analysis, or an encoder for a live stream - or
+     * null when none is. Every session built while it is attached carries it, so a recording, a
+     * settings change or the camera reopening does not quietly drop it. Main thread only.
+     */
+    @Nullable
+    private VideoRecorder.SurfaceProvider mStreamProvider;
+
+    /** The cameras that would not configure a still beside a stream, which are not asked again. */
+    private final Set<String> mStillBesideStreamRefused = new HashSet<>();
+
+    /**
      * The current capture session. There is one capture session per {@link Session}.
      */
     @Nullable
@@ -683,7 +695,7 @@ public class Camera2Module extends ICameraModule {
 
                 mBusyRetry.cancel();
                 mCameraDevice = cameraDevice;
-                setSession(new PictureSession(Camera2Module.this));
+                setSession(newPictureSession());
             }
 
             @Override
@@ -839,11 +851,20 @@ public class Camera2Module extends ICameraModule {
         mBusyRetry = new BusyCameraRetry(mHandler);
     }
 
-    private void setSession(final Session session) {
+    private void setSession(Session requested) {
         if (!mIsOpen || mCameraDevice == null) {
             if (DEBUG) Log.w(TAG, "Cannot start a session without an open CameraDevice");
-            closeSession(session);
+            closeSession(requested);
             return;
+        }
+        final Session session;
+        if (isBuiltForAnotherStream(requested)) {
+            // Built before a stream came or went, and waited on the session before it. The stream
+            // as it is now wins, or a stream attached in the meantime is quietly dropped.
+            closeSession(requested);
+            session = newPictureSession();
+        } else {
+            session = requested;
         }
 
         try {
@@ -936,6 +957,10 @@ public class Camera2Module extends ICameraModule {
                         cameraCaptureSession.close();
                         return;
                     }
+                    if (fallBackFrom(session)) {
+                        cameraCaptureSession.close();
+                        return;
+                    }
                     mAwaitingFormatSession = false;
                     cancelPendingPicture();
                     failSession(session, cameraCaptureSession,
@@ -943,8 +968,67 @@ public class Camera2Module extends ICameraModule {
                 }
             });
         } catch (CameraAccessException | RuntimeException e) {
+            if (mRegisteringSession == session && fallBackFrom(session)) {
+                Log.w(TAG, "Failed to create capture session", e);
+                return;
+            }
             failSession(session, null, "Failed to create capture session", e);
         }
+    }
+
+    /** Whether a session was built beside a stream other than the one attached now. */
+    private boolean isBuiltForAnotherStream(@NonNull Session session) {
+        if (!(session instanceof PictureSession) || session instanceof VideoSession) {
+            return false;
+        }
+        VideoRecorder.SurfaceProvider builtFor = session instanceof StreamSession
+                ? ((StreamSession) session).getSurfaceProvider() : null;
+        return builtFor != mStreamProvider;
+    }
+
+    /**
+     * The session to show the preview and take pictures in: beside the attached stream, if one
+     * is, with a still output unless this camera has refused one there.
+     */
+    @NonNull
+    private PictureSession newPictureSession() {
+        VideoRecorder.SurfaceProvider stream = mStreamProvider;
+        if (stream == null) {
+            return new PictureSession(this);
+        }
+        return new StreamSession(this, stream, !mStillBesideStreamRefused.contains(mActiveCamera));
+    }
+
+    /**
+     * Builds a session with less in it, for a stream session the camera would not configure.
+     *
+     * <p>A still beside a stream is more than Camera2 promises below FULL hardware, so a camera
+     * that refuses one gets the stream alone, which is how a stream ran before it could have a
+     * still. A stream the camera will not take at all - one sized for another lens, say - is let
+     * go, leaving the preview, rather than taking the camera down with it.</p>
+     *
+     * @return whether a session was built in this one's place
+     */
+    private boolean fallBackFrom(@NonNull Session session) {
+        if (!(session instanceof StreamSession)) {
+            return false;
+        }
+        StreamSession refused = (StreamSession) session;
+        if (refused.hasStillCapture()) {
+            Log.w(TAG, "This camera cannot take a picture beside a stream");
+            if (mActiveCamera != null) {
+                mStillBesideStreamRefused.add(mActiveCamera);
+            }
+        } else {
+            Log.w(TAG, "This camera cannot carry the stream; letting it go");
+            if (mStreamProvider == refused.getSurfaceProvider()) {
+                mStreamProvider = null;
+            }
+        }
+        mRegisteringSession = null;
+        closeSession(session);
+        setSession(newPictureSession());
+        return true;
     }
 
     /**
@@ -1630,7 +1714,7 @@ public class Camera2Module extends ICameraModule {
         // recording or streaming, which a rebuild would end. The session after it is built with
         // the new quality.
         if (mActiveSession != null && !isRecordingOrStreaming()) {
-            setSession(new PictureSession(this));
+            setSession(newPictureSession());
         }
     }
 
@@ -2171,7 +2255,7 @@ public class Camera2Module extends ICameraModule {
                 capturePendingPicture();
                 return;
             }
-            setSession(new PictureSession(this));
+            setSession(newPictureSession());
         });
     }
 
@@ -2444,7 +2528,7 @@ public class Camera2Module extends ICameraModule {
     @Override
     public void stopRecording() {
         mIsRecording = false;
-        setSession(new PictureSession(this));
+        setSession(newPictureSession());
     }
 
     @Override
@@ -2464,14 +2548,31 @@ public class Camera2Module extends ICameraModule {
         mIsRecording = false;
     }
 
+    /**
+     * Carries the stream in every session from here on, starting with one built now. A recording
+     * is left alone: the stream joins the session built when it ends, rather than cutting it
+     * short.
+     */
+    @MainThread
     @Override
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-        setSession(new StreamSession(this, surfaceProvider));
+        mStreamProvider = surfaceProvider;
+        if (!isRecording()) {
+            setSession(newPictureSession());
+        }
     }
 
+    /** Lets the stream go, unless another has taken its place since. */
+    @MainThread
     @Override
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-        setSession(new PictureSession(this));
+        if (mStreamProvider != surfaceProvider) {
+            return;
+        }
+        mStreamProvider = null;
+        if (!isRecording()) {
+            setSession(newPictureSession());
+        }
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {
