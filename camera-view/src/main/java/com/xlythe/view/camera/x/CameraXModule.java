@@ -417,10 +417,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                     info -> Recorder.getVideoCapabilities(info).isStabilizationSupported(), false);
             exposureSupported = query(cameraInfo, "exposure",
                     info -> info.getExposureState().isExposureCompensationSupported(), false);
-            minExposure = query(cameraInfo, "minimum exposure",
-                    info -> info.getExposureState().getExposureCompensationRange().getLower(), 0);
-            maxExposure = query(cameraInfo, "maximum exposure",
-                    info -> info.getExposureState().getExposureCompensationRange().getUpper(), 0);
+            // A camera that cannot compensate reports no range, whatever it publishes, so that a
+            // control sized by it offers nothing the camera refuses.
+            if (exposureSupported) {
+                minExposure = query(cameraInfo, "minimum exposure",
+                        info -> info.getExposureState().getExposureCompensationRange().getLower(),
+                        0);
+                maxExposure = query(cameraInfo, "maximum exposure",
+                        info -> info.getExposureState().getExposureCompensationRange().getUpper(),
+                        0);
+            }
             lowLightBoostSupported = query(cameraInfo, "low-light boost",
                     CameraInfo::isLowLightBoostSupported, false);
         }

@@ -92,8 +92,9 @@ public class ExposureCompensationTest {
     }
 
     /**
-     * A range that stops at zero on one side is published as it is, but counts as no range: the
-     * camera cannot go both ways, and that is the line the CameraX backend draws too.
+     * A range that stops at zero on one side counts as no range, since the camera cannot go both
+     * ways, so it is reported as none: a caller sizing a control by it would offer values the
+     * camera refuses.
      */
     @Test
     public void aRangeThatStopsAtZeroIsUnsupported() {
@@ -102,7 +103,7 @@ public class ExposureCompensationTest {
 
         assertFalse(module.isExposureCompensationSupported());
         assertEquals(0, module.getMinExposureCompensation());
-        assertEquals(4, module.getMaxExposureCompensation());
+        assertEquals(0, module.getMaxExposureCompensation());
     }
 
     @Test

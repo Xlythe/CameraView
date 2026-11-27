@@ -56,8 +56,10 @@ import org.robolectric.annotation.Config;
         shadows = {ShadowAnnouncingCameraManager.class, ShadowListingCamcorderProfile.class,
                 ShadowCallbackCameraCaptureSession.class})
 public class CameraXHarnessTest {
-    /** The back camera's exposure range; the front camera publishes none. */
+    /** The back camera's exposure range. */
     private static final Range<Integer> BACK_EXPOSURE_RANGE = new Range<>(-12, 12);
+    /** The front camera's, which only goes one way and so counts as none. */
+    private static final Range<Integer> FRONT_EXPOSURE_RANGE = new Range<>(0, 4);
 
     @Test
     public void theBackendBindsReportsCapabilitiesSwitchesLensAndCloses() throws Exception {
@@ -73,6 +75,10 @@ public class CameraXHarnessTest {
                 CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, BACK_EXPOSURE_RANGE);
         FakeCamera2.setCharacteristic(application, FakeCamera2.BACK_ID,
                 CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP, new Rational(1, 6));
+        FakeCamera2.setCharacteristic(application, FakeCamera2.FRONT_ID,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, FRONT_EXPOSURE_RANGE);
+        FakeCamera2.setCharacteristic(application, FakeCamera2.FRONT_ID,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP, new Rational(1, 3));
         CameraXModule module = new CameraXModule(host.getCameraView());
         try {
             // The scale is fixed, so it answers before anything is bound.
@@ -198,7 +204,7 @@ public class CameraXHarnessTest {
             assertEquals(flash, module.getFlash());
         }
 
-        // Declined, because the fake camera reports no exposure range.
+        // Declined, because the front camera reports no usable exposure range.
         assertFalse(module.isExposureCompensationSupported());
         module.setExposureCompensation(3);
         FakeCameraXHost.idle();
@@ -302,9 +308,9 @@ public class CameraXHarnessTest {
 
         assertTrue("the fake camera publishes a zoom range", module.isZoomSupported());
 
-        // An exposure range this camera does not publish, so the bounds collapse rather than
-        // coming back as something a caller could act on.
-        assertEquals("no exposure range means no room above zero",
+        // An exposure range that only goes one way counts as none, so the bounds collapse rather
+        // than coming back as something a caller could act on.
+        assertEquals("no usable exposure range means no room above zero",
                 0, module.getMaxExposureCompensation());
         assertEquals("and none below", 0, module.getMinExposureCompensation());
 

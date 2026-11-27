@@ -1285,15 +1285,17 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
+    /** 0 for a camera that cannot compensate, whatever range it publishes. */
     @Override
     public int getMinExposureCompensation() {
-        Range<Integer> range = publishedExposureCompensationRange(getActiveCharacteristics());
+        Range<Integer> range = exposureCompensationRange(getActiveCharacteristics());
         return range == null ? 0 : range.getLower();
     }
 
+    /** 0 for a camera that cannot compensate, whatever range it publishes. */
     @Override
     public int getMaxExposureCompensation() {
-        Range<Integer> range = publishedExposureCompensationRange(getActiveCharacteristics());
+        Range<Integer> range = exposureCompensationRange(getActiveCharacteristics());
         return range == null ? 0 : range.getUpper();
     }
 
@@ -1323,25 +1325,19 @@ public class Camera2Module extends ICameraModule {
     /**
      * The exposure compensation range a camera can apply, or null for one that cannot.
      *
-     * <p>A range that stops at zero on either side counts as none, which is where the CameraX
-     * backend draws the line too.</p>
+     * <p>A range that stops at zero on either side counts as none, which is where every backend
+     * draws the line. The platform publishes 0 to 0 for a camera without compensation, and a
+     * range that can only go one way is a camera that does not keep to that.</p>
      */
     @Nullable
     static Range<Integer> exposureCompensationRange(
             @Nullable CameraCharacteristics characteristics) {
-        Range<Integer> range = publishedExposureCompensationRange(characteristics);
+        Range<Integer> range = characteristics == null ? null
+                : characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
         if (range == null || range.getLower() == 0 || range.getUpper() == 0) {
             return null;
         }
         return range;
-    }
-
-    /** The range as published, which reports a minimum and maximum even where it is unusable. */
-    @Nullable
-    private static Range<Integer> publishedExposureCompensationRange(
-            @Nullable CameraCharacteristics characteristics) {
-        return characteristics == null ? null
-                : characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
     }
 
     /**
