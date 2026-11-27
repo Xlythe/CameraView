@@ -88,6 +88,7 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.TransformMath;
@@ -115,6 +116,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private static final int MAX_ZOOM_LEVEL = 100;
     /** Maximum time CameraX may take to report a still-image terminal callback. */
     private static final long IMAGE_CAPTURE_TIMEOUT_MILLIS = 15_000;
+    /**
+     * How many burst pictures are handed to CameraX at once. It takes them one after another, and
+     * with a few queued the next is always waiting when one is captured, while it is still saved.
+     */
+    static final int BURST_PICTURES_IN_FLIGHT = 3;
     /** Maximum time CameraX may take to emit the recording Start event. */
     private static final long RECORDING_START_TIMEOUT_MILLIS = 15_000;
     /** Maximum time CameraX may take to emit Finalize after a stop request. */
@@ -270,6 +276,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private long mRecordedVideoDurationMillis;
     /** Pending image destination while a terminal callback is outstanding. */
     @Nullable private File mPendingImageFile;
+    /** The burst being taken, or null. Rebinding waits for it, as it does for a picture. */
+    @Nullable private Burst mBurst;
     /** Pending maximum-duration stop task for the active recording. */
     @Nullable private Runnable mDurationStopTask;
     /** Pending still-image timeout task. */
@@ -562,6 +570,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mPendingFrontFacing = null;
         mGeneration++;
         failPendingImage("Camera closed before image capture completed");
+        if (mBurst != null) mBurst.end();
         cancelRecordingTimeouts();
         cancelDurationStop();
         publishSnapshot();
@@ -1167,7 +1176,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     private void takePictureOnMainThread(@NonNull File file) {
         ImageCapture imageCapture = mImageCapture;
-        if (!mOpenRequested || imageCapture == null || isRecording() || mPendingImageFile != null) {
+        if (!mOpenRequested || imageCapture == null || isRecording() || isCapturing()) {
             Log.w(TAG, "Cannot take a picture in the current CameraX state: " + mState);
             onImageFailed();
             return;
@@ -1175,12 +1184,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         long operationId = ++mImageOperationId;
         mPendingImageFile = file;
         scheduleImageTimeout(operationId);
-        ImageCapture.Metadata metadata = new ImageCapture.Metadata();
-        metadata.setLocation(getLocation());
-        metadata.setReversedHorizontal(mFrontFacing);
-        ImageCapture.OutputFileOptions options = new ImageCapture.OutputFileOptions.Builder(file)
-                .setMetadata(metadata).build();
-        imageCapture.takePicture(options, mMainExecutor, new ImageCapture.OnImageSavedCallback() {
+        imageCapture.takePicture(outputOptions(file), mMainExecutor, new ImageCapture.OnImageSavedCallback() {
             @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
                 if (!completePendingImage(operationId)) return;
                 showImageConfirmation(file);
@@ -1189,6 +1193,63 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 if (!completePendingImage(operationId)) return;
                 Log.w(TAG, "Image capture failed", error);
                 onImageFailed();
+            }
+        });
+    }
+
+    /** Where a picture is written, tagged with where it was taken and flipped as the preview is. */
+    @NonNull private ImageCapture.OutputFileOptions outputOptions(@NonNull File file) {
+        ImageCapture.Metadata metadata = new ImageCapture.Metadata();
+        metadata.setLocation(getLocation());
+        metadata.setReversedHorizontal(mFrontFacing);
+        return new ImageCapture.OutputFileOptions.Builder(file).setMetadata(metadata).build();
+    }
+
+    /** Whether a picture or a burst is in flight, which a rebind would abort. */
+    private boolean isCapturing() {
+        return mPendingImageFile != null || mBurst != null;
+    }
+
+    @Override protected void startBurst(@NonNull Burst burst) {
+        runOnMainThread(() -> startBurstOnMainThread(burst));
+    }
+
+    /**
+     * Hands CameraX a few pictures at a time, and another as each is saved. Its own queue takes
+     * them back to back. The flash is off for the burst, and comes back once the last is saved.
+     */
+    private void startBurstOnMainThread(@NonNull Burst burst) {
+        ImageCapture imageCapture = mImageCapture;
+        if (!mOpenRequested || mPaused || imageCapture == null || isRecording() || isCapturing()) {
+            Log.w(TAG, "Cannot take a burst in the current CameraX state: " + mState);
+            burst.end();
+            return;
+        }
+        mBurst = burst;
+        imageCapture.setFlashMode(ImageCapture.FLASH_MODE_OFF);
+        burst.whenFinished(() -> {
+            if (mBurst != burst) return;
+            mBurst = null;
+            imageCapture.setFlashMode(getFlashMode());
+            // Posted, because the burst finishes from inside a CameraX callback.
+            mMainHandler.post(this::rebindForSettledSize);
+        });
+        for (int i = 0; i < BURST_PICTURES_IN_FLIGHT; i++) {
+            requestBurstPicture(burst, imageCapture);
+        }
+    }
+
+    private void requestBurstPicture(@NonNull Burst burst, @NonNull ImageCapture imageCapture) {
+        File file = burst.nextFile();
+        if (file == null) return;
+        imageCapture.takePicture(outputOptions(file), mMainExecutor, new ImageCapture.OnImageSavedCallback() {
+            @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
+                requestBurstPicture(burst, imageCapture);
+                burst.onPictureTaken(file);
+            }
+            @Override public void onError(@NonNull ImageCaptureException error) {
+                Log.w(TAG, "Burst capture failed", error);
+                burst.onPictureFailed(file);
             }
         });
     }
@@ -2218,7 +2279,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mLastHeight = height;
             if (!mOpenRequested || mPaused || mVideoRecording != null) return;
             // Unbinding an ImageCapture aborts the capture in flight, so the rebind waits for it.
-            if (mPendingImageFile != null) {
+            if (isCapturing()) {
                 mSizeRebindPending = true;
                 return;
             }
@@ -2230,7 +2291,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private void rebindForSettledSize() {
         if (!mSizeRebindPending) return;
         mSizeRebindPending = false;
-        if (mOpenRequested && !mPaused && mVideoRecording == null && mPendingImageFile == null) {
+        if (mOpenRequested && !mPaused && mVideoRecording == null && !isCapturing()) {
             reconcileUseCases(true);
         }
     }
@@ -2248,6 +2309,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** Returns whether an atomic CameraX bind is active; used only by device validation. */
     boolean isCameraBoundForTesting() {
         return mActiveCamera != null && !mBoundUseCases.isEmpty();
+    }
+
+    /** The flash mode the bound still capture would use, or -1 for none; used only by tests. */
+    int imageCaptureFlashModeForTesting() {
+        return mImageCapture == null ? -1 : mImageCapture.getFlashMode();
     }
 
     private void runOnMainThread(@NonNull Runnable action) {
