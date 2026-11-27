@@ -102,8 +102,9 @@ public final class FrameRenderThread {
         private final boolean mEncoder;
         /**
          * Whether the camera's timestamps are on the clock that counts sleep, and have to be
-         * moved before an encoder sees them. Null until the first frame decides it, and then
-         * kept, because two frames that disagreed would go backwards in time.
+         * moved before an encoder sees them, or compared with that clock by a time-lapse. Null
+         * until the first frame decides it, and then kept, because two frames that disagreed
+         * would go backwards in time.
          */
         @Nullable private Boolean mRealtimeClock;
         /**
@@ -124,10 +125,18 @@ public final class FrameRenderThread {
          * draw into it directly - turned, but drawn - rather than not at all.
          */
         private boolean mCanvasFailed;
+        /**
+         * The key of the input this output is drawn from, as given to {@link #addInput}, or null
+         * for the camera's main input.
+         */
+        @Nullable private final Object mInputKey;
+        /** Which frames this output keeps and when they play, or null to keep them all as taken. */
+        @Nullable private final TimeLapse mTimeLapse;
 
         private Output(@NonNull Surface surface, @NonNull Size size, @NonNull Size frameSize,
                 @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform,
-                boolean encoder, @Nullable Shown shown) {
+                boolean encoder, @Nullable Shown shown, @Nullable Object inputKey,
+                @Nullable TimeLapse timeLapse) {
             mSurface = surface;
             mSize = size;
             mFrameSize = frameSize;
@@ -135,6 +144,32 @@ public final class FrameRenderThread {
             mTransform = transform;
             mEncoder = encoder;
             mShown = shown;
+            mInputKey = inputKey;
+            mTimeLapse = timeLapse;
+        }
+    }
+
+    /**
+     * A camera stream besides the main one, drawn through the same renderer into outputs of its
+     * own.
+     *
+     * <p>Here because CameraX gives each use case an effect applies to a stream of its own, and a
+     * recording that keeps different frames from its preview - a time-lapse keeps one in many -
+     * has to be a use case with an effect of its own. The renderer is the caller's and runs on one
+     * thread only, so the second stream comes to this thread rather than to a second one.</p>
+     */
+    private static final class Input {
+        /** The texture the camera writes this stream into. */
+        private final SurfaceTexture mTexture;
+        /** The external texture {@link #mTexture} was made over, which frames are drawn from. */
+        private final int mTextureName;
+        /** The size the camera writes at, which is what says whether a frame is shown wide. */
+        private Size mSize;
+
+        private Input(@NonNull SurfaceTexture texture, int textureName, @NonNull Size size) {
+            mTexture = texture;
+            mTextureName = textureName;
+            mSize = size;
         }
     }
 
@@ -166,6 +201,9 @@ public final class FrameRenderThread {
      * here: adding, removing and drawing are all posted to it.</p>
      */
     private final Map<Object, Output> mOutputs = new LinkedHashMap<>();
+
+    /** Inputs besides the camera's main one, by key. Read and written on the render thread only. */
+    private final Map<Object, Input> mInputs = new LinkedHashMap<>();
 
     private final float[] mSurfaceTextureMatrix = GlMath.identity();
     private final float[] mTextureMatrix = GlMath.identity();
@@ -475,7 +513,8 @@ public final class FrameRenderThread {
     public void addOutput(@NonNull Object key, @NonNull Surface surface, @NonNull Size size,
             @NonNull Size frameSize, @NonNull GlMath.ScaleType scaleType,
             @NonNull TextureTransform transform) {
-        putOutput(key, new Output(surface, size, frameSize, scaleType, transform, false, null));
+        putOutput(key, new Output(surface, size, frameSize, scaleType, transform, false, null,
+                null, null));
     }
 
     /**
@@ -489,12 +528,117 @@ public final class FrameRenderThread {
      * @param rotationDegrees how far the camera's buffer is turned clockwise to show this
      *     recording, fixed for its length because the file is tagged once
      * @param mirrored whether the recording is then shown mirrored left to right
+     * @param timeLapse which frames to keep and when they play, or null to keep every frame as it
+     *     was taken
      */
     public void addEncoderOutput(@NonNull Object key, @NonNull Surface surface,
             @NonNull Size size, @NonNull TextureTransform transform,
-            @GlMath.Rotation int rotationDegrees, boolean mirrored) {
+            @GlMath.Rotation int rotationDegrees, boolean mirrored,
+            @Nullable TimeLapse timeLapse) {
         putOutput(key, new Output(surface, size, size, GlMath.ScaleType.FILL_CENTER, transform,
-                true, new Shown(rotationDegrees, mirrored)));
+                true, new Shown(rotationDegrees, mirrored), null, timeLapse));
+    }
+
+    /**
+     * Adds a surface to draw the frames of one input into, keeping the frames a time-lapse keeps
+     * and stamping them when they play.
+     *
+     * <p>The stamps stay on the clock the camera took the frames on, because the surface is a
+     * stage in somebody else's pipeline that decides for itself which clock that is.</p>
+     *
+     * @param key identifies this output for {@link #removeOutput}; the caller's own object
+     * @param inputKey the key the input was added under with {@link #addInput}
+     * @param size the output's size, which the transform fills
+     */
+    public void addTimeLapseOutput(@NonNull Object key, @NonNull Object inputKey,
+            @NonNull Surface surface, @NonNull Size size, @NonNull TextureTransform transform,
+            @NonNull TimeLapse timeLapse) {
+        putOutput(key, new Output(surface, size, size, GlMath.ScaleType.FILL_CENTER, transform,
+                false, null, inputKey, timeLapse));
+    }
+
+    /**
+     * Adds a camera stream besides the main one, whose frames are drawn only into the outputs
+     * added for it.
+     *
+     * <p>Blocks until the render thread has made it, because the caller is answering a camera
+     * that wants somewhere to write. Asked again under the same key, the input is kept and only
+     * resized, since the camera may still be writing into the surface it was given.</p>
+     *
+     * @param key identifies this input for {@link #addTimeLapseOutput} and {@link #removeInput}
+     * @param size the size the camera will write at
+     * @return the texture to give the camera, or null if the thread is not running or will not
+     *     make one
+     */
+    @Nullable
+    public SurfaceTexture addInput(@NonNull Object key, @NonNull Size size) {
+        Handler handler = mHandler;
+        if (!mRunning || handler == null) {
+            return null;
+        }
+        CountDownLatch ready = new CountDownLatch(1);
+        AtomicReference<SurfaceTexture> created = new AtomicReference<>();
+        handler.post(() -> {
+            try {
+                created.set(makeInput(key, size));
+            } catch (RuntimeException | LinkageError error) {
+                Log.w(TAG, "This device will not render a second stream through GL", error);
+            } finally {
+                ready.countDown();
+            }
+        });
+        try {
+            if (!ready.await(START_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                Log.w(TAG, "Timed out making an input");
+            }
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+        }
+        return created.get();
+    }
+
+    /** Runs on the render thread. */
+    @Nullable
+    private SurfaceTexture makeInput(@NonNull Object key, @NonNull Size size) {
+        EglCore egl = mEgl;
+        OesTextureProgram program = mProgram;
+        if (!mRunning || egl == null || program == null) {
+            return null;
+        }
+        Input input = mInputs.get(key);
+        if (input != null) {
+            input.mSize = size;
+            input.mTexture.setDefaultBufferSize(size.getWidth(), size.getHeight());
+            return input.mTexture;
+        }
+        egl.makeCurrent();
+        int textureName = program.createExternalTexture();
+        SurfaceTexture texture = new SurfaceTexture(textureName);
+        texture.setDefaultBufferSize(size.getWidth(), size.getHeight());
+        texture.setOnFrameAvailableListener(this::onInputFrameAvailable, mHandler);
+        mInputs.put(key, new Input(texture, textureName, size));
+        return texture;
+    }
+
+    /**
+     * Lets go of an input added with {@link #addInput}. Its outputs are not drawn again, but stay
+     * until they are removed, because they belong to whoever added them.
+     */
+    public void removeInput(@NonNull Object key) {
+        post(() -> releaseInput(mInputs.remove(key)));
+    }
+
+    /** Runs on the render thread. */
+    private void releaseInput(@Nullable Input input) {
+        if (input == null) {
+            return;
+        }
+        input.mTexture.setOnFrameAvailableListener(null);
+        input.mTexture.release();
+        if (mEgl != null && mProgram != null) {
+            mEgl.makeCurrent();
+            mProgram.deleteTexture(input.mTextureName);
+        }
     }
 
     private void putOutput(@NonNull Object key, @NonNull Output output) {
@@ -601,7 +745,9 @@ public final class FrameRenderThread {
             texture.getTransformMatrix(mSurfaceTextureMatrix);
             long timestampNanos = texture.getTimestamp();
             for (Output output : mOutputs.values()) {
-                drawInto(output, timestampNanos);
+                if (output.mInputKey == null) {
+                    drawInto(output, mTextureName, mInputSize, timestampNanos);
+                }
             }
         } catch (RuntimeException | LinkageError error) {
             // One bad frame is not worth tearing the camera down for: the next one usually works,
@@ -610,10 +756,51 @@ public final class FrameRenderThread {
         }
     }
 
-    private void drawInto(@NonNull Output output, long timestampNanos) {
+    /** Runs on the render thread: a frame has arrived on an input added with {@link #addInput}. */
+    private void onInputFrameAvailable(@NonNull SurfaceTexture texture) {
+        EglCore egl = mEgl;
+        if (!mRunning || egl == null) {
+            return;
+        }
+        Object key = null;
+        Input input = null;
+        for (Map.Entry<Object, Input> entry : mInputs.entrySet()) {
+            if (entry.getValue().mTexture == texture) {
+                key = entry.getKey();
+                input = entry.getValue();
+            }
+        }
+        if (input == null) {
+            return;
+        }
+        try {
+            egl.makeCurrent();
+            texture.updateTexImage();
+            texture.getTransformMatrix(mSurfaceTextureMatrix);
+            long timestampNanos = texture.getTimestamp();
+            for (Output output : mOutputs.values()) {
+                if (key.equals(output.mInputKey)) {
+                    drawInto(output, input.mTextureName, input.mSize, timestampNanos);
+                }
+            }
+        } catch (RuntimeException | LinkageError error) {
+            Log.w(TAG, "Dropped a camera frame", error);
+        }
+    }
+
+    /**
+     * @param textureName the texture of the input the frame arrived on
+     * @param inputSize the size that input is written at, or null where nobody has said
+     */
+    private void drawInto(@NonNull Output output, int textureName, @Nullable Size inputSize,
+            long timestampNanos) {
         EglCore egl = mEgl;
         GlFrame frame = mFrame;
         if (egl == null || frame == null || output.mFailed) {
+            return;
+        }
+        long presentationNanos = presentationTime(output, timestampNanos);
+        if (presentationNanos == TimeLapse.SKIP) {
             return;
         }
         try {
@@ -623,20 +810,21 @@ public final class FrameRenderThread {
             egl.makeCurrent(output.mEglSurface);
             output.mTransform.onTextureTransform(mSurfaceTextureMatrix, mTextureMatrix);
             FrameRenderer renderer = mRenderer;
-            if (renderer == null || !drawThroughCanvas(output, renderer, frame, timestampNanos)) {
+            if (renderer == null || !drawThroughCanvas(
+                    output, renderer, frame, textureName, inputSize, timestampNanos)) {
                 // Cleared because a frame that does not cover the output - and under FIT_CENTER
                 // none of them do - would otherwise show whatever the last frame left behind.
                 GLES20.glViewport(0, 0, output.mSize.getWidth(), output.mSize.getHeight());
                 GLES20.glClearColor(0f, 0f, 0f, 1f);
                 GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-                frame.set(mTextureName, mTextureMatrix, output.mSize.getWidth(),
+                frame.set(textureName, mTextureMatrix, output.mSize.getWidth(),
                         output.mSize.getHeight(), timestampNanos,
                         GlMath.viewport(output.mScaleType, output.mFrameSize, output.mSize));
                 if (renderer == null || !renderer.onDrawFrame(frame)) {
                     frame.drawCameraFrame();
                 }
             }
-            egl.setPresentationTime(output.mEglSurface, presentationTime(output, timestampNanos));
+            egl.setPresentationTime(output.mEglSurface, presentationNanos);
             egl.swapBuffers(output.mEglSurface);
         } catch (RuntimeException | LinkageError error) {
             // This output is gone, which happens when a use case is unbound a frame before the
@@ -658,8 +846,8 @@ public final class FrameRenderThread {
      *     shape it is shown, so the renderer draws into it directly
      */
     private boolean drawThroughCanvas(@NonNull Output output, @NonNull FrameRenderer renderer,
-            @NonNull GlFrame frame, long timestampNanos) {
-        Size inputSize = mInputSize;
+            @NonNull GlFrame frame, int textureName, @Nullable Size inputSize,
+            long timestampNanos) {
         Texture2dProgram canvasProgram = mCanvasProgram;
         if (inputSize == null || canvasProgram == null || output.mCanvasFailed) {
             return false;
@@ -700,7 +888,7 @@ public final class FrameRenderThread {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
         int width = shownSize.getWidth();
         int height = shownSize.getHeight();
-        frame.set(mTextureName, cameraAsShown, width, height, timestampNanos,
+        frame.set(textureName, cameraAsShown, width, height, timestampNanos,
                 new int[] {0, 0, width, height});
         if (!renderer.onDrawFrame(frame)) {
             frame.drawCameraFrame();
@@ -716,9 +904,12 @@ public final class FrameRenderThread {
         return true;
     }
 
-    /** When an output is told a frame happened, which for an encoder is on its own clock. */
+    /**
+     * When an output is told a frame happened, which for an encoder is on its own clock, or
+     * {@link TimeLapse#SKIP} for a frame the output's time-lapse leaves out.
+     */
     private static long presentationTime(@NonNull Output output, long timestampNanos) {
-        if (!output.mEncoder) {
+        if (!output.mEncoder && output.mTimeLapse == null) {
             return timestampNanos;
         }
         long monotonicNanos = System.nanoTime();
@@ -727,9 +918,14 @@ public final class FrameRenderThread {
             output.mRealtimeClock =
                     GlMath.isOnRealtimeClock(timestampNanos, monotonicNanos, realtimeNanos);
         }
-        return output.mRealtimeClock
+        long stamp = output.mEncoder && output.mRealtimeClock
                 ? timestampNanos - (realtimeNanos - monotonicNanos)
                 : timestampNanos;
+        if (output.mTimeLapse == null) {
+            return stamp;
+        }
+        return output.mTimeLapse.presentationTime(stamp, !output.mEncoder && output.mRealtimeClock,
+                monotonicNanos, realtimeNanos);
     }
 
     private void releaseOutput(@Nullable Output output) {
@@ -768,6 +964,10 @@ public final class FrameRenderThread {
             releaseOutput(output);
         }
         mOutputs.clear();
+        for (Input input : mInputs.values()) {
+            releaseInput(input);
+        }
+        mInputs.clear();
         releaseStillInput();
         if (mSurfaceTexture != null) {
             mSurfaceTexture.setOnFrameAvailableListener(null);

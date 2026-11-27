@@ -88,6 +88,17 @@
                 app:cornerRadius="24dp"
                 app:elevation="4dp" />
 
+            <!-- Steps the time-lapse speed of the next recording; MainFragment drives it. -->
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/time_lapse"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:contentDescription="@string/time_lapse_description"
+                android:textColor="#FFFFFF"
+                app:backgroundTint="#616161"
+                app:cornerRadius="20dp" />
+
             <CheckBox
                 android:id="@id/toggle"
                 android:layout_width="50dp"

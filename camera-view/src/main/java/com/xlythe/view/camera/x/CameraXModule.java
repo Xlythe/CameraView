@@ -94,6 +94,7 @@ import com.xlythe.view.camera.CameraXSegmentationAnalyzer;
 import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.gl.TimeLapse;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.TransformMath;
@@ -101,6 +102,7 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -127,6 +129,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private static final long RECORDING_FINALIZE_TIMEOUT_MILLIS = 10_000;
     /** Delay allowing a removed stream surface to settle before restoring stabilization. */
     private static final long STREAM_RECONFIGURE_DELAY_MILLIS = 500;
+    /** The frame rate a time-lapse plays back at, which CameraX records at unless told otherwise. */
+    private static final int TIME_LAPSE_FRAME_RATE = 30;
 
     /** Internal CameraX lifecycle states, serialized on the main thread. */
     private enum State { CLOSED, SUSPENDED, WAITING_FOR_PROVIDER, BINDING, OPEN, RECORDING, STOPPING, ERROR }
@@ -224,6 +228,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Nullable private SurfaceRequest.TransformationInfo mTransformationInfo;
     /** The GL effect every frame passes through, while a caller has asked for one. */
     @Nullable private FrameEffect mFrameEffect;
+
+    /**
+     * Which frames the recording being made keeps, while it is a time-lapse; null otherwise.
+     *
+     * <p>A time-lapse is drawn through GL, because CameraX records every frame it is given at the
+     * moment it was taken. A renderer of the recording's own keeps one frame in many and stamps
+     * them a frame interval apart; see {@link #reconcileEffects}.</p>
+     */
+    @Nullable private TimeLapse mTimeLapse;
+
+    /**
+     * The pipeline a time-lapse is drawn through when no caller has asked for one: a render thread
+     * with no renderer, up for as long as the recording. Null otherwise, including while
+     * {@link #mFrameEffect} draws the time-lapse itself.
+     */
+    @Nullable private FrameEffect mTimeLapseHost;
 
     /**
      * Set once GL has failed here, after which this backend reports no effects and stops trying.
@@ -499,6 +519,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mHostLifecycleOwner = null;
         }
         getView().removeOnAttachStateChangeListener(mAttachStateListener);
+        releaseTimeLapseEffect();
         releaseFrameEffect();
         mLifecycleRegistry.setCurrentState(Lifecycle.State.DESTROYED);
         mState = State.CLOSED;
@@ -1296,23 +1317,35 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         long operationId = ++mVideoOperationId;
         mRecordedVideoDurationMillis = 0;
+        int timeLapseSpeed = getTimeLapseSpeed();
+        mTimeLapse = timeLapseSpeed > 1
+                ? new TimeLapse(timeLapseSpeed, TIME_LAPSE_FRAME_RATE) : null;
         Recorder recorder = new Recorder.Builder().setQualitySelector(createQualitySelector()).build();
         CameraInfo cameraInfo = mActiveCamera == null ? null : mActiveCamera.getCameraInfo();
         VideoCapture.Builder<Recorder> videoBuilder = new VideoCapture.Builder<>(recorder)
                 .setMirrorMode(MirrorMode.MIRROR_MODE_ON_FRONT_ONLY)
                 .setTargetRotation(getTargetRotation());
         if (cameraInfo != null) {
-            videoBuilder.setDynamicRange(selectedDynamicRange(cameraInfo));
+            // A time-lapse is drawn through GL, which draws eight bits a channel.
+            videoBuilder.setDynamicRange(mTimeLapse == null
+                    ? selectedDynamicRange(cameraInfo) : DynamicRange.SDR);
             if (isStabilizationEnabled()
                     && Recorder.getVideoCapabilities(cameraInfo).isStabilizationSupported()) {
                 videoBuilder.setVideoStabilizationEnabled(true);
             }
         }
         mVideoCapture = videoBuilder.build();
-        if (!reconcileUseCases(false)) {
+        boolean bound = reconcileUseCases(false);
+        // GL has to run for a time-lapse, and a device that will not give us a context is found
+        // out while binding. A recording at the wrong speed is not what was asked for.
+        boolean timeLapseRefused = bound && mTimeLapse != null && mGlUnavailable;
+        if (!bound || timeLapseRefused) {
             mVideoCapture = null;
+            mTimeLapse = null;
             reconcileUseCases(false);
-            Log.w(TAG, "CameraX could not bind Preview and VideoCapture together");
+            Log.w(TAG, timeLapseRefused
+                    ? "CameraX cannot record a time-lapse without GL"
+                    : "CameraX could not bind Preview and VideoCapture together");
             onVideoFailed();
             return;
         }
@@ -1324,7 +1357,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 output.setLocation(where);
             }
             PendingRecording pending = recorder.prepareRecording(getContext(), output.build());
-            if (PermissionChecker.hasPermissions(getContext(), Manifest.permission.RECORD_AUDIO)) pending = pending.withAudioEnabled();
+            // A time-lapse has no sound, since sound sped up that far is noise.
+            if (mTimeLapse == null && PermissionChecker.hasPermissions(
+                    getContext(), Manifest.permission.RECORD_AUDIO)) {
+                pending = pending.withAudioEnabled();
+            }
             mVideoFile = file;
             mState = State.RECORDING;
             mVideoRecording = pending.start(mMainExecutor, event -> handleVideoEvent(operationId, file, event));
@@ -1333,6 +1370,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         } catch (RuntimeException error) {
             Log.e(TAG, "Unable to start CameraX recording", error);
             mVideoCapture = null;
+            mTimeLapse = null;
             mVideoFile = null;
             mVideoRecording = null;
             cancelRecordingTimeouts();
@@ -1349,6 +1387,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 event.getRecordingStats().getRecordedDurationNanos() / 1_000_000L);
         if (event instanceof VideoRecordEvent.Start) {
             cancelRecordingStartTimeout();
+            if (mTimeLapse != null) {
+                // Only now, because the encoder drops every frame stamped before it started.
+                mTimeLapse.start();
+            }
             mState = State.RECORDING;
             publishSnapshot();
             return;
@@ -1364,6 +1406,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mVideoOperationId++;
         mVideoRecording = null;
         mVideoCapture = null;
+        mTimeLapse = null;
         mVideoFile = null;
         applyPendingLensFacing();
         boolean success = isSuccessfulFinalize(finalized) && file.exists();
@@ -1412,6 +1455,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mState = State.STOPPING;
         try {
             recording.stop();
+            if (mTimeLapse != null) {
+                // After stop, so the frame stamped now is after the moment the encoder stops at.
+                mTimeLapse.finish();
+            }
             scheduleRecordingFinalizeTimeout(mVideoOperationId);
         } catch (RuntimeException error) {
             Log.e(TAG, "Unable to stop CameraX recording", error);
@@ -1419,6 +1466,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mVideoOperationId++;
             mVideoRecording = null;
             mVideoCapture = null;
+            mTimeLapse = null;
             mVideoFile = null;
             cancelRecordingTimeouts();
             applyPendingLensFacing();
@@ -1461,6 +1509,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mVideoOperationId++;
             mVideoRecording = null;
             mVideoCapture = null;
+            mTimeLapse = null;
             mVideoFile = null;
             cancelDurationStop();
             cancelRecordingTimeouts();
@@ -1622,6 +1671,13 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             ImageAnalysis imageAnalysis = mVideoCapture == null && mFrameAnalyzer != null
                     ? createImageAnalysis() : null;
             Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews = createStreamPreviews(generation);
+            if (imageCapture != null && recordsTimeLapse()
+                    && wantsFrameEffect(!streamPreviews.isEmpty())) {
+                // A time-lapse drawn through the caller's renderer splits the pipeline into a
+                // preview and a recording, and leaves the still with no renderer to draw it.
+                Log.d(TAG, "A time-lapse drawn through a renderer cannot take a picture");
+                imageCapture = null;
+            }
             List<UseCase> requested = new ArrayList<>();
             requested.add(displayPreview);
             if (mVideoCapture != null) requested.add(mVideoCapture);
@@ -1655,9 +1711,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             }
             unbindCurrentUseCases();
             // After unbinding, so that an effect being let go is not closing outputs CameraX is
-            // still drawing into, and before binding, because the group carries the effect.
-            CameraEffect effect = reconcileFrameEffect(!streamPreviews.isEmpty());
-            Camera camera = bindAtomically(selector, requested, effect);
+            // still drawing into, and before binding, because the group carries the effects.
+            List<CameraEffect> effects = reconcileEffects(!streamPreviews.isEmpty());
+            Camera camera = bindAtomically(selector, requested, effects);
             if (generation != mGeneration || !mOpenRequested || mPaused) {
                 provider.unbind(requested.toArray(new UseCase[0]));
                 return false;
@@ -1693,11 +1749,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @NonNull private Camera bindAtomically(@NonNull CameraSelector selector,
-            @NonNull List<UseCase> useCases, @Nullable CameraEffect effect) {
+            @NonNull List<UseCase> useCases, @NonNull List<CameraEffect> effects) {
         int width = getWidth();
         int height = getHeight();
         boolean hasViewPort = isMatchPreviewAspectRatioEnabled() && width > 0 && height > 0;
-        if (!hasViewPort && effect == null) {
+        if (!hasViewPort && effects.isEmpty()) {
             return mCameraProvider.bindToLifecycle(this, selector, useCases.toArray(new UseCase[0]));
         }
         // An effect only reaches the camera through a UseCaseGroup, so a bind that carries one
@@ -1705,7 +1761,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         UseCaseGroup.Builder group = new UseCaseGroup.Builder();
         if (hasViewPort) group.setViewPort(createViewPort(width, height));
         for (UseCase useCase : useCases) group.addUseCase(useCase);
-        if (effect != null) group.addEffect(effect);
+        for (CameraEffect effect : effects) group.addEffect(effect);
         return mCameraProvider.bindToLifecycle(this, selector, group.build());
     }
 
@@ -1785,6 +1841,80 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     static boolean canBindFrameEffect(
             boolean hasCustomStream, @NonNull CameraView.PictureFormat pictureFormat) {
         return !hasCustomStream && pictureFormat == CameraView.PictureFormat.JPEG;
+    }
+
+    /** Whether the next bind carries the caller's effect, which then draws a time-lapse too. */
+    private boolean wantsFrameEffect(boolean hasCustomStream) {
+        return !mGlUnavailable && canBindFrameEffect(hasCustomStream, getPictureFormat())
+                && (getFrameRenderer() != null || getCameraTextureProvider() != null);
+    }
+
+    /** Whether the use cases being bound are for a time-lapse recording. */
+    private boolean recordsTimeLapse() {
+        return mVideoCapture != null && mTimeLapse != null;
+    }
+
+    /**
+     * The effects to bind with, bringing them up or letting them go so that they match.
+     *
+     * <p>Outside a time-lapse that is the caller's effect, if any. A time-lapse needs an effect on
+     * the recording alone, so that the preview keeps every frame while the recording keeps one in
+     * many. With the caller's effect running, the recording is drawn on its thread and through its
+     * renderer, and the caller's effect covers the preview alone; without it, the recording gets a
+     * render thread of its own with nothing to draw but the camera frame.</p>
+     */
+    @NonNull private List<CameraEffect> reconcileEffects(boolean hasCustomStream) {
+        CameraEffect pipeline = reconcileFrameEffect(hasCustomStream);
+        TimeLapse timeLapse = mTimeLapse;
+        if (!recordsTimeLapse() || timeLapse == null) {
+            releaseTimeLapseEffect();
+            return pipeline == null
+                    ? Collections.emptyList() : Collections.singletonList(pipeline);
+        }
+        FrameEffect pipelineEffect = mFrameEffect;
+        if (pipelineEffect != null) {
+            releaseTimeLapseHost();
+            return Arrays.asList(pipelineEffect.forPreview(),
+                    pipelineEffect.startTimeLapse(timeLapse));
+        }
+        FrameEffect host = ensureTimeLapseHost();
+        if (host == null) {
+            return Collections.emptyList();
+        }
+        return Collections.singletonList(host.startTimeLapse(timeLapse));
+    }
+
+    /**
+     * Brings up the render thread a time-lapse is drawn by when no caller has asked for one, or
+     * returns null where GL will not run.
+     */
+    @Nullable private FrameEffect ensureTimeLapseHost() {
+        if (mTimeLapseHost == null && !mGlUnavailable) {
+            // Never bound itself: only the time-lapse effect made from it is.
+            mTimeLapseHost = FrameEffect.create(FrameEffect.ALL_TARGETS, mMainExecutor, null,
+                    null, this::onFrameEffectFailed);
+            if (mTimeLapseHost == null) {
+                mGlUnavailable = true;
+            }
+        }
+        return mTimeLapseHost;
+    }
+
+    /** Lets go of whatever is drawing a time-lapse, once the recording no longer needs it. */
+    private void releaseTimeLapseEffect() {
+        FrameEffect effect = mFrameEffect;
+        if (effect != null) {
+            effect.stopTimeLapse();
+        }
+        releaseTimeLapseHost();
+    }
+
+    private void releaseTimeLapseHost() {
+        FrameEffect host = mTimeLapseHost;
+        mTimeLapseHost = null;
+        if (host != null) {
+            host.release();
+        }
     }
 
     /**
@@ -2233,6 +2363,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         // After unbinding, because the renderer is drawing into surfaces those use cases own. The
         // GL context does not survive the camera being let go: a renderer kept running against no
         // camera holds a thread and a context for as long as the view exists.
+        mTimeLapse = null;
+        releaseTimeLapseEffect();
         releaseFrameEffect();
         setTransform(new Matrix());
     }

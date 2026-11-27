@@ -99,7 +99,7 @@ public class LegacyCaptureTest {
         cameraView = new TestCameraView(context);
         cameraView.layout(0, 0, 1080, 1920);
         module = new LegacyCameraModule(cameraView);
-        ShadowGeotaggingMediaRecorder.forgetLocation();
+        ShadowGeotaggingMediaRecorder.forgetEverything();
     }
 
     @After
@@ -241,6 +241,49 @@ public class LegacyCaptureTest {
         module.stopRecording();
         idle();
         assertFalse("stopping has to leave it not recording", module.isRecording());
+    }
+
+    /**
+     * A time-lapse is kept by the recorder, since the camera hands its frames straight to it:
+     * told to capture one frame in the speed's worth of the profile's rate, and given no
+     * microphone.
+     */
+    @Test
+    public void aTimeLapseIsKeptByTheRecorderWithoutSound() throws IOException {
+        module.setTimeLapseSpeed(10);
+        module.open();
+        idle();
+        File file = File.createTempFile("legacy-time-lapse", ".mp4");
+        file.deleteOnExit();
+
+        module.startRecording(file);
+        idle();
+
+        assertTrue(module.isRecording());
+        Double captureRate = ShadowGeotaggingMediaRecorder.getLastCaptureRate();
+        assertNotNull("the recorder is told to keep one frame in ten", captureRate);
+        assertEquals("three frames a second, played at thirty", 3.0, captureRate, 1e-9);
+        assertNull("a time-lapse has no sound", ShadowGeotaggingMediaRecorder.getLastAudioSource());
+        module.stopRecording();
+        idle();
+    }
+
+    /** A recording at normal speed keeps its sound and every frame. */
+    @Test
+    public void aNormalRecordingKeepsItsSound() throws IOException {
+        module.open();
+        idle();
+        File file = File.createTempFile("legacy-sound", ".mp4");
+        file.deleteOnExit();
+
+        module.startRecording(file);
+        idle();
+
+        assertEquals(Integer.valueOf(MediaRecorder.AudioSource.CAMCORDER),
+                ShadowGeotaggingMediaRecorder.getLastAudioSource());
+        assertNull(ShadowGeotaggingMediaRecorder.getLastCaptureRate());
+        module.stopRecording();
+        idle();
     }
 
     /** Every quality picks a profile, and the fall-through has to land somewhere. */

@@ -5,7 +5,9 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assume.assumeTrue;
@@ -86,6 +88,9 @@ public class FrameRenderThreadTest {
 
     private static final Size LANDSCAPE = new Size(1920, 1080);
     private static final Size PORTRAIT = new Size(1080, 1920);
+
+    /** How long a frame plays for at 30 frames a second, as a time-lapse counts it. */
+    private static final long FRAME_NANOS = TimeUnit.SECONDS.toNanos(1) / 30;
 
     /** Every thread a test started, so none outlives it. */
     private final List<FrameRenderThread> threads = new ArrayList<>();
@@ -372,7 +377,7 @@ public class FrameRenderThreadTest {
         thread.setInputBufferSize(LANDSCAPE);
         thread.setShownOrientation(0, false);
         thread.addEncoderOutput("recording", newSurface(), LANDSCAPE, copying(CAMERA_FLIP),
-                90, false);
+                90, false, null);
 
         ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
         thread.setShownOrientation(270, true);
@@ -421,7 +426,7 @@ public class FrameRenderThreadTest {
         thread.addOutput("preview", newSurface(), LANDSCAPE, LANDSCAPE,
                 GlMath.ScaleType.FILL_CENTER, copying(CAMERA_FLIP));
         thread.addEncoderOutput("recording", newSurface(), LANDSCAPE, copying(CAMERA_FLIP),
-                0, false);
+                0, false, null);
         ShadowFrameSurfaceTexture.setFrameTimestamp(realtimeNanos);
 
         ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
@@ -443,7 +448,7 @@ public class FrameRenderThreadTest {
                         > TimeUnit.SECONDS.toNanos(10));
         FrameRenderThread thread = started(new RecordingRenderer());
         thread.addEncoderOutput("recording", newSurface(), LANDSCAPE, copying(CAMERA_FLIP),
-                0, false);
+                0, false, null);
         ShadowFrameSurfaceTexture.setFrameTimestamp(monotonicNanos);
 
         ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
@@ -645,6 +650,106 @@ public class FrameRenderThreadTest {
         assertFalse(thread.drawStillInto(newSurface(), LANDSCAPE, GlMath.ScaleType.FILL_CENTER,
                 copying(MIRROR), () -> {}));
         assertTrue("nothing was drawn into anything", ShadowRecordingGles20.draws().isEmpty());
+    }
+
+    /**
+     * A time-lapse recording is drawn only once its encoder has started, and then only one frame
+     * in its speed, each stamped a frame interval after the last on the encoder's clock.
+     */
+    @Test
+    public void aTimeLapseRecordingKeepsOneFrameInItsSpeed() {
+        assumeTrue("the two clocks have to be told apart",
+                Math.abs(System.nanoTime() - SystemClock.elapsedRealtimeNanos())
+                        > TimeUnit.SECONDS.toNanos(10));
+        RecordingRenderer renderer = new RecordingRenderer();
+        FrameRenderThread thread = started(renderer);
+        TimeLapse timeLapse = new TimeLapse(10, 30);
+        thread.addEncoderOutput("recording", newSurface(), LANDSCAPE, copying(CAMERA_FLIP),
+                0, false, timeLapse);
+        ShadowFrameSurfaceTexture.setFrameTimestamp(System.nanoTime());
+        ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+
+        assertTrue("nothing is drawn before the encoder starts", renderer.frames().isEmpty());
+
+        timeLapse.start();
+        long started = System.nanoTime();
+        for (int frame = 0; frame <= 20; frame++) {
+            ShadowFrameSurfaceTexture.setFrameTimestamp(started + frame * FRAME_NANOS);
+            ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+        }
+
+        assertEquals("frames 0, 10 and 20, and nothing between", 3, renderer.frames().size());
+        assertEquals(Arrays.asList(started, started + FRAME_NANOS, started + 2 * FRAME_NANOS),
+                ShadowRecordingEglExt.presentationTimes());
+        assertEquals("a frame left out is still consumed", 22,
+                ShadowFrameSurfaceTexture.updatesOf(thread.getInputSurfaceTexture()));
+    }
+
+    /**
+     * A second input is a texture of its own at its own size, and its frames are drawn into the
+     * outputs added for it and no others, through the same renderer on the same thread.
+     */
+    @Test
+    public void aSecondInputIsDrawnOnlyIntoItsOwnOutputs() {
+        assumeTrue("the two clocks have to be told apart",
+                Math.abs(System.nanoTime() - SystemClock.elapsedRealtimeNanos())
+                        > TimeUnit.SECONDS.toNanos(10));
+        RecordingRenderer renderer = new RecordingRenderer();
+        FrameRenderThread thread = started(renderer);
+        Size uhd = new Size(3840, 2160);
+        TimeLapse timeLapse = new TimeLapse(2, 30);
+        timeLapse.start();
+        thread.addOutput("preview", newSurface(), PORTRAIT, PORTRAIT,
+                GlMath.ScaleType.FILL_CENTER, copying(MIRROR));
+        SurfaceTexture recordingInput = thread.addInput("video", uhd);
+        thread.addTimeLapseOutput("recording", "video", newSurface(), LANDSCAPE,
+                copying(CAMERA_FLIP), timeLapse);
+        long now = System.nanoTime();
+        ShadowFrameSurfaceTexture.setFrameTimestamp(now);
+
+        assertNotNull(recordingInput);
+        assertNotSame(thread.getInputSurfaceTexture(), recordingInput);
+        assertEquals(uhd, ShadowFrameSurfaceTexture.bufferSizeOf(recordingInput));
+
+        ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+        ShadowFrameSurfaceTexture.deliverFrame(recordingInput);
+
+        List<DrawnFrame> frames = renderer.frames();
+        assertEquals("one frame from each input, each into its own output", 2, frames.size());
+        assertEquals(PORTRAIT, frames.get(0).size);
+        assertEquals(LANDSCAPE, frames.get(1).size);
+        assertArrayEquals(CAMERA_FLIP, frames.get(1).textureMatrix, TOLERANCE);
+        assertNotEquals("each drawn from its own texture",
+                frames.get(0).textureName, frames.get(1).textureName);
+        assertEquals(THREAD_NAME, frames.get(1).thread);
+        assertEquals("the recording stays on the camera's clock", Arrays.asList(now, now),
+                ShadowRecordingEglExt.presentationTimes());
+    }
+
+    /**
+     * Asked for again, an input is kept and resized, since the camera may still be writing into
+     * it; removed, or with the thread stopped, it is given back.
+     */
+    @Test
+    public void aSecondInputIsKeptAcrossRequestsAndGivenBack() {
+        FrameRenderThread thread = started(new RecordingRenderer());
+        SurfaceTexture first = thread.addInput("video", LANDSCAPE);
+        SurfaceTexture second = thread.addInput("other", LANDSCAPE);
+
+        assertSame(first, thread.addInput("video", PORTRAIT));
+        assertEquals(PORTRAIT, ShadowFrameSurfaceTexture.bufferSizeOf(first));
+
+        thread.removeInput("video");
+        ShadowFrameSurfaceTexture.flush(
+                ShadowFrameSurfaceTexture.handlerOf(thread.getInputSurfaceTexture()));
+
+        assertTrue(ShadowFrameSurfaceTexture.isReleased(first));
+        assertFalse(ShadowFrameSurfaceTexture.isReleased(second));
+
+        thread.stop();
+
+        assertTrue("stopping gives back what is left", ShadowFrameSurfaceTexture.isReleased(second));
+        assertNull("a stopped thread makes nothing", thread.addInput("video", LANDSCAPE));
     }
 
     private FrameRenderThread newThread(FrameRenderer renderer) {

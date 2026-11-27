@@ -13,6 +13,7 @@ import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.IntRange;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.NonNull;
@@ -53,6 +54,11 @@ public abstract class ICameraModule {
     private CameraView.Extension mExtension = CameraView.Extension.NONE;
     /** Whether a steadied picture is requested, of the preview and of a recording alike. */
     private boolean mStabilizationEnabled;
+    /**
+     * How many times faster than it happened the next recording plays, where 1 records normally.
+     * Read once when a recording starts. See {@link CameraView#setTimeLapseSpeed}.
+     */
+    private int mTimeLapseSpeed = 1;
     /** Requested exposure compensation index. */
     private int mExposureCompensation;
     /** Whether continuous torch illumination is requested. */
@@ -351,6 +357,24 @@ public abstract class ICameraModule {
      */
     public boolean isFrontVideoMirrored() {
         return false;
+    }
+
+    /** See {@link CameraView#setTimeLapseSpeed}. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @AnyThread
+    public synchronized void setTimeLapseSpeed(@IntRange(from = 1) int speed) {
+        if (speed < 1) {
+            throw new IllegalArgumentException("Time-lapse speed must be at least 1: " + speed);
+        }
+        mTimeLapseSpeed = speed;
+    }
+
+    /** How many times faster than it happened the next recording plays; 1 records normally. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @AnyThread
+    @IntRange(from = 1)
+    public synchronized int getTimeLapseSpeed() {
+        return mTimeLapseSpeed;
     }
 
     public synchronized void setStabilizationEnabled(boolean enabled) {

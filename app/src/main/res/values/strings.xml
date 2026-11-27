@@ -22,5 +22,8 @@
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_resize">Resize</string>
+    <!-- How many times faster than real time the next recording plays back. -->
+    <string name="time_lapse_speed">%1$dx</string>
+    <string name="time_lapse_description">Time-lapse speed</string>
 
 </resources>

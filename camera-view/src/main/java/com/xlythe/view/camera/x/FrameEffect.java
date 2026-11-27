@@ -20,6 +20,7 @@ import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderThread;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.gl.GlMath;
+import com.xlythe.view.camera.gl.TimeLapse;
 
 import java.util.LinkedHashSet;
 import java.util.Set;
@@ -58,6 +59,12 @@ final class FrameEffect extends CameraEffect {
     @Nullable private final CameraTextureProvider mTextureProvider;
 
     /**
+     * What draws a time-lapse recording on this effect's thread, from the recording's own stream,
+     * while one is being made. See {@link #startTimeLapse}.
+     */
+    @Nullable private Processor mTimeLapseProcessor;
+
+    /**
      * Brings up the renderer and wraps it in an effect, or returns null if this device will not
      * give us a GL context - which the caller answers by binding without an effect.
      */
@@ -75,8 +82,8 @@ final class FrameEffect extends CameraEffect {
         if (!renderThread.start()) {
             return null;
         }
-        return new FrameEffect(targets, new Processor(renderThread, executor), textureProvider,
-                executor, errorListener);
+        return new FrameEffect(targets, new Processor(renderThread, executor, null),
+                textureProvider, executor, errorListener);
     }
 
     private FrameEffect(
@@ -143,10 +150,68 @@ final class FrameEffect extends CameraEffect {
         mProcessor.mRenderThread.setShownOrientation(rotationDegrees, mirrored);
     }
 
+    /**
+     * This pipeline offered for the preview alone, for a bind whose recording is drawn from a
+     * stream of its own by {@link #startTimeLapse}.
+     *
+     * <p>The same processor, so the same thread, texture and renderer: only what CameraX routes
+     * through it changes. The still is left out, because CameraX accepts the preview and the
+     * recording apart only as one effect each, and a still with an effect of its own is the
+     * output that aborts the process on a Pixel 7 Pro.</p>
+     */
+    @NonNull
+    @MainThread
+    CameraEffect forPreview() {
+        return new TargetedEffect(PREVIEW, getExecutor(), mProcessor, getErrorListener());
+    }
+
+    /**
+     * An effect for the recording alone that draws it as a time-lapse, on this effect's thread and
+     * through its renderer.
+     *
+     * <p>A separate effect because CameraX shares one output between every use case an effect
+     * covers. Keeping one frame in many there would keep one frame in many on the preview too;
+     * as an effect of its own the recording has a stream of its own, and the preview keeps every
+     * frame. It still comes to this thread, because the renderer is the caller's and runs on one
+     * thread only.</p>
+     *
+     * <p>Replaces any time-lapse already started here.</p>
+     */
+    @NonNull
+    @MainThread
+    CameraEffect startTimeLapse(@NonNull TimeLapse timeLapse) {
+        stopTimeLapse();
+        Processor processor = new Processor(mProcessor.mRenderThread, getExecutor(), timeLapse);
+        mTimeLapseProcessor = processor;
+        return new TargetedEffect(VIDEO_CAPTURE, getExecutor(), processor, getErrorListener());
+    }
+
+    /** Closes what {@link #startTimeLapse} drew into and lets its stream go. */
+    @MainThread
+    void stopTimeLapse() {
+        Processor processor = mTimeLapseProcessor;
+        mTimeLapseProcessor = null;
+        if (processor != null) {
+            processor.release();
+        }
+    }
+
     /** Stops drawing, closes every output and gives the GL context back. */
     @MainThread
     void release() {
+        stopTimeLapse();
         mProcessor.release();
+        // Last, because it blocks until the render thread has stopped, and the outputs above
+        // are surfaces it was drawing into.
+        mProcessor.mRenderThread.stop();
+    }
+
+    /** Another set of targets for a processor this effect already has. */
+    private static final class TargetedEffect extends CameraEffect {
+        private TargetedEffect(int targets, @NonNull Executor executor,
+                @NonNull SurfaceProcessor processor, @NonNull Consumer<Throwable> errorListener) {
+            super(targets, executor, processor, errorListener);
+        }
     }
 
     /**
@@ -158,26 +223,39 @@ final class FrameEffect extends CameraEffect {
         private final FrameRenderThread mRenderThread;
         private final Executor mExecutor;
 
+        /**
+         * Which frames the outputs keep, for a time-lapse drawn from a stream of its own, which is
+         * an input of the render thread's keyed by this processor. Null for the main pipeline,
+         * which draws every frame of the camera's main input.
+         */
+        @Nullable private final TimeLapse mTimeLapse;
+
         /** The outputs CameraX has given us and not yet asked for back. Main thread only. */
         private final Set<SurfaceOutput> mOutputs = new LinkedHashSet<>();
 
         private boolean mReleased;
 
-        private Processor(@NonNull FrameRenderThread renderThread, @NonNull Executor executor) {
+        private Processor(@NonNull FrameRenderThread renderThread, @NonNull Executor executor,
+                @Nullable TimeLapse timeLapse) {
             mRenderThread = renderThread;
             mExecutor = executor;
+            mTimeLapse = timeLapse;
         }
 
         @Override
         public void onInputSurface(@NonNull SurfaceRequest request) throws ProcessingException {
-            SurfaceTexture texture = mRenderThread.getInputSurfaceTexture();
-            if (mReleased || texture == null) {
+            SurfaceTexture texture = mReleased ? null : mTimeLapse == null
+                    ? mRenderThread.getInputSurfaceTexture()
+                    : mRenderThread.addInput(this, request.getResolution());
+            if (texture == null) {
                 // Answered as well as reported: the request is a promise CameraX waits on, and
                 // throwing alone would leave it waiting.
                 request.willNotProvideSurface();
                 throw new ProcessingException();
             }
-            mRenderThread.setInputBufferSize(request.getResolution());
+            if (mTimeLapse == null) {
+                mRenderThread.setInputBufferSize(request.getResolution());
+            }
             // A new Surface per request over the one SurfaceTexture, which is how a rebind at a
             // different resolution is honoured. The previous one is released from the result
             // consumer rather than here, because that only runs once CameraX has stopped writing
@@ -207,14 +285,21 @@ final class FrameEffect extends CameraEffect {
             });
             mOutputs.add(output);
             Size size = output.getSize();
+            FrameRenderThread.TextureTransform transform = (surfaceTextureMatrix, into) ->
+                    output.updateTransformMatrix(into, surfaceTextureMatrix);
+            if (mTimeLapse != null) {
+                mRenderThread.addTimeLapseOutput(output, this, surface, size, transform,
+                        mTimeLapse);
+                return;
+            }
             // The frame is the size of the output, because the matrix above has already rotated
             // and cropped the camera's buffer to fill it. So the scale type decides nothing here -
             // which is the intent: where the frame sits is CameraX's answer, not ours.
             mRenderThread.addOutput(output, surface, size, size, GlMath.ScaleType.FILL_CENTER,
-                    (surfaceTextureMatrix, into) ->
-                            output.updateTransformMatrix(into, surfaceTextureMatrix));
+                    transform);
         }
 
+        /** Closes every output, and lets a time-lapse's stream go. The thread is the effect's. */
         @MainThread
         private void release() {
             if (mReleased) {
@@ -226,9 +311,9 @@ final class FrameEffect extends CameraEffect {
                 output.close();
             }
             mOutputs.clear();
-            // Last, because it blocks until the render thread has stopped, and the outputs above
-            // are surfaces it was drawing into.
-            mRenderThread.stop();
+            if (mTimeLapse != null) {
+                mRenderThread.removeInput(this);
+            }
         }
     }
 }

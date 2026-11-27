@@ -4,7 +4,9 @@ import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -28,6 +30,7 @@ import androidx.core.util.Consumer;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.gl.GlFrame;
+import com.xlythe.view.camera.gl.TimeLapse;
 import com.xlythe.view.camera.shadow.ShadowFrameSurfaceTexture;
 import com.xlythe.view.camera.shadow.ShadowRecordingGles20;
 import com.xlythe.view.camera.shadow.ShadowUnavailableEgl;
@@ -237,6 +240,89 @@ public class FrameEffectTest {
         assertFalse(effect.usesTextureFrom(null));
     }
 
+    /**
+     * For a time-lapse the pipeline splits in two: the preview through the processor it always
+     * had, and the recording through a processor of its own on the same thread.
+     */
+    @Test
+    public void aTimeLapseSplitsThePreviewFromTheRecording() {
+        FrameEffect effect = create(new RecordingRenderer(), null);
+
+        CameraEffect preview = effect.forPreview();
+        CameraEffect recording = effect.startTimeLapse(new TimeLapse(10, 30));
+
+        assertEquals(CameraEffect.PREVIEW, preview.getTargets());
+        assertSame("the preview keeps the pipeline it had",
+                effect.getSurfaceProcessor(), preview.getSurfaceProcessor());
+        assertEquals(CameraEffect.VIDEO_CAPTURE, recording.getTargets());
+        assertNotSame(effect.getSurfaceProcessor(), recording.getSurfaceProcessor());
+    }
+
+    /**
+     * The recording's camera stream is a second input, and once the recording has started its
+     * frames are drawn into the recording alone, as the time-lapse keeps them, through the same
+     * renderer. The preview's frames do not reach it.
+     */
+    @Test
+    public void aTimeLapseRecordingIsDrawnFromAStreamOfItsOwn() throws ProcessingException {
+        RecordingRenderer renderer = new RecordingRenderer();
+        FrameEffect effect = create(renderer, null);
+        TimeLapse timeLapse = new TimeLapse(10, 30);
+        SurfaceProcessor recording = effect.startTimeLapse(timeLapse).getSurfaceProcessor();
+        assertNotNull(recording);
+        SurfaceRequest request = request(LANDSCAPE);
+
+        recording.onInputSurface(request);
+        recording.onOutputSurface(new FakeSurfaceOutput(LANDSCAPE, MIRROR));
+        SurfaceTexture recordingInput = secondInput();
+        timeLapse.start();
+        ShadowFrameSurfaceTexture.setFrameTimestamp(System.nanoTime());
+        ShadowFrameSurfaceTexture.deliverFrame(firstInput());
+        ShadowFrameSurfaceTexture.deliverFrame(recordingInput);
+
+        verify(request).provideSurface(any(Surface.class), any(Executor.class), any());
+        assertEquals(LANDSCAPE, ShadowFrameSurfaceTexture.bufferSizeOf(recordingInput));
+        assertEquals("only the recording's own frame is drawn", 1, renderer.frames().size());
+        assertEquals(LANDSCAPE, renderer.frames().get(0).size);
+    }
+
+    /**
+     * Stopping the time-lapse closes the recording and gives its stream back, and leaves the
+     * pipeline running; releasing the effect does both.
+     */
+    @Test
+    public void aStoppedTimeLapseGivesItsStreamBack() throws ProcessingException {
+        RecordingRenderer renderer = new RecordingRenderer();
+        FrameEffect effect = create(renderer, null);
+        SurfaceProcessor first = effect.startTimeLapse(new TimeLapse(10, 30))
+                .getSurfaceProcessor();
+        assertNotNull(first);
+        FakeSurfaceOutput output = new FakeSurfaceOutput(LANDSCAPE, MIRROR);
+        first.onInputSurface(request(LANDSCAPE));
+        first.onOutputSurface(output);
+        SurfaceTexture firstInput = secondInput();
+
+        effect.stopTimeLapse();
+        ShadowFrameSurfaceTexture.flush(ShadowFrameSurfaceTexture.handlerOf(firstInput()));
+
+        assertTrue(output.closed);
+        assertTrue(ShadowFrameSurfaceTexture.isReleased(firstInput));
+        assertEquals("the pipeline is still running", 0, renderer.stopped.get());
+        SurfaceRequest late = request(LANDSCAPE);
+        assertThrows(ProcessingException.class, () -> first.onInputSurface(late));
+        verify(late).willNotProvideSurface();
+
+        SurfaceProcessor second = effect.startTimeLapse(new TimeLapse(10, 30))
+                .getSurfaceProcessor();
+        assertNotNull(second);
+        FakeSurfaceOutput secondOutput = new FakeSurfaceOutput(LANDSCAPE, MIRROR);
+        second.onOutputSurface(secondOutput);
+        effect.release();
+
+        assertTrue("released with the effect", secondOutput.closed);
+        assertEquals(1, renderer.stopped.get());
+    }
+
     private FrameEffect create(FrameRenderer renderer, CameraTextureProvider provider) {
         Consumer<Throwable> errors = error -> {
             throw new AssertionError("CameraX reported an error", error);
@@ -259,6 +345,18 @@ public class FrameEffectTest {
         List<SurfaceTexture> listening = ShadowFrameSurfaceTexture.listeningTextures();
         assertEquals("one camera input", 1, listening.size());
         return listening.get(0);
+    }
+
+    /** The camera's main input, which is the first texture listening for frames. */
+    private static SurfaceTexture firstInput() {
+        return ShadowFrameSurfaceTexture.listeningTextures().get(0);
+    }
+
+    /** A second camera stream's input, which is the second texture listening for frames. */
+    private static SurfaceTexture secondInput() {
+        List<SurfaceTexture> listening = ShadowFrameSurfaceTexture.listeningTextures();
+        assertEquals("the main input and the recording's", 2, listening.size());
+        return listening.get(1);
     }
 
     /** CameraX asking for somewhere to write frames of this size. */

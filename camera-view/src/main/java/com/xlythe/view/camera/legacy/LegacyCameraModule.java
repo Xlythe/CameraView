@@ -22,6 +22,7 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.TransformMath;
+import com.xlythe.view.camera.gl.TimeLapse;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.ByteArrayOutputStream;
@@ -203,45 +204,23 @@ public class LegacyCameraModule extends ICameraModule {
         mCamera.unlock();
         mVideoRecorder.setCamera(mCamera);
 
-        // CAMCORDER rather than MIC: on a phone with several microphones it selects the
-        // one facing the same way as the camera, and it applies the camcorder tuning
-        // instead of the voice-call tuning. The voice tuning is automatic gain control and
-        // noise suppression built for speech, which audibly pumps on music and on room
-        // ambience - exactly the material a camera records.
-        mVideoRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
+        int timeLapseSpeed = getTimeLapseSpeed();
+        if (timeLapseSpeed == 1) {
+            // CAMCORDER rather than MIC: on a phone with several microphones it selects the
+            // one facing the same way as the camera, and it applies the camcorder tuning
+            // instead of the voice-call tuning. The voice tuning is automatic gain control and
+            // noise suppression built for speech, which audibly pumps on music and on room
+            // ambience - exactly the material a camera records.
+            mVideoRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
+        }
         mVideoRecorder.setVideoSource(MediaRecorder.VideoSource.DEFAULT);
-        // Every profile below is fetched for the camera actually in use. The single-argument
-        // overload returns the first back-facing camera's profile whatever camera is open, so on
-        // the front camera it handed MediaRecorder a size and encoder configuration belonging to
-        // a different sensor - which is one way to get a recording full of green lines.
-        switch (getQuality()) {
-            case MAX:
-                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_HIGH)) {
-                    mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_HIGH));
-                    break;
-                }
-                // Fall-through
-            case HIGH:
-                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_1080P)) {
-                    mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_1080P));
-                    break;
-                }
-                // Fall-through
-            case MEDIUM:
-                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_720P)) {
-                    mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_720P));
-                    break;
-                }
-                // Fall-through
-            case LOW:
-                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_480P)) {
-                    mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_480P));
-                    break;
-                }
-                // Fall-through
-            default:
-                mVideoRecorder.setProfile(CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_LOW));
-                break;
+        CamcorderProfile profile = chooseProfile();
+        if (timeLapseSpeed == 1) {
+            mVideoRecorder.setProfile(profile);
+        } else {
+            // The camera hands its frames straight to the recorder, which keeps one in every
+            // timeLapseSpeed of them itself.
+            TimeLapse.setUpRecorder(mVideoRecorder, profile, timeLapseSpeed);
         }
         mVideoRecorder.setOutputFile(file.getAbsolutePath());
         mVideoRecorder.setMaxDuration((int) getMaxVideoDuration());
@@ -272,6 +251,43 @@ public class LegacyCameraModule extends ICameraModule {
             e.printStackTrace();
             mVideoRecorder = null;
             onVideoFailed();
+        }
+    }
+
+    /**
+     * The best profile the open camera has at the requested quality, stepping down until one
+     * exists.
+     *
+     * <p>Every profile is fetched for the camera actually in use. The single-argument overload
+     * returns the first back-facing camera's profile whatever camera is open, so on the front
+     * camera it hands MediaRecorder a size and encoder configuration belonging to a different
+     * sensor - which is one way to get a recording full of green lines.</p>
+     */
+    @NonNull
+    private CamcorderProfile chooseProfile() {
+        switch (getQuality()) {
+            case MAX:
+                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_HIGH)) {
+                    return CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_HIGH);
+                }
+                // Fall-through
+            case HIGH:
+                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_1080P)) {
+                    return CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_1080P);
+                }
+                // Fall-through
+            case MEDIUM:
+                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_720P)) {
+                    return CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_720P);
+                }
+                // Fall-through
+            case LOW:
+                if (CamcorderProfile.hasProfile(mActiveCamera, CamcorderProfile.QUALITY_480P)) {
+                    return CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_480P);
+                }
+                // Fall-through
+            default:
+                return CamcorderProfile.get(mActiveCamera, CamcorderProfile.QUALITY_LOW);
         }
     }
 

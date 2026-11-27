@@ -21,6 +21,7 @@ import android.view.Surface;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.gl.FrameRenderThread;
 import com.xlythe.view.camera.gl.GlMath;
+import com.xlythe.view.camera.gl.TimeLapse;
 
 import java.io.File;
 import java.io.IOException;
@@ -91,13 +92,18 @@ class VideoSession extends PictureSession {
     @SuppressLint({"WrongThread", "ThreadConstraint"})
     protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
             throws CameraAccessException {
+        // Settled before the recorder is set up, because a time-lapse the camera writes straight
+        // into the recorder is one the recorder has to keep the frames of itself.
+        FrameRenderThread renderer = chooseRecordingPath();
+        mVideoSurface.mWrittenByCamera = mPath == RecordingPath.CAMERA;
         mVideoSurface.initialize(map);
         if (!mVideoSurface.mIsInitialized) {
+            stopRecordingRenderer();
             onVideoFailed();
             throw new CameraAccessException(CameraAccessException.CAMERA_ERROR);
         }
         // After the recorder has a size, which is what the renderer has to be told.
-        attachRecorderToRenderer();
+        attachRecorderToRenderer(renderer);
     }
 
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
@@ -162,8 +168,7 @@ class VideoSession extends PictureSession {
         if (mRecordingRenderer != null) {
             // Stopped rather than told to let go of the recorder, because it is this
             // recording's alone, and stopping waits until it has let go.
-            mRecordingRenderer.stop();
-            mRecordingRenderer = null;
+            stopRecordingRenderer();
         } else if (mPath == RecordingPath.EFFECT) {
             FrameRenderThread effect = getModule().getEffect();
             if (effect != null) {
@@ -187,27 +192,32 @@ class VideoSession extends PictureSession {
         CAMERA,
         /** The effect's renderer, from the stream it is already drawing the preview from. */
         EFFECT,
-        /** A renderer of the recording's own, there only to mirror it like the preview. */
-        MIRROR
+        /**
+         * A renderer of the recording's own, there to mirror it like the preview or to keep the
+         * frames a time-lapse keeps.
+         */
+        RECORDING_RENDERER
     }
 
     /**
      * Who fills the recorder, given what is running.
      *
      * <p>A front recording goes through GL even with nothing to draw, because its preview is
-     * mirrored and an encoder ignores the mirror a camera asks for. Nothing else does: a back
-     * recording, or one on a device where GL will not run, stays on the camera, since a thread,
-     * a context and a copy of every frame would change nothing about the file.</p>
+     * mirrored and an encoder ignores the mirror a camera asks for. So does a time-lapse, whose
+     * renderer keeps one frame in many and stamps them to play back faster. Nothing else does:
+     * a normal back recording, or one on a device where GL will not run, stays on the camera,
+     * since a thread, a context and a copy of every frame would change nothing about the
+     * file.</p>
      */
     @NonNull
     @VisibleForTesting
     static RecordingPath recordingPath(boolean effectRunning, boolean frontFacing,
-            boolean glAvailable) {
+            boolean glAvailable, boolean timeLapse) {
         if (effectRunning) {
             return RecordingPath.EFFECT;
         }
-        if (frontFacing && glAvailable) {
-            return RecordingPath.MIRROR;
+        if ((frontFacing || timeLapse) && glAvailable) {
+            return RecordingPath.RECORDING_RENDERER;
         }
         return RecordingPath.CAMERA;
     }
@@ -215,8 +225,8 @@ class VideoSession extends PictureSession {
     /**
      * Who is filling the recorder.
      *
-     * <p>Decided once the sizes are known, in {@link #initialize}, because that is when there
-     * is a recorder surface to hand a renderer.</p>
+     * <p>Decided in {@link #onPreviewInitialized} before the recorder is set up, because a
+     * time-lapse is set up differently depending on who keeps its frames.</p>
      */
     @NonNull
     private RecordingPath mPath = RecordingPath.CAMERA;
@@ -229,7 +239,7 @@ class VideoSession extends PictureSession {
 
     /**
      * The renderer this recording has to itself, which is only there on the
-     * {@link RecordingPath#MIRROR} path.
+     * {@link RecordingPath#RECORDING_RENDERER} path.
      *
      * <p>It draws the recording and nothing else. The preview and the still keep their own
      * streams straight from the camera, and the camera writes this renderer frames at the
@@ -262,7 +272,7 @@ class VideoSession extends PictureSession {
         switch (mPath) {
             case EFFECT:
                 return null;
-            case MIRROR:
+            case RECORDING_RENDERER:
                 return mRecordingInput;
             case CAMERA:
             default:
@@ -271,61 +281,94 @@ class VideoSession extends PictureSession {
     }
 
     /**
-     * Hands the recorder to a renderer where one has to draw it, and tells the module whether
+     * Settles who fills the recorder, starting a renderer of the recording's own if that is who.
+     *
+     * @return the renderer that draws the recording, or null when the camera writes it
+     */
+    @MainThread
+    @Nullable
+    private FrameRenderThread chooseRecordingPath() {
+        Camera2Module module = getModule();
+        FrameRenderThread effect = module.getEffect();
+        mPath = recordingPath(effect != null, module.isUsingFrontFacingCamera(),
+                module.isGlAvailable(), mVideoSurface.mTimeLapseSpeed > 1);
+        switch (mPath) {
+            case EFFECT:
+                return effect;
+            case RECORDING_RENDERER:
+                FrameRenderThread renderer = startRecordingRenderer();
+                if (renderer == null) {
+                    mPath = RecordingPath.CAMERA;
+                }
+                return renderer;
+            case CAMERA:
+            default:
+                return null;
+        }
+    }
+
+    /**
+     * Hands the recorder to the renderer that draws it, if one does, and tells the module whether
      * the file is mirrored.
      *
      * <p>An effect's renderer draws it so that a filter reaches the video as well as the preview
-     * and the photograph. A front recording with no effect gets a renderer of its own so that it
-     * is mirrored like its preview. Either way the frame is drawn as the camera would have
-     * written it, in the sensor's orientation, because the file is already tagged with the turn
-     * that shows it upright; the mirror is then taken across the frame as it is shown.</p>
+     * and the photograph. A front recording or a time-lapse with no effect gets a renderer of its
+     * own. Either way the frame is drawn as the camera would have written it, in the sensor's
+     * orientation, because the file is already tagged with the turn that shows it upright; the
+     * mirror is then taken across the frame as it is shown.</p>
      */
     @MainThread
-    private void attachRecorderToRenderer() {
+    private void attachRecorderToRenderer(@Nullable FrameRenderThread renderer) {
         Camera2Module module = getModule();
         boolean frontFacing = module.isUsingFrontFacingCamera();
-        FrameRenderThread effect = module.getEffect();
-        mPath = recordingPath(effect != null, frontFacing, module.isGlAvailable());
-        FrameRenderThread renderer = effect;
-        Size size = new Size(mVideoSurface.getWidth(), mVideoSurface.getHeight());
-        if (mPath == RecordingPath.MIRROR) {
-            renderer = startRecordingRenderer(size);
-        }
         if (renderer == null) {
-            mPath = RecordingPath.CAMERA;
             module.setRecordingMirrored(false);
             return;
+        }
+        Size size = new Size(mVideoSurface.getWidth(), mVideoSurface.getHeight());
+        SurfaceTexture input = renderer.getInputSurfaceTexture();
+        if (mPath == RecordingPath.RECORDING_RENDERER && input != null) {
+            // The camera writes this renderer frames at the recording's size, not the preview's.
+            renderer.setInputBufferSize(size);
+            mRecordingInput = new Surface(input);
         }
         int orientation = mVideoSurface.mOrientationHint;
         renderer.addEncoderOutput(mVideoSurface, mVideoSurface.getSurface(), size,
                 (surfaceTextureMatrix, into) -> System.arraycopy(
                         GlMath.recordingMatrix(surfaceTextureMatrix, orientation, frontFacing),
                         0, into, 0, into.length),
-                orientation, frontFacing);
+                orientation, frontFacing, mVideoSurface.mTimeLapse);
         module.setRecordingMirrored(frontFacing);
     }
 
     /**
-     * Starts the renderer a recording has to itself, with an input at the recording's size.
+     * Starts the renderer a recording has to itself.
      *
      * @return the renderer, or null when GL will not run here
      */
     @MainThread
     @Nullable
-    private FrameRenderThread startRecordingRenderer(@NonNull Size size) {
+    private FrameRenderThread startRecordingRenderer() {
         FrameRenderThread renderer = getModule().startRecordingRenderer();
         if (renderer == null) {
             return null;
         }
-        SurfaceTexture input = renderer.getInputSurfaceTexture();
-        if (input == null) {
+        if (renderer.getInputSurfaceTexture() == null) {
             renderer.stop();
             return null;
         }
-        renderer.setInputBufferSize(size);
-        mRecordingInput = new Surface(input);
         mRecordingRenderer = renderer;
         return renderer;
+    }
+
+    /** Stops the renderer this recording has to itself, if it has one. */
+    @MainThread
+    private void stopRecordingRenderer() {
+        FrameRenderThread renderer = mRecordingRenderer;
+        mRecordingRenderer = null;
+        if (renderer != null) {
+            renderer.stop();
+        }
     }
 
     public File getFile() {
@@ -484,6 +527,25 @@ class VideoSession extends PictureSession {
         private boolean mAwaitingRecording;
 
         /**
+         * How many times faster than it happened this recording plays, where 1 records normally.
+         * Read once, so a change made while recording waits for the next one.
+         */
+        private final int mTimeLapseSpeed;
+
+        /**
+         * Whether the camera writes straight into the recorder, which then keeps a time-lapse's
+         * frames itself. Set before {@link #initialize}.
+         */
+        private boolean mWrittenByCamera;
+
+        /**
+         * Which frames the renderer drawing this recording keeps, for a time-lapse a renderer
+         * draws. Started once the recorder has, since frames before then would be lost.
+         */
+        @Nullable
+        private TimeLapse mTimeLapse;
+
+        /**
          * How far the file is tagged to be turned clockwise when it is shown, which is the turn a
          * renderer drawing into the recorder mirrors across.
          */
@@ -499,6 +561,7 @@ class VideoSession extends PictureSession {
             super(cameraView);
             mFile = file;
             mPreviewSurface = previewSurface;
+            mTimeLapseSpeed = cameraView.getTimeLapseSpeed();
         }
 
         @Override
@@ -507,17 +570,27 @@ class VideoSession extends PictureSession {
             super.initialize(chooseSize(getSizes(map), mPreviewSurface.mSize));
 
             try {
+                boolean timeLapse = mTimeLapseSpeed > 1;
                 mMediaRecorder = new MediaRecorder();
-                // CAMCORDER rather than MIC: on a phone with several microphones it selects the
-                // one facing the same way as the camera, and it applies the camcorder tuning
-                // instead of the voice-call tuning. The voice tuning is automatic gain control and
-                // noise suppression built for speech, which audibly pumps on music and on room
-                // ambience - exactly the material a camera records.
-                mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
+                if (!timeLapse) {
+                    // CAMCORDER rather than MIC: on a phone with several microphones it selects
+                    // the one facing the same way as the camera, and it applies the camcorder
+                    // tuning instead of the voice-call tuning. The voice tuning is automatic gain
+                    // control and noise suppression built for speech, which audibly pumps on
+                    // music and on room ambience - exactly the material a camera records.
+                    mMediaRecorder.setAudioSource(MediaRecorder.AudioSource.CAMCORDER);
+                }
                 mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
                 int intCameraId = getIntCameraId();
                 CamcorderProfile profile = chooseProfile(intCameraId, getQuality());
-                mMediaRecorder.setProfile(profile);
+                if (timeLapse) {
+                    TimeLapse.setUpRecorder(mMediaRecorder, profile,
+                            mWrittenByCamera ? mTimeLapseSpeed : 1);
+                    mTimeLapse = mWrittenByCamera
+                            ? null : new TimeLapse(mTimeLapseSpeed, profile.videoFrameRate);
+                } else {
+                    mMediaRecorder.setProfile(profile);
+                }
                 mMediaRecorder.setOutputFile(mFile.getAbsolutePath());
                 mMediaRecorder.setMaxDuration((int) mCameraView.getMaxVideoDuration());
                 mMediaRecorder.setMaxFileSize(mCameraView.getMaxVideoSize());
@@ -543,7 +616,7 @@ class VideoSession extends PictureSession {
                         getWidth(), getHeight()));
                 // setProfile set the audio rate from the profile too, and it falls short in the
                 // same way.
-                int audioBitRate = audioBitRateFor(
+                int audioBitRate = timeLapse ? 0 : audioBitRateFor(
                         profile, highestProfile(intCameraId), getWidth(), getHeight());
                 if (audioBitRate > 0) {
                     mMediaRecorder.setAudioEncodingBitRate(audioBitRate);
@@ -581,6 +654,9 @@ class VideoSession extends PictureSession {
             try {
                 mMediaRecorder.start();
                 mIsRecordingVideo = true;
+                if (mTimeLapse != null) {
+                    mTimeLapse.start();
+                }
             } catch (IllegalStateException e) {
                 Log.e(TAG, "Unable to start recording", e);
                 onVideoFailed();

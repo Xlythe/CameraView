@@ -29,6 +29,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 import androidx.annotation.ColorInt;
+import androidx.annotation.IntRange;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -184,6 +185,8 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_EXTENSION = "extension";
     /** Saved-state key for stabilization. */
     private static final String EXTRA_STABILIZATION = "stabilization";
+    /** Saved-state key for the time-lapse speed. */
+    private static final String EXTRA_TIME_LAPSE_SPEED = "time_lapse_speed";
     /** Saved-state key for exposure compensation. */
     private static final String EXTRA_EXPOSURE_COMPENSATION = "exposure_compensation";
     /** Saved-state key for torch state. */
@@ -634,6 +637,7 @@ public class CameraView extends FrameLayout {
         state.putInt(EXTRA_DYNAMIC_RANGE, getDynamicRange().id);
         state.putInt(EXTRA_EXTENSION, getExtension().id);
         state.putBoolean(EXTRA_STABILIZATION, isStabilizationEnabled());
+        state.putInt(EXTRA_TIME_LAPSE_SPEED, getTimeLapseSpeed());
         state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
         state.putBoolean(EXTRA_TORCH, isTorchEnabled());
         state.putBoolean(EXTRA_LOW_LIGHT_BOOST, isLowLightBoostEnabled());
@@ -667,6 +671,7 @@ public class CameraView extends FrameLayout {
             setDynamicRange(DynamicRange.fromId(state.getInt(EXTRA_DYNAMIC_RANGE, DynamicRange.SDR.id)));
             setExtension(Extension.fromId(state.getInt(EXTRA_EXTENSION, Extension.NONE.id)));
             setStabilizationEnabled(state.getBoolean(EXTRA_STABILIZATION));
+            setTimeLapseSpeed(state.getInt(EXTRA_TIME_LAPSE_SPEED, 1));
             setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
             setTorchEnabled(state.getBoolean(EXTRA_TORCH));
             setLowLightBoostEnabled(state.getBoolean(EXTRA_LOW_LIGHT_BOOST));
@@ -1980,6 +1985,27 @@ public class CameraView extends FrameLayout {
     /** Returns whether the active camera can steady either the preview or a recording. */
     public boolean isStabilizationSupported() {
         return mCameraModule.isStabilizationSupported();
+    }
+
+    /**
+     * Records time-lapses: how many times faster than real time a recording plays back, where 1,
+     * the default, records normally.
+     *
+     * <p>Above 1, a recording keeps one frame in every {@code speed} and plays them back at the
+     * normal frame rate, so a minute recorded at 30 plays for two seconds. It has no sound, since
+     * sound sped up that far is noise. A maximum duration is the length of the video, not the time
+     * it took to record.</p>
+     *
+     * <p>Read when a recording starts, so a change waits for the next one.</p>
+     */
+    public void setTimeLapseSpeed(@IntRange(from = 1) int speed) {
+        mCameraModule.setTimeLapseSpeed(speed);
+    }
+
+    /** Returns how many times faster than real time the next recording plays back. */
+    @IntRange(from = 1)
+    public int getTimeLapseSpeed() {
+        return mCameraModule.getTimeLapseSpeed();
     }
 
     /** Sets the exposure compensation index, clamped to the active camera's range. */

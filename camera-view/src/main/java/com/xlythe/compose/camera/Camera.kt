@@ -499,6 +499,9 @@ private fun Extension.toCameraView() = when (this) {
  * @param pictureQuality How hard a still capture is compressed, from 1 to 100.
  * @param stabilizationEnabled Steadies the preview and recorded video, where the camera can.
  * @param lowLightBoostEnabled Brightens the preview in the dark.
+ * @param timeLapseSpeed How many times faster than real time a recording plays back, where 1
+ *  records normally. Above 1, a recording keeps one frame in that many, plays them at the normal
+ *  frame rate and has no sound. Read when [CameraController.startRecording] is called.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
@@ -532,6 +535,7 @@ fun Camera(
     pictureQuality: Int = ICameraModule.DEFAULT_PICTURE_QUALITY,
     stabilizationEnabled: Boolean = false,
     lowLightBoostEnabled: Boolean = false,
+    timeLapseSpeed: Int = 1,
     controller: MutableState<CameraController?>,
     state: MutableState<CameraState?> = remember { mutableStateOf(null) },
     onImageConfirmation: () -> Unit = {},
@@ -752,6 +756,7 @@ fun Camera(
         view.pictureQuality = pictureQuality
         view.isStabilizationEnabled = stabilizationEnabled
         view.isLowLightBoostEnabled = lowLightBoostEnabled
+        view.timeLapseSpeed = timeLapseSpeed
         // What the camera can do depends on what it has just been asked for - a lens, an extension
         // and a zoom each change the answers - so the snapshot is taken after the settings land.
         publishState(view)

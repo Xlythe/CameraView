@@ -18,6 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 @RunWith(RobolectricTestRunner.class)
@@ -94,6 +95,19 @@ public class CameraViewTest {
 
         cameraView.setPinchToZoomEnabled(false);
         assertFalse(cameraView.isPinchToZoomEnabled());
+    }
+
+    /** A time-lapse speed is kept for the next recording; 1 is normal, and below that is not. */
+    @Test
+    public void theTimeLapseSpeedRoundTrips() {
+        assertEquals("recordings play at the speed they happened", 1,
+                cameraView.getTimeLapseSpeed());
+
+        cameraView.setTimeLapseSpeed(120);
+
+        assertEquals(120, cameraView.getTimeLapseSpeed());
+        assertThrows(IllegalArgumentException.class, () -> cameraView.setTimeLapseSpeed(0));
+        assertEquals("a refused speed changes nothing", 120, cameraView.getTimeLapseSpeed());
     }
 
     @Test

@@ -71,6 +71,7 @@ public class CameraViewStateTest {
         cameraView.setMatchPreviewAspectRatio(false);
         cameraView.setDynamicRange(CameraView.DynamicRange.HDR);
         cameraView.setStabilizationEnabled(true);
+        cameraView.setTimeLapseSpeed(30);
         cameraView.setExposureCompensation(3);
         cameraView.setTorchEnabled(true);
 
@@ -86,6 +87,7 @@ public class CameraViewStateTest {
         assertFalse(restored.isMatchPreviewAspectRatioEnabled());
         assertEquals(CameraView.DynamicRange.HDR, restored.getDynamicRange());
         assertTrue(restored.isStabilizationEnabled());
+        assertEquals(30, restored.getTimeLapseSpeed());
         assertEquals(3, restored.getExposureCompensation());
         assertTrue(restored.isTorchEnabled());
     }

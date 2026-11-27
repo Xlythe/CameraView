@@ -62,9 +62,9 @@ Camera(
 Camera also accepts zoomLevel [0 to maxZoomLevel, or null to leave the zoom to pinchToZoom],
 pictureQuality [1 to 100], colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr],
 exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
-extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
-lowLightBoostEnabled [boolean]. Not every camera can do all of these, so CameraState below says
-which this one supports.
+extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean],
+lowLightBoostEnabled [boolean] and timeLapseSpeed [1 or more]. Not every camera can do all of
+these, so CameraState below says which this one supports.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
 opens, and is republished when the camera reconfigures, so ask it before offering a control: a
@@ -320,6 +320,19 @@ where it is false the picture is refused and the recording carries on.
 if (mCameraView.isSnapshotWhileRecordingSupported()) {
   mCameraView.takePicture(file);
 }
+```
+
+Time-lapse
+-----------------
+Set a speed above 1 and recordings become time-lapses: one frame is kept in every that many, and
+they play back at the normal frame rate without sound. At 30, a minute of recording plays for
+two seconds. The speed is read when a recording starts.
+```java
+mCameraView.setTimeLapseSpeed(30);
+mCameraView.startRecording();
+```
+```kotlin
+Camera(controller = cameraController, timeLapseSpeed = 30)
 ```
 
 Focus

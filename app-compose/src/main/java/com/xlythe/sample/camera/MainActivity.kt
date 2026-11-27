@@ -33,6 +33,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material.icons.filled.Transform
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Button
@@ -81,8 +82,15 @@ enum class DemoScreen(val title: String) {
     SIMPLE("Simple Demo"),
     STREAM("Stream Demo"),
     RESIZING("Resizing Demo"),
-    QR_CODE("QR Code Demo")
+    QR_CODE("QR Code Demo"),
+    TIME_LAPSE("Time-lapse Demo")
 }
+
+/**
+ * The speeds the time-lapse demo offers, starting from a normal recording: a crowd at ten times,
+ * clouds at thirty, a sunset at a hundred and twenty.
+ */
+private val TIME_LAPSE_SPEEDS = listOf(1, 10, 30, 120)
 
 /**
  * MainActivity showcases a multi-screen Jetpack Compose application mirroring the Java sample.
@@ -129,6 +137,7 @@ class MainActivity : ComponentActivity() {
                                             DemoScreen.STREAM -> Icon(Icons.Default.Videocam, contentDescription = null)
                                             DemoScreen.RESIZING -> Icon(Icons.Default.Transform, contentDescription = null)
                                             DemoScreen.QR_CODE -> Icon(Icons.Default.QrCode, contentDescription = null)
+                                            DemoScreen.TIME_LAPSE -> Icon(Icons.Default.Timelapse, contentDescription = null)
                                         }
                                     },
                                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
@@ -176,6 +185,7 @@ class MainActivity : ComponentActivity() {
                                 DemoScreen.STREAM -> StreamDemoScreen()
                                 DemoScreen.RESIZING -> ResizingDemoScreen()
                                 DemoScreen.QR_CODE -> QrCodeDemoScreen()
+                                DemoScreen.TIME_LAPSE -> TimeLapseDemoScreen()
                             }
                         }
                     }
@@ -339,6 +349,124 @@ fun StreamDemoScreen() {
                 modifier = Modifier.align(Alignment.Center)
             ) {
                 Text("Request Permission")
+            }
+        }
+    }
+}
+
+/**
+ * Records time-lapses: the speed buttons set how many times faster than real time the next
+ * recording plays back, and Record starts and stops it.
+ */
+@RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
+@Composable
+fun TimeLapseDemoScreen() {
+    val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    var hasRequiredPermissions by remember { mutableStateOf(false) }
+    var speed by remember { mutableStateOf(TIME_LAPSE_SPEEDS[1]) }
+    var recording by remember { mutableStateOf(false) }
+    var uiStatusText by remember { mutableStateOf("") }
+
+    val allPermissions = remember { (Permissions.REQUIRED_PERMISSIONS + Permissions.OPTIONAL_PERMISSIONS).distinct().toTypedArray() }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
+        hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }
+    }
+
+    LaunchedEffect(Unit) { permissionLauncher.launch(allPermissions) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        if (uiStatusText.isNotEmpty()) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+                shape = RoundedCornerShape(16.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    text = uiStatusText,
+                    modifier = Modifier.padding(16.dp).align(Alignment.CenterHorizontally),
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = Color.White)
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
+        if (hasRequiredPermissions) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .clip(RoundedCornerShape(24.dp))
+            ) {
+                Camera(
+                    modifier = Modifier.fillMaxSize(),
+                    controller = cameraController,
+                    timeLapseSpeed = speed,
+                    onVideoSaved = { uri ->
+                        recording = false
+                        uiStatusText = "Saved: $uri"
+                    },
+                    onVideoCaptureFailed = {
+                        recording = false
+                        uiStatusText = "Recording failed"
+                    }
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Read when a recording starts, so the speed is fixed while one is under way.
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                TIME_LAPSE_SPEEDS.forEach { option ->
+                    Button(
+                        onClick = { speed = option },
+                        enabled = !recording,
+                        shape = RoundedCornerShape(20.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (option == speed) MaterialTheme.colorScheme.primary else Color(0xFF424242)
+                        )
+                    ) {
+                        Text("${option}x", fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = {
+                    if (recording) {
+                        cameraController.value?.stopRecording()
+                        uiStatusText = "Saving..."
+                    } else {
+                        cameraController.value?.startRecording()
+                        recording = true
+                        uiStatusText = if (speed == 1) "Recording" else "Recording at ${speed}x"
+                    }
+                },
+                enabled = cameraController.value != null,
+                shape = RoundedCornerShape(20.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (recording) Color(0xFFD32F2F) else MaterialTheme.colorScheme.primary
+                )
+            ) {
+                Icon(Icons.Default.Timelapse, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(if (recording) "Stop" else "Record", fontWeight = FontWeight.SemiBold)
+            }
+        } else {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                Button(onClick = { permissionLauncher.launch(allPermissions) }) {
+                    Text("Request Permission")
+                }
             }
         }
     }

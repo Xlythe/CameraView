@@ -67,19 +67,20 @@ public class RecordingMirrorTest {
     /** The back camera's preview is not mirrored, so its recording has nothing to gain from GL. */
     @Test
     public void aBackRecordingWithNothingToDrawStaysOnTheCamera() {
-        assertEquals(RecordingPath.CAMERA, VideoSession.recordingPath(false, false, true));
-        assertEquals(RecordingPath.CAMERA, VideoSession.recordingPath(false, false, false));
+        assertEquals(RecordingPath.CAMERA, VideoSession.recordingPath(false, false, true, false));
+        assertEquals(RecordingPath.CAMERA, VideoSession.recordingPath(false, false, false, false));
     }
 
     @Test
     public void aFrontRecordingIsDrawnToBeMirrored() {
-        assertEquals(RecordingPath.MIRROR, VideoSession.recordingPath(false, true, true));
+        assertEquals(RecordingPath.RECORDING_RENDERER,
+                VideoSession.recordingPath(false, true, true, false));
     }
 
     /** Where GL will not run, the recording is made as it always was, and left unmirrored. */
     @Test
     public void aFrontRecordingStaysOnTheCameraWhereGlWillNotRun() {
-        assertEquals(RecordingPath.CAMERA, VideoSession.recordingPath(false, true, false));
+        assertEquals(RecordingPath.CAMERA, VideoSession.recordingPath(false, true, false, false));
     }
 
     /**
@@ -88,8 +89,8 @@ public class RecordingMirrorTest {
      */
     @Test
     public void anEffectDrawsEveryRecording() {
-        assertEquals(RecordingPath.EFFECT, VideoSession.recordingPath(true, false, true));
-        assertEquals(RecordingPath.EFFECT, VideoSession.recordingPath(true, true, true));
+        assertEquals(RecordingPath.EFFECT, VideoSession.recordingPath(true, false, true, false));
+        assertEquals(RecordingPath.EFFECT, VideoSession.recordingPath(true, true, true, false));
     }
 
     /** A back recording never brings GL up, so it costs what it always did. */
@@ -122,7 +123,7 @@ public class RecordingMirrorTest {
         FakeCamera2.idleMainLooper();
 
         assertTrue("the recording should have started", module.isRecording());
-        assertEquals(RecordingPath.MIRROR, recordingSession().getRecordingPath());
+        assertEquals(RecordingPath.RECORDING_RENDERER, recordingSession().getRecordingPath());
         assertTrue("a front recording should be drawn by its own renderer",
                 recordingRendererIsRunning());
         assertTrue(module.isFrontVideoMirrored());
