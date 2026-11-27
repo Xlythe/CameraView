@@ -54,6 +54,36 @@ public class ExifThumbnailEncodingTest {
         assertEquals(ExifInterface.ORIENTATION_ROTATE_90, thumbnailOrientation(jpeg));
     }
 
+    /** A plain save, with no thumbnail asked for, keeps the one a file already has. */
+    @Test
+    public void aPlainSaveKeepsTheThumbnailAFileHas() throws IOException {
+        File file = thumbnailed(picture(640, 480));
+
+        Exif exif = new Exif(file);
+        exif.setDescription("saved again");
+        exif.save();
+
+        assertTrue(exif.hasThumbnail());
+        assertOneDeclaredThumbnail(file);
+    }
+
+    /**
+     * A thumbnail whose directory lost its Compression tag, as some cameras write one, is
+     * declared again by a plain save rather than left for readers to guess at.
+     */
+    @Test
+    public void aPlainSaveDeclaresAThumbnailThatLostItsCompression() throws IOException {
+        File file = thumbnailed(picture(640, 480));
+        ExifInterface camera = new ExifInterface(file.getPath());
+        camera.setAttribute(ExifInterface.TAG_COMPRESSION, null);
+        camera.saveAttributes();
+        assertFalse("the fixture should start undeclared", existing(readAll(file)).declared);
+
+        new Exif(file).save();
+
+        assertOneDeclaredThumbnail(file);
+    }
+
     /** Saving twice leaves one thumbnail, not one per save. */
     @Test
     public void savingTwiceKeepsOneThumbnail() throws IOException {

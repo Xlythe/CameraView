@@ -164,7 +164,10 @@ public class Exif {
     /** Whether {@link #attachThumbnail()} asked {@link #save()} to write a thumbnail. */
     private boolean mThumbnailRequested;
 
-    /** Whether the file holds a thumbnail, as of the last save. */
+    /**
+     * Whether the file holds a thumbnail: one it had when opened, such as a camera's own, or one
+     * a save wrote. Every save declares it again, so rewriting the block never loses it.
+     */
     private boolean mHasThumbnail;
 
     // When true, avoid saving any time. This is a privacy issue.
@@ -194,15 +197,18 @@ public class Exif {
     public Exif(String filePath) throws IOException {
         mExifInterface = new ExifInterface(filePath);
         mFilePath = filePath;
+        mHasThumbnail = mExifInterface.hasThumbnail();
     }
 
     public Exif(InputStream is) throws IOException {
         mExifInterface = new ExifInterface(is);
         mFilePath = null;
+        mHasThumbnail = mExifInterface.hasThumbnail();
     }
 
     /**
-     * Persists changes to disc, along with the thumbnail {@link #attachThumbnail()} asks for.
+     * Persists changes to disc. A thumbnail the file already holds is kept, and one
+     * {@link #attachThumbnail()} asked for is written.
      */
     @WorkerThread
     public void save() throws IOException {
@@ -600,21 +606,21 @@ public class Exif {
         mThumbnailRequested = true;
     }
 
-    /** Whether the file holds a thumbnail, as of the last save. */
+    /** Whether the file holds a thumbnail, as of when it was opened or last saved. */
     @VisibleForTesting
     boolean hasThumbnail() {
         return mHasThumbnail;
     }
 
     /**
-     * Writes the thumbnail {@link #attachThumbnail()} asked for into the block saveAttributes has
-     * just rewritten, or declares again one already there. The bytes go straight into the file,
-     * since ExifInterface cannot add a thumbnail, and so they go last: saveAttributes rewrites the
-     * block from what it read, which drops them.
+     * Writes the thumbnail into the block saveAttributes has just rewritten: the one the file
+     * holds, declared again, or a new one if {@link #attachThumbnail()} asked for it. The bytes
+     * go straight into the file, since ExifInterface cannot add a thumbnail, and so they go last:
+     * saveAttributes rewrites the block from what it read, which drops them.
      */
     @WorkerThread
     private void saveThumbnail() {
-        if (!mThumbnailRequested) {
+        if (!mHasThumbnail && !mThumbnailRequested) {
             return;
         }
         // Only ever after a save, which a stream cannot have, so there is always a file.
