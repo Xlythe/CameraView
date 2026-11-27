@@ -9,6 +9,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.xlythe.view.camera.viewer.ImageLoadListener
 import com.xlythe.view.camera.viewer.LargeImageView
+import com.xlythe.view.camera.viewer.MediaListener
+import com.xlythe.view.camera.viewer.MediaView
 import com.xlythe.view.camera.viewer.PanoramaView
 import com.xlythe.view.camera.viewer.PhotosphereView
 import java.io.File
@@ -103,6 +105,64 @@ fun Photosphere(
         update = { view ->
             if (file != null) view.setFile(file) else view.setUri(uri)
             view.isGyroscopeEnabled = gyroscope
+        },
+    )
+}
+
+/**
+ * Shows any picture, video or sound file the way it is meant to be seen, worked out from its
+ * contents: a picture to zoom, a panorama to pan, a photo sphere or 360° video to look around, a
+ * video or recording to tap to play, or a motion photo to hold to play. HDR content shows in HDR
+ * where the device can. See [MediaView] for what it draws and how to restyle it.
+ *
+ * @param modifier Modifier for layout.
+ * @param file The file to show. Takes precedence over [uri].
+ * @param uri The file to show, such as one in the gallery.
+ * @param type What to show the file as, one of [MediaView]'s media types, or
+ *     [MediaView.UNKNOWN] for whatever it is found to be.
+ * @param gyroscope Whether turning the phone looks around a sphere.
+ * @param tapToPlay Whether a tap plays and pauses.
+ * @param holdToPlay Whether holding a motion photo plays its clip.
+ * @param showProgress Whether a thin line shows how far playback has got.
+ * @param hdr Whether HDR content puts the window in HDR colour mode.
+ * @param onLoaded Called once the file is showing, with what it shows as.
+ * @param onFailed Called if it cannot be shown.
+ */
+@Composable
+fun Media(
+    modifier: Modifier = Modifier,
+    file: File? = null,
+    uri: Uri? = null,
+    @MediaView.MediaType type: Int = MediaView.UNKNOWN,
+    gyroscope: Boolean = false,
+    tapToPlay: Boolean = true,
+    holdToPlay: Boolean = true,
+    showProgress: Boolean = true,
+    hdr: Boolean = true,
+    onLoaded: (Int) -> Unit = {},
+    onFailed: () -> Unit = {},
+) {
+    val currentOnLoaded by rememberUpdatedState(onLoaded)
+    val currentOnFailed by rememberUpdatedState(onFailed)
+    val listener = remember {
+        object : MediaListener {
+            override fun onMediaLoaded(type: Int) = currentOnLoaded(type)
+            override fun onMediaFailed() = currentOnFailed()
+        }
+    }
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            MediaView(context).apply { setMediaListener(listener) }
+        },
+        update = { view ->
+            view.setMediaType(type)
+            view.isGyroscopeEnabled = gyroscope
+            view.isTapToPlayEnabled = tapToPlay
+            view.isHoldToPlayEnabled = holdToPlay
+            view.isProgressVisible = showProgress
+            view.isHdrEnabled = hdr
+            if (file != null) view.setFile(file) else view.setUri(uri)
         },
     )
 }
