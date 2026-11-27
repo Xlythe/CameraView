@@ -1,5 +1,6 @@
 package com.xlythe.view.camera;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.RestrictTo;
 import androidx.camera.core.ImageAnalysis;
 
@@ -16,6 +17,13 @@ import androidx.camera.core.ImageAnalysis;
  */
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public interface CameraXFrameAnalyzer extends ImageAnalysis.Analyzer, AutoCloseable {
+    /**
+     * Whether the frames from the next bind come from a lens shown mirrored, as a front camera
+     * is. Told before every bind, since a lens switch rebinds with the same analyzer.
+     */
+    @MainThread
+    default void setMirrored(boolean mirrored) {}
+
     /** Releases the model. Narrowed from AutoCloseable, which throws and this does not. */
     @Override
     void close();

@@ -59,16 +59,10 @@ public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeab
     private final Executor mCallbackExecutor;
     /** Whether {@link #close} has been called, after which no mask is reported. */
     private final AtomicBoolean mClosed = new AtomicBoolean();
-    /** Whether the frames are mirrored, as a front camera's are, so the mask is read flipped. */
-    private final boolean mMirrored;
 
-    /**
-     * @param mirrored true when these frames come from a front camera the library mirrors, so
-     *     the mask has to be read back the other way round
-     */
     public SegmentationAnalyzer(@NonNull CameraView.SegmentationListener listener,
-            @NonNull Executor callbackExecutor, boolean mirrored) {
-        this(listener, callbackExecutor, mirrored,
+            @NonNull Executor callbackExecutor) {
+        this(listener, callbackExecutor,
                 Segmentation.getClient(new SelfieSegmenterOptions.Builder()
                         .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE)
                         .build()));
@@ -77,10 +71,9 @@ public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeab
     /** Runs frames through the given segmenter, which a test supplies in ML Kit's place. */
     @VisibleForTesting
     SegmentationAnalyzer(@NonNull CameraView.SegmentationListener listener,
-            @NonNull Executor callbackExecutor, boolean mirrored, @NonNull Segmenter segmenter) {
+            @NonNull Executor callbackExecutor, @NonNull Segmenter segmenter) {
         mListener = listener;
         mCallbackExecutor = callbackExecutor;
-        mMirrored = mirrored;
         mSegmenter = segmenter;
     }
 
@@ -90,6 +83,10 @@ public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeab
      * <p>The frame is valid only inside this call: the stream closes it, and on stopping closes
      * its reader, as soon as this returns. The model reads it on a thread of its own, so this
      * waits for the result, which is a mask rather than a reference to the frame.</p>
+     *
+     * <p>The mask is mirrored when the frame is, as a front camera's is, since the model sees the
+     * frame unmirrored and the preview shows it mirrored. That is asked of each frame, not fixed
+     * when segmenting starts, so a mask stays the right way round across a lens switch.</p>
      */
     @WorkerThread
     @Override
@@ -113,7 +110,7 @@ public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeab
             return;
         }
         SegmentationMask result = new SegmentationMask(
-                mask.getBuffer(), mask.getWidth(), mask.getHeight(), mMirrored);
+                mask.getBuffer(), mask.getWidth(), mask.getHeight(), frame.isMirrored());
         mCallbackExecutor.execute(() -> {
             if (!mClosed.get()) {
                 mListener.onSegmentation(result);

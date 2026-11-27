@@ -327,6 +327,16 @@ public class CameraXHarnessTest {
                 ReflectionHelpers.getField(module, "mImageAnalysis"));
         assertNotNull("and a picture can be taken beside them",
                 ReflectionHelpers.getField(module, "mImageCapture"));
+        assertEquals("the analyzer is told whether its lens is shown mirrored",
+                Boolean.valueOf(module.isUsingFrontFacingCamera()), analyzer.mirrored);
+
+        // A lens switch rebinds with the same analyzer, which has to hear about the new lens.
+        module.toggleCamera();
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertEquals(Boolean.valueOf(module.isUsingFrontFacingCamera()), analyzer.mirrored);
+        module.toggleCamera();
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertEquals(Boolean.valueOf(module.isUsingFrontFacingCamera()), analyzer.mirrored);
 
         module.stopSegmentation();
         assertTrue(FakeCameraXHost.awaitBind(module));
@@ -339,6 +349,13 @@ public class CameraXHarnessTest {
     private static final class RecordingAnalyzer implements CameraXFrameAnalyzer {
         /** Whether it has been closed. */
         volatile boolean closed;
+        /** What it was last told about mirroring, or null before it was told anything. */
+        volatile Boolean mirrored;
+
+        @Override
+        public void setMirrored(boolean mirrored) {
+            this.mirrored = mirrored;
+        }
 
         @Override
         public void analyze(@NonNull ImageProxy image) {

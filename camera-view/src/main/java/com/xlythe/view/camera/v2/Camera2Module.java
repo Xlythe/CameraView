@@ -501,6 +501,10 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     private SegmentationAnalyzer mSegmentationAnalyzer;
 
+    /** Who hears the masks, kept to start segmenting again on another lens, or null. */
+    @Nullable
+    private CameraView.SegmentationListener mSegmentationListener;
+
     /**
      * Starts segmenting frames, through a stream of this session's own.
      *
@@ -526,8 +530,7 @@ public class Camera2Module extends ICameraModule {
         stopSegmentation();
         SegmentationAnalyzer analyzer;
         try {
-            analyzer = new SegmentationAnalyzer(listener, mHandler::post,
-                    isUsingFrontFacingCamera());
+            analyzer = new SegmentationAnalyzer(listener, mHandler::post);
         } catch (RuntimeException | LinkageError error) {
             // The model is delivered by Play services and its client is built here, so a device
             // without it fails at construction. Reported rather than thrown: a camera library
@@ -541,11 +544,28 @@ public class Camera2Module extends ICameraModule {
             stream.start();
             mSegmentationStream = stream;
             mSegmentationAnalyzer = analyzer;
+            mSegmentationListener = listener;
             return true;
         } catch (RuntimeException error) {
             Log.w(TAG, "Unable to start segmenting frames", error);
             analyzer.close();
             return false;
+        }
+    }
+
+    /**
+     * Segments the next lens's frames through a stream of their own, if anything is segmenting.
+     *
+     * <p>A stream keeps the size and the labels of the lens it started on - its reader is sized
+     * for that lens's preview, and its frames say whether that lens was mirrored - so carrying it
+     * over would hand the camera a surface it may not take and the model frames marked the wrong
+     * way round.</p>
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    private void restartSegmentation() {
+        CameraView.SegmentationListener listener = mSegmentationListener;
+        if (listener != null) {
+            startSegmentation(listener);
         }
     }
 
@@ -555,6 +575,7 @@ public class Camera2Module extends ICameraModule {
         SegmentationAnalyzer analyzer = mSegmentationAnalyzer;
         mSegmentationStream = null;
         mSegmentationAnalyzer = null;
+        mSegmentationListener = null;
         if (stream != null) {
             stream.close();
         }
@@ -1247,6 +1268,7 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
+    @RequiresPermission(Manifest.permission.CAMERA)
     private void switchCamera(String cameraId) {
         boolean shouldReopen = mIsOpen;
         CameraDevice deviceToClose = mCameraDevice;
@@ -1260,6 +1282,7 @@ public class Camera2Module extends ICameraModule {
         closeCameraResources();
         mActiveCamera = cameraId;
         clampZoomToActiveCamera();
+        restartSegmentation();
         if (shouldReopen) {
             mIsOpen = true;
             int nextGeneration = ++mGeneration;

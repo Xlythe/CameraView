@@ -9,18 +9,17 @@ import static org.mockito.Mockito.when;
 import android.media.FakeImage;
 
 import com.google.android.gms.tasks.TaskCompletionSource;
-import com.google.mlkit.common.sdkinternal.MlKitContext;
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.segmentation.Segmenter;
 import com.xlythe.view.camera.gl.SegmentationMask;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.Mockito;
 import org.robolectric.RobolectricTestRunner;
-import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 import java.nio.ByteBuffer;
@@ -56,16 +55,21 @@ public class SegmentationAnalyzerTest {
 
     @Before
     public void setUp() {
-        // ML Kit reads its context to make an InputImage. An app gets it from a manifest
-        // provider; a unit test brings it up itself.
-        MlKitContext.initializeIfNeeded(RuntimeEnvironment.getApplication());
+        // ML Kit reads its context to make an InputImage.
+        MlKitForTests.bringUp();
         task = new TaskCompletionSource<>();
         Segmenter segmenter = Mockito.mock(Segmenter.class);
         when(segmenter.process(any(InputImage.class))).thenAnswer(invocation -> {
             handedOver.countDown();
             return task.getTask();
         });
-        analyzer = new SegmentationAnalyzer(masks::add, Runnable::run, false, segmenter);
+        analyzer = new SegmentationAnalyzer(masks::add, Runnable::run, segmenter);
+    }
+
+    @After
+    public void tearDown() {
+        analyzer.close();
+        MlKitForTests.takeDown();
     }
 
     @Test
@@ -86,6 +90,21 @@ public class SegmentationAnalyzerTest {
         assertEquals(2, masks.get(0).getWidth());
         assertEquals(1, masks.get(0).getHeight());
         assertEquals(0.75f, masks.get(0).confidenceAt(1.5f, 0.5f, 2, 1), 0f);
+    }
+
+    /**
+     * A mask is mirrored when its frame is, as a front camera's is, and asked of each frame: an
+     * analyzer that fixed it when it started kept the first lens's answer after a lens switch.
+     */
+    @Test
+    public void aMaskIsMirroredWhenItsFrameIs() throws Exception {
+        Thread stream = analyze(FakeImage.yuv(4, 2), true /* mirrored */);
+        task.setResult(modelMask(2, 1, 0.25f, 0.75f));
+        stream.join(JOIN_MILLIS);
+
+        assertEquals(1, masks.size());
+        assertEquals("the left of the view reads the right of the mask",
+                0.75f, masks.get(0).confidenceAt(0.5f, 0.5f, 2, 1), 0f);
     }
 
     @Test
@@ -116,12 +135,17 @@ public class SegmentationAnalyzerTest {
      * returns, as the frame stream does.
      */
     private Thread analyze(FakeImage image) {
+        return analyze(image, false);
+    }
+
+    /** {@link #analyze(FakeImage)}, for a frame from a lens that is or is not mirrored. */
+    private Thread analyze(FakeImage image, boolean mirrored) {
         FrameStream stream = FrameStream.forLibrary(new VideoRecorder.Canvas() {
             @Override public void attachSurface(VideoRecorder.SurfaceProvider provider) {}
 
             @Override public void detachSurface(VideoRecorder.SurfaceProvider provider) {}
         }, new FrameStream.Params(), analyzer);
-        FrameStream.Frame frame = stream.new Frame(image, 90, false);
+        FrameStream.Frame frame = stream.new Frame(image, 90, mirrored);
         Thread thread = new Thread(() -> {
             analyzer.onFrame(frame);
             image.close();

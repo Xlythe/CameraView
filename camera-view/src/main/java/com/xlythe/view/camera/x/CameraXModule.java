@@ -1397,8 +1397,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         if (listener == null) throw new NullPointerException("listener cannot be null");
         CameraXSegmentationAnalyzer analyzer;
         try {
-            analyzer = new CameraXSegmentationAnalyzer(
-                    listener, mMainExecutor, isUsingFrontFacingCamera());
+            analyzer = new CameraXSegmentationAnalyzer(listener, mMainExecutor);
         } catch (RuntimeException | LinkageError error) {
             // The model is delivered by Play services and its client is built here, so a device
             // without it fails at construction. Reported rather than thrown, for the same reason
@@ -2231,6 +2230,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 }
             }
             unbindCurrentUseCases();
+            CameraXFrameAnalyzer analyzer = mFrameAnalyzer;
+            if (imageAnalysis != null && analyzer != null) {
+                // After unbinding, so no frame from the last lens arrives labelled as this one's.
+                analyzer.setMirrored(mFrontFacing);
+            }
             // After unbinding, so that an effect being let go is not closing outputs CameraX is
             // still drawing into, and before binding, because the group carries the effect.
             CameraEffect effect = reconcileFrameEffect(drawing);
