@@ -85,6 +85,7 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera = Camera.open(getActiveCamera());
         } catch (RuntimeException e) {
             Log.e(TAG, "Failed to open camera", e);
+            onCameraError(e);
             return;
         }
 
@@ -123,7 +124,17 @@ public class LegacyCameraModule extends ICameraModule {
             }
             mCamera = null;
             mPreviewSize = null;
+            onCameraError(e);
         }
+    }
+
+    /**
+     * Ready once open() has a camera previewing, and not after an open that failed: the view
+     * announces a ready camera as open, and an app enables its shutter on that.
+     */
+    @Override
+    public boolean isCameraReady() {
+        return mCamera != null;
     }
 
     @Override

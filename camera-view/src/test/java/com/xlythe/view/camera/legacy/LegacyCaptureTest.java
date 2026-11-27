@@ -26,6 +26,7 @@ import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowGeotaggingMediaRecorder;
 import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
+import com.xlythe.view.camera.shadow.ShadowPreviewlessCamera;
 
 import org.junit.After;
 import org.junit.Before;
@@ -295,6 +296,30 @@ public class LegacyCaptureTest {
 
         assertTrue(Shadows.shadowOf(camera).isShutterSoundEnabled());
         assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+    }
+
+    /**
+     * A camera that will not take its preview is not announced as open.
+     *
+     * <p>An app enables its shutter when the view says the camera is open, which the view says once
+     * the backend reports it ready. A camera that opened and then refused its preview was released
+     * and reported ready all the same, so the app's first picture failed with nothing to explain
+     * it. Camera2 and CameraX report a failed open as an error, and so does this backend.</p>
+     */
+    @Test
+    @Config(shadows = ShadowPreviewlessCamera.class)
+    public void aCameraThatWillNotPreviewIsNotAnnouncedAsOpen() {
+        AtomicInteger opens = new AtomicInteger();
+        cameraView.setOnCameraStateChangedListener(new CameraView.OnCameraStateChangedListener() {
+            @Override public void onCameraOpened() { opens.incrementAndGet(); }
+            @Override public void onCameraClosed() {}
+        });
+
+        cameraView.open();
+        idle();
+
+        assertEquals("a camera that failed to open is never announced", 0, opens.get());
+        assertFalse(cameraView.isOpen());
     }
 
     /** A capture asked for before the camera is open fails rather than throwing. */
