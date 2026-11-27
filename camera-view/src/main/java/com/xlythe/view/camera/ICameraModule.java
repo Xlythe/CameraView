@@ -21,6 +21,7 @@ import androidx.annotation.RequiresPermission;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.UiThread;
 
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
@@ -29,9 +30,11 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 public abstract class ICameraModule {
@@ -130,6 +133,34 @@ public abstract class ICameraModule {
 
     protected void stopBarcodeScanner() {}
 
+    /** Receives preview frames as the original camera API delivers them. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public interface PreviewFrameListener {
+        /**
+         * Called on the main thread with each preview frame.
+         *
+         * @param nv21 the frame, which the listener may keep
+         * @param rotationDegrees the clockwise turn that stands the frame upright
+         * @param frontFacing whether the frame came from a lens facing the user
+         */
+        @UiThread
+        void onPreviewFrame(@NonNull byte[] nv21, int width, int height, int rotationDegrees,
+                boolean frontFacing);
+    }
+
+    /**
+     * Hands every preview frame to a listener as NV21 bytes, or stops when given null.
+     *
+     * <p>For a backend whose frames cannot reach an ImageReader, which is how a sweep reads the
+     * original camera API. Backends built on camera2 hand out a surface instead, and say no.</p>
+     *
+     * @return whether frames will be delivered
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    protected boolean setPreviewFrameListener(@Nullable PreviewFrameListener listener) {
+        return false;
+    }
+
     /**
      * Starts handing frames to a segmenter, which reports each mask to {@code listener}.
      *
@@ -145,13 +176,36 @@ public abstract class ICameraModule {
     @RequiresApi(18)
     public VideoRecorder.Canvas getCanvas() {
         return new VideoRecorder.Canvas() {
+            /**
+             * Surfaces whose attach is waiting on the main thread. One detached before its attach
+             * runs is never attached: the stream that would fill it has stopped, and attaching it
+             * would hold the main thread until the wait for its surface gave up, then fail the
+             * session and with it the camera.
+             */
+            private final Set<VideoRecorder.SurfaceProvider> mPendingAttaches = new HashSet<>();
+
             @Override
             public void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-                new Handler(Looper.getMainLooper()).post(() -> ICameraModule.this.attachSurface(surfaceProvider));
+                synchronized (mPendingAttaches) {
+                    mPendingAttaches.add(surfaceProvider);
+                }
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    synchronized (mPendingAttaches) {
+                        if (!mPendingAttaches.remove(surfaceProvider)) {
+                            return;
+                        }
+                    }
+                    ICameraModule.this.attachSurface(surfaceProvider);
+                });
             }
 
             @Override
             public void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+                synchronized (mPendingAttaches) {
+                    if (mPendingAttaches.remove(surfaceProvider)) {
+                        return;
+                    }
+                }
                 if (Looper.myLooper() == Looper.getMainLooper()) {
                     ICameraModule.this.detachSurface(surfaceProvider);
                     return;

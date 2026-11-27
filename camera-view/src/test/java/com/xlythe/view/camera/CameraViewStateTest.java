@@ -245,7 +245,8 @@ public class CameraViewStateTest {
 
     @Test
     public void thePreviewViewsAreBuiltAndHiddenUntilNeeded() {
-        assertEquals(4, cameraView.getChildCount());
+        // The preview, the two confirmation views, the sweep guide and the focus reticle.
+        assertEquals(5, cameraView.getChildCount());
         assertNotNull(cameraView.asTextureView());
         assertEquals(View.VISIBLE, cameraView.asTextureView().getVisibility());
     }
