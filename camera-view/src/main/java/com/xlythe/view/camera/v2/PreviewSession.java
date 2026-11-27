@@ -183,7 +183,7 @@ class PreviewSession extends SessionImpl {
                 return false;
             }
             Size size = new Size(getWidth(), getHeight());
-            input.setDefaultBufferSize(getWidth(), getHeight());
+            effect.setInputBufferSize(size);
             mSurface = new Surface(input);
             effect.addOutput(this, new Surface(preview), size, size,
                     GlMath.ScaleType.FILL_CENTER,

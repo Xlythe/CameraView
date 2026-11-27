@@ -34,6 +34,11 @@ import java.util.concurrent.atomic.AtomicReference;
  * the camera's frames arrive here rather than on the main thread: {@link SurfaceTexture} is given
  * this thread's handler, so a frame is consumed and drawn on the thread that can.</p>
  *
+ * <p>A renderer draws every output the right way up as it is shown. An output held some other way
+ * round - a recording in the sensor's orientation, a preview in the camera buffer's shape - is
+ * drawn through a {@link ShownCanvas} and turned onto it, so that nothing a renderer draws needs
+ * to know which way the sensor faces or whether the lens is mirrored.</p>
+ *
  * <p>This is the driver. It is as thin as a thing that owns a thread can be, and every decision it
  * makes is in {@link GlMath}, because nothing here can run without a GPU.</p>
  */
@@ -63,6 +68,26 @@ public final class FrameRenderThread {
         void onTextureTransform(@NonNull float[] surfaceTextureMatrix, @NonNull float[] into);
     }
 
+    /**
+     * How the camera's frames are shown: turned clockwise from the buffer the camera writes,
+     * then mirrored left to right or not.
+     */
+    private static final class Shown {
+        /** Before anybody has said: the buffer as it is. */
+        private static final Shown AS_WRITTEN = new Shown(0, false);
+
+        /** How far the camera's buffer is turned clockwise to be shown. */
+        @GlMath.Rotation private final int mRotation;
+
+        /** Whether it is then shown mirrored left to right, as a front camera's is. */
+        private final boolean mMirrored;
+
+        private Shown(@GlMath.Rotation int rotation, boolean mirrored) {
+            mRotation = rotation;
+            mMirrored = mirrored;
+        }
+    }
+
     /** One surface being drawn into, and everything known about how to draw into it. */
     private static final class Output {
         private final Surface mSurface;
@@ -81,19 +106,35 @@ public final class FrameRenderThread {
          * kept, because two frames that disagreed would go backwards in time.
          */
         @Nullable private Boolean mRealtimeClock;
+        /**
+         * How this output's frames are shown, for one that has to stay as it was when it began -
+         * a recording is tagged once - or null to follow {@link #setShownOrientation}.
+         */
+        @Nullable private final Shown mShown;
         @Nullable private EGLSurface mEglSurface;
         /** Set once this output has failed, so a broken surface is not retried every frame. */
         private boolean mFailed;
+        /**
+         * Where a renderer draws for this output when the output is not the right way up as
+         * shown. Made on the first frame that needs it.
+         */
+        @Nullable private ShownCanvas mCanvas;
+        /**
+         * Set once this output could not be drawn through a canvas, which then has the renderer
+         * draw into it directly - turned, but drawn - rather than not at all.
+         */
+        private boolean mCanvasFailed;
 
         private Output(@NonNull Surface surface, @NonNull Size size, @NonNull Size frameSize,
                 @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform,
-                boolean encoder) {
+                boolean encoder, @Nullable Shown shown) {
             mSurface = surface;
             mSize = size;
             mFrameSize = frameSize;
             mScaleType = scaleType;
             mTransform = transform;
             mEncoder = encoder;
+            mShown = shown;
         }
     }
 
@@ -128,6 +169,18 @@ public final class FrameRenderThread {
 
     private final float[] mSurfaceTextureMatrix = GlMath.identity();
     private final float[] mTextureMatrix = GlMath.identity();
+
+    /**
+     * The size the camera writes frames at, which is what says whether a picture is shown wide
+     * or tall. Null until the backend says, which leaves every output drawn as it is held.
+     */
+    @Nullable private volatile Size mInputSize;
+
+    /** How the camera's frames are shown, set by the backend as the display turns. */
+    @NonNull private volatile Shown mShown = Shown.AS_WRITTEN;
+
+    /** What turns a {@link ShownCanvas} onto its output. Made with the context. */
+    @Nullable private Texture2dProgram mCanvasProgram;
 
     @Nullable private HandlerThread mThread;
     @Nullable private Handler mHandler;
@@ -219,6 +272,33 @@ public final class FrameRenderThread {
         mThread = thread;
         mRunning = true;
         return true;
+    }
+
+    /**
+     * The size the camera writes frames at, which is passed on to the input texture.
+     *
+     * <p>Kept as well as passed on, because a SurfaceTexture cannot be asked for it back and a
+     * renderer drawing in the shape a picture is shown needs it.</p>
+     */
+    public void setInputBufferSize(@NonNull Size size) {
+        mInputSize = size;
+        SurfaceTexture texture = mSurfaceTexture;
+        if (texture != null) {
+            texture.setDefaultBufferSize(size.getWidth(), size.getHeight());
+        }
+    }
+
+    /**
+     * How the camera's frames are shown, which is what a renderer's drawing is turned to match.
+     *
+     * <p>The same for every output, because the preview, the recording and the still all show
+     * what the person framed. Called again whenever the display turns.</p>
+     *
+     * @param rotationDegrees how far the camera's buffer is turned clockwise to be shown
+     * @param mirrored whether it is then shown mirrored left to right, as a front camera's is
+     */
+    public void setShownOrientation(@GlMath.Rotation int rotationDegrees, boolean mirrored) {
+        mShown = new Shown(rotationDegrees, mirrored);
     }
 
     /** The texture the camera writes into. Null until {@link #start} has succeeded. */
@@ -395,7 +475,7 @@ public final class FrameRenderThread {
     public void addOutput(@NonNull Object key, @NonNull Surface surface, @NonNull Size size,
             @NonNull Size frameSize, @NonNull GlMath.ScaleType scaleType,
             @NonNull TextureTransform transform) {
-        putOutput(key, new Output(surface, size, frameSize, scaleType, transform, false));
+        putOutput(key, new Output(surface, size, frameSize, scaleType, transform, false, null));
     }
 
     /**
@@ -406,11 +486,15 @@ public final class FrameRenderThread {
      * clock.</p>
      *
      * @param key identifies this output for {@link #removeOutput}; the caller's own object
+     * @param rotationDegrees how far the camera's buffer is turned clockwise to show this
+     *     recording, fixed for its length because the file is tagged once
+     * @param mirrored whether the recording is then shown mirrored left to right
      */
     public void addEncoderOutput(@NonNull Object key, @NonNull Surface surface,
-            @NonNull Size size, @NonNull TextureTransform transform) {
-        putOutput(key, new Output(
-                surface, size, size, GlMath.ScaleType.FILL_CENTER, transform, true));
+            @NonNull Size size, @NonNull TextureTransform transform,
+            @GlMath.Rotation int rotationDegrees, boolean mirrored) {
+        putOutput(key, new Output(surface, size, size, GlMath.ScaleType.FILL_CENTER, transform,
+                true, new Shown(rotationDegrees, mirrored)));
     }
 
     private void putOutput(@NonNull Object key, @NonNull Output output) {
@@ -479,6 +563,7 @@ public final class FrameRenderThread {
             egl.makeCurrent();
             OesTextureProgram program = new OesTextureProgram();
             mProgram = program;
+            mCanvasProgram = new Texture2dProgram();
             mFrame = new GlFrame(program);
             CameraTextureProvider provider = mTextureProvider;
             mTextureName = provider == null
@@ -537,17 +622,19 @@ public final class FrameRenderThread {
             }
             egl.makeCurrent(output.mEglSurface);
             output.mTransform.onTextureTransform(mSurfaceTextureMatrix, mTextureMatrix);
-            // Cleared because a frame that does not cover the output - and under FIT_CENTER none
-            // of them do - would otherwise show whatever the last frame left in the buffer.
-            GLES20.glViewport(0, 0, output.mSize.getWidth(), output.mSize.getHeight());
-            GLES20.glClearColor(0f, 0f, 0f, 1f);
-            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-            frame.set(mTextureName, mTextureMatrix, output.mSize.getWidth(),
-                    output.mSize.getHeight(), timestampNanos,
-                    GlMath.viewport(output.mScaleType, output.mFrameSize, output.mSize));
             FrameRenderer renderer = mRenderer;
-            if (renderer == null || !renderer.onDrawFrame(frame)) {
-                frame.drawCameraFrame();
+            if (renderer == null || !drawThroughCanvas(output, renderer, frame, timestampNanos)) {
+                // Cleared because a frame that does not cover the output - and under FIT_CENTER
+                // none of them do - would otherwise show whatever the last frame left behind.
+                GLES20.glViewport(0, 0, output.mSize.getWidth(), output.mSize.getHeight());
+                GLES20.glClearColor(0f, 0f, 0f, 1f);
+                GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+                frame.set(mTextureName, mTextureMatrix, output.mSize.getWidth(),
+                        output.mSize.getHeight(), timestampNanos,
+                        GlMath.viewport(output.mScaleType, output.mFrameSize, output.mSize));
+                if (renderer == null || !renderer.onDrawFrame(frame)) {
+                    frame.drawCameraFrame();
+                }
             }
             egl.setPresentationTime(output.mEglSurface, presentationTime(output, timestampNanos));
             egl.swapBuffers(output.mEglSurface);
@@ -558,6 +645,75 @@ public final class FrameRenderThread {
             output.mFailed = true;
             releaseOutput(output);
         }
+    }
+
+    /**
+     * Has the renderer draw the picture the right way up as it is shown, and turns that onto the
+     * output, for an output that holds the picture some other way round.
+     *
+     * <p>Not used without a renderer: the camera frame alone is drawn straight into the output
+     * with the output's own matrix, which is the same picture for one pass instead of two.</p>
+     *
+     * @return false, having drawn nothing, when the output is already the right way up and the
+     *     shape it is shown, so the renderer draws into it directly
+     */
+    private boolean drawThroughCanvas(@NonNull Output output, @NonNull FrameRenderer renderer,
+            @NonNull GlFrame frame, long timestampNanos) {
+        Size inputSize = mInputSize;
+        Texture2dProgram canvasProgram = mCanvasProgram;
+        if (inputSize == null || canvasProgram == null || output.mCanvasFailed) {
+            return false;
+        }
+        Shown shown = output.mShown != null ? output.mShown : mShown;
+        float[] asShown;
+        float[] cameraAsShown;
+        Size shownSize;
+        try {
+            float[] toBuffer = GlMath.outputToBuffer(mTextureMatrix, mSurfaceTextureMatrix);
+            asShown = GlMath.outputAsShown(toBuffer, shown.mRotation, shown.mMirrored);
+            shownSize = GlMath.shownSize(toBuffer, inputSize, output.mSize, shown.mRotation);
+            cameraAsShown = GlMath.multiply(mTextureMatrix, GlMath.invertAffine(asShown));
+        } catch (IllegalArgumentException error) {
+            // A matrix that flattens the frame says nothing about how it is turned.
+            Log.w(TAG, "Drawing straight into an output whose turn cannot be read", error);
+            output.mCanvasFailed = true;
+            return false;
+        }
+        if (GlMath.isIdentity(asShown) && shownSize.equals(output.mSize)) {
+            return false;
+        }
+        ShownCanvas canvas = output.mCanvas;
+        if (canvas == null) {
+            canvas = new ShownCanvas();
+            output.mCanvas = canvas;
+        }
+        try {
+            canvas.bind(shownSize);
+        } catch (IllegalStateException error) {
+            Log.w(TAG, "Drawing straight into an output that is held turned", error);
+            output.mCanvasFailed = true;
+            canvas.release();
+            output.mCanvas = null;
+            return false;
+        }
+        GLES20.glClearColor(0f, 0f, 0f, 1f);
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+        int width = shownSize.getWidth();
+        int height = shownSize.getHeight();
+        frame.set(mTextureName, cameraAsShown, width, height, timestampNanos,
+                new int[] {0, 0, width, height});
+        if (!renderer.onDrawFrame(frame)) {
+            frame.drawCameraFrame();
+        }
+        canvas.unbind();
+        // Whatever the renderer left switched on would otherwise clip or blend the turn.
+        GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
+        GLES20.glDisable(GLES20.GL_BLEND);
+        GLES20.glClearColor(0f, 0f, 0f, 1f);
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+        canvasProgram.draw(canvas.getTexture(), asShown,
+                new int[] {0, 0, output.mSize.getWidth(), output.mSize.getHeight()});
+        return true;
     }
 
     /** When an output is told a frame happened, which for an encoder is on its own clock. */
@@ -578,7 +734,14 @@ public final class FrameRenderThread {
 
     private void releaseOutput(@Nullable Output output) {
         EglCore egl = mEgl;
-        if (output == null || output.mEglSurface == null) {
+        if (output == null) {
+            return;
+        }
+        if (output.mCanvas != null) {
+            output.mCanvas.release();
+            output.mCanvas = null;
+        }
+        if (output.mEglSurface == null) {
             return;
         }
         if (egl != null) {
@@ -619,6 +782,10 @@ public final class FrameRenderThread {
                 mProgram.deleteTexture(mTextureName);
             }
             mTextureName = 0;
+        }
+        if (mCanvasProgram != null) {
+            mCanvasProgram.release();
+            mCanvasProgram = null;
         }
         if (mProgram != null) {
             mProgram.release();

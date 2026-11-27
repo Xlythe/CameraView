@@ -56,12 +56,15 @@ public final class GlFrame {
         return mTextureMatrix;
     }
 
-    /** The width in pixels of the output being drawn into. */
+    /**
+     * The width in pixels of the picture being drawn, the right way up as it is shown. An output
+     * held some other way round is drawn through a picture this shape and turned onto it.
+     */
     public int getWidth() {
         return mWidth;
     }
 
-    /** The height in pixels of the output being drawn into. */
+    /** The height in pixels of the picture being drawn, the right way up as it is shown. */
     public int getHeight() {
         return mHeight;
     }

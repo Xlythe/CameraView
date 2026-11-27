@@ -44,6 +44,7 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Locale;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -252,6 +253,148 @@ public final class FrameEffectDeviceTest {
             assertSameQuarters(lensFacing + " recording", preview.get(), frame);
             Log.i(FILTER_TAG, backend + " " + lensFacing + " recording shows the preview's quarters");
         }
+    }
+
+    /**
+     * Draws a mark in the coordinates of the picture as it is shown, and nothing of the camera: a
+     * band across the top, blue on the left and yellow on the right, over grey.
+     *
+     * <p>The other half of what a renderer can draw. {@link Quarters} is pinned to the camera's
+     * buffer and has to turn with the scene; this is pinned to the output and must not turn at
+     * all. A caption, a watermark or a background drawn behind a subject is drawn this way, and
+     * it has to sit where it was drawn on every output - the right way up, and not mirrored, on
+     * the screen, in the recording and in the picture, whichever lens took them.</p>
+     */
+    private static final class TopBand implements FrameRenderer {
+        /**
+         * How much of the picture the band covers, from the top. Deep enough to be seen below a
+         * status bar and an app bar drawn over the top of the preview, as they are edge to edge.
+         */
+        private static final float BAND = 0.4f;
+
+        @Override public boolean onDrawFrame(@NonNull GlFrame frame) {
+            int width = frame.getWidth();
+            int height = frame.getHeight();
+            GLES20.glEnable(GLES20.GL_SCISSOR_TEST);
+            GLES20.glScissor(0, 0, width, height);
+            GLES20.glClearColor(0.5f, 0.5f, 0.5f, 1f);
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+            // GL counts rows from the bottom, so the top of the picture is the end of the range.
+            int bandHeight = Math.round(height * BAND);
+            GLES20.glScissor(0, height - bandHeight, width / 2, bandHeight);
+            GLES20.glClearColor(0f, 0f, 1f, 1f);
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+            GLES20.glScissor(width / 2, height - bandHeight, width - width / 2, bandHeight);
+            GLES20.glClearColor(1f, 1f, 0f, 1f);
+            GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+            GLES20.glDisable(GLES20.GL_SCISSOR_TEST);
+            return true;
+        }
+    }
+
+    /**
+     * What a renderer draws relative to the picture lands there in every output: a band drawn
+     * across the top of the preview is across the top of the recording and the picture, blue
+     * end on the left, as each file is meant to be shown.
+     *
+     * <p>A renderer is never told the sensor's orientation, the display's rotation or whether
+     * the lens mirrors, and does not need to be: each output it draws is the right way up as it
+     * will be shown.</p>
+     */
+    @Test
+    public void aMarkDrawnAtTheTopIsAtTheTopOfEveryOutput() throws Exception {
+        for (CameraView.LensFacing lensFacing : CameraView.LensFacing.values()) {
+            File picture = temporaryFile(".jpg");
+            File video = temporaryFile(".mp4");
+            CountDownLatch pictured = new CountDownLatch(1);
+            CountDownLatch recorded = new CountDownLatch(1);
+            AtomicReference<File> savedPicture = new AtomicReference<>();
+            AtomicReference<File> savedVideo = new AtomicReference<>();
+            AtomicReference<Bitmap> preview = new AtomicReference<>();
+
+            boolean opened = withOpenCamera(new TopBand(), lensFacing, camera -> {
+                camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+                    @Override public void onImageConfirmation() {}
+
+                    @Override public void onImageCaptured(File saved) {
+                        savedPicture.set(saved);
+                        pictured.countDown();
+                    }
+
+                    @Override public void onFailure() {
+                        pictured.countDown();
+                    }
+                });
+                camera.setOnVideoCapturedListener(new CameraView.OnVideoCapturedListener() {
+                    @Override public void onVideoConfirmation() {}
+
+                    @Override public void onVideoCaptured(File saved) {
+                        savedVideo.set(saved);
+                        recorded.countDown();
+                    }
+
+                    @Override public void onFailure() {
+                        recorded.countDown();
+                    }
+                });
+                Thread.sleep(1_000);
+                preview.set(ShownFrames.onScreen(camera));
+                camera.takePicture(picture);
+                assertTrue("the capture never reported",
+                        pictured.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                camera.startRecording(video);
+                Thread.sleep(3_000);
+                camera.stopRecording();
+                assertTrue("the recording never reported",
+                        recorded.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            });
+            if (!opened) {
+                continue;
+            }
+
+            assertBandAtTheTop(lensFacing + " preview", preview.get());
+            assertNotNull("the " + lensFacing + " capture failed", savedPicture.get());
+            Bitmap shownPicture = ShownFrames.ofPicture(savedPicture.get());
+            try {
+                assertBandAtTheTop(lensFacing + " picture", shownPicture);
+            } finally {
+                shownPicture.recycle();
+            }
+            Assume.assumeTrue("this device's encoder produced no video",
+                    savedVideo.get() != null && savedVideo.get().length() > 0);
+            Bitmap frame = ShownFrames.ofRecording(savedVideo.get(), 1_500_000);
+            Assume.assumeTrue("no frame could be decoded from the recording", frame != null);
+            assertBandAtTheTop(lensFacing + " recording", frame);
+            Log.i(FILTER_TAG, backend + " " + lensFacing + " band is at the top everywhere");
+        }
+    }
+
+    /**
+     * Asserts a frame as shown has {@link TopBand}'s band across its top, blue end on the left,
+     * and grey below it.
+     *
+     * <p>Read a quarter of the way in from each edge: below where system bars cover the top of
+     * an edge-to-edge preview, and inside what a preview's crop leaves of the band.</p>
+     */
+    private static void assertBandAtTheTop(@NonNull String what, @NonNull Bitmap shown) {
+        int topLeft = shown.getPixel(shown.getWidth() / 4, shown.getHeight() / 4);
+        int topRight = shown.getPixel(shown.getWidth() * 3 / 4, shown.getHeight() / 4);
+        int bottomLeft = shown.getPixel(shown.getWidth() / 4, shown.getHeight() * 3 / 4);
+        int bottomRight = shown.getPixel(shown.getWidth() * 3 / 4, shown.getHeight() * 3 / 4);
+        String colours = what + " showed " + String.format(Locale.US,
+                "#%06X #%06X above #%06X #%06X", topLeft & 0xFFFFFF, topRight & 0xFFFFFF,
+                bottomLeft & 0xFFFFFF, bottomRight & 0xFFFFFF);
+        assertTrue("the band's blue end should be at the top left: " + colours,
+                Color.blue(topLeft) > 180 && Color.red(topLeft) < 80 && Color.green(topLeft) < 80);
+        assertTrue("the band's yellow end should be at the top right: " + colours,
+                Color.red(topRight) > 180 && Color.green(topRight) > 180
+                        && Color.blue(topRight) < 80);
+        assertTrue("there should be no band at the bottom: " + colours,
+                isGrey(bottomLeft) && isGrey(bottomRight));
+    }
+
+    private static boolean isGrey(int pixel) {
+        return channelSpread(pixel) < 40 && Color.red(pixel) > 80 && Color.red(pixel) < 180;
     }
 
     /**

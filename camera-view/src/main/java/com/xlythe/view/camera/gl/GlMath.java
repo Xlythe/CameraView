@@ -2,8 +2,12 @@ package com.xlythe.view.camera.gl;
 
 import android.util.Size;
 
+import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
 import androidx.annotation.RestrictTo;
+
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 
 /**
  * The arithmetic the renderer runs on every frame, with no GL in it.
@@ -21,6 +25,14 @@ public final class GlMath {
 
     /** The side of the square matrix those sixteen floats hold. */
     private static final int MATRIX_SIDE = 4;
+
+    /** How far a frame is turned clockwise to be shown, in whole quarter turns. */
+    @Retention(RetentionPolicy.SOURCE)
+    @IntDef({0, 90, 180, 270})
+    public @interface Rotation {}
+
+    /** How far apart two matrix entries may be and still count as the same. */
+    private static final float TOLERANCE = 1e-4f;
 
     /** How a frame is placed in an output whose shape is not its own. */
     public enum ScaleType {
@@ -95,18 +107,10 @@ public final class GlMath {
     @NonNull
     public static float[] withoutCameraTransform(@NonNull float[] surfaceTextureMatrix) {
         checkMatrix(surfaceTextureMatrix);
-        float a = surfaceTextureMatrix[0];
-        float b = surfaceTextureMatrix[MATRIX_SIDE];
-        float c = surfaceTextureMatrix[1];
-        float d = surfaceTextureMatrix[MATRIX_SIDE + 1];
-        // The request as a signed permutation, row by row: {s from s, s from t, t from s, t from t}.
+        float[] request = signs(surfaceTextureMatrix);
         // The matrix's second row is negated by the flip in front of it.
-        float[] request;
-        if (Math.abs(a) + Math.abs(d) >= Math.abs(b) + Math.abs(c)) {
-            request = new float[] {Math.signum(a), 0f, 0f, -Math.signum(d)};
-        } else {
-            request = new float[] {0f, Math.signum(b), -Math.signum(c), 0f};
-        }
+        request[2] = -request[2];
+        request[3] = -request[3];
         return multiply(surfaceTextureMatrix, unitSquareSymmetry(transpose(request)));
     }
 
@@ -121,7 +125,7 @@ public final class GlMath {
      *     recording is the orientation it is tagged with
      */
     @NonNull
-    public static float[] displayMirror(int rotationDegrees) {
+    public static float[] displayMirror(@Rotation int rotationDegrees) {
         boolean quarterTurned = (rotationDegrees / 90) % 2 != 0;
         return unitSquareSymmetry(quarterTurned
                 ? new float[] {1f, 0f, 0f, -1f}
@@ -137,9 +141,147 @@ public final class GlMath {
      */
     @NonNull
     public static float[] recordingMatrix(@NonNull float[] surfaceTextureMatrix,
-            int rotationDegrees, boolean mirrored) {
+            @Rotation int rotationDegrees, boolean mirrored) {
         float[] asWritten = withoutCameraTransform(surfaceTextureMatrix);
         return mirrored ? multiply(asWritten, displayMirror(rotationDegrees)) : asWritten;
+    }
+
+    /**
+     * The matrix to draw a frame with so that it comes out the right way up as it is shown, with
+     * nothing left for a tag to do.
+     *
+     * @param rotationDegrees how far the camera's buffer is turned clockwise to be shown
+     * @param mirrored whether it is then shown mirrored left to right, as a front camera's is
+     */
+    @NonNull
+    public static float[] uprightMatrix(@NonNull float[] surfaceTextureMatrix,
+            @Rotation int rotationDegrees, boolean mirrored) {
+        return multiply(recordingMatrix(surfaceTextureMatrix, rotationDegrees, mirrored),
+                invertAffine(asShown(rotationDegrees, false)));
+    }
+
+    /**
+     * Where each point of a frame lands as it is shown, for a frame turned clockwise to be shown
+     * and then mirrored left to right or not. Both sides are texture coordinates, counted up from
+     * the bottom as GL counts them.
+     */
+    @NonNull
+    public static float[] asShown(@Rotation int rotationDegrees, boolean mirrored) {
+        // A quarter turn clockwise, as shown, takes (s, t) to (t, 1 - s).
+        float[] quarterTurn = unitSquareSymmetry(new float[] {0f, 1f, -1f, 0f});
+        float[] shown = identity();
+        for (int turned = 0; turned < (rotationDegrees % 360 + 360) % 360; turned += 90) {
+            shown = multiply(quarterTurn, shown);
+        }
+        return mirrored
+                ? multiply(unitSquareSymmetry(new float[] {-1f, 0f, 0f, 1f}), shown)
+                : shown;
+    }
+
+    /**
+     * Where each of an output's texture coordinates reads the camera's buffer, as the camera
+     * wrote it: the output's own matrix with the SurfaceTexture's flip, crop and camera request
+     * taken back off.
+     */
+    @NonNull
+    public static float[] outputToBuffer(@NonNull float[] outputMatrix,
+            @NonNull float[] surfaceTextureMatrix) {
+        return multiply(invertAffine(withoutCameraTransform(surfaceTextureMatrix)), outputMatrix);
+    }
+
+    /**
+     * Where each of an output's texture coordinates lands in the picture as it is shown.
+     *
+     * <p>Worked out from how the output holds the camera's buffer rather than told by whoever
+     * made the output. The camera's frames are shown the same way round on every output - the
+     * preview, the recording and the still all show what the person framed - so how the buffer
+     * is shown, and how one output holds it, say how that output is shown. A preview a view turns
+     * for the screen, a recording a player turns by its tag, and an output whose turning another
+     * library decides downstream all come out of the same arithmetic.</p>
+     *
+     * <p>Only the turn and the mirror are kept. An output that shows part of the buffer is still
+     * shown whole, so the crop is left out.</p>
+     *
+     * @param outputToBuffer from {@link #outputToBuffer}
+     * @param rotationDegrees how far the camera's buffer is turned clockwise to be shown
+     * @param mirrored whether it is then shown mirrored left to right, as a front camera's is
+     */
+    @NonNull
+    public static float[] outputAsShown(@NonNull float[] outputToBuffer,
+            @Rotation int rotationDegrees, boolean mirrored) {
+        checkMatrix(outputToBuffer);
+        return multiply(asShown(rotationDegrees, mirrored),
+                unitSquareSymmetry(signs(outputToBuffer)));
+    }
+
+    /**
+     * The size to draw an output at in the shape it is shown: the output's own pixels, arranged
+     * the way the picture is shown.
+     *
+     * <p>Not simply the output's size turned with it, because an output can hold the picture
+     * squeezed. A Camera2 preview is the camera's buffer, in the buffer's shape, holding a frame
+     * already turned upright for the device, and the view stretches it back - so a renderer drawing
+     * at the buffer's shape would draw a circle that the screen shows as an ellipse. Which way the
+     * picture is shown, wide or tall, comes from the part of the buffer the output reads.</p>
+     *
+     * @param outputToBuffer from {@link #outputToBuffer}
+     * @param bufferSize the size the camera writes its frames at
+     * @param rotationDegrees how far the camera's buffer is turned clockwise to be shown
+     */
+    @NonNull
+    public static Size shownSize(@NonNull float[] outputToBuffer, @NonNull Size bufferSize,
+            @NonNull Size outputSize, @Rotation int rotationDegrees) {
+        checkMatrix(outputToBuffer);
+        float readWidth = (Math.abs(outputToBuffer[0]) + Math.abs(outputToBuffer[MATRIX_SIDE]))
+                * bufferSize.getWidth();
+        float readHeight = (Math.abs(outputToBuffer[1]) + Math.abs(outputToBuffer[MATRIX_SIDE + 1]))
+                * bufferSize.getHeight();
+        boolean shownWide = (readWidth >= readHeight) != ((rotationDegrees / 90) % 2 != 0);
+        boolean outputWide = outputSize.getWidth() >= outputSize.getHeight();
+        return shownWide == outputWide
+                ? outputSize
+                : new Size(outputSize.getHeight(), outputSize.getWidth());
+    }
+
+    /**
+     * The inverse of a matrix that only moves, scales, turns and mirrors in two dimensions, which
+     * is every matrix a frame is drawn with.
+     *
+     * @throws IllegalArgumentException if it flattens the frame, which cannot be undone
+     */
+    @NonNull
+    public static float[] invertAffine(@NonNull float[] matrix) {
+        checkMatrix(matrix);
+        float a = matrix[0];
+        float b = matrix[MATRIX_SIDE];
+        float c = matrix[1];
+        float d = matrix[MATRIX_SIDE + 1];
+        float determinant = a * d - b * c;
+        if (Math.abs(determinant) < TOLERANCE * TOLERANCE) {
+            throw new IllegalArgumentException("A matrix that flattens the frame has no inverse");
+        }
+        float x = matrix[3 * MATRIX_SIDE];
+        float y = matrix[3 * MATRIX_SIDE + 1];
+        float[] inverse = identity();
+        inverse[0] = d / determinant;
+        inverse[MATRIX_SIDE] = -b / determinant;
+        inverse[1] = -c / determinant;
+        inverse[MATRIX_SIDE + 1] = a / determinant;
+        inverse[3 * MATRIX_SIDE] = -(inverse[0] * x + inverse[MATRIX_SIDE] * y);
+        inverse[3 * MATRIX_SIDE + 1] = -(inverse[1] * x + inverse[MATRIX_SIDE + 1] * y);
+        return inverse;
+    }
+
+    /** Whether a matrix leaves every coordinate where it was, to within rounding. */
+    public static boolean isIdentity(@NonNull float[] matrix) {
+        checkMatrix(matrix);
+        float[] identity = identity();
+        for (int i = 0; i < MATRIX_SIZE; i++) {
+            if (Math.abs(matrix[i] - identity[i]) > TOLERANCE) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -225,6 +367,23 @@ public final class GlMath {
         matrix[3 * MATRIX_SIDE] = 0.5f - 0.5f * (linear[0] + linear[1]);
         matrix[3 * MATRIX_SIDE + 1] = 0.5f - 0.5f * (linear[2] + linear[3]);
         return matrix;
+    }
+
+    /**
+     * The turn or flip in a matrix that may also move and scale, as the signs of its 2x2 part:
+     * {s from s, s from t, t from s, t from t}, each -1, 0 or 1. Whichever pair of entries is
+     * larger decides whether the axes are swapped, so a little rounding cannot.
+     */
+    @NonNull
+    private static float[] signs(@NonNull float[] matrix) {
+        float a = matrix[0];
+        float b = matrix[MATRIX_SIDE];
+        float c = matrix[1];
+        float d = matrix[MATRIX_SIDE + 1];
+        if (Math.abs(a) + Math.abs(d) >= Math.abs(b) + Math.abs(c)) {
+            return new float[] {Math.signum(a), 0f, 0f, Math.signum(d)};
+        }
+        return new float[] {0f, Math.signum(b), Math.signum(c), 0f};
     }
 
     /** The transpose of a 2x2, which for a turn or a flip is also its inverse. */

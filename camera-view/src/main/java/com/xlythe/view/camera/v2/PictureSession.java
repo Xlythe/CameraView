@@ -230,6 +230,11 @@ class PictureSession extends PreviewSession {
      * <p>Encoded here rather than by the camera, which is the cost of this: the JPEG comes from
      * a bitmap this writes, so it does not go through whatever the camera's own encoder would
      * have done. The resolution is the camera's, which is the part that matters.</p>
+     *
+     * <p>Drawn the right way up and mirrored as it is shown, rather than in the sensor's
+     * orientation with an Exif tag to turn it as the camera's own JPEG is. A renderer then draws
+     * the picture exactly as it draws the preview, and a caption it puts at the top is at the
+     * top of the file.</p>
      */
     private void takeDrawnPicture(@NonNull FrameRenderThread effect, @NonNull File file,
             @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
@@ -239,17 +244,18 @@ class PictureSession extends PreviewSession {
             onImageFailed();
             return;
         }
-        int width = mPictureSurface.getWidth();
-        int height = mPictureSurface.getHeight();
+        int orientation = getRelativeCameraOrientation();
+        boolean mirrored = getModule().isUsingFrontFacingCamera();
+        boolean quarterTurned = (orientation / 90) % 2 != 0;
+        int width = quarterTurned ? mPictureSurface.getHeight() : mPictureSurface.getWidth();
+        int height = quarterTurned ? mPictureSurface.getWidth() : mPictureSurface.getHeight();
         ImageReader reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
         mDrawnStillReader = reader;
         Size size = new Size(width, height);
-        // Drawn as the camera would have written it, in the sensor's orientation and unmirrored,
-        // so the Exif turn and mirror below finish it as they finish the camera's own JPEG.
         boolean armed = effect.drawStillInto(reader.getSurface(), size,
                 GlMath.ScaleType.FILL_CENTER,
                 (surfaceTextureMatrix, into) -> System.arraycopy(
-                        GlMath.withoutCameraTransform(surfaceTextureMatrix),
+                        GlMath.uprightMatrix(surfaceTextureMatrix, orientation, mirrored),
                         0, into, 0, into.length),
                 () -> {});
         if (!armed) {
@@ -265,8 +271,7 @@ class PictureSession extends PreviewSession {
                 if (drawn == null) {
                     return;
                 }
-                new DrawnImageSaver(getContext(), toBitmap(drawn), getRelativeCameraOrientation(),
-                        getModule().isUsingFrontFacingCamera(), file, getPictureQuality(), this)
+                new DrawnImageSaver(getContext(), toBitmap(drawn), file, getPictureQuality(), this)
                         .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
             } catch (RuntimeException error) {
                 Log.e(TAG, "Failed to read back a drawn picture", error);
@@ -331,27 +336,22 @@ class PictureSession extends PreviewSession {
     /**
      * Writes a drawn picture, and finishes it the way a captured one is finished.
      *
-     * <p>Separate from {@link ImageSaver} because what it is given is already pixels rather than
-     * a camera frame, but the half that matters is the same: the timestamp, the orientation, the
-     * mirror and the location all have to reach the file, or a filtered photograph would be the
-     * only one in the library missing them.</p>
+     * <p>Separate from {@link ImageSaver} because what it is given is already pixels, already the
+     * right way up and mirrored as shown, rather than a camera frame. The timestamp and the
+     * location still have to reach the file, or a filtered photograph would be the only one in
+     * the library missing them.</p>
      */
     private static final class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
         private final Context mContext;
         private final Bitmap mBitmap;
-        private final int mOrientation;
-        private final boolean mIsReversed;
         private final File mFile;
         private final int mQuality;
         private final PictureSession mSession;
 
-        private DrawnImageSaver(@NonNull Context context, @NonNull Bitmap bitmap, int orientation,
-                boolean reversed, @NonNull File file, int quality,
-                @NonNull PictureSession session) {
+        private DrawnImageSaver(@NonNull Context context, @NonNull Bitmap bitmap,
+                @NonNull File file, int quality, @NonNull PictureSession session) {
             mContext = context.getApplicationContext();
             mBitmap = bitmap;
-            mOrientation = orientation;
-            mIsReversed = reversed;
             mFile = file;
             mQuality = quality;
             mSession = session;
@@ -377,10 +377,6 @@ class PictureSession extends PreviewSession {
             try {
                 Exif exif = new Exif(mFile);
                 exif.attachTimestamp();
-                exif.rotate(mOrientation);
-                if (mIsReversed) {
-                    exif.flipHorizontally();
-                }
                 Location location = SessionImpl.CameraSurface.getLocation(mContext);
                 if (location != null) {
                     exif.attachLocation(location);

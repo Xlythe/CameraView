@@ -300,7 +300,8 @@ class VideoSession extends PictureSession {
         renderer.addEncoderOutput(mVideoSurface, mVideoSurface.getSurface(), size,
                 (surfaceTextureMatrix, into) -> System.arraycopy(
                         GlMath.recordingMatrix(surfaceTextureMatrix, orientation, frontFacing),
-                        0, into, 0, into.length));
+                        0, into, 0, into.length),
+                orientation, frontFacing);
         module.setRecordingMirrored(frontFacing);
     }
 
@@ -321,7 +322,7 @@ class VideoSession extends PictureSession {
             renderer.stop();
             return null;
         }
-        input.setDefaultBufferSize(size.getWidth(), size.getHeight());
+        renderer.setInputBufferSize(size);
         mRecordingInput = new Surface(input);
         mRecordingRenderer = renderer;
         return renderer;

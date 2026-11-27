@@ -1844,6 +1844,13 @@ public class Camera2Module extends ICameraModule {
         }
 
         setTransform(matrix);
+
+        FrameRenderThread effect = mEffect;
+        if (effect != null) {
+            // The preview is turned for the display here, so this is also where how every frame
+            // is shown changes, and with it which way round a renderer's drawing goes.
+            effect.setShownOrientation(getRelativeCameraOrientation(), isUsingFrontFacingCamera());
+        }
     }
 
     @Override

@@ -28,6 +28,7 @@ import android.util.SizeF;
 import android.view.Surface;
 import android.view.View;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
@@ -1692,6 +1693,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mBoundUseCases.clear();
             mBoundUseCases.addAll(requested);
             mActiveCamera = camera;
+            updateFrameEffectOrientation();
             observeCameraState(camera);
             mState = mVideoCapture == null ? State.OPEN : State.BINDING;
             publishSnapshot();
@@ -1826,6 +1828,18 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         releaseFrameEffect();
         return null;
+    }
+
+    /**
+     * Tells the effect how frames are shown, which is how it turns a renderer's drawing to match.
+     * Called once a camera is bound and whenever the display turns, the two things it rests on.
+     */
+    @MainThread
+    private void updateFrameEffectOrientation() {
+        FrameEffect effect = mFrameEffect;
+        if (effect != null) {
+            effect.setShownOrientation(getRelativeCameraOrientation(), mFrontFacing);
+        }
     }
 
     private void releaseFrameEffect() {
@@ -2405,6 +2419,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Override public void onLayoutChanged() {
         runOnMainThread(() -> {
             applyPreviewTransform();
+            updateFrameEffectOrientation();
             if (mPreview != null) mPreview.setTargetRotation(getTargetRotation());
             if (mImageCapture != null) mImageCapture.setTargetRotation(getTargetRotation());
             if (mImageAnalysis != null) mImageAnalysis.setTargetRotation(getTargetRotation());

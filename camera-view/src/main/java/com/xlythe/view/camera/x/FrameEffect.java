@@ -128,6 +128,21 @@ final class FrameEffect extends CameraEffect {
         return mTextureProvider == provider;
     }
 
+    /**
+     * How the camera's frames are shown, so that a renderer draws them the right way up.
+     *
+     * <p>Needed because the effect has one output for the preview, the recording and the still,
+     * and CameraX turns it for each of them after it is drawn. That output is held in whatever
+     * orientation CameraX chose, and only how the frames end up shown says how to turn a
+     * renderer's drawing onto it.</p>
+     *
+     * @param rotationDegrees how far the camera's buffer is turned clockwise to be shown
+     * @param mirrored whether it is then shown mirrored left to right, as a front camera's is
+     */
+    void setShownOrientation(@GlMath.Rotation int rotationDegrees, boolean mirrored) {
+        mProcessor.mRenderThread.setShownOrientation(rotationDegrees, mirrored);
+    }
+
     /** Stops drawing, closes every output and gives the GL context back. */
     @MainThread
     void release() {
@@ -162,8 +177,7 @@ final class FrameEffect extends CameraEffect {
                 request.willNotProvideSurface();
                 throw new ProcessingException();
             }
-            Size resolution = request.getResolution();
-            texture.setDefaultBufferSize(resolution.getWidth(), resolution.getHeight());
+            mRenderThread.setInputBufferSize(request.getResolution());
             // A new Surface per request over the one SurfaceTexture, which is how a rebind at a
             // different resolution is honoured. The previous one is released from the result
             // consumer rather than here, because that only runs once CameraX has stopped writing

@@ -368,6 +368,11 @@ tint), and ColorFilter takes any 4x5 matrix of your own. A renderer that returns
 onDrawFrame passes the frame through, so one renderer can filter some frames and leave others
 alone.
 
+A renderer draws the picture the right way up as it is shown. Whatever it draws at the top is at
+the top of the preview, the recording and the photograph, and left stays left, from either camera
+and however the phone is held; only the camera's own frame turns and mirrors to match the preview.
+frame.getWidth and frame.getHeight are the size of that upright picture.
+
 For a mask rather than a filter, enterBackgroundReplacement segments the subject out of each frame
 and composites it over something else. It takes the frames an analyzer would, so it cannot run at
 the same time as startFrameAnalysis or the barcode scanner, and that is refused rather than left to

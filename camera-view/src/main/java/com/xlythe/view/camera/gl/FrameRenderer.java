@@ -10,6 +10,13 @@ import androidx.annotation.NonNull;
  * watermark, a segmented background, a face drawn over a face, or the camera frame and nothing
  * else.</p>
  *
+ * <p>Every output is drawn the right way up as it is shown: the top of what is drawn is the top of
+ * the preview on screen, of the recording as a player shows it and of the photograph as a gallery
+ * shows it, and left is left, on every backend and from either lens. Only the camera's own frame
+ * turns and mirrors to match the preview, and {@link GlFrame#drawCameraFrame()} takes care of
+ * that. A renderer never needs to know which way the sensor faces, how the display is turned or
+ * whether the lens is mirrored.</p>
+ *
  * <p>Every method is called on the render thread with the GL context current and the output
  * surface bound, so GLES calls are safe inside them and nowhere else. The thread is the camera's:
  * work done here that takes longer than a frame interval costs frames on the preview and in the

@@ -165,7 +165,7 @@ public final class OesTextureProgram {
         GLES20.glDeleteProgram(mProgram);
     }
 
-    private static int compile(int type, @NonNull String source) {
+    static int compile(int type, @NonNull String source) {
         int shader = GLES20.glCreateShader(type);
         if (shader == 0) {
             throw new IllegalStateException("GL would not create a shader");

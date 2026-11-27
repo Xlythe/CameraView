@@ -281,7 +281,6 @@ public final class GlMathTest {
         assertArrayEquals(acrossColumns, GlMath.displayMirror(180), 0f);
         assertArrayEquals(FLIP_T, GlMath.displayMirror(90), 0f);
         assertArrayEquals(FLIP_T, GlMath.displayMirror(270), 0f);
-        assertArrayEquals(FLIP_T, GlMath.displayMirror(-90), 0f);
     }
 
     /**
@@ -336,6 +335,193 @@ public final class GlMathTest {
     @Test
     public void clocksThatAgreeAreTakenAsMonotonic() {
         assertFalse(GlMath.isOnRealtimeClock(4_990_000_000L, 5_000_000_000L, 5_000_000_000L));
+    }
+
+    /** Every display rotation, and every way a sensor can be mounted. */
+    private static final int[] ANGLES = {0, 90, 180, 270};
+
+    /** A quarter turn clockwise, as shown, sends the left edge to the top. */
+    @Test
+    public void aQuarterTurnAsShownSendsTheLeftEdgeToTheTop() {
+        float[] turned = GlMath.asShown(90, false);
+        assertPoint(new float[] {0.5f, 1f}, apply(turned, new float[] {0f, 0.5f}));
+        assertPoint(new float[] {1f, 0.5f}, apply(turned, new float[] {0.5f, 1f}));
+    }
+
+    @Test
+    public void turningAsShownComesBackRoundAfterFourQuarterTurns() {
+        float[] full = GlMath.identity();
+        for (int i = 0; i < 4; i++) {
+            full = GlMath.multiply(GlMath.asShown(90, false), full);
+        }
+        assertTrue(GlMath.isIdentity(full));
+        assertArrayEquals(GlMath.asShown(180, false),
+                GlMath.multiply(GlMath.asShown(90, false), GlMath.asShown(90, false)), 1e-6f);
+        assertTrue(GlMath.isIdentity(GlMath.asShown(0, false)));
+    }
+
+    /** The mirror comes after the turn, across the picture as it is shown. */
+    @Test
+    public void aMirroredPictureIsMirroredAfterItIsTurned() {
+        float[] shown = GlMath.asShown(90, true);
+        // The left edge goes to the top, and then the top's left end goes to its right end.
+        assertPoint(new float[] {0.75f, 1f}, apply(shown, new float[] {0f, 0.25f}));
+    }
+
+    @Test
+    public void anInverseUndoesWhatItInverts() {
+        float[] crop = HALF_TEXEL_CROP;
+        assertTrue(GlMath.isIdentity(GlMath.multiply(GlMath.invertAffine(crop), crop)));
+        float[] request = surfaceTextureMatrix(cameraRequest(270, true));
+        assertTrue(GlMath.isIdentity(GlMath.multiply(request, GlMath.invertAffine(request))));
+    }
+
+    @Test
+    public void aMatrixThatFlattensTheFrameHasNoInverse() {
+        float[] flat = GlMath.identity();
+        flat[5] = 0f;
+        assertThrows(IllegalArgumentException.class, () -> GlMath.invertAffine(flat));
+    }
+
+    @Test
+    public void onlyTheIdentityCountsAsTheIdentity() {
+        assertTrue(GlMath.isIdentity(GlMath.identity()));
+        assertFalse(GlMath.isIdentity(FLIP_S));
+        assertFalse(GlMath.isIdentity(HALF_TEXEL_CROP));
+    }
+
+    /**
+     * A Camera2 preview holds the frame turned upright for the device and is turned the rest of
+     * the way by its view, which turns it back by the display's rotation and mirrors nothing - the
+     * camera already mirrored it. Worked out from the preview's own matrix, that is what comes
+     * out, for every sensor, display rotation and lens.
+     */
+    @Test
+    public void aPreviewIsShownTurnedBackByTheDisplay() {
+        for (boolean front : new boolean[] {false, true}) {
+            for (int sensor : ANGLES) {
+                for (int display : ANGLES) {
+                    int shownRotation = ICameraModule.getRelativeImageOrientation(
+                            display, sensor, front, false);
+                    float[] preview = surfaceTextureMatrix(cameraRequest(sensor, front));
+                    float[] asShown = GlMath.outputAsShown(
+                            GlMath.outputToBuffer(preview, preview), shownRotation, front);
+                    assertArrayEquals((front ? "front" : "back") + " sensor " + sensor
+                                    + " display " + display,
+                            GlMath.asShown((360 - display) % 360, false), asShown, 1e-6f);
+                }
+            }
+        }
+    }
+
+    /** A recording is shown turned by its tag, and has already been mirrored on the way in. */
+    @Test
+    public void aRecordingIsShownTurnedByItsTag() {
+        for (boolean front : new boolean[] {false, true}) {
+            for (int sensor : ANGLES) {
+                for (int display : ANGLES) {
+                    int tag = ICameraModule.getRelativeImageOrientation(
+                            display, sensor, front, false);
+                    float[] reported = surfaceTextureMatrix(cameraRequest(sensor, front));
+                    float[] recording = GlMath.recordingMatrix(reported, tag, front);
+                    assertArrayEquals((front ? "front" : "back") + " sensor " + sensor
+                                    + " display " + display,
+                            GlMath.asShown(tag, false),
+                            GlMath.outputAsShown(GlMath.outputToBuffer(recording, reported),
+                                    tag, front),
+                            1e-6f);
+                }
+            }
+        }
+    }
+
+    /**
+     * A picture drawn upright needs nothing done to it to be shown, and shows every point of the
+     * buffer where the camera's own recording would, mirrored at the front.
+     */
+    @Test
+    public void anUprightPictureIsShownAsItIsDrawn() {
+        for (boolean front : new boolean[] {false, true}) {
+            for (int sensor : ANGLES) {
+                for (int display : ANGLES) {
+                    int rotation = ICameraModule.getRelativeImageOrientation(
+                            display, sensor, front, false);
+                    float[] reported = surfaceTextureMatrix(cameraRequest(sensor, front));
+                    float[] upright = GlMath.uprightMatrix(reported, rotation, front);
+                    String where = (front ? "front" : "back") + " sensor " + sensor
+                            + " display " + display;
+                    assertTrue(where, GlMath.isIdentity(GlMath.outputAsShown(
+                            GlMath.outputToBuffer(upright, reported), rotation, front)));
+                    for (float[] shown : SHOWN_POINTS) {
+                        float[] expected = unturn(front ? mirror(shown) : shown, rotation);
+                        float[] actual = readThrough(upright, shown);
+                        assertEquals(where, expected[0], actual[0], CROP_TOLERANCE);
+                        assertEquals(where, expected[1], actual[1], CROP_TOLERANCE);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The preview's buffer is wide and holds a frame that is shown tall, so a renderer draws it
+     * tall: the same pixels, the other way round.
+     */
+    @Test
+    public void aSqueezedPreviewIsDrawnInTheShapeItIsShown() {
+        float[] preview = surfaceTextureMatrix(cameraRequest(90, false));
+        float[] toBuffer = GlMath.outputToBuffer(preview, preview);
+        Size buffer = new Size(1280, 720);
+
+        assertEquals(new Size(720, 1280), GlMath.shownSize(toBuffer, buffer, buffer, 90));
+        assertEquals(new Size(1280, 720), GlMath.shownSize(toBuffer, buffer, buffer, 0));
+    }
+
+    /** A recording in the sensor's orientation is drawn at its own pixels, turned with its tag. */
+    @Test
+    public void aRecordingIsDrawnAtItsOwnSizeTurned() {
+        float[] reported = surfaceTextureMatrix(cameraRequest(90, false));
+        float[] toBuffer = GlMath.outputToBuffer(
+                GlMath.recordingMatrix(reported, 90, false), reported);
+
+        assertEquals(new Size(1080, 1920), GlMath.shownSize(
+                toBuffer, new Size(1280, 720), new Size(1920, 1080), 90));
+        assertEquals(new Size(1920, 1080), GlMath.shownSize(
+                toBuffer, new Size(1280, 720), new Size(1920, 1080), 180));
+    }
+
+    /**
+     * An output that reads a tall part of a wide buffer is shown tall even without a turn, which
+     * is what a view port cut to a portrait screen does.
+     */
+    @Test
+    public void theShapeShownIsThePartOfTheBufferThatIsRead() {
+        float[] reported = surfaceTextureMatrix(0);
+        float[] tallCrop = GlMath.multiply(reported, new float[] {
+                0.25f, 0f, 0f, 0f,
+                0f, 1f, 0f, 0f,
+                0f, 0f, 1f, 0f,
+                0.375f, 0f, 0f, 1f,
+        });
+        float[] toBuffer = GlMath.outputToBuffer(tallCrop, reported);
+
+        assertEquals(new Size(1080, 1920), GlMath.shownSize(
+                toBuffer, new Size(1920, 1080), new Size(1920, 1080), 0));
+        assertTrue("a crop is not a turn", GlMath.isIdentity(
+                GlMath.outputAsShown(toBuffer, 0, false)));
+    }
+
+    @NonNull
+    private static float[] apply(@NonNull float[] matrix, @NonNull float[] point) {
+        return new float[] {
+                matrix[0] * point[0] + matrix[4] * point[1] + matrix[12],
+                matrix[1] * point[0] + matrix[5] * point[1] + matrix[13],
+        };
+    }
+
+    private static void assertPoint(@NonNull float[] expected, @NonNull float[] actual) {
+        assertEquals(expected[0], actual[0], 1e-6f);
+        assertEquals(expected[1], actual[1], 1e-6f);
     }
 
     /**
