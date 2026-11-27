@@ -29,6 +29,7 @@ import android.os.Parcelable;
 import android.util.DisplayMetrics;
 import android.util.Log;
 import android.util.Range;
+import android.util.Rational;
 import android.util.Size;
 import android.util.SizeF;
 import android.view.Surface;
@@ -50,6 +51,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
@@ -505,6 +507,7 @@ public class Camera2Module extends ICameraModule {
                             mRegisteringSession = null;
                         }
                         mReopenAttempts = 0;
+                        clampExposureCompensation();
                         // Before the first request goes out, so the preview starts at the zoom it
                         // was asked for rather than showing a frame at 1x first.
                         clampZoomToActiveCamera();
@@ -1203,15 +1206,11 @@ public class Camera2Module extends ICameraModule {
     public void setQuality(CameraView.Quality quality) {
         super.setQuality(quality);
 
-        // When quality changes, we need to update our session with the new dimensions
-        if (mActiveSession != null) {
-            if (mActiveSession instanceof PictureSession) {
-                setSession(new PictureSession(this));
-            } else if (mActiveSession instanceof VideoSession) {
-                setSession(new VideoSession(this, ((VideoSession) mActiveSession).getFile()));
-            } else if (mActiveSession instanceof StreamSession) {
-                // Ignored. Streams cannot be restarted so we'll update quality once the stream ends.
-            }
+        // The dimensions belong to the session, so it is rebuilt with them - except while
+        // recording or streaming, which a rebuild would end. The session after it is built with
+        // the new quality.
+        if (mActiveSession != null && !isRecordingOrStreaming()) {
+            setSession(new PictureSession(this));
         }
     }
 
@@ -1222,6 +1221,234 @@ public class Camera2Module extends ICameraModule {
         // The strategy is carried by the repeating request, so the preview has to be reissued for
         // auto-exposure to converge under the new mode before the next capture.
         reissueRepeatingRequest("the flash strategy");
+    }
+
+    /**
+     * Lights the flash continuously, on every request the session makes.
+     *
+     * <p>Refused only while a camera without a flash is open. A request made before then is kept,
+     * and lights the torch on whichever camera opens if it has one.</p>
+     *
+     * <p>Turns low-light boost off, as {@link ICameraModule#setTorchEnabled} does on every
+     * backend: it is an auto-exposure mode of its own, and the torch needs plain ON.</p>
+     */
+    @AnyThread
+    @Override
+    public void setTorchEnabled(boolean enabled) {
+        if (enabled && mCameraDevice != null && !hasFlash()) {
+            Log.w(TAG, "Ignoring torch request because the active camera has no flash unit");
+            return;
+        }
+        boolean changed = enabled != isTorchEnabled() || (enabled && isLowLightBoostEnabled());
+        super.setTorchEnabled(enabled);
+        if (changed) {
+            reissueRepeatingRequest("the torch");
+        }
+    }
+
+    /**
+     * Brightens the preview and recordings in the dark, through the auto-exposure mode
+     * CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY.
+     *
+     * <p>Refused only while a camera without the mode is open, as on CameraX, and turns the torch
+     * off. The camera itself falls back to plain ON for a session it cannot boost, which the
+     * platform documents as anything beyond a preview and one encoder.</p>
+     */
+    @AnyThread
+    @Override
+    public void setLowLightBoostEnabled(boolean enabled) {
+        if (enabled && mCameraDevice != null && !isLowLightBoostSupported()) {
+            Log.w(TAG, "Ignoring low-light boost because the active camera does not support it");
+            return;
+        }
+        boolean changed = enabled != isLowLightBoostEnabled() || (enabled && isTorchEnabled());
+        super.setLowLightBoostEnabled(enabled);
+        if (changed) {
+            reissueRepeatingRequest("low-light boost");
+        }
+    }
+
+    @Override
+    public boolean isLowLightBoostSupported() {
+        return offersLowLightBoost(getCameraCharacteristics());
+    }
+
+    /** Whether a camera lists the low-light boost auto-exposure mode. */
+    static boolean offersLowLightBoost(@Nullable CameraCharacteristics characteristics) {
+        return Build.VERSION.SDK_INT >= 35 && characteristics != null && contains(
+                characteristics.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES),
+                CameraCharacteristics.CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY);
+    }
+
+    /**
+     * Sets the exposure compensation index, in the camera's own steps.
+     *
+     * <p>With no camera open there is no range to hold the index to, so it is kept as given and
+     * clamped once a session is configured. An open camera that cannot compensate refuses it.</p>
+     */
+    @AnyThread
+    @Override
+    public void setExposureCompensation(int exposureCompensation) {
+        if (mCameraDevice == null) {
+            super.setExposureCompensation(exposureCompensation);
+            return;
+        }
+        Range<Integer> range = exposureCompensationRange(getCameraCharacteristics());
+        if (range == null) {
+            Log.w(TAG, "Ignoring exposure request because the active camera does not support it");
+            return;
+        }
+        int clamped = range.clamp(exposureCompensation);
+        boolean changed = clamped != getExposureCompensation();
+        super.setExposureCompensation(clamped);
+        if (changed) {
+            reissueRepeatingRequest("exposure compensation");
+        }
+    }
+
+    /** 0 for a camera that cannot compensate, whatever range it publishes. */
+    @Override
+    public int getMinExposureCompensation() {
+        Range<Integer> range = exposureCompensationRange(getCameraCharacteristics());
+        return range == null ? 0 : range.getLower();
+    }
+
+    /** 0 for a camera that cannot compensate, whatever range it publishes. */
+    @Override
+    public int getMaxExposureCompensation() {
+        Range<Integer> range = exposureCompensationRange(getCameraCharacteristics());
+        return range == null ? 0 : range.getUpper();
+    }
+
+    /** CONTROL_AE_COMPENSATION_STEP, or 0 for a camera that cannot compensate. */
+    @Override
+    public float getExposureCompensationStep() {
+        CameraCharacteristics characteristics = getCameraCharacteristics();
+        if (exposureCompensationRange(characteristics) == null) {
+            return 0f;
+        }
+        Rational step = characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP);
+        return step == null ? 0f : step.floatValue();
+    }
+
+    @Override
+    public boolean isExposureCompensationSupported() {
+        return exposureCompensationRange(getCameraCharacteristics()) != null;
+    }
+
+    /**
+     * The exposure index every request carries, and so every picture's Exif: the one asked for,
+     * held to the active camera's range, or null for a camera that cannot compensate.
+     */
+    @Nullable
+    Integer getRequestedExposureCompensation() {
+        Range<Integer> range = exposureCompensationRange(getCameraCharacteristics());
+        return range == null ? null : range.clamp(getExposureCompensation());
+    }
+
+    /** Holds the index to the range of the camera now configured, for one set before it was. */
+    private void clampExposureCompensation() {
+        Range<Integer> range = exposureCompensationRange(getCameraCharacteristics());
+        if (range != null) {
+            super.setExposureCompensation(range.clamp(getExposureCompensation()));
+        }
+    }
+
+    /**
+     * The exposure compensation range a camera can apply, or null for one that cannot.
+     *
+     * <p>A range that stops at zero on either side counts as none, which is where every backend
+     * draws the line. The platform publishes 0 to 0 for a camera without compensation, and a
+     * range that can only go one way is a camera that does not keep to that.</p>
+     */
+    @Nullable
+    static Range<Integer> exposureCompensationRange(
+            @Nullable CameraCharacteristics characteristics) {
+        Range<Integer> range = characteristics == null ? null
+                : characteristics.get(CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE);
+        if (range == null || range.getLower() == 0 || range.getUpper() == 0) {
+            return null;
+        }
+        return range;
+    }
+
+    /**
+     * Steadies the preview and a recording, each as far as the camera can.
+     *
+     * <p>Refused only while a camera that can steady neither is open. The mode is a session
+     * parameter on many cameras, so a change rebuilds the session rather than reissuing a request,
+     * except while recording or streaming: those keep the mode they started with, and the session
+     * after them is built with the new one.</p>
+     */
+    @AnyThread
+    @Override
+    public void setStabilizationEnabled(boolean enabled) {
+        if (enabled && mCameraDevice != null && !isStabilizationSupported()) {
+            Log.w(TAG, "Ignoring stabilization because the active camera does not support it");
+            return;
+        }
+        boolean changed = enabled != isStabilizationEnabled();
+        super.setStabilizationEnabled(enabled);
+        if (changed) {
+            restartActiveSession();
+        }
+    }
+
+    /**
+     * True when the camera can steady either the preview or a recording digitally.
+     *
+     * <p>Optical stabilization is used where a camera has it but does not count here, because the
+     * CameraX backend does not count it either, and a camera with only OIS would otherwise be
+     * supported on one backend and not the other.</p>
+     */
+    @Override
+    public boolean isStabilizationSupported() {
+        CameraCharacteristics characteristics = getCameraCharacteristics();
+        return offersPreviewStabilization(characteristics)
+                || offersVideoStabilization(characteristics);
+    }
+
+    /** Whether a camera can steady the preview, and with it every other stream it outputs. */
+    static boolean offersPreviewStabilization(@Nullable CameraCharacteristics characteristics) {
+        return Build.VERSION.SDK_INT >= 33 && characteristics != null && contains(
+                characteristics.get(
+                        CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES),
+                CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION);
+    }
+
+    /** Whether a camera can steady what it sends to an encoder. */
+    static boolean offersVideoStabilization(@Nullable CameraCharacteristics characteristics) {
+        return characteristics != null && contains(
+                characteristics.get(
+                        CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES),
+                CameraCharacteristics.CONTROL_VIDEO_STABILIZATION_MODE_ON);
+    }
+
+    /** Whether a camera has a lens it can steady optically. */
+    static boolean offersOpticalStabilization(@Nullable CameraCharacteristics characteristics) {
+        return characteristics != null && contains(
+                characteristics.get(
+                        CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION),
+                CameraCharacteristics.LENS_OPTICAL_STABILIZATION_MODE_ON);
+    }
+
+    /**
+     * Whether a camera lists a mode.
+     *
+     * <p>The lists are searched rather than read as enumerations, because they need not hold only
+     * values the platform defines: Samsung's front cameras list auto-exposure modes 101, 102 and
+     * 104 beside the standard ones.</p>
+     */
+    static boolean contains(@Nullable int[] modes, int mode) {
+        if (modes == null) {
+            return false;
+        }
+        for (int candidate : modes) {
+            if (candidate == mode) {
+                return true;
+            }
+        }
+        return false;
     }
 
     @Override
@@ -1270,8 +1497,7 @@ public class Camera2Module extends ICameraModule {
 
     /**
      * The Exif a picture taken now should carry about how it was taken: the active camera's
-     * optics, and the zoom and flash this session requests. The camera2 backend requests no
-     * exposure compensation, so the bias is always none.
+     * optics, and the zoom, exposure compensation and flash this session requests.
      */
     @NonNull
     ExifCaptureParameters exifCaptureParameters() {
@@ -1283,7 +1509,10 @@ public class Camera2Module extends ICameraModule {
             Log.w(TAG, "Unable to describe the camera for a picture's Exif", error);
             parameters = new ExifCaptureParameters();
         }
-        return parameters.setExposureCompensation(0).setFlash(getFlash(), hasFlash());
+        Integer exposureCompensation = getRequestedExposureCompensation();
+        return parameters
+                .setExposureCompensation(exposureCompensation == null ? 0 : exposureCompensation)
+                .setFlash(getFlash(), hasFlash());
     }
 
     /** Rebuilds the repeating request, for a setting the request itself carries. */
@@ -1508,19 +1737,36 @@ public class Camera2Module extends ICameraModule {
                 && profiles.getSupportedColorSpaces(ImageFormat.JPEG_R).contains(named);
     }
 
-    /** Rebuilds the session, for a setting the session itself carries. */
+    /**
+     * Rebuilds the session, for a setting the session itself carries, unless
+     * {@link #isRecordingOrStreaming}.
+     */
     private void restartActiveSession() {
         mHandler.post(() -> {
-            Session session = mActiveSession;
-            if (mCameraDevice == null || session == null || mIsPaused) {
-                // No session is coming, so a capture waiting for one goes to the session there is.
+            if (mCameraDevice == null || mActiveSession == null || mIsPaused
+                    || isRecordingOrStreaming()) {
+                // No session is coming, or none until the recording or stream ends, so a capture
+                // waiting for one goes to the session there is.
                 mAwaitingFormatSession = false;
                 capturePendingPicture();
                 return;
             }
-            setSession(session instanceof PictureSession && !(session instanceof VideoSession)
-                    ? new PictureSession(this) : session);
+            setSession(new PictureSession(this));
         });
+    }
+
+    /**
+     * Whether a recording or a stream owns the session, or is about to.
+     *
+     * <p>Neither can be rebuilt without ending it, so a setting the session carries waits for the
+     * session built after it. That is the library's rule: a recording is never cut short by a
+     * settings change.</p>
+     */
+    private boolean isRecordingOrStreaming() {
+        return mIsRecording
+                || mActiveSession instanceof VideoSession || mActiveSession instanceof StreamSession
+                || mRegisteringSession instanceof VideoSession
+                || mRegisteringSession instanceof StreamSession;
     }
 
     /**
