@@ -97,7 +97,6 @@ import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.ICameraModule;
-import com.xlythe.view.camera.LocationProvider;
 import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.RawCapturePairer;
@@ -122,10 +121,6 @@ import java.util.concurrent.Executor;
 /** A CameraView backend implemented with CameraX. */
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class CameraXModule extends ICameraModule implements LifecycleOwner {
-    /** The time for which a cached GPS location remains useful. */
-    private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
-    /** A short timeout used only to refresh and read the last known GPS location. */
-    private static final long GPS_TIMEOUT_MILLIS = 10;
     /** The public CameraView zoom range is represented as one hundred linear steps. */
     private static final int MAX_ZOOM_LEVEL = 100;
     /** Maximum time CameraX may take to report a still-image terminal callback. */
@@ -1353,13 +1348,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         capture.jpegDelivered = true;
+        // Read now rather than on the writer's thread, because the camera can close before the
+        // writer runs and the fix it was following goes with it.
+        Location location = getLocation();
         JpegSaver saver;
         try {
             saver = new JpegSaver(image, quality, capture.mirrored, file) {
                 @Nullable
                 @Override
                 protected Location getLocation() {
-                    return CameraXModule.this.getLocation();
+                    return location;
                 }
 
                 @Override
@@ -1386,12 +1384,15 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         capture.dngDelivered = true;
+        // Read now rather than on the writer's thread, because the camera can close before the
+        // writer runs and the fix it was following goes with it.
+        Location location = getLocation();
         new DngWriter(capture.characteristics, pairing,
                 DngWriter.exifOrientation(capture.rotation, capture.mirrored), capture.dng) {
             @Nullable
             @Override
             protected Location getLocation() {
-                return CameraXModule.this.getLocation();
+                return location;
             }
 
             @Override
@@ -1505,25 +1506,6 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mImageTimeoutTask = null;
     }
 
-    /**
-     * Where the device already knows it is, for the paths that run on the main thread.
-     *
-     * <p>{@link #getLocation} waits for a fix, briefly, which is fine from a background thread
-     * and not from this one. Starting a recording happens on the main thread because CameraX
-     * binds there, so it takes what is already known or nothing at all.</p>
-     */
-    @SuppressLint("MissingPermission")
-    @Nullable private Location getLastKnownLocation() {
-        if (!PermissionChecker.hasPermissions(getContext(), Manifest.permission.ACCESS_FINE_LOCATION)) return null;
-        return LocationProvider.getLastKnownGPSLocation(getContext(), STALE_LOCATION_MILLIS);
-    }
-
-    @SuppressLint("MissingPermission")
-    @Nullable private Location getLocation() {
-        if (!PermissionChecker.hasPermissions(getContext(), Manifest.permission.ACCESS_FINE_LOCATION)) return null;
-        return LocationProvider.getGPSLocation(getContext(), STALE_LOCATION_MILLIS, GPS_TIMEOUT_MILLIS);
-    }
-
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override public void startRecording(File file) {
         if (file == null) throw new NullPointerException("file cannot be null");
@@ -1562,7 +1544,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         try {
             FileOutputOptions.Builder output = new FileOutputOptions.Builder(file);
             if (getMaxVideoSize() != CameraView.INDEFINITE_VIDEO_SIZE) output.setFileSizeLimit(getMaxVideoSize());
-            Location where = getLastKnownLocation();
+            Location where = getLocation();
             if (where != null) {
                 output.setLocation(where);
             }

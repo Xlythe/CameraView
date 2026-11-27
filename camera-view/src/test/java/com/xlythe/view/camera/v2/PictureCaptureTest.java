@@ -1,15 +1,23 @@
 package com.xlythe.view.camera.v2;
 
+import static com.xlythe.view.camera.FakeLocation.LATITUDE;
+import static com.xlythe.view.camera.FakeLocation.LONGITUDE;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.location.Location;
+import android.location.LocationManager;
 import android.media.FakeImage;
 import android.media.ImageReader;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.FakeLocation;
+import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader;
 
@@ -23,6 +31,7 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowPausedAsyncTask;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -36,12 +45,19 @@ import java.util.concurrent.atomic.AtomicReference;
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {29, 37}, qualifiers = "w360dp-h800dp-xxxhdpi", shadows = {
+        ShadowAvailableTextureView.class,
         ShadowCallbackCameraCaptureSession.class,
         ShadowInjectableImageReader.class})
 public class PictureCaptureTest {
     /** Stands in for encoded JPEG bytes; nothing in the path parses them. */
     private static final byte[] JPEG_BYTES =
             "not-really-a-jpeg-but-exactly-these-bytes".getBytes(StandardCharsets.US_ASCII);
+
+    /** The smallest JPEG that EXIF can be written into, for the tests that read it back. */
+    private static final byte[] EMPTY_JPEG = {
+            (byte) 0xFF, (byte) 0xD8, // SOI
+            (byte) 0xFF, (byte) 0xD9, // EOI
+    };
 
     private Context context;
     private FakeCamera2.TestCameraView cameraView;
@@ -70,6 +86,7 @@ public class PictureCaptureTest {
     @After
     public void tearDown() {
         module.close();
+        cameraView.close();
         FakeCamera2.idleMainLooper();
         cameraView.release();
         if (output.exists() && !output.delete()) {
@@ -176,6 +193,49 @@ public class PictureCaptureTest {
         FakeCamera2.idleMainLooper();
 
         assertTrue("expected onFailure for a frame nobody asked for", failed.get());
+    }
+
+    /**
+     * A picture is tagged with the fix the camera has followed since it opened, which is still
+     * there once the system has forgotten its own.
+     */
+    @Test
+    public void aPictureIsTaggedWithWhereTheDeviceIs() throws IOException {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+        cameraView.open();
+        FakeCamera2.idleMainLooper();
+        FakeLocation.deliver(context,
+                FakeLocation.fix(LocationManager.GPS_PROVIDER, LATITUDE, LONGITUDE, 5));
+        FakeLocation.setLastKnown(context, LocationManager.GPS_PROVIDER, null);
+
+        cameraView.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        deliverFrame(FakeImage.jpeg(1920, 1080, EMPTY_JPEG));
+
+        Location tagged = new Exif(output).getLocation();
+        assertNotNull("expected the picture to carry a location", tagged);
+        assertEquals(LATITUDE, tagged.getLatitude(), 1e-4);
+        assertEquals(LONGITUDE, tagged.getLongitude(), 1e-4);
+        assertEquals("the capture asks for nothing of its own",
+                2, FakeLocation.listeners(context));
+    }
+
+    /** With no fix to be had, a picture is saved untagged rather than waiting for one. */
+    @Test
+    public void aPictureNeverWaitsForAFix() throws IOException {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        deliverFrame(FakeImage.jpeg(1920, 1080, EMPTY_JPEG));
+
+        assertEquals(output, captured.get());
+        assertEquals("nothing may be asked of the radio", 0, FakeLocation.listeners(context));
+        assertNull(new Exif(output).getLocation());
     }
 
     /** Hands the reader a frame and runs the save through to its callbacks. */

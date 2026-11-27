@@ -77,8 +77,9 @@ public class DngWriter extends AsyncTask<Void, Void, Boolean> {
     /**
      * Where the picture was taken, or null when that is not known.
      *
-     * <p>Asked on the writer's thread, so it may wait briefly for a fix. A DNG cannot be amended
-     * after it is written the way a JPEG's Exif can, so this is the only chance to record it.</p>
+     * <p>Asked on the writer's thread, so it returns a fix already in hand rather than waiting for
+     * one. A DNG cannot be amended after it is written the way a JPEG's Exif can, so this is the
+     * only chance to record it.</p>
      */
     @WorkerThread
     @Nullable

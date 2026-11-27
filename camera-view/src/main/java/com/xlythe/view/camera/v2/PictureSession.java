@@ -1,7 +1,6 @@
 package com.xlythe.view.camera.v2;
 
 import android.annotation.TargetApi;
-import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
@@ -240,7 +239,9 @@ class PictureSession extends PreviewSession {
      * image rather than by throwing, which no end-to-end assertion notices.
      */
     static class ImageSaver extends AsyncTask<Void, Void, Boolean> {
-        private final Context mContext;
+        // Where the picture was taken, or null to leave it untagged
+        @Nullable
+        private final Location mLocation;
 
         // The frame that was captured, closed as soon as its bytes are copied out
         private final SafeCloseImageReader.Frame mFrame;
@@ -255,9 +256,9 @@ class PictureSession extends PreviewSession {
         // The file to save the image to
         private final File mFile;
 
-        ImageSaver(Context context, SafeCloseImageReader.Frame frame, int orientation,
-                boolean reversed, File file) {
-            mContext = context.getApplicationContext();
+        ImageSaver(@Nullable Location location, SafeCloseImageReader.Frame frame,
+                int orientation, boolean reversed, File file) {
+            mLocation = location;
             mFrame = frame;
             mOrientation = orientation;
             mIsReversed = reversed;
@@ -297,9 +298,8 @@ class PictureSession extends PreviewSession {
                 if (mIsReversed) {
                     exif.flipHorizontally();
                 }
-                Location location = SessionImpl.CameraSurface.getLocation(mContext);
-                if (location != null) {
-                    exif.attachLocation(location);
+                if (mLocation != null) {
+                    exif.attachLocation(mLocation);
                 }
                 exif.save();
             } catch (IOException e) {
@@ -433,7 +433,7 @@ class PictureSession extends PreviewSession {
                         final File file = mFile;
                         final PendingPicture picture = mPicture;
                         new ImageSaver(
-                                mCameraView.getContext(),
+                                getLocation(),
                                 frame,
                                 mCameraView.getRelativeCameraOrientation(),
                                 isUsingFrontFacingCamera(),
@@ -693,7 +693,9 @@ class PictureSession extends PreviewSession {
             }
             mFile = null;
             mPicture = null;
-            Context context = getContext().getApplicationContext();
+            // Read now, as a JPEG's location is, because the camera can close before the writer
+            // runs and the fix it was following goes with it.
+            Location location = getLocation();
             new DngWriter(characteristics, pairing,
                     DngWriter.exifOrientation(mCameraView.getRelativeCameraOrientation(),
                             isUsingFrontFacingCamera()),
@@ -702,7 +704,7 @@ class PictureSession extends PreviewSession {
                 @Nullable
                 @Override
                 protected Location getLocation() {
-                    return SessionImpl.CameraSurface.getLocation(context);
+                    return location;
                 }
 
                 @UiThread

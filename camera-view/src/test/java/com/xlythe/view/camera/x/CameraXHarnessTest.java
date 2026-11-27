@@ -5,7 +5,10 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
+import android.content.Context;
+
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAnnouncingCameraManager;
 import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
 
@@ -14,6 +17,7 @@ import org.junit.Test;
 import java.io.File;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 /**
@@ -241,10 +245,16 @@ public class CameraXHarnessTest {
     private static void exerciseCapture(CameraXModule module) throws Exception {
         File file = File.createTempFile("harness", ".jpg");
         file.deleteOnExit();
+        // With the permission held and no fix known. This backend reads the location on the main
+        // thread, so a capture that asked for a fix here would hold the main thread waiting.
+        Context context = RuntimeEnvironment.getApplication();
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
 
         module.takePicture(file);
         FakeCameraXHost.idle();
 
+        assertEquals("a capture asks for no fix of its own", 0, FakeLocation.listeners(context));
         // Whether it failed yet or is still in flight, the camera has to still be usable.
         assertTrue("a capture must not cost the binding",
                 FakeCameraXHost.awaitBind(module));

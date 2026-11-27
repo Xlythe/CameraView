@@ -416,6 +416,9 @@ public class CameraView extends FrameLayout {
 
     private ICameraModule mCameraModule;
 
+    /** Follows the device's location while the camera is open, for the backend to tag captures. */
+    private final LocationTracker mLocationTracker = new LocationTracker(getContext());
+
     /** Lets a burst of layout passes finish before the camera is reconfigured for the last one. */
     private final Runnable mLayoutSettledRunnable = this::onLayoutSettled;
 
@@ -1034,8 +1037,28 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getMaxVideoSize();
     }
 
+    /** Read by {@link ICameraModule#getLocation}, for whichever backend is tagging a capture. */
+    @NonNull
+    LocationTracker getLocationTracker() {
+        return mLocationTracker;
+    }
+
     protected void onOpen() {
         mCameraModule.open();
+        // After the camera, so that one that throws on opening leaves nothing listening.
+        mLocationTracker.start();
+    }
+
+    /**
+     * Picks up a location permission granted while the camera is open. A permission dialog takes
+     * the window's focus and gives it back once answered, as returning from Settings does.
+     */
+    @Override
+    public void onWindowFocusChanged(boolean hasWindowFocus) {
+        super.onWindowFocusChanged(hasWindowFocus);
+        if (hasWindowFocus) {
+            mLocationTracker.refresh();
+        }
     }
 
     protected void onClose() {
@@ -1043,6 +1066,7 @@ public class CameraView extends FrameLayout {
             exitBarcodeScanner();
             stopFrameAnalysis();
         }
+        mLocationTracker.stop();
         mCameraModule.close();
 
         if (!mHasSavedState) {

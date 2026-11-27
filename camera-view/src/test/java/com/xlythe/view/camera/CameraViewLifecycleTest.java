@@ -9,6 +9,7 @@ import android.Manifest;
 import android.content.Context;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.location.LocationManager;
 
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader;
@@ -88,6 +89,64 @@ public class CameraViewLifecycleTest {
 
         assertFalse(cameraView.isOpen());
         assertEquals(1, closes.get());
+    }
+
+    /** The location is followed from when the camera opens until it closes, and never otherwise. */
+    @Test
+    public void theLocationIsFollowedWhileTheCameraIsOpen() {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+        assertEquals("nothing listens before the camera opens", 0, FakeLocation.listeners(context));
+
+        cameraView.open();
+        idle();
+        assertEquals(1, FakeLocation.listeners(context, LocationManager.GPS_PROVIDER));
+        assertEquals(1, FakeLocation.listeners(context, LocationManager.NETWORK_PROVIDER));
+
+        cameraView.close();
+        idle();
+        assertEquals("closing the camera stops it", 0, FakeLocation.listeners(context));
+    }
+
+    /** An app that holds no location permission is neither followed nor asked for one. */
+    @Test
+    public void withoutALocationPermissionNothingIsFollowed() {
+        FakeLocation.addProviders(context);
+
+        cameraView.open();
+        idle();
+
+        assertTrue(cameraView.isOpen());
+        assertEquals(0, FakeLocation.listeners(context));
+    }
+
+    /**
+     * A location permission granted while the camera is open is followed once the window has its
+     * focus back, which is when the permission dialog has been answered.
+     */
+    @Test
+    public void aLocationPermissionGrantedWhileOpenIsFollowed() {
+        FakeLocation.addProviders(context);
+        cameraView.open();
+        idle();
+        assertEquals(0, FakeLocation.listeners(context));
+
+        FakeLocation.grantFine(context);
+        cameraView.onWindowFocusChanged(true);
+
+        assertEquals(1, FakeLocation.listeners(context, LocationManager.GPS_PROVIDER));
+        assertEquals(1, FakeLocation.listeners(context, LocationManager.NETWORK_PROVIDER));
+    }
+
+    /** Focus with the camera closed follows nothing. */
+    @Test
+    public void focusWithTheCameraClosedFollowsNothing() {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+
+        cameraView.onWindowFocusChanged(true);
+
+        assertEquals(0, FakeLocation.listeners(context));
     }
 
     /** Opening twice is one open, because an app cannot always tell. */

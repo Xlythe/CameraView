@@ -114,7 +114,7 @@ class JpegSaver extends AsyncTask<Void, Void, Boolean> {
 
     /**
      * Where the picture was taken, or null when that is not known. Asked on the writer's thread,
-     * so it may wait briefly for a fix.
+     * so it returns a fix already in hand rather than waiting for one.
      */
     @WorkerThread
     @Nullable
