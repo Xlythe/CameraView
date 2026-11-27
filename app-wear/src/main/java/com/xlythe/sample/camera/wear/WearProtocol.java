@@ -48,5 +48,16 @@ final class WearProtocol {
 
     static final int PREVIEW_KEY_FRAME_INTERVAL_SECONDS = 1;
 
+    /**
+     * How much of the preview the watch reads between acknowledgements.
+     *
+     * <p>An acknowledgement is the total the watch has read so far, as a big-endian long, written
+     * back over the preview channel. The phone sends only so much before it waits for one, which
+     * keeps the delay out of the Data Layer and in CameraView's lossy stream, where late frames
+     * are dropped. It has to be well under the phone's PREVIEW_IN_FLIGHT_BYTES, or the phone waits
+     * for an acknowledgement the watch is not yet due to send.</p>
+     */
+    static final int PREVIEW_ACK_INTERVAL_BYTES = 4 * 1024;
+
     private WearProtocol() {}
 }
