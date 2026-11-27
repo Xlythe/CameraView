@@ -167,6 +167,14 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getPictureQuality();
     }
 
+    CameraView.PictureFormat getPictureFormat() {
+        return mCamera2Module.getPictureFormat();
+    }
+
+    boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        return mCamera2Module.isPictureFormatSupported(format);
+    }
+
     @NonNull
     ExifCaptureParameters exifCaptureParameters() {
         return mCamera2Module.exifCaptureParameters();
@@ -257,7 +265,7 @@ abstract class SessionImpl implements Camera2Module.Session {
         if (!mCamera2Module.isStabilizationEnabled()) {
             return;
         }
-        CameraCharacteristics characteristics = mCamera2Module.getActiveCharacteristics();
+        CameraCharacteristics characteristics = mCamera2Module.getCameraCharacteristics();
         if (Build.VERSION.SDK_INT >= 33
                 && Camera2Module.offersPreviewStabilization(characteristics)) {
             builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
@@ -365,6 +373,15 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     @Override
     public void close() {}
+
+    void showImageConfirmation(File file) {
+        mCamera2Module.showImageConfirmation(file);
+    }
+
+    /** Shows a picture that wrote every one of {@code files}, reported as {@code file}. */
+    void showImageConfirmation(@NonNull File file, @NonNull List<File> files) {
+        mCamera2Module.showImageConfirmation(file, files);
+    }
 
     void onImageFailed() {
         mCamera2Module.onImageFailed();

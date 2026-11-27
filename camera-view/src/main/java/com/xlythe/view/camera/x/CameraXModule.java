@@ -14,14 +14,15 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
+import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.location.Location;
+import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
-import android.os.AsyncTask;
 import android.os.Looper;
 import android.util.Log;
 import android.util.Range;
@@ -37,6 +38,7 @@ import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.WorkerThread;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
 import androidx.camera.camera2.interop.Camera2CameraInfo;
@@ -53,6 +55,7 @@ import androidx.camera.core.FocusMeteringAction;
 import androidx.camera.core.FocusMeteringResult;
 import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageCaptureException;
+import androidx.camera.core.ImageProxy;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.MeteringPoint;
 import androidx.camera.core.MirrorMode;
@@ -91,13 +94,16 @@ import androidx.lifecycle.ViewTreeLifecycleOwner;
 
 import com.google.common.util.concurrent.ListenableFuture;
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.PermissionChecker;
+import com.xlythe.view.camera.RawCapturePairer;
 import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.ZoomMath;
 import com.xlythe.view.camera.v2.Camera2Module;
@@ -125,6 +131,11 @@ import java.util.concurrent.Executor;
 public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** Maximum time CameraX may take to report a still-image terminal callback. */
     private static final long IMAGE_CAPTURE_TIMEOUT_MILLIS = 15_000;
+    /**
+     * How many RAW frames, and how many results, may wait to be paired. Captures are taken one at
+     * a time here, so the second slot only covers one left behind by a capture CameraX abandoned.
+     */
+    private static final int MAX_PENDING_RAW = 2;
     /** Maximum time CameraX may take to emit the recording Start event. */
     private static final long RECORDING_START_TIMEOUT_MILLIS = 15_000;
     /** Maximum time CameraX may take to emit Finalize after a stop request. */
@@ -231,6 +242,44 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     /** Whether the bound configuration can take a still while it records. */
     private boolean mSnapshotWhileRecording;
+
+    /**
+     * Pairs each RAW frame CameraX hands over with the camera2 result that describes it, which
+     * arrives separately through interop. Kept across binds, and cleared whenever one ends.
+     */
+    private final RawCapturePairer<TotalCaptureResult> mRawPairer =
+            new RawCapturePairer<>(MAX_PENDING_RAW);
+
+    /** The RAW capture whose images are still arriving, or null. Main thread only. */
+    @Nullable private RawCapture mRawCapture;
+
+    /**
+     * Hands still-capture results to {@link #mRawPairer}, on the camera's own thread.
+     *
+     * <p>Every request the session issues reports here, preview frames included, and only a still
+     * can be the other half of a DNG. Letting the rest in would push the still's result out of the
+     * pairer before its frame arrived.</p>
+     */
+    private final CameraCaptureSession.CaptureCallback mRawCaptureCallback =
+            new CameraCaptureSession.CaptureCallback() {
+                @WorkerThread
+                @Override public void onCaptureCompleted(
+                        @NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request,
+                        @NonNull TotalCaptureResult result) {
+                    Integer intent = request.get(CaptureRequest.CONTROL_CAPTURE_INTENT);
+                    Long timestamp = result.get(CaptureResult.SENSOR_TIMESTAMP);
+                    if (intent == null || timestamp == null
+                            || intent != CaptureRequest.CONTROL_CAPTURE_INTENT_STILL_CAPTURE) {
+                        return;
+                    }
+                    RawCapturePairer.Pairing<TotalCaptureResult> pairing =
+                            mRawPairer.offerMetadata(result, timestamp);
+                    if (pairing != null) {
+                        mMainHandler.post(() -> writeDng(pairing));
+                    }
+                }
+            };
 
     /** Whether the caller asked for faces, which the bound request has to carry.
      *
@@ -1326,9 +1375,21 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             onImageFailed();
             return;
         }
+        boolean raw = writesRaw(getPictureFormat());
+        if (raw && !writesRaw(imageCapture)) {
+            // The format changed to one this camera cannot write, as a lens switch can leave it. A
+            // caller who asked for a DNG and quietly got a JPEG would have no way to tell.
+            Log.w(TAG, "The bound camera cannot capture " + getPictureFormat());
+            onImageFailed();
+            return;
+        }
         long operationId = ++mImageOperationId;
         mPendingImageFile = file;
         scheduleImageTimeout(operationId);
+        if (raw) {
+            takeRawPicture(imageCapture, file, operationId);
+            return;
+        }
         ImageCapture.Metadata metadata = new ImageCapture.Metadata();
         Location location = getLocation();
         metadata.setLocation(location);
@@ -1351,6 +1412,224 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 onImageFailed();
             }
         });
+    }
+
+    /**
+     * Takes a RAW or RAW_JPEG picture in memory and writes it ourselves.
+     *
+     * <p>CameraX's own file writer cannot be trusted with a DNG. It sizes the RAW stream from the
+     * resolution selector without regard to the sensor, and DngCreator answers a frame of the
+     * wrong size with an AssertionError that its writer does not catch, on a thread of CameraX's
+     * where it ends the process. It also describes every DNG after the first with the first
+     * capture's result. So the frames come back in memory, are paired with their own results, and
+     * go through the same writer the camera2 backend uses. They are copied out as they arrive,
+     * because CameraX frees an image's buffer when the camera closes, open or not.</p>
+     *
+     * <p>The capture is over, as far as the camera is concerned, once every image has been handed
+     * to a writer. Closing the camera after that lets the writes finish, and the caller hears from
+     * the writers.</p>
+     */
+    private void takeRawPicture(
+            @NonNull ImageCapture imageCapture, @NonNull File file, long operationId) {
+        boolean jpeg = getPictureFormat() == CameraView.PictureFormat.RAW_JPEG;
+        // RAW writes only the DNG, so it takes the file it was given whatever it is called.
+        File dng = jpeg ? DngWriter.dngBeside(file) : file;
+        List<File> files = new ArrayList<>(2);
+        if (jpeg) files.add(file);
+        files.add(dng);
+        PendingPicture picture = new PendingPicture(file, files, new PendingPicture.Callback() {
+            @Override public void onSaved(@NonNull File saved) {
+                showImageConfirmation(saved, files);
+            }
+
+            @Override public void onFailed() {
+                onImageFailed();
+            }
+        });
+        CameraCharacteristics characteristics = cameraCharacteristics(mActiveCamera);
+        if (characteristics == null) {
+            Log.w(TAG, "The bound camera cannot describe itself to DngCreator");
+            completePendingImage(operationId);
+            picture.fail();
+            return;
+        }
+        // Anything still waiting belongs to a capture that was abandoned.
+        mRawPairer.clear();
+        RawCapture capture = new RawCapture(operationId, jpeg ? file : null, dng, picture,
+                characteristics, mFrontFacing, exifCaptureParameters());
+        mRawCapture = capture;
+        int quality = getPictureQuality();
+        imageCapture.takePicture(mMainExecutor, new ImageCapture.OnImageCapturedCallback() {
+            @Override public void onCaptureStarted() {
+                if (mRawCapture == capture) onShutter();
+            }
+
+            @Override public void onCaptureSuccess(@NonNull ImageProxy image) {
+                if (mRawCapture != capture) {
+                    image.close();
+                    return;
+                }
+                if (image.getFormat() != ImageFormat.RAW_SENSOR) {
+                    saveJpeg(capture, image, quality);
+                    return;
+                }
+                CopiedFrame frame;
+                try {
+                    frame = CopiedFrame.copyOf(image);
+                    capture.rotation = image.getImageInfo().getRotationDegrees();
+                } catch (RuntimeException | OutOfMemoryError error) {
+                    Log.e(TAG, "Failed to copy the raw frame", error);
+                    capture.dngDelivered = true;
+                    capture.picture.onWritten(capture.dng, false);
+                    onRawImageDelivered(capture);
+                    return;
+                } finally {
+                    image.close();
+                }
+                RawCapturePairer.Pairing<TotalCaptureResult> pairing = mRawPairer.offerFrame(frame);
+                if (pairing != null) writeDng(pairing);
+            }
+
+            @Override public void onError(@NonNull ImageCaptureException error) {
+                if (mRawCapture != capture) return;
+                Log.w(TAG, "Image capture failed", error);
+                abandonRawCapture();
+                completePendingImage(operationId);
+            }
+        });
+    }
+
+    /** Writes the JPEG half of a RAW_JPEG capture. */
+    @MainThread
+    private void saveJpeg(@NonNull RawCapture capture, @NonNull ImageProxy image, int quality) {
+        File file = capture.jpeg;
+        if (file == null || capture.jpegDelivered) {
+            image.close();
+            return;
+        }
+        capture.jpegDelivered = true;
+        // Read now rather than on the writer's thread, because the camera can close before the
+        // writer runs and the fix it was following goes with it.
+        Location location = getLocation();
+        JpegSaver saver;
+        try {
+            saver = new JpegSaver(getContext(), image, quality, capture.mirrored, file,
+                    capture.exifParameters) {
+                @Nullable
+                @Override
+                protected Location getLocation() {
+                    return location;
+                }
+
+                @Override
+                protected void onPostExecute(Boolean saved) {
+                    capture.picture.onWritten(file, Boolean.TRUE.equals(saved));
+                }
+            };
+        } catch (RuntimeException | OutOfMemoryError error) {
+            Log.e(TAG, "Failed to copy the JPEG", error);
+            capture.picture.onWritten(file, false);
+            onRawImageDelivered(capture);
+            return;
+        }
+        saver.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        onRawImageDelivered(capture);
+    }
+
+    /** Hands a paired frame to the writer, or closes it if no capture is waiting for it. */
+    @MainThread
+    private void writeDng(@NonNull RawCapturePairer.Pairing<TotalCaptureResult> pairing) {
+        RawCapture capture = mRawCapture;
+        if (capture == null || capture.dngDelivered) {
+            pairing.frame.close();
+            return;
+        }
+        capture.dngDelivered = true;
+        // Read now rather than on the writer's thread, because the camera can close before the
+        // writer runs and the fix it was following goes with it.
+        Location location = getLocation();
+        new DngWriter(capture.characteristics, pairing,
+                DngWriter.exifOrientation(capture.rotation, capture.mirrored), capture.dng) {
+            @Nullable
+            @Override
+            protected Location getLocation() {
+                return location;
+            }
+
+            @Override
+            protected void onPostExecute(Boolean saved) {
+                capture.picture.onWritten(capture.dng, Boolean.TRUE.equals(saved));
+            }
+        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        onRawImageDelivered(capture);
+    }
+
+    /** Ends the camera's part of a capture once every image it owes has reached a writer. */
+    @MainThread
+    private void onRawImageDelivered(@NonNull RawCapture capture) {
+        if (mRawCapture != capture || !capture.dngDelivered
+                || (capture.jpeg != null && !capture.jpegDelivered)) {
+            return;
+        }
+        mRawCapture = null;
+        completePendingImage(capture.operationId);
+    }
+
+    /**
+     * Gives up on whatever the capture in flight has not yet handed to a writer. Its picture
+     * reports the failure once anything already being written has finished.
+     *
+     * @return whether there was a capture to give up on
+     */
+    @MainThread
+    private boolean abandonRawCapture() {
+        RawCapture capture = mRawCapture;
+        mRawCapture = null;
+        mRawPairer.clear();
+        if (capture == null) return false;
+        if (capture.jpeg != null && !capture.jpegDelivered) {
+            capture.picture.onWritten(capture.jpeg, false);
+        }
+        if (!capture.dngDelivered) {
+            capture.picture.onWritten(capture.dng, false);
+        }
+        return true;
+    }
+
+    /** A RAW or RAW_JPEG capture whose images have not all reached a writer yet. */
+    private static final class RawCapture {
+        /** The operation the capture belongs to, ended once every image is delivered. */
+        final long operationId;
+        /** Where the JPEG goes, or null for a capture that writes only the DNG. */
+        @Nullable final File jpeg;
+        /** Where the DNG goes. */
+        @NonNull final File dng;
+        /** The shutter press, told as each file is written or lost. */
+        @NonNull final PendingPicture picture;
+        /** The bound camera's, which DngCreator reads the sensor's description from. */
+        @NonNull final CameraCharacteristics characteristics;
+        /** Whether the picture is mirrored, as a front lens's preview is. */
+        final boolean mirrored;
+        /** How the picture was taken, described as it was asked for, for the JPEG's Exif. */
+        @NonNull final ExifCaptureParameters exifParameters;
+        /** How far the frame is turned, which only arrives with the frame. */
+        int rotation;
+        /** Whether the JPEG has been handed to its writer. */
+        boolean jpegDelivered;
+        /** Whether the DNG has been handed to its writer, or given up on. */
+        boolean dngDelivered;
+
+        RawCapture(long operationId, @Nullable File jpeg, @NonNull File dng,
+                @NonNull PendingPicture picture, @NonNull CameraCharacteristics characteristics,
+                boolean mirrored, @NonNull ExifCaptureParameters exifParameters) {
+            this.operationId = operationId;
+            this.jpeg = jpeg;
+            this.dng = dng;
+            this.picture = picture;
+            this.characteristics = characteristics;
+            this.mirrored = mirrored;
+            this.exifParameters = exifParameters;
+        }
     }
 
     /**
@@ -1437,7 +1716,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mImageOperationId++;
         mPendingImageFile = null;
         cancelImageTimeout();
-        onImageFailed();
+        // A RAW capture reports through its picture, once whatever it already handed to a writer
+        // has finished.
+        if (!abandonRawCapture()) onImageFailed();
         mMainHandler.post(this::rebindForSettledSize);
     }
 
@@ -2149,7 +2430,92 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 && writesUltraHdr(cameraInfo)) {
             builder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR);
         }
+        Size sensorSize = DngWriter.sensorSize(cameraCharacteristics(cameraInfo));
+        if (writesRaw(getPictureFormat()) && writesRaw(cameraInfo, getPictureFormat())
+                && sensorSize != null) {
+            builder.setOutputFormat(outputFormatFor(getPictureFormat()));
+            // DngCreator only writes a frame the sensor's size, so that is the one size asked for.
+            // Should CameraX not offer it after all, its own choice stands and a frame of the
+            // wrong size fails the capture rather than the bind.
+            builder.setResolutionSelector(new ResolutionSelector.Builder()
+                    .setResolutionFilter((sizes, rotation) -> sizes.contains(sensorSize)
+                            ? Collections.singletonList(sensorSize) : sizes)
+                    .build());
+            applyRawCaptureCallback(builder);
+        }
         return builder.build();
+    }
+
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    private void applyRawCaptureCallback(@NonNull ImageCapture.Builder builder) {
+        new Camera2Interop.Extender<>(builder).setSessionCaptureCallback(mRawCaptureCallback);
+    }
+
+    /** Whether a format writes a DNG, with or without a JPEG beside it. */
+    private static boolean writesRaw(@NonNull CameraView.PictureFormat format) {
+        return format == CameraView.PictureFormat.RAW
+                || format == CameraView.PictureFormat.RAW_JPEG;
+    }
+
+    /** Whether a bound use case was configured to capture RAW. */
+    private static boolean writesRaw(@NonNull ImageCapture imageCapture) {
+        int format = imageCapture.getOutputFormat();
+        return format == ImageCapture.OUTPUT_FORMAT_RAW
+                || format == ImageCapture.OUTPUT_FORMAT_RAW_JPEG;
+    }
+
+    /**
+     * Whether this camera can be asked for a DNG in a given format: CameraX has to offer the
+     * output format, and the camera a RAW output at a size DngCreator accepts.
+     */
+    private boolean writesRaw(
+            @NonNull CameraInfo cameraInfo, @NonNull CameraView.PictureFormat format) {
+        try {
+            return ImageCapture.getImageCaptureCapabilities(cameraInfo).getSupportedOutputFormats()
+                    .contains(outputFormatFor(format))
+                    && DngWriter.sensorSize(cameraCharacteristics(cameraInfo)) != null;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Could not ask whether this camera writes RAW", error);
+            return false;
+        }
+    }
+
+    private static int outputFormatFor(@NonNull CameraView.PictureFormat format) {
+        switch (format) {
+            case RAW:
+                return ImageCapture.OUTPUT_FORMAT_RAW;
+            case RAW_JPEG:
+                return ImageCapture.OUTPUT_FORMAT_RAW_JPEG;
+            case ULTRA_HDR:
+                return ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR;
+            case JPEG:
+                // Fall-through
+            default:
+                return ImageCapture.OUTPUT_FORMAT_JPEG;
+        }
+    }
+
+    @Nullable private CameraCharacteristics cameraCharacteristics(@Nullable Camera camera) {
+        return camera == null ? null : cameraCharacteristics(camera.getCameraInfo());
+    }
+
+    /**
+     * A camera's characteristics, whole, through the camera2 camera underneath CameraX.
+     *
+     * <p>DngCreator reads them whole rather than a key at a time, which Camera2CameraInfo is
+     * limited to, so they come from CameraManager by the id it reports.</p>
+     */
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    @Nullable private CameraCharacteristics cameraCharacteristics(@NonNull CameraInfo cameraInfo) {
+        try {
+            CameraManager manager =
+                    (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
+            return manager.getCameraCharacteristics(
+                    Camera2CameraInfo.from(cameraInfo).getCameraId());
+        } catch (CameraAccessException | RuntimeException | LinkageError error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its characteristics", error);
+            return null;
+        }
     }
 
     private static boolean writesUltraHdr(@NonNull CameraInfo cameraInfo) {
@@ -2163,10 +2529,13 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @Override public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        Camera camera = mActiveCamera;
+        if (writesRaw(format)) {
+            return camera != null && writesRaw(camera.getCameraInfo(), format);
+        }
         if (format != CameraView.PictureFormat.ULTRA_HDR) {
             return super.isPictureFormatSupported(format);
         }
-        Camera camera = mActiveCamera;
         return camera != null && writesUltraHdr(camera.getCameraInfo());
     }
 
@@ -2237,6 +2606,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         mBoundUseCases.clear();
         mBoundStreamPreviews.clear();
+        mRawPairer.clear();
         if (mObservedCameraState != null && mCameraStateObserver != null) {
             mObservedCameraState.removeObserver(mCameraStateObserver);
         }
@@ -2347,13 +2717,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /**
      * MAX waits for the best frame. Below it, a picture is a frame the camera already has where
      * it keeps them, which CameraX itself gives up whenever the flash is on or on auto.
+     *
+     * <p>RAW never comes from the buffer: CameraX takes such a picture by reprocessing a kept
+     * frame, and a reprocessed capture writes only JPEG or YUV, never a RAW_SENSOR frame.</p>
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     private int getCaptureMode(@NonNull CameraInfo cameraInfo) {
         if (getQuality() == CameraView.Quality.MAX) {
             return ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY;
         }
-        return cameraInfo.isZslSupported()
+        return cameraInfo.isZslSupported() && !writesRaw(getPictureFormat())
                 ? ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
                 : ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY;
     }

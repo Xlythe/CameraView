@@ -206,6 +206,17 @@ public abstract class ICameraModule {
         mView.showImageConfirmation(file);
     }
 
+    /**
+     * Shows a photo that wrote more than one file, as RAW_JPEG writes a JPEG and a DNG.
+     *
+     * @param file the file the photo is reported as
+     * @param files every file the photo wrote, in the order they are filed in the gallery
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public void showImageConfirmation(@NonNull File file, @NonNull List<File> files) {
+        mView.showImageConfirmation(file, files);
+    }
+
     public void onImageFailed() {
         mView.onImageFailed();
     }

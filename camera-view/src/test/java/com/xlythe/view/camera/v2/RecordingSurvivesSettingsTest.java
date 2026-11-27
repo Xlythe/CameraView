@@ -128,6 +128,28 @@ public class RecordingSurvivesSettingsTest {
         assertTheNextSessionFollows(recording);
     }
 
+    /**
+     * A picture asked for after a format change made while recording is taken by the recording's
+     * session, rather than waiting on the session built for the format, which only comes once the
+     * recording ends.
+     */
+    @Test
+    @Config(minSdk = 34)
+    public void aPictureAfterAFormatChangeWhileRecordingIsTakenAtOnce() {
+        givenUltraHdr();
+        Camera2Module.Session recording = startRecording();
+        module.setPictureFormat(CameraView.PictureFormat.ULTRA_HDR);
+        FakeCamera2.idleMainLooper();
+        int before = ShadowCallbackCameraCaptureSession.getCaptures().size();
+
+        module.takePicture(new File(context.getCacheDir(), "recording-snapshot.jpg"));
+        FakeCamera2.idleMainLooper();
+
+        assertStillRecording(recording);
+        assertTrue("the picture waited for a session the recording holds back",
+                ShadowCallbackCameraCaptureSession.getCaptures().size() > before);
+    }
+
     @Test
     public void aQualityChangeWaitsForTheRecordingToEnd() {
         Camera2Module.Session recording = startRecording();

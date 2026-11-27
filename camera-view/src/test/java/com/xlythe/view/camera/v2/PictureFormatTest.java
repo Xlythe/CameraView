@@ -58,4 +58,19 @@ public class PictureFormatTest {
         assertEquals(CameraView.PictureFormat.JPEG, cameraView.getPictureFormat());
         assertTrue(cameraView.isOpen());
     }
+
+    /** Nor does it report RAW, so a request for a DNG is dropped too. */
+    @Test
+    public void aCameraWithoutRawKeepsJpeg() {
+        cameraView.open();
+        ShadowLooper.idleMainLooper();
+
+        for (CameraView.PictureFormat format : new CameraView.PictureFormat[] {
+                CameraView.PictureFormat.RAW, CameraView.PictureFormat.RAW_JPEG}) {
+            assertFalse(format.name(), cameraView.isPictureFormatSupported(format));
+            cameraView.setPictureFormat(format);
+            ShadowLooper.idleMainLooper();
+            assertEquals(CameraView.PictureFormat.JPEG, cameraView.getPictureFormat());
+        }
+    }
 }

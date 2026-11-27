@@ -48,6 +48,34 @@ public final class FakeCamera2 {
     static final Size SIZE_720P = new Size(1280, 720);
     static final Size SIZE_480P = new Size(640, 480);
 
+    /** The sensor's pixel array and pre-correction active array: the size a DNG is written at. */
+    public static final Size SIZE_RAW = new Size(4000, 3000);
+
+    /**
+     * A RAW output larger than the sensor's arrays, as a camera with a remosaicing mode lists.
+     * DngCreator refuses a frame this size, so taking the largest RAW output would be wrong.
+     */
+    static final Size SIZE_RAW_REMOSAIC = new Size(8000, 6000);
+
+    /**
+     * What a camera says about RAW.
+     *
+     * <p>Two separate claims, and a camera can make either without the other: the RAW
+     * capability, which promises the metadata needed to interpret the sensor's readings, and
+     * RAW_SENSOR outputs in the configuration map. Both are needed.</p>
+     */
+    public enum RawSupport {
+        NONE, CAPABILITY_ONLY, FORMAT_ONLY, FULL;
+
+        boolean hasCapability() {
+            return this == CAPABILITY_ONLY || this == FULL;
+        }
+
+        boolean hasFormat() {
+            return this == FORMAT_ONLY || this == FULL;
+        }
+    }
+
     /**
      * JPEG's internal HAL format.
      *
@@ -123,10 +151,23 @@ public final class FakeCamera2 {
      */
     public static void addBackAndFrontCameras(
             Context context, boolean faceDetection, Integer hardwareLevel) {
+        addBackAndFrontCameras(context, faceDetection, hardwareLevel, RawSupport.NONE);
+    }
+
+    /** Registers a back and a front camera that make this claim about RAW. */
+    public static void addBackAndFrontCameras(Context context, RawSupport rawSupport) {
+        addBackAndFrontCameras(context, true /* faceDetection */,
+                CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL, rawSupport);
+    }
+
+    static void addBackAndFrontCameras(Context context, boolean faceDetection,
+            Integer hardwareLevel, RawSupport rawSupport) {
         addCamera(context, BACK_ID, CameraMetadata.LENS_FACING_BACK, 90,
-                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel);
+                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel,
+                rawSupport);
         addCamera(context, FRONT_ID, CameraMetadata.LENS_FACING_FRONT, 270,
-                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel);
+                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel,
+                rawSupport);
         addCamcorderProfiles();
     }
 
@@ -197,6 +238,23 @@ public final class FakeCamera2 {
 
     static void addCamera(Context context, String id, int lensFacing, int sensorOrientation,
             int deviceType, boolean faceDetection, Integer hardwareLevel) {
+        addCamera(context, id, lensFacing, sensorOrientation, deviceType, faceDetection,
+                hardwareLevel, RawSupport.NONE);
+    }
+
+    static void addCamera(Context context, String id, int lensFacing, int sensorOrientation,
+            int deviceType, boolean faceDetection, Integer hardwareLevel,
+            RawSupport rawSupport) {
+        ShadowCameraManager shadowManager =
+                Shadow.extract(context.getSystemService(CameraManager.class));
+        shadowManager.addCamera(id, characteristics(lensFacing, sensorOrientation, deviceType,
+                faceDetection, hardwareLevel, rawSupport));
+    }
+
+    /** The characteristics {@link #addCamera} registers, for a test that needs them directly. */
+    public static CameraCharacteristics characteristics(int lensFacing, int sensorOrientation,
+            int deviceType, boolean faceDetection, Integer hardwareLevel,
+            RawSupport rawSupport) {
         CameraCharacteristics characteristics = ShadowCameraCharacteristics.newCameraCharacteristics();
         ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
 
@@ -207,6 +265,21 @@ public final class FakeCamera2 {
         shadow.set(CameraCharacteristics.CONTROL_MAX_REGIONS_AE, 1);
         shadow.set(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM, 4f);
         shadow.set(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE, new Rect(0, 0, 4000, 3000));
+        if (rawSupport != RawSupport.NONE) {
+            // The geometry a DNG is written against. Every real camera publishes it, but only a
+            // RAW camera here does: a pixel array twice as wide as the largest JPEG is also a
+            // sensor the zoom offers a 2x crop of, which a test of the zoom does not expect.
+            shadow.set(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                    new Rect(0, 0, SIZE_RAW.getWidth(), SIZE_RAW.getHeight()));
+            shadow.set(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE, SIZE_RAW);
+        }
+        // Published by every camera, and read by DngCreator to date the file it writes.
+        shadow.set(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE,
+                CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN);
+        shadow.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, rawSupport.hasCapability()
+                ? new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
+                        CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW}
+                : new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
         // A plausible phone sensor and lens: 5.76mm x 4.29mm behind a 4.3mm lens, which is about
         // 67 degrees across. Published so that anything working out an angle of view has
         // something to work from - a camera that publishes neither can only decline.
@@ -227,16 +300,14 @@ public final class FakeCamera2 {
         if (hardwareLevel != null) {
             shadow.set(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL, hardwareLevel);
         }
-        shadow.set(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP, streamConfigurationMap());
+        shadow.set(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP,
+                streamConfigurationMap(rawSupport));
         if (android.os.Build.VERSION.SDK_INT >= 37) {
             // Only exists from API 37, and a test configured for an older platform must not see
             // a characteristic that platform could not report.
             shadow.set(CameraCharacteristics.INFO_DEVICE_TYPE, deviceType);
         }
-
-        ShadowCameraManager shadowManager =
-                Shadow.extract(context.getSystemService(CameraManager.class));
-        shadowManager.addCamera(id, characteristics);
+        return characteristics;
     }
 
     /**
@@ -315,12 +386,19 @@ public final class FakeCamera2 {
      * implementation-defined sizes that back SurfaceTexture, MediaRecorder and MediaCodec, and
      * the picture surface reads the JPEG sizes.
      */
-    private static android.hardware.camera2.params.StreamConfigurationMap streamConfigurationMap() {
+    private static android.hardware.camera2.params.StreamConfigurationMap streamConfigurationMap(
+            RawSupport rawSupport) {
         StreamConfigurationMapBuilder builder = StreamConfigurationMapBuilder.newBuilder();
         for (Size size : new Size[] {SIZE_1080P, SIZE_720P, SIZE_480P}) {
             builder.addOutputSize(size);
             builder.addOutputSize(HAL_PIXEL_FORMAT_BLOB, size);
             builder.addOutputSize(ImageFormat.YUV_420_888, size);
+        }
+        if (rawSupport.hasFormat()) {
+            // The remosaic size first and largest, so a choice of "the largest" or "the first"
+            // would both pick the size DngCreator refuses.
+            builder.addOutputSize(ImageFormat.RAW_SENSOR, SIZE_RAW_REMOSAIC);
+            builder.addOutputSize(ImageFormat.RAW_SENSOR, SIZE_RAW);
         }
         return builder.build();
     }

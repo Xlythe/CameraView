@@ -773,6 +773,29 @@ class CameraComposableTest {
         assertTrue(captured.isEmpty())
     }
 
+    /** A RAW_JPEG picture without a file reaches onImageSaved twice, the JPEG first. */
+    @Test
+    fun aRawJpegPictureWithoutAFileIsReportedByBothUris() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val saved = mutableListOf<Uri>()
+        compose.setContent {
+            Camera(controller = controller, onImageSaved = { saved.add(it) })
+        }
+        compose.waitForIdle()
+
+        CaptureDelivery.deliverOwnRawJpeg(requireCameraView(), JPEG_BYTES, DNG_BYTES)
+        awaitUntil { saved.isNotEmpty() }
+
+        assertEquals(2, saved.size)
+        assertEquals("image/jpeg", mimeTypeInserted(0))
+        assertEquals("image/x-adobe-dng", mimeTypeInserted(1))
+    }
+
+    /** The MIME type of the nth row filed, as handed to MediaStore. */
+    private fun mimeTypeInserted(index: Int): String? =
+        Shadows.shadowOf(compose.activity.contentResolver).insertStatements[index]
+            .contentValues.getAsString(MediaStore.MediaColumns.MIME_TYPE)
+
     /** The controller's recording without a file reaches the camera like one with a file. */
     @Test
     fun theControllerRecordsWithoutAFile() {
@@ -874,6 +897,9 @@ class CameraComposableTest {
     private companion object {
         /** Stands in for an encoded picture; nothing on the way to MediaStore parses it. */
         val JPEG_BYTES = "not-really-a-jpeg".toByteArray()
+
+        /** Stands in for a DNG, distinct from [JPEG_BYTES]. */
+        val DNG_BYTES = "not-really-a-dng".toByteArray()
 
         /** One display frame, as the animator sees it. */
         const val FRAME_MILLIS = 16L

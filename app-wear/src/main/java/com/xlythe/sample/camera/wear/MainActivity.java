@@ -26,7 +26,12 @@ import com.google.android.gms.wearable.Wearable;
 import com.xlythe.view.camera.VideoStream;
 import com.xlythe.view.camera.VideoView;
 
+import java.io.DataOutputStream;
 import java.io.File;
+import java.io.FilterInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.Set;
@@ -194,21 +199,40 @@ public class MainActivity extends AppCompatActivity {
      * Plays the phone's preview.
      *
      * <p>The channel's input stream is H.264 exactly as CameraView's encoder produced it, which is
-     * what VideoView.setStream expects, so there is nothing to decode here.</p>
+     * what VideoView.setStream expects, so there is nothing to decode here. Its output stream
+     * carries the acknowledgements the phone paces itself by.</p>
      */
     @WorkerThread
     private void showPreview(@NonNull ChannelClient.Channel channel) {
         ChannelClient channels = Wearable.getChannelClient(this);
-        channels.getInputStream(channel).addOnSuccessListener(this, inputStream -> {
-            closeStream();
-            mStream = new VideoStream.Builder().withVideoStream(inputStream).build();
-            mPreview.setStream(mStream);
-            mPreview.play();
-            setStatus(R.string.status_streaming);
-        }).addOnFailureListener(this, error -> {
-            Log.w(TAG, "Could not read the preview", error);
-            setStatus(R.string.status_preview_failed);
-        });
+        channels.getInputStream(channel).addOnSuccessListener(this, inputStream ->
+                channels.getOutputStream(channel).addOnSuccessListener(this, acks -> {
+                    closeStream();
+                    mStream = new VideoStream.Builder()
+                            .withVideoStream(new AcknowledgingInputStream(inputStream, acks))
+                            .build();
+                    mPreview.setStream(mStream);
+                    mPreview.play();
+                    setStatus(R.string.status_streaming);
+                }).addOnFailureListener(this, error -> {
+                    closeQuietly(inputStream);
+                    onPreviewFailed(error);
+                })
+        ).addOnFailureListener(this, this::onPreviewFailed);
+    }
+
+    @MainThread
+    private void onPreviewFailed(@NonNull Exception error) {
+        Log.w(TAG, "Could not read the preview", error);
+        setStatus(R.string.status_preview_failed);
+    }
+
+    private static void closeQuietly(@NonNull InputStream inputStream) {
+        try {
+            inputStream.close();
+        } catch (IOException error) {
+            Log.d(TAG, "Could not close the preview", error);
+        }
     }
 
     /**
@@ -268,5 +292,75 @@ public class MainActivity extends AppCompatActivity {
     @UiThread
     private void setStatus(@StringRes int message) {
         mStatus.setText(message);
+    }
+
+    /**
+     * The preview as it comes off the channel, telling the phone how much of it has been read.
+     *
+     * <p>The phone sends only so much before it waits to hear back, so what is counted is what was
+     * read off the channel rather than what was shown: a frame waiting in the Data Layer is delay
+     * the phone could have dropped. Read on VideoPlayer's thread, which is also where the
+     * acknowledgements are written.</p>
+     */
+    private static final class AcknowledgingInputStream extends FilterInputStream {
+        /** Back up the same channel to the phone. */
+        private final DataOutputStream mAcks;
+
+        /** Bytes read off the channel. */
+        private long mRead;
+
+        /** {@link #mRead} as of the last acknowledgement. */
+        private long mAcknowledged;
+
+        AcknowledgingInputStream(@NonNull InputStream preview, @NonNull OutputStream acks) {
+            super(preview);
+            mAcks = new DataOutputStream(acks);
+        }
+
+        @Override
+        public int read() throws IOException {
+            int read = super.read();
+            if (read >= 0) {
+                count(1);
+            }
+            return read;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            int read = super.read(buffer, offset, length);
+            if (read > 0) {
+                count(read);
+            }
+            return read;
+        }
+
+        @Override
+        public long skip(long bytes) throws IOException {
+            long skipped = super.skip(bytes);
+            if (skipped > 0) {
+                count(skipped);
+            }
+            return skipped;
+        }
+
+        @WorkerThread
+        private void count(long bytes) throws IOException {
+            mRead += bytes;
+            if (mRead - mAcknowledged >= WearProtocol.PREVIEW_ACK_INTERVAL_BYTES) {
+                mAcks.writeLong(mRead);
+                mAcks.flush();
+                mAcknowledged = mRead;
+            }
+        }
+
+        @Override
+        public void close() throws IOException {
+            try {
+                super.close();
+            } finally {
+                mAcks.close();
+            }
+        }
     }
 }
