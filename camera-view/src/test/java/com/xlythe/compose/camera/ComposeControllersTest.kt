@@ -11,6 +11,7 @@ import com.xlythe.view.camera.Face
 import com.xlythe.view.camera.FrameStream
 import com.xlythe.view.camera.VideoStream
 import com.xlythe.view.camera.VideoView
+import com.xlythe.view.camera.gl.BackgroundReplacer
 import org.junit.Assert.assertNotNull
 import org.junit.Before
 import org.junit.Test
@@ -141,6 +142,9 @@ class ComposeControllersTest {
             override fun stopPanorama() {}
 
             override fun cancelPanorama() {}
+            override fun enterBackgroundReplacement(replacer: BackgroundReplacer): Boolean = false
+
+            override fun exitBackgroundReplacement() {}
         }
 
         controllerState.value = controller

@@ -1,13 +1,16 @@
 package com.xlythe.view.camera.v2;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.ImageFormat;
+import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureFailure;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
@@ -26,8 +29,11 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifNoRoomException;
 import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.RawCapturePairer;
+import com.xlythe.view.camera.gl.FrameRenderThread;
+import com.xlythe.view.camera.gl.GlMath;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -45,6 +51,7 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.UiThread;
 import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
+import androidx.exifinterface.media.ExifInterface;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
@@ -86,6 +93,27 @@ class PictureSession extends PreviewSession {
     @Nullable
     private volatile Metering mMetering;
 
+    /**
+     * The renderer input the camera writes a still into, or null when nothing is drawing.
+     *
+     * <p>Made once in {@link #initialize} and held, because the session is configured around it
+     * and the request has to target the same one.</p>
+     */
+    @Nullable
+    private Surface mEffectStillInput;
+
+    /**
+     * The drawn picture on its way to disk, or null when none is.
+     *
+     * <p>Holds the reader the renderer draws into, because nothing else does. The renderer keeps
+     * only the reader's surface, and an ImageReader that nothing references is collected and its
+     * surface released - after which the picture has nowhere to be drawn, and the capture never
+     * reports. Volatile because a picture can be asked for from any thread and is read back on
+     * the camera's handler.</p>
+     */
+    @Nullable
+    private volatile DrawnPicture mDrawnPicture;
+
     PictureSession(Camera2Module camera2Module) {
         super(camera2Module);
         mPictureSurface = new PictureSurface(camera2Module, getPreviewSurface());
@@ -106,15 +134,45 @@ class PictureSession extends PreviewSession {
         // then capped to it.
         onPreviewInitialized(map);
         if (hasStillCapture()) {
-            mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr());
             // Asked of the camera again rather than trusted from the request, because a lens
             // change can leave a format accepted for the back camera in front of a front camera
-            // that cannot write it.
+            // that cannot write it. A drawn picture is a JPEG, so no RAW output is configured
+            // while frames are drawn.
             CameraView.PictureFormat format = getPictureFormat();
-            if (allowsRaw() && writesRaw(format) && isPictureFormatSupported(format)) {
+            boolean drawing = getModule().getEffect() != null;
+            boolean raw = !drawing && allowsRaw() && writesRaw(format)
+                    && isPictureFormatSupported(format);
+            // One request reads all of its outputs in one pixel mode, and the RAW output is
+            // sized for the binned one, so a session that writes a DNG keeps its JPEG binned. A
+            // drawn picture keeps it binned too, since the renderer reads a binned stream.
+            mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr(),
+                    allowsMaximumResolution() && !raw && !drawing);
+            // Once the still has a size, and once only: asking the renderer for an input makes
+            // one, so asking twice leaves the session configured around a surface that nothing
+            // is drawing into - which is a capture that configures and then never arrives.
+            mEffectStillInput = createEffectStillInput();
+            if (raw) {
                 mRawSurface.initialize(map);
             }
         }
+    }
+
+    /**
+     * Where the camera writes a still while an effect is running, or null when none is.
+     *
+     * <p>A second input to the renderer rather than the preview stream it is already drawing,
+     * because a camera gives its full resolution only to a request aimed at a high-resolution
+     * target. Taking the photograph off the preview would quietly turn a twelve megapixel
+     * camera into a two megapixel one.</p>
+     */
+    @Nullable
+    private Surface createEffectStillInput() {
+        FrameRenderThread effect = getModule().getEffect();
+        if (effect == null || !mPictureSurface.hasSize()) {
+            return null;
+        }
+        return effect.createStillInput(
+                new Size(mPictureSurface.getWidth(), mPictureSurface.getHeight()));
     }
 
     /** Lets a subclass add its own outputs once the preview has a size and before the still does. */
@@ -157,15 +215,32 @@ class PictureSession extends PreviewSession {
         return true;
     }
 
+    /**
+     * Whether a MAX still may read the sensor out unbinned, on a camera that offers it. The
+     * readout stalls the repeating frames while it happens, which a recording cannot afford.
+     */
+    protected boolean allowsMaximumResolution() {
+        return true;
+    }
+
     @NonNull
     @Override
     public List<Surface> getSurfaces() {
         List<Surface> surfaces = super.getSurfaces();
-        if (hasStillCapture()) {
-            surfaces.add(mPictureSurface.getSurface());
-            if (mRawSurface.isInitialized()) {
-                surfaces.add(mRawSurface.getSurface());
-            }
+        if (!hasStillCapture()) {
+            return surfaces;
+        }
+        Surface stillInput = mEffectStillInput;
+        if (stillInput != null) {
+            // The renderer's own input, at the size the camera would have written the JPEG.
+            // The reader is left out: a frame drawn by GL cannot land in a JPEG reader, so the
+            // photograph is encoded from what the renderer produced instead.
+            surfaces.add(stillInput);
+            return surfaces;
+        }
+        surfaces.add(mPictureSurface.getSurface());
+        if (mRawSurface.isInitialized()) {
+            surfaces.add(mRawSurface.getSurface());
         }
         return surfaces;
     }
@@ -180,6 +255,7 @@ class PictureSession extends PreviewSession {
         }
         mPictureSurface.close();
         mRawSurface.close();
+        abandonDrawnPicture();
     }
 
     /** Whether a flash picture may run auto-exposure's metering, with its pre-flash, first. */
@@ -229,9 +305,11 @@ class PictureSession extends PreviewSession {
         }
         CameraView.PictureFormat format = getPictureFormat();
         boolean raw = writesRaw(format);
-        if (raw && !mRawSurface.isInitialized()) {
-            // Reached while recording, and on a camera that cannot write RAW. A caller who asked
-            // for a DNG and quietly got a JPEG would have no way to tell, so this refuses.
+        FrameRenderThread effect = getModule().getEffect();
+        if (raw && (effect != null || !mRawSurface.isInitialized())) {
+            // Reached while recording, while frames are drawn, and on a camera that cannot write
+            // RAW. A renderer draws a JPEG and nothing else, and a caller who asked for a DNG and
+            // quietly got a JPEG would have no way to tell, so this refuses.
             Log.w(TAG, "This session cannot capture " + format);
             onImageFailed();
             return;
@@ -257,13 +335,22 @@ class PictureSession extends PreviewSession {
                 onImageFailed();
             }
         });
-        if (jpeg) {
-            mPictureSurface.initializePicture(file, exifCaptureParameters(), picture);
+        Targets targets;
+        if (effect != null) {
+            DrawnPicture drawn = prepareDrawnPicture(effect, file, picture);
+            if (drawn == null) {
+                return;
+            }
+            targets = new Targets(drawn);
+        } else {
+            if (jpeg) {
+                mPictureSurface.initializePicture(file, exifCaptureParameters(), picture);
+            }
+            if (raw) {
+                mRawSurface.initializePicture(dng, picture);
+            }
+            targets = new Targets(jpeg, raw);
         }
-        if (raw) {
-            mRawSurface.initializePicture(dng, picture);
-        }
-        Targets targets = new Targets(jpeg, raw);
         // The torch takes the flash strategy's place on every request, so nothing fires to meter
         // for.
         if (!isTorchLit() && flashWillFire(hasFlash(), getFlash(), getAeState())) {
@@ -285,9 +372,20 @@ class PictureSession extends PreviewSession {
         /** Whether the press writes a DNG. */
         final boolean mRaw;
 
+        /** The drawn picture the press writes instead of either, or null for a camera frame. */
+        @Nullable
+        final DrawnPicture mDrawn;
+
         Targets(boolean jpeg, boolean raw) {
             mJpeg = jpeg;
             mRaw = raw;
+            mDrawn = null;
+        }
+
+        Targets(@NonNull DrawnPicture drawn) {
+            mJpeg = false;
+            mRaw = false;
+            mDrawn = drawn;
         }
     }
 
@@ -312,18 +410,32 @@ class PictureSession extends PreviewSession {
             if (targets.mRaw) {
                 builder.addTarget(mRawSurface.getSurface());
             }
-            if (mMeteringRectangle != null) {
-                builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
-                builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
+            DrawnPicture drawn = targets.mDrawn;
+            if (drawn != null) {
+                builder.addTarget(drawn.mInput);
             }
-            applyZoom(builder);
+            MeteringRectangle metering = mMeteringRectangle;
+            Rect cropRegion = mCropRegion;
+            if (Build.VERSION.SDK_INT >= 31 && mPictureSurface.isMaximumResolution()) {
+                builder.set(CaptureRequest.SENSOR_PIXEL_MODE,
+                        CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
+                metering = toMaximumResolution(metering);
+                cropRegion = toMaximumResolution(cropRegion);
+            }
+            if (metering != null) {
+                builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{metering});
+                builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{metering});
+            }
+            applyZoom(builder, cropRegion);
             applyStabilization(builder);
             builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
             if (Build.VERSION.SDK_INT >= 26 && isZeroShutterLagSupported()) {
                 // Set either way, since some still templates turn it on themselves. A RAW frame
                 // taken from the buffer carries that frame's timestamp, and so does its result,
-                // so the two still pair.
-                builder.set(CaptureRequest.CONTROL_ENABLE_ZSL, fromBuffer);
+                // so the two still pair. An unbinned still never comes from the buffer, whose
+                // frames are binned.
+                builder.set(CaptureRequest.CONTROL_ENABLE_ZSL,
+                        fromBuffer && !mPictureSurface.isMaximumResolution());
             }
             // A DNG is written from the capture result as much as from the frame, so only a RAW
             // capture hands the result on.
@@ -345,6 +457,9 @@ class PictureSession extends PreviewSession {
                     if (rawCallback != null) {
                         rawCallback.onCaptureCompleted(session, request, result);
                     }
+                    if (drawn != null) {
+                        drawn.onCaptureCompleted(result);
+                    }
                 }
 
                 @Override
@@ -353,6 +468,19 @@ class PictureSession extends PreviewSession {
                     if (rawCallback != null) {
                         rawCallback.onCaptureFailed(session, request, failure);
                     }
+                    if (drawn != null) {
+                        drawn.onCaptureFailed(failure);
+                    }
+                }
+
+                @Override
+                public void onCaptureBufferLost(@NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request, @NonNull Surface target,
+                        long frameNumber) {
+                    if (drawn != null && target == drawn.mInput) {
+                        Log.e(TAG, "The camera lost the frame a picture was to be drawn from");
+                        drawn.abandon();
+                    }
                 }
             }, getHandler());
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
@@ -360,6 +488,7 @@ class PictureSession extends PreviewSession {
             Log.e(TAG, "Failed to create capture request", e);
             mPictureSurface.abandonPicture();
             mRawSurface.abandonPicture();
+            abandonDrawnPicture();
         }
     }
 
@@ -401,6 +530,7 @@ class PictureSession extends PreviewSession {
             getHandler().removeCallbacks(metering);
             mPictureSurface.abandonPicture();
             mRawSurface.abandonPicture();
+            abandonDrawnPicture();
         }
     }
 
@@ -485,6 +615,337 @@ class PictureSession extends PreviewSession {
     }
 
     /**
+     * Arms the renderer to draw the next still, and returns the picture it will be, or null
+     * having failed {@code picture} if it cannot.
+     *
+     * <p>The camera writes one full-size frame into the renderer, the renderer draws it the way
+     * it draws every other frame, and what comes out is read back and encoded. So a filter, a
+     * mask or a replaced background reaches the photograph and not only the preview.</p>
+     *
+     * <p>Encoded here rather than by the camera: the JPEG comes from a bitmap this writes, so it
+     * does not go through the camera's own encoder, and every tag the camera would have written
+     * is filled in from the frame's capture result instead. The resolution is the camera's.</p>
+     *
+     * <p>Drawn the right way up and mirrored as it is shown, rather than in the sensor's
+     * orientation with an Exif tag to turn it as the camera's own JPEG is. A renderer then draws
+     * the picture exactly as it draws the preview, and a caption it puts at the top is at the
+     * top of the file.</p>
+     */
+    @Nullable
+    private DrawnPicture prepareDrawnPicture(@NonNull FrameRenderThread effect,
+            @NonNull File file, @NonNull PendingPicture picture) {
+        Surface input = mEffectStillInput;
+        if (input == null) {
+            Log.w(TAG, "The renderer has no still input, so there is nothing to draw into");
+            picture.fail();
+            return null;
+        }
+        DrawnPicture previous = mDrawnPicture;
+        if (previous != null) {
+            // The renderer draws one still at a time, so the newer press takes its place rather
+            // than both waiting on a frame only one of them can have.
+            Log.w(TAG, "Giving up a drawn picture for the one asked for after it");
+            previous.abandon();
+        }
+        int orientation = getRelativeCameraOrientation();
+        boolean mirrored = getModule().isUsingFrontFacingCamera();
+        boolean quarterTurned = (orientation / 90) % 2 != 0;
+        int width = quarterTurned ? mPictureSurface.getHeight() : mPictureSurface.getWidth();
+        int height = quarterTurned ? mPictureSurface.getWidth() : mPictureSurface.getHeight();
+        SafeCloseImageReader reader =
+                new SafeCloseImageReader(width, height, PixelFormat.RGBA_8888, 2 /* maxImages */);
+        boolean armed = effect.drawStillInto(reader.getSurface(), new Size(width, height),
+                GlMath.ScaleType.FILL_CENTER,
+                (surfaceTextureMatrix, into) -> System.arraycopy(
+                        GlMath.uprightMatrix(surfaceTextureMatrix, orientation, mirrored),
+                        0, into, 0, into.length),
+                () -> {});
+        if (!armed) {
+            reader.close();
+            picture.fail();
+            return null;
+        }
+        DrawnPicture drawn = new DrawnPicture(
+                effect, input, reader, file, exifCaptureParameters(), picture);
+        mDrawnPicture = drawn;
+        reader.setOnImageAvailableListener(drawn::onImageAvailable, getHandler());
+        return drawn;
+    }
+
+    /** Gives up the drawn picture on its way, if there is one. */
+    private void abandonDrawnPicture() {
+        DrawnPicture drawn = mDrawnPicture;
+        if (drawn != null) {
+            drawn.abandon();
+        }
+    }
+
+    /**
+     * A drawn picture on its way to disk.
+     *
+     * <p>Written once two things are back, which arrive in either order: the drawing, read back
+     * from the reader, and the camera's capture result for the frame it was drawn from, which is
+     * where the file's exposure, sensitivity, aperture and focus distance come from.</p>
+     */
+    private final class DrawnPicture {
+        /** The renderer drawing the picture, told to stop waiting if the picture is given up. */
+        private final FrameRenderThread mEffect;
+
+        /** The renderer's input the camera writes the frame into. */
+        final Surface mInput;
+
+        /** The reader the renderer draws into, closed once the drawing is read back. */
+        private final SafeCloseImageReader mReader;
+
+        /** Where the JPEG goes. */
+        private final File mFile;
+
+        /** How the picture was taken, described when it was asked for. */
+        private final ExifCaptureParameters mExifParameters;
+
+        /** The shutter press, told once the JPEG is written or lost. */
+        private final PendingPicture mPicture;
+
+        /** The drawing, once read back, or null until then. */
+        @Nullable
+        private Bitmap mBitmap;
+
+        /** Whether the camera has reported the frame, with or without its capture result. */
+        private boolean mCaptured;
+
+        /** The frame's capture result, or null until it arrives or if the camera lost it. */
+        @Nullable
+        private TotalCaptureResult mResult;
+
+        /** Whether the picture has gone to its writer or been given up. */
+        private boolean mFinished;
+
+        DrawnPicture(@NonNull FrameRenderThread effect, @NonNull Surface input,
+                @NonNull SafeCloseImageReader reader, @NonNull File file,
+                @NonNull ExifCaptureParameters exifParameters, @NonNull PendingPicture picture) {
+            mEffect = effect;
+            mInput = input;
+            mReader = reader;
+            mFile = file;
+            mExifParameters = exifParameters;
+            mPicture = picture;
+        }
+
+        @MainThread
+        void onImageAvailable(@NonNull SafeCloseImageReader reader) {
+            SafeCloseImageReader.Frame frame;
+            try {
+                frame = reader.acquireLatestImage();
+            } catch (IllegalStateException error) {
+                Log.e(TAG, "Failed to acquire a drawn picture", error);
+                abandon();
+                return;
+            }
+            if (frame == null) {
+                return;
+            }
+            Bitmap bitmap;
+            try {
+                bitmap = toBitmap(frame.getImage());
+            } catch (RuntimeException | OutOfMemoryError error) {
+                Log.e(TAG, "Failed to read back a drawn picture", error);
+                abandon();
+                return;
+            } finally {
+                frame.close();
+                // One frame is all that was asked for, and the reader holds native buffers.
+                reader.close();
+            }
+            if (mFinished) {
+                bitmap.recycle();
+                return;
+            }
+            mBitmap = bitmap;
+            saveWhenReady();
+        }
+
+        @MainThread
+        void onCaptureCompleted(@NonNull TotalCaptureResult result) {
+            mResult = result;
+            mCaptured = true;
+            saveWhenReady();
+        }
+
+        @MainThread
+        void onCaptureFailed(@NonNull CaptureFailure failure) {
+            if (failure.wasImageCaptured()) {
+                // The frame is on its way without its result, so the file goes without what only
+                // the result could have said.
+                mCaptured = true;
+                saveWhenReady();
+                return;
+            }
+            Log.e(TAG, "The camera dropped a drawn picture, reason " + failure.getReason());
+            abandon();
+        }
+
+        /** Hands the picture to its writer once both the drawing and the camera's report are in. */
+        @MainThread
+        private void saveWhenReady() {
+            Bitmap bitmap = mBitmap;
+            if (mFinished || bitmap == null || !mCaptured) {
+                return;
+            }
+            mFinished = true;
+            mBitmap = null;
+            if (mDrawnPicture == this) {
+                mDrawnPicture = null;
+            }
+            TotalCaptureResult result = mResult;
+            if (result != null) {
+                mExifParameters.setCaptureResult(result);
+            }
+            File file = mFile;
+            PendingPicture picture = mPicture;
+            // Read now rather than on the writer's thread, because the camera can close before
+            // the writer runs and the fix it was following goes with it.
+            Location location = getModule().getLocation();
+            new DrawnImageSaver(getContext(), location, bitmap, file, getPictureQuality(),
+                    mExifParameters) {
+                @UiThread
+                @Override
+                protected void onPostExecute(Boolean saved) {
+                    picture.onWritten(file, Boolean.TRUE.equals(saved));
+                }
+            }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+        }
+
+        /** Reports the picture lost, and lets go of what it was holding. */
+        void abandon() {
+            if (mFinished) {
+                return;
+            }
+            mFinished = true;
+            if (mDrawnPicture == this) {
+                mDrawnPicture = null;
+            }
+            mEffect.cancelStill();
+            mReader.close();
+            Bitmap bitmap = mBitmap;
+            mBitmap = null;
+            if (bitmap != null) {
+                bitmap.recycle();
+            }
+            mPicture.onWritten(mFile, false);
+        }
+    }
+
+    /** The drawn frame as a bitmap, which is RGBA and so needs no conversion beyond the stride. */
+    @NonNull
+    private static Bitmap toBitmap(@NonNull Image drawn) {
+        Image.Plane plane = drawn.getPlanes()[0];
+        int rowStride = plane.getRowStride();
+        int pixelStride = plane.getPixelStride();
+        // The reader pads each row out to its stride, so the bitmap is made wide enough to hold
+        // the padding and then cropped - reading it as if it were packed shears the picture.
+        int padded = rowStride / pixelStride;
+        Bitmap full = Bitmap.createBitmap(padded, drawn.getHeight(), Bitmap.Config.ARGB_8888);
+        full.copyPixelsFromBuffer(plane.getBuffer());
+        if (padded == drawn.getWidth()) {
+            return full;
+        }
+        Bitmap cropped = Bitmap.createBitmap(full, 0, 0, drawn.getWidth(), drawn.getHeight());
+        full.recycle();
+        return cropped;
+    }
+
+    /**
+     * Writes a drawn picture, and tags it as {@link ImageSaver} tags a camera frame.
+     *
+     * <p>Separate from {@link ImageSaver} because what it is given is already pixels, already the
+     * right way up and mirrored as shown, rather than a camera frame. So the orientation it
+     * records is normal, where a camera frame's records the turn and the mirror a viewer still
+     * has to apply.</p>
+     */
+    private static class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
+        /** The application, whose name and version the picture records as its software. */
+        private final Context mContext;
+
+        /** Where the picture was taken, or null to leave it untagged. */
+        @Nullable
+        private final Location mLocation;
+
+        /** The drawn picture, recycled once written. */
+        private final Bitmap mBitmap;
+
+        /** Where the JPEG goes. */
+        private final File mFile;
+
+        /** The JPEG quality, from 0 to 100. */
+        private final int mQuality;
+
+        /** How the picture was taken, including what the camera reported for its frame. */
+        private final ExifCaptureParameters mExifParameters;
+
+        DrawnImageSaver(@NonNull Context context, @Nullable Location location,
+                @NonNull Bitmap bitmap, @NonNull File file, int quality,
+                @NonNull ExifCaptureParameters exifParameters) {
+            mContext = context.getApplicationContext();
+            mLocation = location;
+            mBitmap = bitmap;
+            mFile = file;
+            mQuality = quality;
+            mExifParameters = exifParameters;
+        }
+
+        /** @return true only when the picture reached disk, so a failure is never reported as one. */
+        @WorkerThread
+        @Override
+        protected Boolean doInBackground(Void... params) {
+            try (FileOutputStream output = new FileOutputStream(mFile)) {
+                if (!mBitmap.compress(Bitmap.CompressFormat.JPEG, mQuality, output)) {
+                    Log.e(TAG, "Failed to compress a drawn picture");
+                    return false;
+                }
+            } catch (IOException | RuntimeException error) {
+                Log.e(TAG, "Failed to write a drawn picture", error);
+                if (mFile.exists() && !mFile.delete()) {
+                    Log.w(TAG, "Failed to clean up a partially written picture");
+                }
+                return false;
+            } finally {
+                mBitmap.recycle();
+            }
+            try {
+                Exif exif = new Exif(mFile);
+                exif.attachTimestamp();
+                exif.attachCaptureDevice(mContext);
+                exif.attachThumbnail();
+                mExifParameters.applyTo(exif);
+                exif.setAttribute(ExifInterface.TAG_ORIENTATION,
+                        Integer.toString(ExifInterface.ORIENTATION_NORMAL));
+                if (mLocation != null) {
+                    exif.attachLocation(mLocation);
+                }
+                exif.save();
+            } catch (IOException error) {
+                Log.e(TAG, "Failed to update EXIF on a drawn picture", error);
+            }
+            return true;
+        }
+    }
+
+    /**
+     * A metering region moved onto the unbinned sensor, or null when it cannot be: a request in
+     * maximum resolution mode reads its regions against the larger array.
+     */
+    @RequiresApi(31)
+    @Nullable
+    private MeteringRectangle toMaximumResolution(@Nullable MeteringRectangle metering) {
+        if (metering == null) {
+            return null;
+        }
+        Rect region = toMaximumResolution(metering.getRect());
+        return region == null ? null
+                : new MeteringRectangle(region, metering.getMeteringWeight());
+    }
+
+    /**
      * Package-private, and so is the conversion below it, so that the planes-to-NV21 arithmetic
      * can be asserted directly. It is the kind of code that fails by tinting or striping an
      * image rather than by throwing, which no end-to-end assertion notices.
@@ -565,6 +1026,9 @@ class PictureSession extends PreviewSession {
                     exif.attachLocation(mLocation);
                 }
                 exif.save();
+            } catch (ExifNoRoomException e) {
+                // The picture keeps everything else, and is never failed over its metadata.
+                Log.w(TAG, "Saved the picture without some of its Exif tags", e);
             } catch (IOException e) {
                 Log.e(TAG, "Failed to update EXIF", e);
             }
@@ -681,6 +1145,38 @@ class PictureSession extends PreviewSession {
             return Arrays.asList(sizes);
         }
 
+        /**
+         * The JPEG sizes a MAX still gains from reading the sensor out unbinned. Empty for any
+         * other quality or format: the guaranteed unbinned combination is a JPEG beside a
+         * preview, so an Ultra HDR still stays binned.
+         */
+        private List<Size> getMaximumResolutionSizes(List<Size> binned) {
+            List<Size> unbinned = new ArrayList<>();
+            if (Build.VERSION.SDK_INT < 31 || getQuality() != CameraView.Quality.MAX
+                    || mImageFormat != ImageFormat.JPEG) {
+                return unbinned;
+            }
+            StreamConfigurationMap map = mCameraView.getMaximumResolutionMap();
+            if (map == null) {
+                return unbinned;
+            }
+            for (Size[] group : new Size[][] {
+                    map.getOutputSizes(ImageFormat.JPEG),
+                    map.getHighResolutionOutputSizes(ImageFormat.JPEG)}) {
+                if (group == null) {
+                    continue;
+                }
+                for (Size size : group) {
+                    // A size both maps list is configured for the binned mode, so it is never a
+                    // reason to switch.
+                    if (!binned.contains(size) && !unbinned.contains(size)) {
+                        unbinned.add(size);
+                    }
+                }
+            }
+            return unbinned;
+        }
+
         private final SafeCloseImageReader.OnImageAvailableListener mOnImageAvailableListener =
                 new SafeCloseImageReader.OnImageAvailableListener() {
             @Override
@@ -736,6 +1232,12 @@ class PictureSession extends PreviewSession {
         /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
         private int mImageFormat = IMAGE_FORMAT_DEFAULT;
 
+        /**
+         * Whether {@link #mImageReader} has a size only the unbinned sensor offers, so a capture
+         * into it has to ask for maximum resolution mode. See {@link PictureSession#takePicture}.
+         */
+        private boolean mMaximumResolution;
+
         PictureSurface(Camera2Module camera2Module, CameraSurface previewSurface) {
             super(camera2Module);
             mPreviewSurface = previewSurface;
@@ -743,14 +1245,21 @@ class PictureSession extends PreviewSession {
 
         @Override
         void initialize(StreamConfigurationMap map) {
-            initialize(map, null /* maxSize */, true /* ultraHdrAllowed */);
+            initialize(map, null /* maxSize */, true /* ultraHdrAllowed */,
+                    true /* maximumResolutionAllowed */);
         }
 
-        void initialize(
-                StreamConfigurationMap map, @Nullable Size maxSize, boolean ultraHdrAllowed) {
+        void initialize(StreamConfigurationMap map, @Nullable Size maxSize,
+                boolean ultraHdrAllowed, boolean maximumResolutionAllowed) {
             if (DEBUG) Log.d(TAG, "Initializing PictureSession");
             mImageFormat = chooseImageFormat(ultraHdrAllowed);
-            super.initialize(chooseSize(within(getSizes(map), maxSize), mPreviewSurface.mSize));
+            List<Size> sizes = getSizes(map);
+            List<Size> unbinned = maximumResolutionAllowed
+                    ? getMaximumResolutionSizes(sizes) : new ArrayList<>();
+            List<Size> choices = new ArrayList<>(sizes);
+            choices.addAll(unbinned);
+            super.initialize(chooseSize(within(choices, maxSize), mPreviewSurface.mSize));
+            mMaximumResolution = unbinned.contains(mSize);
             if (mImageReader != null) {
                 // Initialized again - a session can be, when the camera is reconfigured - and an
                 // ImageReader holds native buffers the collector cannot reclaim, so the one being
@@ -797,6 +1306,10 @@ class PictureSession extends PreviewSession {
             if (file != null && picture != null) {
                 picture.onWritten(file, false);
             }
+        }
+
+        boolean isMaximumResolution() {
+            return mMaximumResolution;
         }
 
         @Override

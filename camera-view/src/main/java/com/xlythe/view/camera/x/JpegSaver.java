@@ -18,6 +18,7 @@ import androidx.camera.core.ImageProxy;
 
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifNoRoomException;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -118,7 +119,12 @@ class JpegSaver extends AsyncTask<Void, Void, Boolean> {
             exif.attachCaptureDevice(mContext);
             exif.attachThumbnail();
             mExifParameters.applyTo(exif);
-            exif.save();
+            try {
+                exif.save();
+            } catch (ExifNoRoomException e) {
+                // The picture keeps everything else, and is never failed over its metadata.
+                Log.w(TAG, "Saved the picture without some of its Exif tags", e);
+            }
             return true;
         } catch (IOException | RuntimeException e) {
             Log.e(TAG, "Failed to write the JPEG", e);

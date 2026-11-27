@@ -79,7 +79,7 @@ final class ExifSegment {
     @Nullable
     @VisibleForTesting
     static Segment find(@NonNull byte[] jpeg) {
-        if (jpeg.length < 4 || u8(jpeg, 0) != MARKER || u8(jpeg, 1) != SOI) {
+        if (jpeg.length < 4 || !isJpeg(jpeg)) {
             return null;
         }
         int offset = 2;
@@ -116,6 +116,11 @@ final class ExifSegment {
             offset = lengthOffset + length;
         }
         return null;
+    }
+
+    /** Whether the data begins as a JPEG does, with a start-of-image marker. */
+    static boolean isJpeg(@NonNull byte[] data) {
+        return data.length >= 2 && u8(data, 0) == MARKER && u8(data, 1) == SOI;
     }
 
     /** The absolute offset of IFD0, or -1 if the header does not describe one. */

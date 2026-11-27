@@ -42,9 +42,14 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 import androidx.annotation.VisibleForTesting;
 
+import com.xlythe.view.camera.gl.BackgroundReplacer;
+import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.gl.SegmentationMask;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.pano.PanoramaFrame;
 import com.xlythe.view.camera.pano.PanoramaGuideView;
@@ -250,7 +255,12 @@ public class CameraView extends FrameLayout {
      * will fall to lower qualities if the Android device cannot support them. Resolutions also may
      * change in the future (if, say, Android adds 8k resolution).
      *
-     * (*) {@link Quality#MAX} will output at 4k.
+     * (*) {@link Quality#MAX} will output video at 4k, and pictures at the largest size the
+     *     camera offers apps. Most phone sensors combine neighbouring pixels into one. On a phone
+     *     that lets apps read the whole sensor, a MAX picture can use every pixel instead, and
+     *     takes longer to capture; many phones keep that to their own camera app. A picture taken
+     *     while recording, or as {@link PictureFormat#ULTRA_HDR} or
+     *     {@link PictureFormat#RAW_JPEG}, keeps to the combined size.
      * (*) {@link Quality#HIGH} will output at 1080p.
      * (*) {@link Quality#MEDIUM} will output at 720.
      * (*) {@link Quality#LOW} will output at 480.
@@ -524,6 +534,8 @@ public class CameraView extends FrameLayout {
     private BarcodeScanner mBarcodeScanner;
     /** Whether the active backend owns a native barcode analysis use case. */
     private boolean mUsingModuleBarcodeScanner;
+    /** Whether enterBackgroundReplacement is in force. */
+    private boolean mReplacingBackground;
 
     /** The caller's own frame analyzer, if one is running. */
     @Nullable
@@ -1556,7 +1568,8 @@ public class CameraView extends FrameLayout {
     /**
      * Starts reporting the barcodes the camera can see.
      *
-     * @return whether scanning started. False below API 21, when the app does not include ML Kit's
+     * @return whether scanning started. False below API 21, while the background is being
+     *     replaced, when the app does not include ML Kit's
      *     {@code com.google.mlkit:barcode-scanning}, or when its barcode model is not available on
      *     this device.
      */
@@ -1571,6 +1584,11 @@ public class CameraView extends FrameLayout {
         }
         if (mPanoramaSession != null) {
             throw new IllegalStateException("The camera's frames are going to a panorama");
+        }
+
+        if (mReplacingBackground) {
+            Log.w(TAG, "Barcodes cannot be scanned while the background is being replaced");
+            return false;
         }
 
         if (Build.VERSION.SDK_INT < 21 || !BarcodeScanner.isAvailable()) {
@@ -1596,6 +1614,72 @@ public class CameraView extends FrameLayout {
         return true;
     }
 
+    /** Receives which parts of each frame are the subject, as often as the segmenter manages. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public interface SegmentationListener {
+        void onSegmentation(@NonNull SegmentationMask mask);
+    }
+
+    /**
+     * Segments the subject out of each frame and draws it over the replacer's background, in the
+     * preview, the recording and the pictures, until {@link #exitBackgroundReplacement()}. The
+     * replacer becomes the frame renderer, in place of any other.
+     *
+     * <p>To use a segmentation model of your own, set a {@link BackgroundReplacer} with
+     * {@link #setFrameRenderer} and hand it masks with {@link BackgroundReplacer#setMask}
+     * instead.</p>
+     *
+     * @return whether it started. Returns false, changing nothing, while
+     *     {@link #startFrameAnalysis frame analysis} or the barcode scanner is running, since it
+     *     reads the same frames. False also where frames cannot be drawn, which
+     *     {@link #isFrameEffectSupported()} says in advance, when the app does not include ML
+     *     Kit's {@code com.google.mlkit:segmentation-selfie}, or when its model is not available
+     *     on this device.
+     * @throws IllegalStateException if the camera is not open
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public boolean enterBackgroundReplacement(@NonNull BackgroundReplacer replacer) {
+        if (!isOpen()) {
+            throw new IllegalStateException(
+                    "Camera must be open before replacing the background");
+        }
+        if (isReadingFrames()) {
+            Log.w(TAG, "The background cannot be replaced while frames are being analyzed");
+            return false;
+        }
+        if (!isFrameEffectSupported()) {
+            Log.w(TAG, "This backend draws no effects, so there is nothing to composite with");
+            return false;
+        }
+        setFrameRenderer(replacer);
+        if (!mCameraModule.startSegmentation(replacer::setMask)) {
+            setFrameRenderer(null);
+            return false;
+        }
+        mReplacingBackground = true;
+        return true;
+    }
+
+    /** Stops replacing the background, and shows the camera's own frames again. */
+    public void exitBackgroundReplacement() {
+        if (!mReplacingBackground) {
+            return;
+        }
+        mReplacingBackground = false;
+        mCameraModule.stopSegmentation();
+        setFrameRenderer(null);
+    }
+
+    /** Whether a background is currently being replaced. */
+    public boolean isReplacingBackground() {
+        return mReplacingBackground;
+    }
+
+    /** Whether frame analysis or the barcode scanner is reading frames. */
+    private boolean isReadingFrames() {
+        return mFrameStream != null || mBarcodeScanner != null || mUsingModuleBarcodeScanner;
+    }
+
     public void exitBarcodeScanner() {
         if (Build.VERSION.SDK_INT >= 21 && mBarcodeScanner != null) {
             mBarcodeScanner.stop();
@@ -1618,8 +1702,8 @@ public class CameraView extends FrameLayout {
      * <p>This runs alongside the preview and recording, and stays attached across a lens switch.
      * Call {@link #stopFrameAnalysis()} to let the camera give the buffers back.</p>
      *
-     * @return whether analysis started. False below API 21, and on a backend that cannot produce
-     *     frames to read.
+     * @return whether analysis started. False below API 21, on a backend that cannot produce
+     *     frames to read, and while the background is being replaced.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
      */
     @RequiresPermission(Manifest.permission.CAMERA)
@@ -1643,6 +1727,10 @@ public class CameraView extends FrameLayout {
         }
         if (mPanoramaSession != null) {
             throw new IllegalStateException("The camera's frames are going to a panorama");
+        }
+        if (mReplacingBackground) {
+            Log.w(TAG, "Frames cannot be analyzed while the background is being replaced");
+            return false;
         }
         if (Build.VERSION.SDK_INT < 19 || !mCameraModule.isFrameAnalysisSupported()) {
             Log.w(TAG, "The " + getBackend() + " backend cannot analyze frames");
@@ -1935,6 +2023,61 @@ public class CameraView extends FrameLayout {
         }
     }
 
+    /**
+     * Draws every camera frame through a renderer on its way to the preview, the recording and
+     * the pictures, so what it draws is in the files as well as on the screen.
+     *
+     * <p>Where frames cannot be drawn, which {@link #isFrameEffectSupported()} says, the renderer
+     * is kept but never called, and the camera's own frames are shown.</p>
+     *
+     * <p>The renderer is called on a GL thread of its own. See {@link FrameRenderer}.</p>
+     *
+     * @param renderer what draws each frame, or null for the camera's own frames
+     * @see #startFrameAnalysis for reading frames rather than drawing them
+     */
+    public void setFrameRenderer(@Nullable FrameRenderer renderer) {
+        mCameraModule.setFrameRenderer(renderer);
+    }
+
+    /** @see #setFrameRenderer */
+    @Nullable
+    public FrameRenderer getFrameRenderer() {
+        return mCameraModule.getFrameRenderer();
+    }
+
+    /**
+     * Has the camera write its frames into a texture the caller creates, and tells the caller as
+     * each frame lands on it, for a consumer whose API takes the name of a texture it made. See
+     * {@link CameraTextureProvider}.
+     *
+     * <p>Changing the provider briefly restarts the camera; changing the renderer does not.</p>
+     *
+     * @param provider who creates the texture and consumes its frames, or null for the library's
+     *     own texture
+     */
+    public void setCameraTextureProvider(@Nullable CameraTextureProvider provider) {
+        mCameraModule.setCameraTextureProvider(provider);
+    }
+
+    /** @see #setCameraTextureProvider */
+    @Nullable
+    public CameraTextureProvider getCameraTextureProvider() {
+        return mCameraModule.getCameraTextureProvider();
+    }
+
+    /**
+     * Whether this camera can draw its frames through {@link #setFrameRenderer} and
+     * {@link #setCameraTextureProvider}, into the preview, the recording and the pictures. A
+     * picture taken while frames are drawn is drawn as the preview shows it and written as a
+     * JPEG; see {@link #isPictureFormatSupported}.
+     *
+     * <p>False also once drawing has failed on this device, after which the camera keeps showing
+     * its own frames.</p>
+     */
+    public boolean isFrameEffectSupported() {
+        return mCameraModule.isFrameEffectSupported();
+    }
+
     /** Receives the faces the camera itself is tracking. */
     public interface FaceDetectionListener {
         /**
@@ -1972,7 +2115,14 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getColorSpace();
     }
 
-    /** Whether this camera can write pictures in a given format. */
+    /**
+     * Whether this camera can write pictures in a given format.
+     *
+     * <p>While a renderer, filter or mask is drawing, a picture is drawn as the preview shows it
+     * and written as a JPEG, so JPEG is the only format supported. Ultra HDR set beforehand
+     * falls back to JPEG, and a picture taken in RAW or RAW_JPEG set beforehand fails. Every
+     * format the camera writes is supported again once nothing is drawing.</p>
+     */
     public boolean isPictureFormatSupported(PictureFormat format) {
         return mCameraModule.isPictureFormatSupported(format);
     }

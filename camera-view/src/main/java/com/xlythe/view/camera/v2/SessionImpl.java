@@ -75,6 +75,23 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getHandler();
     }
 
+    /**
+     * The module this session belongs to, for the few things a session asks it directly.
+     *
+     * <p>Most of what a session needs is already forwarded by a named method here. This is for
+     * the pieces that are about the module itself rather than about a setting - the GL pipeline
+     * the camera may be writing into, and the context a file is saved with.</p>
+     */
+    @NonNull
+    Camera2Module getModule() {
+        return mCamera2Module;
+    }
+
+    @NonNull
+    Context getContext() {
+        return mCamera2Module.getContext();
+    }
+
     boolean hasFlash() {
         return mCamera2Module.hasFlash();
     }
@@ -336,11 +353,23 @@ abstract class SessionImpl implements Camera2Module.Session {
      * sensor of the lens already in use, so it is the fallback for older devices.</p>
      */
     void applyZoom(@NonNull CaptureRequest.Builder builder) {
+        applyZoom(builder, mCropRegion);
+    }
+
+    /** Applies zoom with a crop region already in the coordinates the request reads. */
+    void applyZoom(@NonNull CaptureRequest.Builder builder, @Nullable Rect cropRegion) {
         if (Build.VERSION.SDK_INT >= 30 && mZoomRatio != null) {
             builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, mZoomRatio);
-        } else if (mCropRegion != null) {
-            builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
+        } else if (cropRegion != null) {
+            builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion);
         }
+    }
+
+    /** See {@link Camera2Module#toMaximumResolution}. */
+    @RequiresApi(31)
+    @Nullable
+    Rect toMaximumResolution(@Nullable Rect region) {
+        return mCamera2Module.toMaximumResolution(region);
     }
 
     @Override
@@ -442,6 +471,11 @@ abstract class SessionImpl implements Camera2Module.Session {
 
         void onVideoFailed() {
             mCameraView.onVideoFailed();
+        }
+
+        /** Whether this surface has been given a size, and so can be asked for one. */
+        boolean hasSize() {
+            return mSize != null;
         }
 
         int getWidth() {

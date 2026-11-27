@@ -16,6 +16,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import com.xlythe.view.camera.gl.FrameRenderThread;
+import com.xlythe.view.camera.gl.GlMath;
+
 import androidx.annotation.CallSuper;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
@@ -136,6 +139,9 @@ class PreviewSession extends SessionImpl {
 
         private Surface mSurface;
 
+        /** Whether the camera is writing into the renderer rather than into the view. */
+        private boolean mThroughGl;
+
         PreviewSurface(Camera2Module cameraView) {
             super(cameraView);
         }
@@ -154,8 +160,45 @@ class PreviewSession extends SessionImpl {
             }
             texture.setDefaultBufferSize(getWidth(), getHeight());
 
+            FrameRenderThread effect = mCameraView.getEffect();
+            if (effect != null) {
+                mThroughGl = initializeThroughGl(effect, texture);
+                if (mThroughGl) {
+                    return;
+                }
+                // The renderer came up and then would not give us a texture, which leaves the
+                // camera with nowhere to write. Straight to the preview is better than nothing.
+                Log.w(TAG, "The renderer has no input, so this preview goes round it");
+            }
+
             // This is the output Surface we need to start the preview.
             mSurface = new Surface(texture);
+        }
+
+        /**
+         * Points the camera at the renderer, and the renderer at the view.
+         *
+         * <p>The same size for both, and the frame drawn with the transform the camera itself
+         * reports - which is what the preview would have been given had it come straight from
+         * the camera. So the view transform that was already orienting the preview still does,
+         * and going through GL changes nothing about where the picture sits.</p>
+         *
+         * @return whether the camera has somewhere to write
+         */
+        private boolean initializeThroughGl(@NonNull FrameRenderThread effect,
+                @NonNull SurfaceTexture preview) {
+            SurfaceTexture input = effect.getInputSurfaceTexture();
+            if (input == null) {
+                return false;
+            }
+            Size size = new Size(getWidth(), getHeight());
+            effect.setInputBufferSize(size);
+            mSurface = new Surface(input);
+            effect.addOutput(this, new Surface(preview), size, size,
+                    GlMath.ScaleType.FILL_CENTER,
+                    (surfaceTextureMatrix, into) ->
+                            System.arraycopy(surfaceTextureMatrix, 0, into, 0, into.length));
+            return true;
         }
 
         @Override
@@ -165,6 +208,15 @@ class PreviewSession extends SessionImpl {
 
         @Override
         void close() {
+            if (mThroughGl) {
+                FrameRenderThread effect = mCameraView.getEffect();
+                if (effect != null) {
+                    // Before the surface goes, because it is being drawn into, and removing an
+                    // output releases the one it was drawing into.
+                    effect.removeOutput(this);
+                }
+                mThroughGl = false;
+            }
             if (mSurface != null) {
                 mSurface.release();
                 mSurface = null;

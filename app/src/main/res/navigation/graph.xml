@@ -41,4 +41,10 @@
         android:label="@string/app_name_qr_code"
         tools:layout="@layout/fragment_qr_code" />
 
+    <fragment
+        android:id="@+id/effect_fragment"
+        android:name="com.xlythe.sample.camera.EffectFragment"
+        android:label="@string/app_name_effect"
+        tools:layout="@layout/fragment_effect" />
+
 </navigation>

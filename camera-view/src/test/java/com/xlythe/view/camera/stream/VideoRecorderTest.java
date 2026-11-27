@@ -11,6 +11,8 @@ import android.media.MediaFormat;
 import android.util.Size;
 import android.view.Surface;
 
+import com.xlythe.view.camera.shadow.ShadowSlowStartingMediaCodec;
+
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -22,6 +24,7 @@ import org.robolectric.shadows.ShadowMediaCodec;
 import org.robolectric.shadows.ShadowMediaCodecList;
 
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -47,6 +50,7 @@ public class VideoRecorderTest {
 
     @Before
     public void setUp() {
+        ShadowSlowStartingMediaCodec.reset();
         ShadowMediaCodecList.reset();
         ShadowMediaCodecList.addCodec(MediaCodecInfoBuilder.newBuilder()
                 .setName("fake.avc.encoder")
@@ -67,6 +71,9 @@ public class VideoRecorderTest {
 
     @After
     public void tearDown() {
+        // A test that failed while an encoder was held mid-start would otherwise leave its
+        // thread waiting forever.
+        ShadowSlowStartingMediaCodec.finishStarting();
         ShadowMediaCodec.clearCodecs();
         ShadowMediaCodecList.reset();
     }
@@ -226,6 +233,46 @@ public class VideoRecorderTest {
         assertEquals("it never attached to the camera", 0, canvas.attachments);
         recorder.stop();
         assertFalse("and stopping twice is the same as stopping once", recorder.isRecording());
+    }
+
+    /**
+     * Stopping while the encoder is still starting waits for the start to finish.
+     *
+     * <p>A caller stops a stream from its own thread, whenever it likes, and the first bytes reach
+     * it before the encoder has finished starting. Before API 29, a MediaCodec released while a
+     * start is completing on another thread aborts the process, so the release has to come after.
+     * </p>
+     */
+    @Test
+    @Config(shadows = ShadowSlowStartingMediaCodec.class)
+    public void stoppingWhileTheEncoderStartsWaitsForTheStart() throws Exception {
+        VideoRecorder recorder =
+                new VideoRecorder(new RecordingCanvas(), new ByteArrayOutputStream());
+        recorder.start();
+        assertTrue("the encoder has to begin starting",
+                ShadowSlowStartingMediaCodec.awaitStarting(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+
+        Thread stopper = new Thread(recorder::stop, "Stopper");
+        stopper.start();
+        awaitBlockedOrFinished(stopper);
+        ShadowSlowStartingMediaCodec.finishStarting();
+        stopper.join(TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS));
+
+        assertFalse("stop() has to return once the encoder has started", stopper.isAlive());
+        assertEquals("the encoder is stopped and released only after it has started",
+                Arrays.asList("started", "stopped", "released"),
+                ShadowSlowStartingMediaCodec.getEvents());
+        assertFalse(recorder.isRecording());
+    }
+
+    /** Waits until a thread is either waiting for a lock or finished, whichever comes first. */
+    static void awaitBlockedOrFinished(Thread thread) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS);
+        while (thread.getState() != Thread.State.BLOCKED
+                && thread.getState() != Thread.State.TERMINATED
+                && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10);
+        }
     }
 
     /** A canvas that never answers, for the cases that do not get as far as an encoder. */

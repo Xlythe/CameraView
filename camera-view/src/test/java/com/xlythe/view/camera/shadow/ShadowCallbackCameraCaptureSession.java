@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.shadow;
 
+import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
@@ -21,6 +22,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -34,9 +36,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>Each accepted request produces one {@code onCaptureStarted} followed by one
  * {@code onCaptureCompleted}, posted to the handler the caller supplied so it arrives the way a
  * real callback does rather than re-entering the caller mid-call. The result carries the sensor
- * timestamp {@code onCaptureStarted} reported, and the auto-exposure state a test sets: enough for
- * a caller that only needs to know a frame landed, for one that pairs a frame with its result, and
- * for one that waits on metering.</p>
+ * timestamp {@code onCaptureStarted} reported, the auto-exposure state a test sets, and any other
+ * values a test sets: enough for a caller that only needs to know a frame landed, for one that
+ * pairs a frame with its result, for one that waits on metering, and for one that copies the
+ * result into a file. A test can also hold one-off captures back, to have their frames arrive
+ * before their results.</p>
  *
  * <p>Every request is also kept, so a test can read back what the backend asked the camera for.
  * Robolectric runs no {@link Resetter} for a shadow a test names in its own {@code @Config}, so
@@ -58,6 +62,12 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     @Nullable private static Integer sAeState;
     /** The repeating request in force, so a test can deliver more of its frames. */
     @Nullable private static Runnable sNextRepeatingFrame;
+    /** Sets each further value a test asked results to report, in the order asked. */
+    private static final List<Consumer<ShadowCaptureResult>> sResultValues = new ArrayList<>();
+    /** Whether one-off captures are held back until {@link #releaseHeldCaptures}. */
+    private static boolean sHoldCaptures;
+    /** The one-off captures held back, in the order they were sent. */
+    private static final List<Runnable> sHeldCaptures = new ArrayList<>();
 
     @RealObject private CameraCaptureSession realSession;
 
@@ -97,6 +107,25 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         sAeState = aeState;
     }
 
+    /** Has results report this value from now on, as a camera reports how it took a frame. */
+    public static <T> void setResultValue(CaptureResult.Key<T> key, T value) {
+        sResultValues.add(shadow -> shadow.set(key, value));
+    }
+
+    /** Holds the callbacks of one-off captures back until released, or delivers them again. */
+    public static void setHoldCaptures(boolean hold) {
+        sHoldCaptures = hold;
+    }
+
+    /** Delivers the one-off captures held back so far, in the order they were sent. */
+    public static void releaseHeldCaptures() {
+        List<Runnable> held = new ArrayList<>(sHeldCaptures);
+        sHeldCaptures.clear();
+        for (Runnable delivery : held) {
+            delivery.run();
+        }
+    }
+
     /** Delivers one more frame of the repeating request, as the camera would continuously. */
     public static void deliverRepeatingFrame() {
         if (sNextRepeatingFrame != null) {
@@ -114,12 +143,15 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         sCaptures.clear();
         sAeState = null;
         sNextRepeatingFrame = null;
+        sResultValues.clear();
+        sHoldCaptures = false;
+        sHeldCaptures.clear();
     }
 
     @Implementation
     protected int setRepeatingRequest(CaptureRequest request,
             CameraCaptureSession.CaptureCallback callback, Handler handler)
-            throws android.hardware.camera2.CameraAccessException {
+            throws CameraAccessException {
         int sequenceId = super.setRepeatingRequest(request, callback, handler);
         sRepeatingRequests.add(request);
         sNextRepeatingFrame = () -> deliver(request, callback, handler);
@@ -130,10 +162,14 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     @Implementation
     protected int capture(CaptureRequest request,
             CameraCaptureSession.CaptureCallback callback, Handler handler)
-            throws android.hardware.camera2.CameraAccessException {
+            throws CameraAccessException {
         int sequenceId = super.capture(request, callback, handler);
         sCaptures.add(request);
-        deliver(request, callback, handler);
+        if (sHoldCaptures) {
+            sHeldCaptures.add(() -> deliver(request, callback, handler));
+        } else {
+            deliver(request, callback, handler);
+        }
         return sequenceId;
     }
 
@@ -158,13 +194,16 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         }
     }
 
-    /** A result carrying its sensor timestamp, and the auto-exposure state a test asked for. */
+    /** A result carrying its sensor timestamp, and whatever else a test asked for. */
     private static TotalCaptureResult newResult(long timestamp) {
         TotalCaptureResult result = ShadowTotalCaptureResult.newTotalCaptureResult();
         ShadowCaptureResult shadow = Shadow.extract(result);
         shadow.set(CaptureResult.SENSOR_TIMESTAMP, timestamp);
         if (sAeState != null) {
             shadow.set(CaptureResult.CONTROL_AE_STATE, sAeState);
+        }
+        for (Consumer<ShadowCaptureResult> value : sResultValues) {
+            value.accept(shadow);
         }
         return result;
     }

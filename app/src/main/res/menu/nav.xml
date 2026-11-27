@@ -23,4 +23,8 @@
         android:id="@+id/qr_code_fragment"
         android:icon="@drawable/ic_qr_code"
         android:title="@string/app_name_qr_code" />
+    <item
+        android:id="@+id/effect_fragment"
+        android:icon="@drawable/ic_effect"
+        android:title="@string/app_name_effect" />
 </menu>

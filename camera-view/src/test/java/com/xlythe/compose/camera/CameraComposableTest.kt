@@ -3,6 +3,7 @@ package com.xlythe.compose.camera
 import android.Manifest
 import android.content.Context
 import android.graphics.Rect
+import android.graphics.SurfaceTexture
 import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.media.FakeImage
@@ -18,11 +19,15 @@ import com.xlythe.view.camera.CameraView
 import com.xlythe.view.camera.CaptureDelivery
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader
+import com.xlythe.view.camera.gl.BackgroundReplacer
+import com.xlythe.view.camera.gl.CameraTextureProvider
+import com.xlythe.view.camera.gl.FrameRenderer
 import com.xlythe.view.camera.v2.FakeCamera2
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.After
@@ -717,6 +722,95 @@ class CameraComposableTest {
         camera.stopFrameAnalysis()
     }
 
+    /** The renderer and the texture provider reach the camera, and changing them does too. */
+    @Test
+    fun theFrameRendererAndTextureProviderReachTheCamera() {
+        val first = FrameRenderer { false }
+        val second = FrameRenderer { false }
+        val renderer = mutableStateOf<FrameRenderer?>(first)
+        val provider = mutableStateOf<CameraTextureProvider?>(BorrowedTexture())
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent {
+            Camera(
+                frameRenderer = renderer.value,
+                cameraTextureProvider = provider.value,
+                controller = controller,
+            )
+        }
+        compose.waitForIdle()
+        assertSame(first, requireCameraView().frameRenderer)
+        assertSame(provider.value, requireCameraView().cameraTextureProvider)
+
+        renderer.value = second
+        provider.value = null
+        compose.waitForIdle()
+
+        assertSame(second, requireCameraView().frameRenderer)
+        assertNull(requireCameraView().cameraTextureProvider)
+    }
+
+    /**
+     * A renderer the caller never set is left alone by a recomposition: the frameRenderer is
+     * pushed when it changes, so a background replacement drawing in its place is not undone.
+     */
+    @Test
+    fun anUnchangedRendererIsNotPushedAgain() {
+        val flash = mutableStateOf(Flash.AUTO)
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent { Camera(flash = flash.value, controller = controller) }
+        compose.waitForIdle()
+        val drawnElsewhere = FrameRenderer { false }
+        requireCameraView().frameRenderer = drawnElsewhere
+
+        flash.value = Flash.ON
+        compose.waitForIdle()
+
+        assertSame(drawnElsewhere, requireCameraView().frameRenderer)
+    }
+
+    /** The state says whether frames can be drawn and whether a background is being replaced. */
+    @Test
+    fun theStateReportsFrameEffects() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+
+        val published = requireNotNull(state.value)
+        assertEquals(requireCameraView().isFrameEffectSupported, published.isFrameEffectSupported)
+        assertTrue("this camera draws frames", published.isFrameEffectSupported)
+        assertFalse(published.isReplacingBackground)
+    }
+
+    /**
+     * Background replacement goes through the controller. Without the segmentation model, which
+     * a unit test does not have, it is refused, and the caller's renderer is put back in place of
+     * the replacer the attempt set.
+     */
+    @Test
+    fun aRefusedBackgroundReplacementPutsTheRendererBack() {
+        val renderer = FrameRenderer { false }
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+        compose.setContent {
+            Camera(frameRenderer = renderer, controller = controller, state = state)
+        }
+        compose.waitForIdle()
+        val camera = requireNotNull(controller.value)
+
+        assertFalse("no segmentation model here",
+                camera.enterBackgroundReplacement(BackgroundReplacer()))
+        compose.waitForIdle()
+
+        assertFalse(requireNotNull(state.value).isReplacingBackground)
+        assertSame(renderer, requireCameraView().frameRenderer)
+
+        camera.exitBackgroundReplacement()
+        compose.waitForIdle()
+        assertSame("leaving puts the renderer back too", renderer,
+                requireCameraView().frameRenderer)
+    }
+
     /** Face detection says whether the camera took the listener on. */
     @Test
     fun faceDetectionReportsWhetherTheCameraTookItOn() {
@@ -913,6 +1007,15 @@ class CameraComposableTest {
             ShadowLooper.idleMainLooper()
             Thread.sleep(10)
         }
+    }
+
+    /** A texture the caller made, which nothing here draws into. */
+    private class BorrowedTexture : CameraTextureProvider {
+        override fun onCreateCameraTexture(): Int = 1
+
+        override fun onCameraFrameAvailable(texture: SurfaceTexture): Boolean = false
+
+        override fun onReleaseCameraTexture(textureName: Int) {}
     }
 
     private fun requireCameraView(): CameraView {

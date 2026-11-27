@@ -32,18 +32,21 @@ import android.util.SizeF;
 import android.view.Surface;
 import android.view.View;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
 import androidx.camera.camera2.interop.Camera2CameraInfo;
 import androidx.camera.camera2.interop.Camera2Interop;
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop;
+import androidx.camera.core.CameraEffect;
 import androidx.camera.core.CameraInfo;
 import androidx.camera.core.ExperimentalZeroShutterLag;
 import androidx.camera.core.DynamicRange;
@@ -97,9 +100,14 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifNoRoomException;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
+import com.xlythe.view.camera.CameraXFrameAnalyzer;
+import com.xlythe.view.camera.CameraXSegmentationAnalyzer;
 import com.xlythe.view.camera.Barcode;
+import com.xlythe.view.camera.gl.CameraTextureProvider;
+import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.PermissionChecker;
@@ -226,7 +234,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** Native barcode-analysis use case in the latest successful bind. */
     @Nullable private ImageAnalysis mImageAnalysis;
     /** Native CameraX barcode analyzer while scanning is requested. */
-    @Nullable private CameraXBarcodeAnalyzer mBarcodeAnalyzer;
+    @Nullable private CameraXFrameAnalyzer mFrameAnalyzer;
     /** Single-thread executor owned by the active native barcode analyzer. */
     @Nullable private ExecutorService mAnalysisExecutor;
     /** Video use case while a recording is being prepared, recorded, or finalized. */
@@ -239,6 +247,18 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private boolean mVideoStarted;
     /** Latest CameraX preview transformation metadata. */
     @Nullable private SurfaceRequest.TransformationInfo mTransformationInfo;
+    /** The GL effect every frame passes through, while a caller has asked for one. */
+    @Nullable private FrameEffect mFrameEffect;
+
+    /**
+     * Set once GL has failed here, after which this backend reports no effects and stops trying.
+     *
+     * <p>Latched rather than retried because the two ways it fails are both properties of the
+     * device: a driver that will not give us a context, and a shader the driver will not compile.
+     * Neither changes between one bind and the next, and retrying would pay the start-up timeout
+     * on the main thread again on every rotation.</p>
+     */
+    private boolean mGlUnavailable;
 
     /** Whether the bound configuration can take a still while it records. */
     private boolean mSnapshotWhileRecording;
@@ -584,8 +604,19 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mHostLifecycleOwner = null;
         }
         getView().removeOnAttachStateChangeListener(mAttachStateListener);
+        releaseFrameEffect();
         mLifecycleRegistry.setCurrentState(Lifecycle.State.DESTROYED);
         mState = State.CLOSED;
+    }
+
+    /**
+     * Moves this module's lifecycle, unless it is destroyed. A recording the host's end stopped
+     * still reports afterwards, and the registry throws rather than leave DESTROYED.
+     */
+    @MainThread
+    private void moveLifecycleTo(@NonNull Lifecycle.State state) {
+        if (mDestroyed) return;
+        mLifecycleRegistry.setCurrentState(state);
     }
 
     private void onHostActivityStartedChanged(@NonNull Activity activity, boolean started) {
@@ -618,11 +649,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private void updateBackendLifecycle() {
         if (mDestroyed) return;
         if (!mOpenRequested) {
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+            moveLifecycleTo(Lifecycle.State.CREATED);
             return;
         }
         if (isHostActive()) {
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.STARTED);
+            moveLifecycleTo(Lifecycle.State.STARTED);
             if (mCameraProvider != null && mVideoRecording == null
                     && mBoundUseCases.isEmpty() && !mPaused) {
                 reconcileUseCases(true);
@@ -634,7 +665,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         unbindCurrentUseCases();
-        mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+        moveLifecycleTo(Lifecycle.State.CREATED);
         mState = State.SUSPENDED;
     }
 
@@ -673,7 +704,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         releaseAllUseCases();
-        mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+        moveLifecycleTo(Lifecycle.State.CREATED);
         mState = State.CLOSED;
         publishSnapshot();
     }
@@ -732,9 +763,17 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         long generation = mGeneration;
         LiveData<CameraState> source = camera.getCameraInfo().getCameraState();
+        CameraStateSinceBind sinceBind = new CameraStateSinceBind(source.getValue());
         Observer<CameraState> observer = cameraState -> {
             if (generation != mGeneration || camera != mActiveCamera
                     || source != mObservedCameraState) {
+                return;
+            }
+            if (!sinceBind.isAboutTheBind(cameraState)) {
+                if (cameraState.getError() != null) {
+                    Log.d(TAG, "Ignoring camera error " + cameraState.getError().getCode()
+                            + " left over from before the use cases were bound");
+                }
                 return;
             }
             onCameraStateChanged(cameraState);
@@ -1327,20 +1366,53 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     private void startBarcodeScannerOnMainThread(@NonNull CameraXBarcodeAnalyzer analyzer) {
-        if (mBarcodeAnalyzer != null) {
-            Log.w(TAG, "CameraX barcode analysis is already active");
+        startFrameAnalyzerOnMainThread(analyzer, "Barcode");
+    }
+
+    /**
+     * Takes the analysis slot, which there is only one of.
+     *
+     * @param what names the thread, so a stack trace says which model is holding it
+     */
+    private void startFrameAnalyzerOnMainThread(@NonNull CameraXFrameAnalyzer analyzer,
+            @NonNull String what) {
+        if (mFrameAnalyzer != null) {
+            Log.w(TAG, "CameraX frame analysis is already active");
             analyzer.close();
             return;
         }
         mAnalysisExecutor = Executors.newSingleThreadExecutor(runnable -> {
-            Thread thread = new Thread(runnable, "CameraView-BarcodeAnalysis");
+            Thread thread = new Thread(runnable, "CameraView-" + what + "Analysis");
             thread.setDaemon(true);
             return thread;
         });
-        mBarcodeAnalyzer = analyzer;
+        mFrameAnalyzer = analyzer;
         if (mOpenRequested && mVideoRecording == null && !mPaused && isHostActive()) {
             reconcileUseCases(true);
         }
+    }
+
+    @RequiresPermission(Manifest.permission.CAMERA)
+    @Override protected boolean startSegmentation(CameraView.SegmentationListener listener) {
+        if (listener == null) throw new NullPointerException("listener cannot be null");
+        CameraXSegmentationAnalyzer analyzer;
+        try {
+            analyzer = new CameraXSegmentationAnalyzer(
+                    listener, mMainExecutor, isUsingFrontFacingCamera());
+        } catch (RuntimeException | LinkageError error) {
+            // The model is delivered by Play services and its client is built here, so a device
+            // without it fails at construction. Reported rather than thrown, for the same reason
+            // the barcode client is: a camera library may not take an app down because a vision
+            // dependency is missing.
+            Log.w(TAG, "CameraX cannot segment on this device", error);
+            return false;
+        }
+        runOnMainThread(() -> startFrameAnalyzerOnMainThread(analyzer, "Segmentation"));
+        return true;
+    }
+
+    @Override protected void stopSegmentation() {
+        runOnMainThread(this::stopBarcodeScannerOnMainThread);
     }
 
     @Override protected void stopBarcodeScanner() {
@@ -1355,8 +1427,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     private void releaseBarcodeAnalysisResources() {
-        CameraXBarcodeAnalyzer analyzer = mBarcodeAnalyzer;
-        mBarcodeAnalyzer = null;
+        CameraXFrameAnalyzer analyzer = mFrameAnalyzer;
+        mFrameAnalyzer = null;
         if (analyzer != null) analyzer.close();
         ExecutorService executor = mAnalysisExecutor;
         mAnalysisExecutor = null;
@@ -1368,17 +1440,32 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         runOnMainThread(() -> takePictureOnMainThread(file));
     }
 
+    /**
+     * Whether a picture may be taken now. A recording does not stand in the way: the still output
+     * bound beside it is the one a snapshot uses, and it is bound exactly when
+     * {@link #isSnapshotWhileRecordingSupported} says so.
+     */
+    @AnyThread
+    @VisibleForTesting
+    static boolean acceptsPicture(boolean open, boolean hasStillOutput, boolean picturePending,
+            boolean recording, boolean snapshotWhileRecording) {
+        return open && hasStillOutput && !picturePending
+                && (!recording || snapshotWhileRecording);
+    }
+
     private void takePictureOnMainThread(@NonNull File file) {
         ImageCapture imageCapture = mImageCapture;
-        if (!mOpenRequested || imageCapture == null || isRecording() || mPendingImageFile != null) {
+        if (!acceptsPicture(mOpenRequested, imageCapture != null, mPendingImageFile != null,
+                isRecording(), mSnapshotWhileRecording)) {
             Log.w(TAG, "Cannot take a picture in the current CameraX state: " + mState);
             onImageFailed();
             return;
         }
         boolean raw = writesRaw(getPictureFormat());
         if (raw && !writesRaw(imageCapture)) {
-            // The format changed to one this camera cannot write, as a lens switch can leave it. A
-            // caller who asked for a DNG and quietly got a JPEG would have no way to tell.
+            // The format changed to one this camera cannot write, as a lens switch can leave it,
+            // or frames are drawn, which makes the still a JPEG. A caller who asked for a DNG and
+            // quietly got a JPEG would have no way to tell.
             Log.w(TAG, "The bound camera cannot capture " + getPictureFormat());
             onImageFailed();
             return;
@@ -1641,21 +1728,32 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private void finishExif(@NonNull File file, @Nullable Location location,
             @NonNull ExifCaptureParameters exifParameters, @NonNull Runnable then) {
         AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
-            try {
-                Exif exif = new Exif(file);
-                exif.attachTimestamp();
-                exif.attachCaptureDevice(getContext());
-                exif.attachThumbnail();
-                exifParameters.applyTo(exif);
-                if (location != null) {
-                    exif.attachLocation(location);
-                }
-                exif.save();
-            } catch (IOException | RuntimeException error) {
-                Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
-            }
+            writeExif(getContext(), file, location, exifParameters);
             mMainHandler.post(then);
         });
+    }
+
+    /** The Exif {@link #finishExif} writes, which never fails the capture. */
+    @VisibleForTesting
+    @WorkerThread
+    static void writeExif(@NonNull Context context, @NonNull File file,
+            @Nullable Location location, @NonNull ExifCaptureParameters exifParameters) {
+        try {
+            Exif exif = new Exif(file);
+            exif.attachTimestamp();
+            exif.attachCaptureDevice(context);
+            exif.attachThumbnail();
+            exifParameters.applyTo(exif);
+            if (location != null) {
+                exif.attachLocation(location);
+            }
+            exif.save();
+        } catch (ExifNoRoomException error) {
+            // The picture keeps everything else, and is never failed over its metadata.
+            Log.w(TAG, "Saved the picture without some of its Exif tags", error);
+        } catch (IOException | RuntimeException error) {
+            Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
+        }
     }
 
     /**
@@ -1809,6 +1907,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         if (!(event instanceof VideoRecordEvent.Finalize)) return;
         VideoRecordEvent.Finalize finalized = (VideoRecordEvent.Finalize) event;
+        boolean success = isSuccessfulFinalize(finalized) && file.exists();
+        if (!success) {
+            Log.e(TAG, "CameraX recording failed: " + describeFinalize(finalized),
+                    finalized.getCause());
+        }
+        onRecordingFinalized(file, success);
+    }
+
+    /**
+     * Settles the camera once a recording has ended, and tells the caller how it went. It can
+     * arrive after the camera closed, and after the host is gone, since a close stops the
+     * recording rather than waiting for it.
+     */
+    @MainThread
+    @VisibleForTesting
+    void onRecordingFinalized(@NonNull File file, boolean success) {
         if (mVideoStarted) {
             mVideoStarted = false;
             onRecordingStopped();
@@ -1820,24 +1934,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mVideoCapture = null;
         mVideoFile = null;
         applyPendingLensFacing();
-        boolean success = isSuccessfulFinalize(finalized) && file.exists();
         if (mCriticalCameraFailure) {
             releaseAllUseCases();
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+            moveLifecycleTo(Lifecycle.State.CREATED);
             mState = State.ERROR;
         } else if (mOpenRequested && isHostActive()) {
             mState = State.OPEN;
             if (!mPaused) reconcileUseCases(false);
         } else {
             releaseAllUseCases();
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+            moveLifecycleTo(Lifecycle.State.CREATED);
             mState = mOpenRequested ? State.SUSPENDED : State.CLOSED;
         }
         publishSnapshot();
         if (success) {
             showVideoConfirmation(file);
         } else {
-            Log.e(TAG, "CameraX recording failed: " + describeFinalize(finalized), finalized.getCause());
             onVideoFailed();
         }
     }
@@ -1881,7 +1993,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 if (!mPaused) reconcileUseCases(false);
             } else {
                 releaseAllUseCases();
-                mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+                moveLifecycleTo(Lifecycle.State.CREATED);
                 mState = mCriticalCameraFailure ? State.ERROR
                         : (mOpenRequested ? State.SUSPENDED : State.CLOSED);
             }
@@ -1929,7 +2041,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 if (!mPaused) reconcileUseCases(false);
             } else {
                 releaseAllUseCases();
-                mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+                moveLifecycleTo(Lifecycle.State.CREATED);
                 mState = mCriticalCameraFailure ? State.ERROR
                         : (mOpenRequested ? State.SUSPENDED : State.CLOSED);
             }
@@ -2068,14 +2180,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             CameraInfo cameraInfo = provider.getCameraInfo(selector);
             mSensorOrientation = cameraInfo.getSensorRotationDegrees();
             Preview displayPreview = createDisplayPreview(generation, cameraInfo);
+            Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews = createStreamPreviews(generation);
+            // Before the still, which is built as a JPEG whenever frames are drawn.
+            boolean drawing = prepareFrameEffect(!streamPreviews.isEmpty());
             // A still output is wanted alongside a recording, not instead of it: that is the
             // combination a camera app's video-snapshot button uses. Barcode analysis is the one
             // thing that genuinely takes the slot, because it needs the frames itself.
-            ImageCapture imageCapture = mBarcodeAnalyzer == null
-                    ? createImageCapture(cameraInfo) : null;
-            ImageAnalysis imageAnalysis = mVideoCapture == null && mBarcodeAnalyzer != null
+            ImageCapture imageCapture = mFrameAnalyzer == null
+                    ? createImageCapture(cameraInfo, drawing) : null;
+            ImageAnalysis imageAnalysis = mVideoCapture == null && mFrameAnalyzer != null
                     ? createImageAnalysis() : null;
-            Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews = createStreamPreviews(generation);
             List<UseCase> requested = new ArrayList<>();
             requested.add(displayPreview);
             if (mVideoCapture != null) requested.add(mVideoCapture);
@@ -2108,7 +2222,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 }
             }
             unbindCurrentUseCases();
-            Camera camera = bindAtomically(selector, requested);
+            // After unbinding, so that an effect being let go is not closing outputs CameraX is
+            // still drawing into, and before binding, because the group carries the effect.
+            CameraEffect effect = reconcileFrameEffect(drawing);
+            Camera camera = bindAtomically(selector, requested, effect);
             if (generation != mGeneration || !mOpenRequested || mPaused) {
                 provider.unbind(requested.toArray(new UseCase[0]));
                 return false;
@@ -2121,6 +2238,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mBoundUseCases.clear();
             mBoundUseCases.addAll(requested);
             mActiveCamera = camera;
+            updateFrameEffectOrientation();
             observeCameraState(camera);
             mState = mVideoCapture == null ? State.OPEN : State.BINDING;
             publishSnapshot();
@@ -2144,15 +2262,175 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
     }
 
-    @NonNull private Camera bindAtomically(@NonNull CameraSelector selector, @NonNull List<UseCase> useCases) {
+    @NonNull private Camera bindAtomically(@NonNull CameraSelector selector,
+            @NonNull List<UseCase> useCases, @Nullable CameraEffect effect) {
         int width = getWidth();
         int height = getHeight();
-        if (isMatchPreviewAspectRatioEnabled() && width > 0 && height > 0) {
-            UseCaseGroup.Builder group = new UseCaseGroup.Builder().setViewPort(createViewPort(width, height));
-            for (UseCase useCase : useCases) group.addUseCase(useCase);
-            return mCameraProvider.bindToLifecycle(this, selector, group.build());
+        boolean hasViewPort = isMatchPreviewAspectRatioEnabled() && width > 0 && height > 0;
+        if (!hasViewPort && effect == null) {
+            return mCameraProvider.bindToLifecycle(this, selector, useCases.toArray(new UseCase[0]));
         }
-        return mCameraProvider.bindToLifecycle(this, selector, useCases.toArray(new UseCase[0]));
+        // An effect only reaches the camera through a UseCaseGroup, so a bind that carries one
+        // goes this way whether or not there is a view port to set.
+        UseCaseGroup.Builder group = new UseCaseGroup.Builder();
+        if (hasViewPort) group.setViewPort(createViewPort(width, height));
+        for (UseCase useCase : useCases) group.addUseCase(useCase);
+        if (effect != null) group.addEffect(effect);
+        return mCameraProvider.bindToLifecycle(this, selector, group.build());
+    }
+
+    @Override public boolean isFrameEffectSupported() {
+        return !mGlUnavailable;
+    }
+
+    @Override public void setFrameRenderer(@Nullable FrameRenderer renderer) {
+        super.setFrameRenderer(renderer);
+        runOnMainThread(this::applyFrameEffect);
+    }
+
+    @Override public void setCameraTextureProvider(@Nullable CameraTextureProvider provider) {
+        super.setCameraTextureProvider(provider);
+        runOnMainThread(this::applyFrameEffect);
+    }
+
+    /**
+     * Brings the effect into line with what the caller has asked for.
+     *
+     * <p>Rebinds only when it has to. Changing what draws is a field on a renderer that is already
+     * running, and rebinding for it would drop frames and restart the context for nothing;
+     * changing whether frames go through GL at all, or whose texture they go through, is a
+     * different pipeline and does need one.</p>
+     */
+    private void applyFrameEffect() {
+        if (mDestroyed) return;
+        FrameRenderer renderer = getFrameRenderer();
+        CameraTextureProvider textureProvider = getCameraTextureProvider();
+        FrameEffect effect = mFrameEffect;
+        boolean wanted = renderer != null || textureProvider != null;
+        if (effect != null && wanted && effect.usesTextureFrom(textureProvider)) {
+            effect.setFrameRenderer(renderer);
+            return;
+        }
+        if (effect == null && !wanted) {
+            return;
+        }
+        releaseFrameEffect();
+        reconcileUseCases(false);
+    }
+
+    /**
+     * Creates the effect, once, for as long as a caller wants frames drawn.
+     *
+     * <p>Nothing goes through GL until somebody asks. An effect across the preview, the recording
+     * and the still makes CameraX share one camera stream between all three, which costs the still
+     * the resolution it would otherwise have had, so a library that did it unasked would be
+     * charging every app for a feature most of them never use.</p>
+     */
+    private void ensureFrameEffect() {
+        if (mFrameEffect != null || mGlUnavailable) return;
+        FrameRenderer renderer = getFrameRenderer();
+        CameraTextureProvider textureProvider = getCameraTextureProvider();
+        if (renderer == null && textureProvider == null) return;
+        mFrameEffect = FrameEffect.create(FrameEffect.ALL_TARGETS, mMainExecutor, renderer,
+                textureProvider, this::onFrameEffectFailed);
+        if (mFrameEffect == null) {
+            // The renderer logged why. The camera goes on being bound without an effect, which is
+            // a camera that works and an effect that does not, rather than no camera at all.
+            Log.w(TAG, "Showing the camera without effects; this device will not give us GL");
+            mGlUnavailable = true;
+        }
+    }
+
+    /**
+     * Whether an effect can be part of a bind that also carries a custom stream, which it cannot.
+     *
+     * <p>A custom stream needs a second Preview, and CameraX picks the use cases an effect applies
+     * to by target type - it cannot tell two Previews apart. The effect gives way, because the
+     * stream was asked for on purpose where an effect may only be decorating.</p>
+     */
+    static boolean canBindFrameEffect(boolean hasCustomStream) {
+        return !hasCustomStream;
+    }
+
+    /**
+     * The format the still use case is built for: the one asked for, or JPEG while frames are
+     * drawn.
+     *
+     * <p>A raw or Ultra HDR still cannot come out of a GL pipeline at all, and CameraX says so by
+     * throwing out of the bind rather than by dropping the effect. So the effect wins, as it does
+     * on Camera2: the still is a drawn JPEG, Ultra HDR falls back to it, and a capture asked for
+     * as RAW is refused rather than quietly written as something else.</p>
+     */
+    @NonNull
+    static CameraView.PictureFormat boundPictureFormat(
+            @NonNull CameraView.PictureFormat requested, boolean drawing) {
+        return drawing ? CameraView.PictureFormat.JPEG : requested;
+    }
+
+    /**
+     * Brings the effect up ahead of the use cases built around it, if one is wanted and can be
+     * bound. Letting one go waits for {@link #reconcileFrameEffect}, after the unbind.
+     *
+     * @return whether the coming bind puts frames through GL
+     */
+    private boolean prepareFrameEffect(boolean hasCustomStream) {
+        if (!canBindFrameEffect(hasCustomStream)) {
+            if (mFrameEffect != null || getFrameRenderer() != null
+                    || getCameraTextureProvider() != null) {
+                Log.w(TAG, "Camera frames bypass GL: a custom stream is attached");
+            }
+            return false;
+        }
+        ensureFrameEffect();
+        return mFrameEffect != null;
+    }
+
+    /**
+     * The effect to bind with, letting it go when the bind does not draw frames, so that the bind
+     * is the one that would have happened had nobody asked for an effect.
+     */
+    @Nullable private CameraEffect reconcileFrameEffect(boolean drawing) {
+        if (drawing) {
+            return mFrameEffect;
+        }
+        releaseFrameEffect();
+        return null;
+    }
+
+    /**
+     * Tells the effect how frames are shown, which is how it turns a renderer's drawing to match.
+     * Called once a camera is bound and whenever the display turns, the two things it rests on.
+     */
+    @MainThread
+    private void updateFrameEffectOrientation() {
+        FrameEffect effect = mFrameEffect;
+        if (effect != null) {
+            effect.setShownOrientation(getRelativeCameraOrientation(), mFrontFacing);
+        }
+    }
+
+    private void releaseFrameEffect() {
+        FrameEffect effect = mFrameEffect;
+        if (effect == null) return;
+        mFrameEffect = null;
+        effect.release();
+    }
+
+    /**
+     * What CameraX reports through the effect's own error listener, from its own thread.
+     *
+     * <p>Reaching here means CameraX accepted the effect and then could not run it, which leaves a
+     * camera that is bound but showing nothing. Letting the effect go and binding again without
+     * one puts the preview back; latching stops the next bind walking into the same wall.</p>
+     */
+    private void onFrameEffectFailed(@NonNull Throwable error) {
+        Log.e(TAG, "Showing the camera without effects; CameraX could not run one", error);
+        runOnMainThread(() -> {
+            if (mDestroyed) return;
+            mGlUnavailable = true;
+            releaseFrameEffect();
+            reconcileUseCases(false);
+        });
     }
 
     @NonNull private SessionConfig createSessionConfig(@NonNull List<UseCase> useCases) {
@@ -2418,22 +2696,23 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         });
     }
 
-    @NonNull private ImageCapture createImageCapture(@NonNull CameraInfo cameraInfo) {
+    /** @param drawing whether the bind puts frames through GL, which makes every still a JPEG */
+    @NonNull private ImageCapture createImageCapture(
+            @NonNull CameraInfo cameraInfo, boolean drawing) {
+        CameraView.PictureFormat format = boundPictureFormat(getPictureFormat(), drawing);
         ImageCapture.Builder builder = new ImageCapture.Builder()
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
-                .setCaptureMode(getCaptureMode(cameraInfo))
+                .setCaptureMode(getCaptureMode(cameraInfo, format))
                 .setJpegQuality(getPictureQuality());
         // Checked against this camera as well as on request, since the lens may have changed.
-        if (getPictureFormat() == CameraView.PictureFormat.ULTRA_HDR
-                && writesUltraHdr(cameraInfo)) {
+        if (format == CameraView.PictureFormat.ULTRA_HDR && writesUltraHdr(cameraInfo)) {
             builder.setOutputFormat(ImageCapture.OUTPUT_FORMAT_JPEG_ULTRA_HDR);
         }
         Size sensorSize = DngWriter.sensorSize(cameraCharacteristics(cameraInfo));
-        if (writesRaw(getPictureFormat()) && writesRaw(cameraInfo, getPictureFormat())
-                && sensorSize != null) {
-            builder.setOutputFormat(outputFormatFor(getPictureFormat()));
+        if (writesRaw(format) && writesRaw(cameraInfo, format) && sensorSize != null) {
+            builder.setOutputFormat(outputFormatFor(format));
             // DngCreator only writes a frame the sensor's size, so that is the one size asked for.
             // Should CameraX not offer it after all, its own choice stands and a frame of the
             // wrong size fails the capture rather than the bind.
@@ -2531,12 +2810,18 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Override public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
         Camera camera = mActiveCamera;
         if (writesRaw(format)) {
-            return camera != null && writesRaw(camera.getCameraInfo(), format);
+            // A drawn picture is a JPEG, so there is no sensor frame to write a DNG from.
+            return camera != null && !isDrawingFrames()
+                    && writesRaw(camera.getCameraInfo(), format);
         }
         if (format != CameraView.PictureFormat.ULTRA_HDR) {
             return super.isPictureFormatSupported(format);
         }
-        return camera != null && writesUltraHdr(camera.getCameraInfo());
+        return camera != null && !isDrawingFrames() && writesUltraHdr(camera.getCameraInfo());
+    }
+
+    @Override protected boolean isDrawingFrames() {
+        return mFrameEffect != null;
     }
 
     @Override public void setPictureFormat(CameraView.PictureFormat format) {
@@ -2550,7 +2835,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @NonNull private ImageAnalysis createImageAnalysis() {
         ExecutorService executor = mAnalysisExecutor;
-        CameraXBarcodeAnalyzer analyzer = mBarcodeAnalyzer;
+        CameraXFrameAnalyzer analyzer = mFrameAnalyzer;
         if (executor == null || analyzer == null) {
             throw new IllegalStateException("Barcode analysis requested without an analyzer executor");
         }
@@ -2627,6 +2912,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mVideoRecording = null;
         mVideoFile = null;
         releaseBarcodeAnalysisResources();
+        // After unbinding, because the renderer is drawing into surfaces those use cases own. The
+        // GL context does not survive the camera being let go: a renderer kept running against no
+        // camera holds a thread and a context for as long as the view exists.
+        releaseFrameEffect();
         setTransform(new Matrix());
     }
 
@@ -2655,16 +2944,46 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @NonNull private ResolutionSelector createImageResolutionSelector() {
-        return new ResolutionSelector.Builder()
-                .setAspectRatioStrategy(getAspectRatioStrategy())
-                .setResolutionStrategy(new ResolutionStrategy(imageTargetSize(getQuality()),
+        return imageResolutionSelector(getQuality(), getAspectRatioStrategy());
+    }
+
+    /**
+     * How a still is sized for a quality.
+     *
+     * <p>MAX takes the largest picture the camera gives, whatever its shape: the view port crops
+     * every output to the view, and a crop of the whole sensor holds more than a frame already
+     * cut to the view's shape. The higher-resolution mode adds the sizes a camera only delivers
+     * slowly, which is the trade a MAX picture makes.</p>
+     */
+    @NonNull static ResolutionSelector imageResolutionSelector(
+            @NonNull CameraView.Quality quality, @NonNull AspectRatioStrategy aspectRatioStrategy) {
+        ResolutionSelector.Builder builder =
+                new ResolutionSelector.Builder().setAspectRatioStrategy(aspectRatioStrategy);
+        if (quality == CameraView.Quality.MAX) {
+            return builder
+                    .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                    .setResolutionFilter((sizes, rotationDegrees) -> largestFirst(sizes))
+                    .setAllowedResolutionMode(
+                            ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
+                    .build();
+        }
+        return builder
+                .setResolutionStrategy(new ResolutionStrategy(imageTargetSize(quality),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
                 .build();
     }
 
+    /** The sizes by area, largest first, which is the order CameraX then tries them in. */
+    @NonNull static List<Size> largestFirst(@NonNull List<Size> sizes) {
+        List<Size> sorted = new ArrayList<>(sizes);
+        Collections.sort(sorted, (a, b) -> Long.compare(
+                (long) b.getWidth() * b.getHeight(), (long) a.getWidth() * a.getHeight()));
+        return sorted;
+    }
+
+    /** The bound a still is held to at every quality but MAX, which has none. */
     @NonNull static Size imageTargetSize(@NonNull CameraView.Quality quality) {
         switch (quality) {
-            case MAX: return new Size(3840, 2160);
             case HIGH: return new Size(1920, 1080);
             case MEDIUM: return new Size(1280, 720);
             case LOW:
@@ -2689,7 +3008,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         if (mVideoCapture == null && extension != CameraView.Extension.NONE && manager != null) {
             try {
                 int extensionMode = toExtensionMode(extension);
-                boolean analysisCompatible = mBarcodeAnalyzer == null
+                boolean analysisCompatible = mFrameAnalyzer == null
                         || manager.isImageAnalysisSupported(selector, extensionMode);
                 if (analysisCompatible && manager.isExtensionAvailable(selector, extensionMode)) {
                     return manager.getExtensionEnabledCameraSelector(selector, extensionMode);
@@ -2722,11 +3041,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * frame, and a reprocessed capture writes only JPEG or YUV, never a RAW_SENSOR frame.</p>
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
-    private int getCaptureMode(@NonNull CameraInfo cameraInfo) {
+    private int getCaptureMode(
+            @NonNull CameraInfo cameraInfo, @NonNull CameraView.PictureFormat format) {
         if (getQuality() == CameraView.Quality.MAX) {
             return ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY;
         }
-        return cameraInfo.isZslSupported() && !writesRaw(getPictureFormat())
+        return cameraInfo.isZslSupported() && !writesRaw(format)
                 ? ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
                 : ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY;
     }
@@ -2796,6 +3116,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Override public void onLayoutChanged() {
         runOnMainThread(() -> {
             applyPreviewTransform();
+            updateFrameEffectOrientation();
             if (mPreview != null) mPreview.setTargetRotation(getTargetRotation());
             if (mImageCapture != null) mImageCapture.setTargetRotation(getTargetRotation());
             if (mImageAnalysis != null) mImageAnalysis.setTargetRotation(getTargetRotation());
