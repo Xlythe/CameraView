@@ -763,9 +763,17 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         long generation = mGeneration;
         LiveData<CameraState> source = camera.getCameraInfo().getCameraState();
+        CameraStateSinceBind sinceBind = new CameraStateSinceBind(source.getValue());
         Observer<CameraState> observer = cameraState -> {
             if (generation != mGeneration || camera != mActiveCamera
                     || source != mObservedCameraState) {
+                return;
+            }
+            if (!sinceBind.isAboutTheBind(cameraState)) {
+                if (cameraState.getError() != null) {
+                    Log.d(TAG, "Ignoring camera error " + cameraState.getError().getCode()
+                            + " left over from before the use cases were bound");
+                }
                 return;
             }
             onCameraStateChanged(cameraState);

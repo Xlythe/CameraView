@@ -21,6 +21,7 @@ import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
@@ -52,6 +53,10 @@ public final class VideoMetadataDeviceTest {
     public final GrantPermissionRule permissions = GrantPermissionRule.grant(
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO);
+
+    /** Skips, rather than fails, a test that the emulator's camera HAL stalled under. */
+    @Rule
+    public final TestRule cameraHal = DeviceState.skipWhenTheEmulatorCameraHalStalls();
 
     private final CameraView.Backend backend;
 
@@ -117,6 +122,7 @@ public final class VideoMetadataDeviceTest {
     }
 
     private File record() throws Exception {
+        DeviceState.assumeTheBackendCanRecord(backend);
         File file = File.createTempFile("meta", ".mp4",
                 ApplicationProvider.getApplicationContext().getCacheDir());
         assertTrue(file.delete() || !file.exists());

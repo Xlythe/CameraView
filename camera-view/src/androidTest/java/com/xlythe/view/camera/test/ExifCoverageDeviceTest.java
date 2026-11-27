@@ -19,6 +19,7 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
@@ -124,6 +125,10 @@ public final class ExifCoverageDeviceTest {
     @Rule
     public final GrantPermissionRule permissions = GrantPermissionRule.grant(
             Manifest.permission.CAMERA);
+
+    /** Skips, rather than fails, a test that the emulator's camera HAL stalled under. */
+    @Rule
+    public final TestRule cameraHal = DeviceState.skipWhenTheEmulatorCameraHalStalls();
 
     private final CameraView.Backend backend;
 

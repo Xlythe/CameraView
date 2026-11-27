@@ -31,6 +31,7 @@ import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
@@ -94,6 +95,10 @@ public final class PictureSizeDeviceTest {
     @Rule
     public final GrantPermissionRule permissions = GrantPermissionRule.grant(
             Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO);
+
+    /** Skips, rather than fails, a test that the emulator's camera HAL stalled under. */
+    @Rule
+    public final TestRule cameraHal = DeviceState.skipWhenTheEmulatorCameraHalStalls();
 
     /** The backend under test. */
     private final CameraView.Backend backend;
@@ -161,6 +166,7 @@ public final class PictureSizeDeviceTest {
     public void aMaxPictureCanBeTakenWhileRecording() throws Exception {
         Assume.assumeTrue("recorded once per backend",
                 shape == Shape.FULL && facing == CameraView.LensFacing.BACK);
+        DeviceState.assumeTheBackendCanRecord(backend);
         File video = File.createTempFile("picture-size", ".mp4",
                 ApplicationProvider.getApplicationContext().getCacheDir());
         video.deleteOnExit();

@@ -252,12 +252,21 @@ public class VideoRecorder {
                           getFrameRate(),
                           getIFrameInterval());
 
-                  MediaCodec encoder = MediaCodec.createByCodecName(codecInfo.getName());
-                  mEncoder.set(encoder);
-                  encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                  surface = encoder.createInputSurface();
-                  providedSurface.set(surface);
-                  encoder.start();
+                  MediaCodec encoder;
+                  // Held until start() returns, because stop() takes the same lock before it
+                  // closes the encoder. Before API 29, MediaCodec aborts the whole process when a
+                  // release() overtakes a start() that is still completing on another thread.
+                  synchronized (VideoRecorder.this) {
+                    if (!isRecording()) {
+                      return;
+                    }
+                    encoder = MediaCodec.createByCodecName(codecInfo.getName());
+                    mEncoder.set(encoder);
+                    encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+                    surface = encoder.createInputSurface();
+                    providedSurface.set(surface);
+                    encoder.start();
+                  }
                   Log.d(TAG, "Started recording video with dimensions " + metadata);
 
                   MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
