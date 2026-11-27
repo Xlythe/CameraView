@@ -12,7 +12,7 @@ import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.math.BigInteger;
 import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -40,6 +40,9 @@ import java.util.Map;
  */
 public final class VideoMetadata {
     private static final String TAG = VideoMetadata.class.getSimpleName();
+
+    /** Text in the boxes. Looked up by name, since StandardCharsets arrived in API 19. */
+    private static final Charset UTF_8 = Charset.forName("UTF-8");
 
     /** The copyright sign that begins QuickTime's user-data text keys. */
     private static final int COPYRIGHT_SIGN = 0xA9;
@@ -682,7 +685,7 @@ public final class VideoMetadata {
     /** One key: its size, the mdta namespace, and the key without a terminator. */
     @NonNull
     private static byte[] keyEntry(@NonNull String key) {
-        byte[] name = key.getBytes(StandardCharsets.UTF_8);
+        byte[] name = key.getBytes(UTF_8);
         byte[] entry = new byte[HEADER + name.length];
         writeInt(entry, 0, entry.length);
         writeType(entry, 4, MDTA);
@@ -695,7 +698,7 @@ public final class VideoMetadata {
         for (int i = 0; i < entries.size(); i++) {
             byte[] entry = entries.get(i);
             if (MDTA.equals(type(entry, 4)) && key.equals(
-                    new String(entry, HEADER, entry.length - HEADER, StandardCharsets.UTF_8))) {
+                    new String(entry, HEADER, entry.length - HEADER, UTF_8))) {
                 return i + 1;
             }
         }
@@ -744,7 +747,7 @@ public final class VideoMetadata {
                 }
                 return typed(TYPE_UNSIGNED, new byte[] {(byte) number});
             default:
-                return typed(TYPE_UTF8, value.getBytes(StandardCharsets.UTF_8));
+                return typed(TYPE_UTF8, value.getBytes(UTF_8));
         }
     }
 
@@ -790,7 +793,7 @@ public final class VideoMetadata {
         ByteBuffer value = ByteBuffer.wrap(data, at, length);
         switch (type) {
             case TYPE_UTF8:
-                return new String(data, at, length, StandardCharsets.UTF_8);
+                return new String(data, at, length, UTF_8);
             case TYPE_FLOAT32:
                 return length == 4 ? Float.toString(value.getFloat()) : null;
             case TYPE_FLOAT64:
@@ -893,7 +896,7 @@ public final class VideoMetadata {
     @VisibleForTesting
     @NonNull
     static byte[] textBox(@NonNull Tag tag, @NonNull String value) {
-        byte[] text = value.getBytes(StandardCharsets.UTF_8);
+        byte[] text = value.getBytes(UTF_8);
         byte[] box = new byte[HEADER + TEXT_PREFIX + text.length];
         writeInt(box, 0, box.length);
         writeType(box, 4, keyOf(tag));
@@ -915,7 +918,7 @@ public final class VideoMetadata {
         if (HEADER + TEXT_PREFIX + length > box.length) {
             return null;
         }
-        return new String(box, HEADER + TEXT_PREFIX, length, StandardCharsets.UTF_8);
+        return new String(box, HEADER + TEXT_PREFIX, length, UTF_8);
     }
 
     /** The box type for a tag: the copyright sign and its three characters. */

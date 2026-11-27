@@ -6,6 +6,7 @@ import android.content.Context;
 import android.location.Location;
 import android.location.LocationListener;
 import android.location.LocationManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Looper;
 import android.os.SystemClock;
@@ -208,7 +209,7 @@ final class LocationTracker {
         if (current == null) {
             return true;
         }
-        long newerByNanos = candidate.getElapsedRealtimeNanos() - current.getElapsedRealtimeNanos();
+        long newerByNanos = getFixTimeNanos(candidate) - getFixTimeNanos(current);
         if (newerByNanos > SIGNIFICANTLY_NEWER_NANOS) {
             return true;
         }
@@ -238,8 +239,27 @@ final class LocationTracker {
      * <p>Measured on the clock since boot, because the wall clock can be set backwards.</p>
      */
     private static boolean isStale(@NonNull Location location) {
-        return SystemClock.elapsedRealtimeNanos() - location.getElapsedRealtimeNanos()
-                > STALE_LOCATION_NANOS;
+        return getNowNanos() - getFixTimeNanos(location) > STALE_LOCATION_NANOS;
+    }
+
+    /**
+     * When a fix was taken, on the same clock as {@link #getNowNanos}.
+     *
+     * <p>A fix carries the time since boot from API 17. Before that it has only the wall clock.</p>
+     */
+    private static long getFixTimeNanos(@NonNull Location location) {
+        if (Build.VERSION.SDK_INT >= 17) {
+            return location.getElapsedRealtimeNanos();
+        }
+        return TimeUnit.MILLISECONDS.toNanos(location.getTime());
+    }
+
+    /** Now, on the clock {@link #getFixTimeNanos} reads fixes on. */
+    private static long getNowNanos() {
+        if (Build.VERSION.SDK_INT >= 17) {
+            return SystemClock.elapsedRealtimeNanos();
+        }
+        return TimeUnit.MILLISECONDS.toNanos(System.currentTimeMillis());
     }
 
     /** The providers this device has that we hold the permission for. */

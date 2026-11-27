@@ -10,8 +10,6 @@ import android.media.MediaCodec;
 import android.media.MediaFormat;
 import android.view.Surface;
 
-import com.google.common.primitives.Ints;
-
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -145,7 +143,7 @@ public class VideoPlayerTest {
     @Test
     public void aFrameWithANonsenseLengthIsRefused() throws Exception {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.write(Ints.toByteArray(-1));
+        out.write(ByteBuffer.allocate(Integer.BYTES).putInt(-1).array());
         CountDownLatch ended = new CountDownLatch(1);
         VideoPlayer player = new VideoPlayer(surface, new ByteArrayInputStream(out.toByteArray()));
         player.setStreamEndListener(ended::countDown);
@@ -212,7 +210,7 @@ public class VideoPlayerTest {
         try {
             for (VideoFrame frame : frames) {
                 byte[] bytes = frame.asBytes();
-                out.write(Ints.toByteArray(bytes.length));
+                out.write(ByteBuffer.allocate(Integer.BYTES).putInt(bytes.length).array());
                 out.write(bytes);
             }
         } catch (IOException error) {

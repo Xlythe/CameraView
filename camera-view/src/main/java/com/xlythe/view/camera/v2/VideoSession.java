@@ -1,7 +1,6 @@
 package com.xlythe.view.camera.v2;
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -30,12 +29,13 @@ import java.util.List;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 class VideoSession extends PictureSession {
     /** Floor for a rescaled bit rate, below which even a small frame looks broken. */
     private static final int MIN_VIDEO_BIT_RATE = 64_000;
