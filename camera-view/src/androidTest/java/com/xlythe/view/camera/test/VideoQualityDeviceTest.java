@@ -30,6 +30,7 @@ import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
@@ -85,6 +86,10 @@ public final class VideoQualityDeviceTest {
             // write. Without it the location test can only skip, which proves nothing.
             Manifest.permission.ACCESS_FINE_LOCATION
     );
+
+    /** Skips, rather than fails, a test that the emulator's camera HAL stalled under. */
+    @Rule
+    public final TestRule cameraHal = DeviceState.skipWhenTheEmulatorCameraHalStalls();
 
     private final CameraView.Backend backend;
 

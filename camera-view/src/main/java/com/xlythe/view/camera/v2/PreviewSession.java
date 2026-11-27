@@ -1,6 +1,5 @@
 package com.xlythe.view.camera.v2;
 
-import android.annotation.TargetApi;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
@@ -17,13 +16,17 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import com.xlythe.view.camera.gl.FrameRenderThread;
+import com.xlythe.view.camera.gl.GlMath;
+
 import androidx.annotation.CallSuper;
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 class PreviewSession extends SessionImpl {
     /**
      * The preview must always be limited to, at most, 1080p. Without that limit, max-resolution
@@ -53,17 +56,26 @@ class PreviewSession extends SessionImpl {
     }
 
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
+        return newPreviewRequest(device).build();
+    }
+
+    /** The preview's request, which a one-off request such as a metering trigger starts from. */
+    @NonNull
+    CaptureRequest.Builder newPreviewRequest(@NonNull CameraDevice device)
+            throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW);
         builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-        applyFlash(builder);
+        applyAeMode(builder, true /* withFlashStrategy */);
+        applyExposureCompensation(builder);
         if (mMeteringRectangle != null) {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
         applyZoom(builder);
+        applyStabilization(builder);
         applyFaceDetection(builder);
         builder.addTarget(mPreviewSurface.getSurface());
-        return builder.build();
+        return builder;
     }
 
     @Override
@@ -127,6 +139,9 @@ class PreviewSession extends SessionImpl {
 
         private Surface mSurface;
 
+        /** Whether the camera is writing into the renderer rather than into the view. */
+        private boolean mThroughGl;
+
         PreviewSurface(Camera2Module cameraView) {
             super(cameraView);
         }
@@ -145,8 +160,45 @@ class PreviewSession extends SessionImpl {
             }
             texture.setDefaultBufferSize(getWidth(), getHeight());
 
+            FrameRenderThread effect = mCameraView.getEffect();
+            if (effect != null) {
+                mThroughGl = initializeThroughGl(effect, texture);
+                if (mThroughGl) {
+                    return;
+                }
+                // The renderer came up and then would not give us a texture, which leaves the
+                // camera with nowhere to write. Straight to the preview is better than nothing.
+                Log.w(TAG, "The renderer has no input, so this preview goes round it");
+            }
+
             // This is the output Surface we need to start the preview.
             mSurface = new Surface(texture);
+        }
+
+        /**
+         * Points the camera at the renderer, and the renderer at the view.
+         *
+         * <p>The same size for both, and the frame drawn with the transform the camera itself
+         * reports - which is what the preview would have been given had it come straight from
+         * the camera. So the view transform that was already orienting the preview still does,
+         * and going through GL changes nothing about where the picture sits.</p>
+         *
+         * @return whether the camera has somewhere to write
+         */
+        private boolean initializeThroughGl(@NonNull FrameRenderThread effect,
+                @NonNull SurfaceTexture preview) {
+            SurfaceTexture input = effect.getInputSurfaceTexture();
+            if (input == null) {
+                return false;
+            }
+            Size size = new Size(getWidth(), getHeight());
+            effect.setInputBufferSize(size);
+            mSurface = new Surface(input);
+            effect.addOutput(this, new Surface(preview), size, size,
+                    GlMath.ScaleType.FILL_CENTER,
+                    (surfaceTextureMatrix, into) ->
+                            System.arraycopy(surfaceTextureMatrix, 0, into, 0, into.length));
+            return true;
         }
 
         @Override
@@ -156,6 +208,15 @@ class PreviewSession extends SessionImpl {
 
         @Override
         void close() {
+            if (mThroughGl) {
+                FrameRenderThread effect = mCameraView.getEffect();
+                if (effect != null) {
+                    // Before the surface goes, because it is being drawn into, and removing an
+                    // output releases the one it was drawing into.
+                    effect.removeOutput(this);
+                }
+                mThroughGl = false;
+            }
             if (mSurface != null) {
                 mSurface.release();
                 mSurface = null;

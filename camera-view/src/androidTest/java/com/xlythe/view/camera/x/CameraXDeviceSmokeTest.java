@@ -23,6 +23,7 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 import org.junit.Assume;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 
 import java.io.ByteArrayOutputStream;
@@ -38,6 +39,10 @@ public final class CameraXDeviceSmokeTest {
     public final GrantPermissionRule permissions = GrantPermissionRule.grant(
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO);
+
+    /** Skips, rather than fails, a test that the emulator's camera HAL stalled under. */
+    @Rule
+    public final TestRule cameraHal = DeviceState.skipWhenTheEmulatorCameraHalStalls();
 
     @Test
     public void cameraXBackendBindsAndClosesWithPlainActivityHost() throws Exception {

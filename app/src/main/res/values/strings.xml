@@ -6,6 +6,7 @@
     <string name="app_name_resizing">Resizing Demo</string>
     <string name="app_name_qr_code">QR Code Demo</string>
     <string name="app_name_wear">Wear Companion</string>
+    <string name="app_name_effect">Effect Demo</string>
     <string name="wear_status_idle">Open the companion app on your watch</string>
     <string name="wear_status_opening">Connecting to the watch…</string>
     <string name="wear_status_streaming">Streaming to the watch</string>
@@ -27,5 +28,13 @@
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_resize">Resize</string>
+    <!-- A zoom preset button, such as 0.6x or 2x -->
+    <string name="zoom_preset">%1$sx</string>
+    <!-- How far exposure compensation shifts the exposure, in stops, such as +0.7 EV -->
+    <string name="exposure_compensation">%1$+.1f EV</string>
+    <!-- Exposure compensation that shifts nothing -->
+    <string name="exposure_compensation_none">0 EV</string>
+    <!-- What the exposure compensation slider is, for accessibility services -->
+    <string name="exposure_compensation_description">Exposure compensation</string>
 
 </resources>

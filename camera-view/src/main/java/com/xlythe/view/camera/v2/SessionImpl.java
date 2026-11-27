@@ -1,11 +1,12 @@
 package com.xlythe.view.camera.v2;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
@@ -17,6 +18,7 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.ExifCaptureParameters;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -28,12 +30,13 @@ import java.util.List;
 import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 abstract class SessionImpl implements Camera2Module.Session {
     static final Size SIZE_4K = new Size(3840, 2160);
     static final Size SIZE_1080P = new Size(1920, 1080);
@@ -52,6 +55,13 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Nullable
     Float mZoomRatio;
 
+    /**
+     * The auto-exposure state the preview last reported, which says whether auto flash will
+     * fire. Written on the camera's thread, read on whichever takes the picture.
+     */
+    @Nullable
+    private volatile Integer mAeState;
+
     SessionImpl(Camera2Module camera2Module) {
         mCamera2Module = camera2Module;
     }
@@ -65,6 +75,23 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getHandler();
     }
 
+    /**
+     * The module this session belongs to, for the few things a session asks it directly.
+     *
+     * <p>Most of what a session needs is already forwarded by a named method here. This is for
+     * the pieces that are about the module itself rather than about a setting - the GL pipeline
+     * the camera may be writing into, and the context a file is saved with.</p>
+     */
+    @NonNull
+    Camera2Module getModule() {
+        return mCamera2Module;
+    }
+
+    @NonNull
+    Context getContext() {
+        return mCamera2Module.getContext();
+    }
+
     boolean hasFlash() {
         return mCamera2Module.hasFlash();
     }
@@ -73,21 +100,15 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getFlash();
     }
 
-    /**
-     * Applies the requested flash strategy to a capture request.
-     *
-     * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
-     * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
-     * on the repeating preview request, because that is the only stream auto-exposure can converge
-     * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
-     * reason.</p>
-     */
-    /**
-     * Asks the camera for the faces it is tracking, when something wants them.
-     *
-     * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
-     * the repeating preview request; the results then arrive with each completed frame.</p>
-     */
+    boolean isZeroShutterLagSupported() {
+        return mCamera2Module.isZeroShutterLagSupported();
+    }
+
+    @Nullable
+    Integer getAeState() {
+        return mAeState;
+    }
+
     /**
      * The sizes that fit inside a bound, or all of them when none do.
      *
@@ -108,6 +129,12 @@ abstract class SessionImpl implements Camera2Module.Session {
         return fitting.isEmpty() ? sizes : fitting;
     }
 
+    /**
+     * Asks the camera for the faces it is tracking, when something wants them.
+     *
+     * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
+     * the repeating preview request; the results then arrive with each completed frame.</p>
+     */
     void applyFaceDetection(@NonNull CaptureRequest.Builder builder) {
         Integer mode = mCamera2Module.getFaceDetectMode();
         if (mode != null) {
@@ -123,7 +150,8 @@ abstract class SessionImpl implements Camera2Module.Session {
      */
     @Nullable
     CameraCaptureSession.CaptureCallback repeatingCallback() {
-        if (mCamera2Module.getFaceDetectMode() == null && !mCamera2Module.isFocusPending()) {
+        if (mCamera2Module.getFaceDetectMode() == null && !mCamera2Module.isFocusPending()
+                && !tracksExposure()) {
             return null;
         }
         return new CameraCaptureSession.CaptureCallback() {
@@ -134,15 +162,146 @@ abstract class SessionImpl implements Camera2Module.Session {
                     mCamera2Module.onFacesCaptured(result);
                 }
                 mCamera2Module.onFocusCaptured(result);
+                onPreviewCaptured(result);
             }
         };
+    }
+
+    /**
+     * Whether the preview's exposure has to be watched: to know whether auto flash will fire,
+     * and to follow the metering a flash picture waits on.
+     */
+    private boolean tracksExposure() {
+        return hasFlash() && getFlash() != CameraView.Flash.OFF;
+    }
+
+    /** Hears each preview frame's result, while anything is listening for them. */
+    void onPreviewCaptured(@NonNull CaptureResult result) {
+        mAeState = result.get(CaptureResult.CONTROL_AE_STATE);
     }
 
     int getPictureQuality() {
         return mCamera2Module.getPictureQuality();
     }
 
-    void applyFlash(@NonNull CaptureRequest.Builder builder) {
+    CameraView.PictureFormat getPictureFormat() {
+        return mCamera2Module.getPictureFormat();
+    }
+
+    boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        return mCamera2Module.isPictureFormatSupported(format);
+    }
+
+    @NonNull
+    ExifCaptureParameters exifCaptureParameters() {
+        return mCamera2Module.exifCaptureParameters();
+    }
+
+    /** Whether the torch should be lit, which takes a camera with a flash to light. */
+    boolean isTorchLit() {
+        return mCamera2Module.isTorchEnabled() && hasFlash();
+    }
+
+    /** Whether low-light boost should be asked for, which takes a camera that has it. */
+    boolean isLowLightBoostOn() {
+        return mCamera2Module.isLowLightBoostEnabled() && mCamera2Module.isLowLightBoostSupported();
+    }
+
+    /**
+     * Chooses the auto-exposure mode, which the torch, low-light boost and the flash strategy
+     * share.
+     *
+     * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
+     * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
+     * on the repeating preview request, because that is the only stream auto-exposure can converge
+     * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
+     * reason.</p>
+     *
+     * <p>The torch is FLASH_MODE_TORCH under plain ON, and it goes on a still as well, so that a
+     * picture neither puts it out nor has the flash strategy fire over it. Low-light boost is an
+     * auto-exposure mode of its own, so the flash strategy waits while it is on; the module never
+     * leaves the torch and low-light boost on together.</p>
+     *
+     * @param withFlashStrategy whether the flash strategy belongs on this request. A recording
+     *     leaves it off, since there is no still for the flash to fire for.
+     */
+    void applyAeMode(@NonNull CaptureRequest.Builder builder, boolean withFlashStrategy) {
+        if (isTorchLit()) {
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 35 && isLowLightBoostOn()) {
+            builder.set(CaptureRequest.CONTROL_AE_MODE,
+                    CaptureRequest.CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY);
+            return;
+        }
+        if (withFlashStrategy) {
+            applyFlash(builder);
+        }
+    }
+
+    /**
+     * Chooses the auto-exposure mode for a still: the preview's, except that a picture the flash
+     * was asked to fire for gets it. Low-light boost steps aside for that one capture, as CameraX
+     * suspends it for a flash capture.
+     */
+    void applyStillAeMode(@NonNull CaptureRequest.Builder builder) {
+        if (!isTorchLit() && isLowLightBoostOn() && hasFlash()
+                && getFlash() == CameraView.Flash.ON) {
+            applyFlash(builder);
+            return;
+        }
+        applyAeMode(builder, true /* withFlashStrategy */);
+    }
+
+    /**
+     * Applies exposure compensation, on every request so that a still and a recording are exposed
+     * as the preview was.
+     */
+    void applyExposureCompensation(@NonNull CaptureRequest.Builder builder) {
+        Integer index = mCamera2Module.getRequestedExposureCompensation();
+        if (index != null) {
+            builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, index);
+        }
+    }
+
+    /**
+     * Steadies the picture, when stabilization is on.
+     *
+     * <p>Preview stabilization is preferred wherever the camera has it: it steadies every stream
+     * alike, a recording included, so what is recorded is what was shown. Video stabilization only
+     * steadies what goes to an encoder, so it is only asked for by a session that feeds one. OIS is
+     * the fallback where neither applies rather than an addition, since the platform recommends
+     * against running optical and digital stabilization together.</p>
+     *
+     * <p>A still carries the same mode as the repeating request, because the mode is a session
+     * parameter on many cameras and changing it for one capture would reconfigure the stream.</p>
+     */
+    void applyStabilization(@NonNull CaptureRequest.Builder builder) {
+        if (!mCamera2Module.isStabilizationEnabled()) {
+            return;
+        }
+        CameraCharacteristics characteristics = mCamera2Module.getCameraCharacteristics();
+        if (Build.VERSION.SDK_INT >= 33
+                && Camera2Module.offersPreviewStabilization(characteristics)) {
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION);
+        } else if (feedsAnEncoder() && Camera2Module.offersVideoStabilization(characteristics)) {
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON);
+        } else if (Camera2Module.offersOpticalStabilization(characteristics)) {
+            builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON);
+        }
+    }
+
+    /** Whether this session sends frames to an encoder, which video stabilization steadies. */
+    boolean feedsAnEncoder() {
+        return false;
+    }
+
+    private void applyFlash(@NonNull CaptureRequest.Builder builder) {
         if (!hasFlash()) {
             return;
         }
@@ -194,11 +353,23 @@ abstract class SessionImpl implements Camera2Module.Session {
      * sensor of the lens already in use, so it is the fallback for older devices.</p>
      */
     void applyZoom(@NonNull CaptureRequest.Builder builder) {
+        applyZoom(builder, mCropRegion);
+    }
+
+    /** Applies zoom with a crop region already in the coordinates the request reads. */
+    void applyZoom(@NonNull CaptureRequest.Builder builder, @Nullable Rect cropRegion) {
         if (Build.VERSION.SDK_INT >= 30 && mZoomRatio != null) {
             builder.set(CaptureRequest.CONTROL_ZOOM_RATIO, mZoomRatio);
-        } else if (mCropRegion != null) {
-            builder.set(CaptureRequest.SCALER_CROP_REGION, mCropRegion);
+        } else if (cropRegion != null) {
+            builder.set(CaptureRequest.SCALER_CROP_REGION, cropRegion);
         }
+    }
+
+    /** See {@link Camera2Module#toMaximumResolution}. */
+    @RequiresApi(31)
+    @Nullable
+    Rect toMaximumResolution(@Nullable Rect region) {
+        return mCamera2Module.toMaximumResolution(region);
     }
 
     @Override
@@ -232,8 +403,21 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Override
     public void close() {}
 
+    void showImageConfirmation(File file) {
+        mCamera2Module.showImageConfirmation(file);
+    }
+
+    /** Shows a picture that wrote every one of {@code files}, reported as {@code file}. */
+    void showImageConfirmation(@NonNull File file, @NonNull List<File> files) {
+        mCamera2Module.showImageConfirmation(file, files);
+    }
+
     void onImageFailed() {
         mCamera2Module.onImageFailed();
+    }
+
+    void onShutter() {
+        mCamera2Module.onShutter();
     }
 
     void onVideoFailed() {
@@ -287,6 +471,11 @@ abstract class SessionImpl implements Camera2Module.Session {
 
         void onVideoFailed() {
             mCameraView.onVideoFailed();
+        }
+
+        /** Whether this surface has been given a size, and so can be asked for one. */
+        boolean hasSize() {
+            return mSize != null;
         }
 
         int getWidth() {

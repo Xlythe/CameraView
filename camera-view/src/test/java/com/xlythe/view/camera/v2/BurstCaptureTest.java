@@ -203,7 +203,7 @@ public class BurstCaptureTest {
     public void aLostFrameEndsTheBurst() {
         Burst burst = openAndStart(10);
         ShadowCallbackCameraCaptureSession.Capture first =
-                ShadowCallbackCameraCaptureSession.getCaptures().get(0);
+                ShadowCallbackCameraCaptureSession.getCapturesWithCallbacks().get(0);
         ImageReader reader = ShadowInjectableImageReader.latestReader();
         assertNotNull(reader);
 
@@ -278,10 +278,9 @@ public class BurstCaptureTest {
     /** The one-off requests the burst made, which carry the file each picture goes to. */
     private static List<CaptureRequest> burstRequests() {
         List<CaptureRequest> requests = new ArrayList<>();
-        for (ShadowCallbackCameraCaptureSession.Capture capture
-                : ShadowCallbackCameraCaptureSession.getCaptures()) {
-            if (capture.request.getTag() instanceof File) {
-                requests.add(capture.request);
+        for (CaptureRequest request : ShadowCallbackCameraCaptureSession.getCaptures()) {
+            if (request.getTag() instanceof File) {
+                requests.add(request);
             }
         }
         return requests;

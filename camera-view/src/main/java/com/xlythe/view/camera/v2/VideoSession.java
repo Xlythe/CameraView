@@ -1,7 +1,7 @@
 package com.xlythe.view.camera.v2;
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
+import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
@@ -18,21 +18,30 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.gl.FrameRenderThread;
+import com.xlythe.view.camera.gl.GlMath;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 class VideoSession extends PictureSession {
+    /** Floor for a rescaled bit rate, below which even a small frame looks broken. */
+    private static final int MIN_VIDEO_BIT_RATE = 64_000;
+    /** Ceiling for a rescaled bit rate, so a 4K profile cannot run away on an odd device. */
+    private static final int MAX_VIDEO_BIT_RATE = 100_000_000;
+
     /**
      * The VideoSurface must always check CamcorderProfile to see if the outputs supported by the
      * camera are also supported by MediaRecorder. Bizarre as it sounds,
@@ -40,11 +49,6 @@ class VideoSession extends PictureSession {
      * sizes it gives back. Because MediaRecorder is always (at most) limited to 4k recording, that
      * is our max video size.
      */
-    /** Floor for a rescaled bit rate, below which even a small frame looks broken. */
-    private static final int MIN_VIDEO_BIT_RATE = 64_000;
-    /** Ceiling for a rescaled bit rate, so a 4K profile cannot run away on an odd device. */
-    private static final int MAX_VIDEO_BIT_RATE = 100_000_000;
-
     private final VideoSurface mVideoSurface;
 
     /** Whether this session carries a still output alongside the recording. */
@@ -84,6 +88,16 @@ class VideoSession extends PictureSession {
     }
 
     @Override
+    protected boolean allowsRaw() {
+        return false;
+    }
+
+    @Override
+    protected boolean allowsMaximumResolution() {
+        return false;
+    }
+
+    @Override
     @SuppressLint({"WrongThread", "ThreadConstraint"})
     protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
             throws CameraAccessException {
@@ -92,20 +106,33 @@ class VideoSession extends PictureSession {
             onVideoFailed();
             throw new CameraAccessException(CameraAccessException.CAMERA_ERROR);
         }
+        // After the recorder has a size, which is what the renderer has to be told.
+        attachRecorderToRenderer();
     }
 
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+        applyAeMode(builder, false /* withFlashStrategy */);
+        applyExposureCompensation(builder);
         if (mMeteringRectangle != null) {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
         applyZoom(builder);
+        applyStabilization(builder);
         applyFaceDetection(builder);
         builder.addTarget(getPreviewSurface().getSurface());
-        builder.addTarget(mVideoSurface.getSurface());
+        Surface recording = cameraRecordingTarget();
+        if (recording != null) {
+            builder.addTarget(recording);
+        }
         return builder.build();
+    }
+
+    @Override
+    boolean feedsAnEncoder() {
+        return true;
     }
 
     @Override
@@ -147,19 +174,182 @@ class VideoSession extends PictureSession {
         session.setRepeatingRequest(createCaptureRequest(device), repeatingCallback(), getHandler());
     }
 
+    /** A pre-flash would light the recording, so a snapshot is taken as the moment stands. */
+    @Override
+    protected boolean metersForFlash() {
+        return false;
+    }
+
+    @MainThread
     @Override
     public void close() {
+        if (mRecordingRenderer != null) {
+            // Stopped rather than told to let go of the recorder, because it is this
+            // recording's alone, and stopping waits until it has let go.
+            mRecordingRenderer.stop();
+            mRecordingRenderer = null;
+        } else if (mPath == RecordingPath.EFFECT) {
+            FrameRenderThread effect = getModule().getEffect();
+            if (effect != null) {
+                // Before the recorder stops, because the renderer is drawing into its surface.
+                effect.removeOutput(mVideoSurface);
+            }
+        }
+        if (mRecordingInput != null) {
+            mRecordingInput.release();
+            mRecordingInput = null;
+        }
+        mPath = RecordingPath.CAMERA;
         super.close();
         mVideoSurface.stopRecording();
         mVideoSurface.close();
     }
 
+    /** Who fills the recorder's surface. */
+    enum RecordingPath {
+        /** The camera, which writes it in the sensor's orientation and never mirrors it. */
+        CAMERA,
+        /** The effect's renderer, from the stream it is already drawing the preview from. */
+        EFFECT,
+        /** A renderer of the recording's own, there only to mirror it like the preview. */
+        MIRROR
+    }
+
+    /**
+     * Who fills the recorder, given what is running.
+     *
+     * <p>A front recording goes through GL even with nothing to draw, because its preview is
+     * mirrored and an encoder ignores the mirror a camera asks for. Nothing else does: a back
+     * recording, or one on a device where GL will not run, stays on the camera, since a thread,
+     * a context and a copy of every frame would change nothing about the file.</p>
+     */
+    @NonNull
+    @VisibleForTesting
+    static RecordingPath recordingPath(boolean effectRunning, boolean frontFacing,
+            boolean glAvailable) {
+        if (effectRunning) {
+            return RecordingPath.EFFECT;
+        }
+        if (frontFacing && glAvailable) {
+            return RecordingPath.MIRROR;
+        }
+        return RecordingPath.CAMERA;
+    }
+
+    /**
+     * Who is filling the recorder.
+     *
+     * <p>Decided once the sizes are known, in {@link #initialize}, because that is when there
+     * is a recorder surface to hand a renderer.</p>
+     */
+    @NonNull
+    private RecordingPath mPath = RecordingPath.CAMERA;
+
+    @NonNull
+    @VisibleForTesting
+    RecordingPath getRecordingPath() {
+        return mPath;
+    }
+
+    /**
+     * The renderer this recording has to itself, which is only there on the
+     * {@link RecordingPath#MIRROR} path.
+     *
+     * <p>It draws the recording and nothing else. The preview and the still keep their own
+     * streams straight from the camera, and the camera writes this renderer frames at the
+     * recording's size rather than the preview's, so the file is no worse for the detour.</p>
+     */
+    @Nullable
+    private FrameRenderThread mRecordingRenderer;
+
+    /** The surface the camera writes into {@link #mRecordingRenderer}, in the recorder's place. */
+    @Nullable
+    private Surface mRecordingInput;
+
     @NonNull
     @Override
     public List<Surface> getSurfaces() {
         List<Surface> surfaces = super.getSurfaces();
-        surfaces.add(mVideoSurface.getSurface());
+        Surface recording = cameraRecordingTarget();
+        if (recording != null) {
+            surfaces.add(recording);
+        }
         return surfaces;
+    }
+
+    /**
+     * The surface the camera writes the recording's frames into, or null when an effect draws
+     * them from the preview stream it already has.
+     */
+    @Nullable
+    private Surface cameraRecordingTarget() {
+        switch (mPath) {
+            case EFFECT:
+                return null;
+            case MIRROR:
+                return mRecordingInput;
+            case CAMERA:
+            default:
+                return mVideoSurface.getSurface();
+        }
+    }
+
+    /**
+     * Hands the recorder to a renderer where one has to draw it, and tells the module whether
+     * the file is mirrored.
+     *
+     * <p>An effect's renderer draws it so that a filter reaches the video as well as the preview
+     * and the photograph. A front recording with no effect gets a renderer of its own so that it
+     * is mirrored like its preview. Either way the frame is drawn as the camera would have
+     * written it, in the sensor's orientation, because the file is already tagged with the turn
+     * that shows it upright; the mirror is then taken across the frame as it is shown.</p>
+     */
+    @MainThread
+    private void attachRecorderToRenderer() {
+        Camera2Module module = getModule();
+        boolean frontFacing = module.isUsingFrontFacingCamera();
+        FrameRenderThread effect = module.getEffect();
+        mPath = recordingPath(effect != null, frontFacing, module.isGlAvailable());
+        FrameRenderThread renderer = effect;
+        Size size = new Size(mVideoSurface.getWidth(), mVideoSurface.getHeight());
+        if (mPath == RecordingPath.MIRROR) {
+            renderer = startRecordingRenderer(size);
+        }
+        if (renderer == null) {
+            mPath = RecordingPath.CAMERA;
+            module.setRecordingMirrored(false);
+            return;
+        }
+        int orientation = mVideoSurface.mOrientationHint;
+        renderer.addEncoderOutput(mVideoSurface, mVideoSurface.getSurface(), size,
+                (surfaceTextureMatrix, into) -> System.arraycopy(
+                        GlMath.recordingMatrix(surfaceTextureMatrix, orientation, frontFacing),
+                        0, into, 0, into.length),
+                orientation, frontFacing);
+        module.setRecordingMirrored(frontFacing);
+    }
+
+    /**
+     * Starts the renderer a recording has to itself, with an input at the recording's size.
+     *
+     * @return the renderer, or null when GL will not run here
+     */
+    @MainThread
+    @Nullable
+    private FrameRenderThread startRecordingRenderer(@NonNull Size size) {
+        FrameRenderThread renderer = getModule().startRecordingRenderer();
+        if (renderer == null) {
+            return null;
+        }
+        SurfaceTexture input = renderer.getInputSurfaceTexture();
+        if (input == null) {
+            renderer.stop();
+            return null;
+        }
+        renderer.setInputBufferSize(size);
+        mRecordingInput = new Surface(input);
+        mRecordingRenderer = renderer;
+        return renderer;
     }
 
     public File getFile() {
@@ -317,6 +507,12 @@ class VideoSession extends PictureSession {
         private boolean mIsInitialized;
         private boolean mAwaitingRecording;
 
+        /**
+         * How far the file is tagged to be turned clockwise when it is shown, which is the turn a
+         * renderer drawing into the recorder mirrors across.
+         */
+        private int mOrientationHint;
+
         private MediaRecorder mMediaRecorder;
 
         @NonNull
@@ -376,7 +572,8 @@ class VideoSession extends PictureSession {
                 if (audioBitRate > 0) {
                     mMediaRecorder.setAudioEncodingBitRate(audioBitRate);
                 }
-                mMediaRecorder.setOrientationHint(mCameraView.getRelativeCameraOrientation());
+                mOrientationHint = mCameraView.getRelativeCameraOrientation();
+                mMediaRecorder.setOrientationHint(mOrientationHint);
 
                 Location location = getLocation();
                 if (location != null) {
@@ -406,6 +603,7 @@ class VideoSession extends PictureSession {
             }
 
             try {
+                mCameraView.onRecordingStarting();
                 mMediaRecorder.start();
                 mIsRecordingVideo = true;
             } catch (IllegalStateException e) {
@@ -441,13 +639,20 @@ class VideoSession extends PictureSession {
             }
             if (mIsRecordingVideo) {
                 mIsRecordingVideo = false;
+                boolean stopped = false;
                 try {
                     mMediaRecorder.stop();
+                    stopped = true;
+                    mCameraView.onRecordingStopped();
                     mMediaRecorder.reset();
                     showVideoConfirmation(mFile);
                 } catch (RuntimeException e) {
                     // MediaRecorder can crash with 'stop failed.'
                     Log.e(TAG, "Let me guess. 'stop failed.'?", e);
+                    if (!stopped) {
+                        // The recording has ended all the same, so its tone still plays.
+                        mCameraView.onRecordingStopped();
+                    }
                     onVideoFailed();
                 }
             } else {

@@ -13,13 +13,18 @@ import android.location.Location;
 import android.location.LocationManager;
 import android.media.FakeImage;
 import android.media.ImageReader;
+import android.media.MediaActionSound;
 
+import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifFixtures;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader;
+
+import androidx.exifinterface.media.ExifInterface;
 
 import org.junit.After;
 import org.junit.Before;
@@ -28,11 +33,16 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowCamera;
+import org.robolectric.shadows.ShadowMediaActionSound;
 import org.robolectric.shadows.ShadowPausedAsyncTask;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -63,13 +73,16 @@ public class PictureCaptureTest {
     private File output;
     private final AtomicReference<File> captured = new AtomicReference<>();
     private final AtomicReference<Boolean> failed = new AtomicReference<>(false);
+    private final AtomicInteger shutters = new AtomicInteger();
 
     @Before
     public void setUp() {
         context = RuntimeEnvironment.getApplication();
         FakeCamera2.addBackAndFrontCameras(context);
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
+        CameraSoundsTest.resetSounds();
         cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onShutter() { shutters.incrementAndGet(); }
             @Override public void onImageConfirmation() {}
             @Override public void onImageCaptured(File file) { captured.set(file); }
             @Override public void onFailure() { failed.set(true); }
@@ -87,6 +100,7 @@ public class PictureCaptureTest {
         cameraView.close();
         FakeCamera2.idleMainLooper();
         cameraView.release();
+        ShadowCamera.clearCameraInfo();
         if (output.exists() && !output.delete()) {
             output.deleteOnExit();
         }
@@ -141,6 +155,44 @@ public class PictureCaptureTest {
         assertTrue("the Image must be closed", image.isClosed());
     }
 
+    /**
+     * Closing the camera while a picture is being saved keeps its reader until the save is done.
+     *
+     * <p>Closing an ImageReader frees the buffers behind the frames it handed out, and the save
+     * copies its bytes out of one on another thread.</p>
+     */
+    @Test
+    public void aCloseMidSaveKeepsTheReaderUntilTheFrameIsBack() {
+        List<Runnable> saves = new ArrayList<>();
+        ShadowPausedAsyncTask.overrideExecutor(saves::add);
+        int readersBefore = ShadowInjectableImageReader.openReaderCount();
+        module.open();
+        FakeCamera2.idleMainLooper();
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        ImageReader reader = ShadowInjectableImageReader.latestReader();
+        assertNotNull(reader);
+        FakeImage frame = FakeImage.jpeg(1920, 1080, JPEG_BYTES);
+        ShadowInjectableImageReader.offerImage(reader, frame);
+        FakeCamera2.idleMainLooper();
+        assertEquals("the save should be waiting to run", 1, saves.size());
+
+        module.close();
+        FakeCamera2.idleMainLooper();
+
+        assertEquals("the reader has to outlive the save",
+                readersBefore + 1, ShadowInjectableImageReader.openReaderCount());
+        assertFalse(frame.isClosed());
+
+        saves.remove(0).run();
+        FakeCamera2.idleMainLooper();
+
+        assertTrue(frame.isClosed());
+        assertEquals("and go once the frame is back",
+                readersBefore, ShadowInjectableImageReader.openReaderCount());
+        assertEquals(output, captured.get());
+    }
+
     /** A frame arriving with no outstanding request is reported rather than written anywhere. */
     @Test
     public void anUnexpectedFrameReportsFailure() {
@@ -153,6 +205,47 @@ public class PictureCaptureTest {
         FakeCamera2.idleMainLooper();
 
         assertTrue("expected onFailure for a frame nobody asked for", failed.get());
+    }
+
+    /** The click plays as the frame is exposed, and the listener hears of it before the save. */
+    @Test
+    public void theShutterClicksAsTheFrameIsExposed() {
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(1, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+        assertEquals(1, shutters.get());
+        assertEquals("nothing has been saved yet", null, captured.get());
+    }
+
+    /** Silencing the click leaves the moment itself reported, for a sound of the app's own. */
+    @Test
+    public void aSilencedShutterStillReportsTheMoment() {
+        module.setShutterSoundEnabled(false);
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+        assertEquals(1, shutters.get());
+    }
+
+    @Test
+    public void aRequiredShutterClicksWhenSilenced() {
+        CameraSoundsTest.requireSounds();
+        module.setShutterSoundEnabled(false);
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(1, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
     }
 
     /**
@@ -196,6 +289,26 @@ public class PictureCaptureTest {
         assertEquals(output, captured.get());
         assertEquals("nothing may be asked of the radio", 0, FakeLocation.listeners(context));
         assertNull(new Exif(output).getLocation());
+    }
+
+    /**
+     * A picture whose Exif has no room for the camera's own tags is still written and reported,
+     * with the rest of its metadata.
+     */
+    @Test
+    public void aPictureIsKeptWhenItsTagsDoNotFit() throws IOException {
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        deliverFrame(FakeImage.jpeg(1920, 1080, ExifFixtures.overfullCapture()));
+
+        assertEquals(output, captured.get());
+        assertFalse("should not have reported a failure", failed.get());
+        Exif saved = new Exif(output);
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertNull(saved.getTag(ExifFixtures.TAG_UNDEFINED_BY_ANY_STANDARD));
     }
 
     /** Hands the reader a frame and runs the save through to its callbacks. */

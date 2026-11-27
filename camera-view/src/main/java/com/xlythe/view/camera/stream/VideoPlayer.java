@@ -10,7 +10,6 @@ import android.view.Surface;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 
-import com.google.common.primitives.Ints;
 import com.xlythe.view.camera.CameraView;
 
 import java.io.IOException;
@@ -139,10 +138,19 @@ public class VideoPlayer {
 
                   // Create a MediaCodec for the decoder, just based on the MIME type.
                   // The various format details will be passed through the csd-0 meta-data later on.
-                  MediaCodec decoder = MediaCodec.createDecoderByType(MIME_TYPE);
-                  mDecoder = decoder;
-                  decoder.configure(format, mSurface, null, 0);
-                  decoder.start();
+                  MediaCodec decoder;
+                  // Held until start() returns, because closeDecoder() takes the same lock.
+                  // Before API 29, MediaCodec aborts the whole process when a release() overtakes
+                  // a start() that is still completing on another thread.
+                  synchronized (VideoPlayer.this) {
+                    if (!isPlaying()) {
+                      return;
+                    }
+                    decoder = MediaCodec.createDecoderByType(MIME_TYPE);
+                    mDecoder = decoder;
+                    decoder.configure(format, mSurface, null, 0);
+                    decoder.start();
+                  }
                   Log.d(TAG, "Started playing video");
 
                   VideoFrame dataFrame = new VideoFrame.Builder().build();
@@ -261,7 +269,7 @@ public class VideoPlayer {
   private int readInt() throws IOException {
     byte[] buffer = new byte[4];
     readFully(buffer);
-    return Ints.fromByteArray(buffer);
+    return ByteBuffer.wrap(buffer).getInt();
   }
 
   private void readFully(byte[] buffer) throws IOException {

@@ -15,14 +15,21 @@ import android.hardware.Camera;
 import android.location.Location;
 import android.location.LocationManager;
 import android.media.CamcorderProfile;
+import android.media.MediaActionSound;
 import android.media.MediaRecorder;
 
+import androidx.exifinterface.media.ExifInterface;
+
+import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifFixtures;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowGeotaggingMediaRecorder;
 import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
+import com.xlythe.view.camera.shadow.ShadowPreviewlessCamera;
 
 import org.junit.After;
 import org.junit.Before;
@@ -35,7 +42,9 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowCamcorderProfile;
 import org.robolectric.shadows.ShadowCamera;
 import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.shadows.ShadowMediaActionSound;
 import org.robolectric.shadows.ShadowPausedAsyncTask;
+import org.robolectric.util.ReflectionHelpers;
 
 import java.io.File;
 import java.io.IOException;
@@ -208,6 +217,137 @@ public class LegacyCaptureTest {
                 captured.get() != null || failures.get() > 0);
     }
 
+    /**
+     * A picture whose Exif has no room for the camera's own tags is still kept and reported,
+     * with the rest of its metadata.
+     */
+    @Test
+    public void aPictureIsKeptWhenItsTagsDoNotFit() throws IOException {
+        AtomicReference<File> captured = new AtomicReference<>();
+        AtomicInteger failures = new AtomicInteger();
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onImageConfirmation() {}
+            @Override public void onImageCaptured(File file) { captured.set(file); }
+            @Override public void onFailure() { failures.incrementAndGet(); }
+        });
+
+        File file = savePicture(ExifFixtures.overfullCapture());
+
+        assertEquals(file, captured.get());
+        assertEquals(0, failures.get());
+        Exif saved = new Exif(file);
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertNull(saved.getTag(ExifFixtures.TAG_UNDEFINED_BY_ANY_STANDARD));
+    }
+
+    /** The platform clicks for the old API itself, so the library adds only the callback. */
+    @Test
+    public void theClickIsThePlatformsOwn() throws IOException {
+        CameraSoundsTest.resetSounds();
+        AtomicInteger shutters = new AtomicInteger();
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onShutter() { shutters.incrementAndGet(); }
+            @Override public void onImageConfirmation() {}
+            @Override public void onImageCaptured(File file) {}
+            @Override public void onFailure() {}
+        });
+        module.open();
+        idle();
+        File file = File.createTempFile("legacy", ".jpg");
+        file.deleteOnExit();
+
+        module.takePicture(file);
+        idle();
+        flushBackgroundWork();
+
+        assertEquals(1, shutters.get());
+        assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+    }
+
+    /** Silencing the shutter is passed on to the platform, whichever way round it is set. */
+    @Test
+    public void silencingTheShutterReachesThePlatform() {
+        module.setShutterSoundEnabled(false);
+        module.open();
+        idle();
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+
+        assertFalse(Shadows.shadowOf(camera).isShutterSoundEnabled());
+
+        module.setShutterSoundEnabled(true);
+
+        assertTrue(Shadows.shadowOf(camera).isShutterSoundEnabled());
+    }
+
+    /** An app's own shutter sound silences the platform's click, and the library plays it. */
+    @Test
+    public void anAppsShutterSoundReplacesThePlatformsClick() throws IOException {
+        CameraSoundsTest.resetSounds();
+        module.setShutterSound(0x7f120001);
+        module.open();
+        idle();
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        File file = File.createTempFile("legacy", ".jpg");
+        file.deleteOnExit();
+
+        module.takePicture(file);
+        idle();
+        flushBackgroundWork();
+
+        assertFalse(Shadows.shadowOf(camera).isShutterSoundEnabled());
+        // Not loaded yet in a test, so the platform's click stands in, played by the library.
+        assertEquals(1, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+    }
+
+    /** Where the click is required the platform keeps it, and the library adds nothing. */
+    @Test
+    public void aRequiredClickStaysThePlatforms() throws IOException {
+        CameraSoundsTest.resetSounds();
+        ShadowCamera.clearCameraInfo();
+        Camera.CameraInfo info = new Camera.CameraInfo();
+        info.facing = Camera.CameraInfo.CAMERA_FACING_BACK;
+        info.orientation = 90;
+        info.canDisableShutterSound = false;
+        ShadowCamera.addCameraInfo(0, info);
+        module.setShutterSound(0x7f120001);
+        module.open();
+        idle();
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        File file = File.createTempFile("legacy", ".jpg");
+        file.deleteOnExit();
+
+        module.takePicture(file);
+        idle();
+        flushBackgroundWork();
+
+        assertTrue(Shadows.shadowOf(camera).isShutterSoundEnabled());
+        assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+    }
+
+    /**
+     * A camera that will not take its preview is not announced as open.
+     *
+     * <p>An app enables its shutter when the view says the camera is open, which the view says once
+     * the backend reports it ready. A camera that opened and then refused its preview was released
+     * and reported ready all the same, so the app's first picture failed with nothing to explain
+     * it. Camera2 and CameraX report a failed open as an error, and so does this backend.</p>
+     */
+    @Test
+    @Config(shadows = ShadowPreviewlessCamera.class)
+    public void aCameraThatWillNotPreviewIsNotAnnouncedAsOpen() {
+        AtomicInteger opens = new AtomicInteger();
+        cameraView.setOnCameraStateChangedListener(new CameraView.OnCameraStateChangedListener() {
+            @Override public void onCameraOpened() { opens.incrementAndGet(); }
+            @Override public void onCameraClosed() {}
+        });
+
+        cameraView.open();
+        idle();
+
+        assertEquals("a camera that failed to open is never announced", 0, opens.get());
+        assertFalse(cameraView.isOpen());
+    }
+
     /** A capture asked for before the camera is open fails rather than throwing. */
     @Test
     public void aCaptureBeforeOpeningFails() throws IOException {
@@ -337,12 +477,18 @@ public class LegacyCaptureTest {
      * into, so this hands it a real one as the driver would.</p>
      */
     private File savePicture() throws IOException {
+        return savePicture(EMPTY_JPEG);
+    }
+
+    /** Hands the picture listener the given frame and lets it save. */
+    private File savePicture(byte[] frame) throws IOException {
         File file = File.createTempFile("legacy", ".jpg");
         file.deleteOnExit();
         ShadowPausedAsyncTask.overrideExecutor(Runnable::run);
         Camera camera = Camera.open(1);
         try {
-            new LegacyPictureListener(file, 0, false, module).onPictureTaken(EMPTY_JPEG, camera);
+            new LegacyPictureListener(file, 0, false, new ExifCaptureParameters(), module)
+                    .onPictureTaken(frame, camera);
             idle();
         } finally {
             camera.release();
@@ -371,6 +517,8 @@ public class LegacyCaptureTest {
         Camera.CameraInfo info = new Camera.CameraInfo();
         info.facing = facing;
         info.orientation = orientation;
+        // As every camera reports outside the countries that require the sound.
+        info.canDisableShutterSound = true;
         ShadowCamera.addCameraInfo(id, info);
     }
 
