@@ -264,6 +264,11 @@ public class LegacyCameraModule extends ICameraModule {
             mPlaysOwnClick = false;
             return;
         }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            // The click cannot be silenced before API 17, so it plays in place of the app's own.
+            mPlaysOwnClick = false;
+            return;
+        }
         boolean custom = getShutterSound() != 0;
         try {
             boolean applied = mCamera.enableShutterSound(isShutterSoundEnabled() && !custom);
@@ -307,6 +312,14 @@ public class LegacyCameraModule extends ICameraModule {
     public void startRecording(File file) {
         if (mCamera == null) {
             Log.w(TAG, "Cannot record before the camera is open");
+            onVideoFailed();
+            return;
+        }
+        if (Build.VERSION.SDK_INT < 16) {
+            // Before API 16, MediaRecorder sets the camera's preview to a surface of its own, and
+            // it cannot take one made from our SurfaceTexture: the camera loses its preview and
+            // mediaserver aborts the recording.
+            Log.w(TAG, "Recording needs API 16");
             onVideoFailed();
             return;
         }

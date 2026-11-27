@@ -2,7 +2,6 @@ package com.xlythe.view.camera.v2;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
@@ -65,7 +64,7 @@ import static java.lang.String.format;
  * too many surfaces (or too large a surface) to a capture session. To get around that, we define
  * {@link Session}s that list out compatible surfaces and creates capture requests for them.
  */
-@TargetApi(21)
+@RequiresApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class Camera2Module extends ICameraModule {
     /** Maximum automatic reopen attempts before reporting a terminal Camera2 failure. */

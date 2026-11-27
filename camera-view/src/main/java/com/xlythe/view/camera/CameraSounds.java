@@ -3,6 +3,7 @@ package com.xlythe.view.camera;
 import android.content.Context;
 import android.hardware.Camera;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.media.MediaActionSound;
 import android.media.SoundPool;
 import android.os.Build;
@@ -26,6 +27,9 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
  *
  * <p>Only the old camera API has the platform play these itself. Camera2 and CameraX leave them
  * to the app, which in Japan and Korea is obliged to play them.</p>
+ *
+ * <p>Below API 16 there is no {@link MediaActionSound}, and nothing here plays: only the old
+ * camera API runs there, and it plays its own click.</p>
  */
 @AnyThread
 final class CameraSounds {
@@ -37,7 +41,10 @@ final class CameraSounds {
     @Retention(RetentionPolicy.SOURCE)
     @interface Sound {}
 
-    /** Created on first use and released with the camera, since it holds a sound pool. */
+    /**
+     * Created on first use and released with the camera, since it holds a sound pool. Always null
+     * below API 16.
+     */
     @Nullable
     private MediaActionSound mSound;
 
@@ -54,7 +61,7 @@ final class CameraSounds {
 
     /** Loads the sounds ahead of the first capture, so its click is not late. */
     synchronized void load(@NonNull Context context) {
-        if (mSound == null) {
+        if (mSound == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
             mSound = new MediaActionSound();
             mSound.load(MediaActionSound.SHUTTER_CLICK);
             mSound.load(MediaActionSound.START_VIDEO_RECORDING);
@@ -70,14 +77,7 @@ final class CameraSounds {
      * click, so it is just as audible where a shutter sound is required.
      */
     private void loadShutterSound(@NonNull Context context, @RawRes int soundRes) {
-        SoundPool pool = new SoundPool.Builder()
-                .setMaxStreams(1)
-                .setAudioAttributes(new AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
-                        .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
-                        .build())
-                .build();
+        SoundPool pool = newShutterSoundPool();
         pool.setOnLoadCompleteListener((loaded, sampleId, status) -> onShutterSoundLoaded(
                 loaded, sampleId, status));
         mShutterSoundPool = pool;
@@ -85,6 +85,26 @@ final class CameraSounds {
         if (pool.load(context, soundRes, 1 /* priority */) == 0) {
             Log.w(TAG, "Could not load the shutter sound; the platform's click plays instead");
         }
+    }
+
+    /**
+     * A pool for one sound. Below API 21 a pool takes a stream type rather than attributes, and
+     * the system stream is the closest to the platform's click.
+     */
+    @SuppressWarnings("deprecation")
+    @NonNull
+    private static SoundPool newShutterSoundPool() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP) {
+            return new SoundPool(1 /* maxStreams */, AudioManager.STREAM_SYSTEM, 0 /* quality */);
+        }
+        return new SoundPool.Builder()
+                .setMaxStreams(1)
+                .setAudioAttributes(new AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .setFlags(AudioAttributes.FLAG_AUDIBILITY_ENFORCED)
+                        .build())
+                .build();
     }
 
     private synchronized void onShutterSoundLoaded(SoundPool pool, int sampleId, int status) {
@@ -114,7 +134,9 @@ final class CameraSounds {
         }
         // Includes a shutter sound that has not finished loading: a click late in arriving is
         // better than a picture taken in silence.
-        mSound.play(sound);
+        if (mSound != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+            mSound.play(sound);
+        }
     }
 
     /** Sets the app's own shutter sound, or 0 for the platform's click. */
@@ -132,10 +154,10 @@ final class CameraSounds {
     }
 
     synchronized void release() {
-        if (mSound != null) {
+        if (mSound != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
             mSound.release();
-            mSound = null;
         }
+        mSound = null;
         releaseShutterSound();
     }
 
@@ -156,13 +178,17 @@ final class CameraSounds {
     /**
      * Whether this device must play camera sounds, which some countries require.
      *
-     * <p>Before API 33 the old camera API is the only place the platform says so. If it cannot
-     * be asked, the sound plays: silencing a required one is the worse mistake.</p>
+     * <p>Before API 33 the old camera API is the only place the platform says so, and before API
+     * 17 it cannot be silenced at all. If it cannot be asked, the sound plays: silencing a
+     * required one is the worse mistake.</p>
      */
     @SuppressWarnings("deprecation")
     static boolean isRequired() {
         if (Build.VERSION.SDK_INT >= 33) {
             return MediaActionSound.mustPlayShutterSound();
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            return true;
         }
         try {
             Camera.CameraInfo info = new Camera.CameraInfo();

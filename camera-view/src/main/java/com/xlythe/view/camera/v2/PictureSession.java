@@ -1,6 +1,5 @@
 package com.xlythe.view.camera.v2;
 
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
@@ -51,7 +50,7 @@ import androidx.annotation.WorkerThread;
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 class PictureSession extends PreviewSession {
     /**
      * Supports {@link ImageFormat#JPEG} and {@link ImageFormat#YUV_420_888}. You can support
