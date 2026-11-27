@@ -5,6 +5,7 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Rect;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
@@ -126,11 +127,31 @@ final class ImageSources {
         RegionSource source;
         try {
             source = DecoderRegionSource.open(location.openDescriptor(context));
+            if (!decodesAPiece(source)) {
+                source.close();
+                throw new IOException("The region decoder opened it but decodes nothing");
+            }
         } catch (IOException e) {
             Log.d(TAG, location + " cannot be decoded in pieces, so it is copied", e);
             source = copy(context, location, bounds.outWidth, bounds.outHeight, MAX_COPY_PIXELS);
         }
         return new Opened(source, orientation, gpano);
+    }
+
+    /**
+     * Whether a region decoder decodes anything at all, tried on the picture's corner. Android
+     * 5's opens some small PNGs and then decodes none of them.
+     */
+    @WorkerThread
+    private static boolean decodesAPiece(@NonNull RegionSource source) {
+        Rect corner = new Rect(0, 0, Math.min(source.getWidth(), 16),
+                Math.min(source.getHeight(), 16));
+        Bitmap piece = source.decode(corner, 1);
+        if (piece == null) {
+            return false;
+        }
+        piece.recycle();
+        return true;
     }
 
     /**
