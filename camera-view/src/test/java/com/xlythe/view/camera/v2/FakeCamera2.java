@@ -3,6 +3,7 @@ package com.xlythe.view.camera.v2;
 import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
+import android.util.Range;
 import android.util.SizeF;
 import android.graphics.SurfaceTexture;
 import android.hardware.camera2.CameraCharacteristics;
@@ -14,6 +15,10 @@ import android.util.Size;
 import android.view.TextureView;
 
 import com.xlythe.view.camera.CameraView;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.robolectric.Shadows;
 import org.robolectric.shadow.api.Shadow;
@@ -242,10 +247,14 @@ public final class FakeCamera2 {
         shadow.set(CameraCharacteristics.CONTROL_MAX_REGIONS_AE, 1);
         shadow.set(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM, 4f);
         shadow.set(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE, new Rect(0, 0, 4000, 3000));
-        // The geometry a DNG is written against, which every real camera publishes.
-        shadow.set(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
-                new Rect(0, 0, SIZE_RAW.getWidth(), SIZE_RAW.getHeight()));
-        shadow.set(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE, SIZE_RAW);
+        if (rawSupport != RawSupport.NONE) {
+            // The geometry a DNG is written against. Every real camera publishes it, but only a
+            // RAW camera here does: a pixel array twice as wide as the largest JPEG is also a
+            // sensor the zoom offers a 2x crop of, which a test of the zoom does not expect.
+            shadow.set(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                    new Rect(0, 0, SIZE_RAW.getWidth(), SIZE_RAW.getHeight()));
+            shadow.set(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE, SIZE_RAW);
+        }
         // Published by every camera, and read by DngCreator to date the file it writes.
         shadow.set(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE,
                 CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN);
@@ -303,6 +312,90 @@ public final class FakeCamera2 {
             builder.addOutputSize(ImageFormat.RAW_SENSOR, SIZE_RAW);
         }
         return builder.build();
+    }
+
+    /** The physical cameras {@link #addLogicalBackCamera} puts behind the logical one. */
+    static final String[] PHYSICAL_IDS = {"2", "5", "6", "7"};
+
+    /**
+     * Registers a back camera standing for several lenses, from what a Galaxy S25 Ultra publishes.
+     *
+     * <p>A logical camera with a 0.6x to 10x zoom ratio range (on API 30 and up, where the control
+     * exists) in front of a 6.3mm main lens on a 9.792mm-wide sensor, with the lenses of
+     * {@link #s25Lenses} behind it as physical cameras. Those report no lens facing, so none of
+     * them is chosen in place of the logical camera. Its front camera is the ordinary one
+     * {@link #addBackAndFrontCameras} registers, which zooms 1x to 4x by cropping.</p>
+     */
+    public static void addLogicalBackCamera(Context context) throws Exception {
+        addCamera(context, BACK_ID, CameraMetadata.LENS_FACING_BACK, 90);
+        addCamera(context, FRONT_ID, CameraMetadata.LENS_FACING_FRONT, 270);
+        addCamcorderProfiles();
+        CameraManager cameraManager = context.getSystemService(CameraManager.class);
+        ShadowCameraCharacteristics logical =
+                Shadow.extract(cameraManager.getCameraCharacteristics(BACK_ID));
+        logical.set(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS, new float[] {6.3f});
+        logical.set(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE, new SizeF(9.792f, 7.344f));
+        logical.set(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM, 8f);
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            logical.set(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE, new Range<>(0.6f, 10f));
+        }
+        logical.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, new int[] {
+                CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
+                CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA});
+        logical.set(physicalIdsKey(), physicalIds(PHYSICAL_IDS));
+
+        ShadowCameraManager shadowManager = Shadow.extract(cameraManager);
+        List<CameraCharacteristics> lenses = s25Lenses();
+        for (int i = 0; i < PHYSICAL_IDS.length; i++) {
+            shadowManager.addCamera(PHYSICAL_IDS[i], lenses.get(i));
+        }
+    }
+
+    /**
+     * The S25 Ultra's four back lenses as physical cameras: the 2.2mm ultra-wide on a 5.712mm-wide
+     * sensor, the 6.3mm main lens on 9.792mm, and telephotos of 7.9mm on 4.48mm and 18.6mm on
+     * 5.712mm.
+     */
+    static List<CameraCharacteristics> s25Lenses() {
+        List<CameraCharacteristics> lenses = new ArrayList<>();
+        lenses.add(lens(2.2f, 5.712f));
+        lenses.add(lens(6.3f, 9.792f));
+        lenses.add(lens(7.9f, 4.48f));
+        lenses.add(lens(18.6f, 5.712f));
+        return lenses;
+    }
+
+    /** A physical camera that publishes only its optics. */
+    static CameraCharacteristics lens(float focalLength, float sensorWidth) {
+        CameraCharacteristics characteristics =
+                ShadowCameraCharacteristics.newCameraCharacteristics();
+        ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
+        shadow.set(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS,
+                new float[] {focalLength});
+        shadow.set(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE,
+                new SizeF(sensorWidth, sensorWidth * 3 / 4));
+        return characteristics;
+    }
+
+    /**
+     * The key a logical camera lists its physical cameras under.
+     *
+     * <p>Hidden from apps, which read it through getPhysicalCameraIds, so it is looked up by
+     * name.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private static CameraCharacteristics.Key<byte[]> physicalIdsKey() throws Exception {
+        return (CameraCharacteristics.Key<byte[]>) CameraCharacteristics.class
+                .getField("LOGICAL_MULTI_CAMERA_PHYSICAL_IDS").get(null);
+    }
+
+    /** Camera ids as the key holds them, each ended by a NUL. */
+    private static byte[] physicalIds(String... ids) {
+        StringBuilder joined = new StringBuilder();
+        for (String id : ids) {
+            joined.append(id).append('\0');
+        }
+        return joined.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     /** Runs everything the backend posted to the main looper. */

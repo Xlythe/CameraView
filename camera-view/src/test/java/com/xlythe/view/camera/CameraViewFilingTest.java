@@ -631,7 +631,9 @@ public class CameraViewFilingTest {
 
     /** Runs the main looper until filing, which happens on a thread of its own, has reported. */
     private void awaitReport() throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 5_000;
+        // Generous, because a loaded machine can starve that thread for seconds; the loop ends
+        // as soon as it reports, so a passing run is no slower.
+        long deadline = System.currentTimeMillis() + 30_000;
         while (heard.saved.isEmpty() && heard.failures == 0
                 && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper();

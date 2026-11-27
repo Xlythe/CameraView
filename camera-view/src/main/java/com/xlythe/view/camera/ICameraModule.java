@@ -372,13 +372,54 @@ public abstract class ICameraModule {
 
     public abstract void focus(Rect focus, Rect metering);
 
-    public abstract void setZoomLevel(int zoomLevel);
+    /**
+     * Zooms to a ratio in the camera's own terms, where 1 is the main lens, held to
+     * {@link #getMinZoomRatio} and {@link #getMaxZoomRatio}. A backend calls
+     * {@link #onZoomChanged} whenever the ratio it answers {@link #getZoomRatio} with changes.
+     */
+    public abstract void setZoomRatio(float zoomRatio);
 
-    public abstract int getZoomLevel();
+    public abstract float getZoomRatio();
 
-    public abstract int getMaxZoomLevel();
+    /** Below 1 on a camera that can switch to an ultra-wide lens, and otherwise 1. */
+    public abstract float getMinZoomRatio();
 
-    public abstract boolean isZoomSupported();
+    /** 1 on a camera that cannot zoom. */
+    public abstract float getMaxZoomRatio();
+
+    /**
+     * The exact ratios worth a button, in increasing order. See {@link ZoomMath#presets}.
+     * CameraView labels them.
+     */
+    @NonNull
+    public abstract float[] getZoomPresets();
+
+    /**
+     * Zooms to a position in the camera's range, from 0 to {@link #getMaxZoomLevel}.
+     *
+     * <p>Worked out from the ratio here rather than by each backend, so that a level is the same
+     * zoom on all of them.</p>
+     */
+    public final void setZoomLevel(int zoomLevel) {
+        setZoomRatio(ZoomMath.ratioForLevel(zoomLevel, getMinZoomRatio(), getMaxZoomRatio()));
+    }
+
+    public final int getZoomLevel() {
+        return ZoomMath.levelForRatio(getZoomRatio(), getMinZoomRatio(), getMaxZoomRatio());
+    }
+
+    public final int getMaxZoomLevel() {
+        return ZoomMath.MAX_ZOOM_LEVEL;
+    }
+
+    public final boolean isZoomSupported() {
+        return getMaxZoomRatio() > getMinZoomRatio();
+    }
+
+    /** Tells the view the zoom is now at this ratio. */
+    protected final void onZoomChanged(float zoomRatio) {
+        onMainThread(() -> getView().onZoomChanged(zoomRatio));
+    }
 
     protected abstract int getRelativeCameraOrientation();
 
