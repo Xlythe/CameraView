@@ -435,6 +435,10 @@ public class CameraView extends FrameLayout {
     @Nullable
     private OnCameraStateChangedListener mOnCameraStateChangedListener;
 
+    /** The burst being taken, or null when none is. Only one runs at a time. */
+    @Nullable
+    private Burst mBurst;
+
     private TextureView mCameraView;
     private ImageView mImagePreview;
     private VideoView mVideoPreview;
@@ -1142,6 +1146,7 @@ public class CameraView extends FrameLayout {
     }
 
     protected void onClose() {
+        stopBurst();
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             exitBarcodeScanner();
             stopFrameAnalysis();
@@ -1183,6 +1188,13 @@ public class CameraView extends FrameLayout {
      */
     public void takePicture(File file) {
         Log.v(TAG, "Taking a picture");
+        if (mBurst != null) {
+            Log.w(TAG, "Cannot take a picture while a burst is running");
+            if (getOnImageCapturedListener() != null) {
+                getOnImageCapturedListener().onFailure();
+            }
+            return;
+        }
         // Freezing the preview to show the picture is right for a still, and wrong in the middle
         // of a recording: the recording would freeze with it.
         if (isImageConfirmationEnabled() && !isRecording()) {
@@ -1190,6 +1202,136 @@ public class CameraView extends FrameLayout {
         }
 
         mCameraModule.takePicture(file);
+    }
+
+    /**
+     * Takes up to {@code count} pictures in quick succession and files each where the gallery
+     * looks, as {@link #takePicture()} does, calling
+     * {@link OnBurstListener#onBurstImageSaved(Uri)} as each one lands. The burst ends at
+     * {@code count} pictures or at {@link #stopBurst()}, whichever comes first, and
+     * {@link OnBurstListener#onBurstFinished(int)} then says how many there were.
+     *
+     * <p>Each picture is tagged like any other. The flash and the shutter sound stay off, except
+     * where the device insists on the sound, and image confirmation does not apply. A burst that
+     * cannot start, because the camera is not open or is recording, a picture is awaiting
+     * confirmation, or another burst is running, finishes at once with a count of 0. A picture
+     * that cannot be taken or filed ends the burst with the pictures it already had.</p>
+     *
+     * @throws IllegalArgumentException if count is less than 1
+     */
+    @UiThread
+    public void startBurst(int count, @NonNull OnBurstListener listener) {
+        startBurst(captureDirectory(getContext()), count, listener, true /* fileInGallery */);
+    }
+
+    /**
+     * Takes up to {@code count} pictures in quick succession into {@code directory}, calling
+     * {@link OnBurstListener#onBurstImageCaptured(File)} as each one lands. Each file is named for
+     * when the burst started and its place in it. Otherwise this is
+     * {@link #startBurst(int, OnBurstListener)}.
+     *
+     * @throws IllegalArgumentException if count is less than 1
+     */
+    @UiThread
+    public void startBurst(@NonNull File directory, int count, @NonNull OnBurstListener listener) {
+        startBurst(directory, count, listener, false /* fileInGallery */);
+    }
+
+    @UiThread
+    private void startBurst(@NonNull File directory, int count,
+            @NonNull OnBurstListener listener, boolean fileInGallery) {
+        if (count < 1) {
+            throw new IllegalArgumentException("A burst takes at least one picture");
+        }
+        if (mBurst != null || !isOpen() || isRecording() || isImageConfirmationPending()) {
+            Log.w(TAG, "Cannot start a burst in the camera's current state");
+            listener.onBurstFinished(0);
+            return;
+        }
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            Log.w(TAG, "Could not create " + directory);
+            listener.onBurstFinished(0);
+            return;
+        }
+        Log.v(TAG, "Starting a burst");
+        String name = new SimpleDateFormat(CAPTURE_NAME, Locale.US).format(new Date());
+        BurstDelivery delivery = new BurstDelivery(listener, fileInGallery);
+        Burst burst = new Burst(directory, name, count, delivery);
+        delivery.mBurst = burst;
+        mBurst = burst;
+        mCameraModule.startBurst(burst);
+    }
+
+    /** Ends a burst before it reaches its count. Pictures already being taken still arrive. */
+    @UiThread
+    public void stopBurst() {
+        if (mBurst != null) {
+            Log.v(TAG, "Stopping a burst");
+            mBurst.end();
+        }
+    }
+
+    /** Hands a burst's pictures to the app, filing each in the gallery first where asked to. */
+    private final class BurstDelivery implements Burst.Callback {
+        /** Hears each picture and the end. */
+        private final OnBurstListener mListener;
+
+        /** Whether pictures are filed in the gallery rather than left where they were written. */
+        private final boolean mFileInGallery;
+
+        /** The burst being delivered, which a picture that cannot be filed ends. */
+        private Burst mBurst;
+
+        /** How many pictures the listener has heard of, which is the count it is given. */
+        private int mDelivered;
+
+        /** How many pictures are still being filed. The end is reported after them. */
+        private int mFiling;
+
+        /** Whether the burst has reported its last picture. */
+        private boolean mBurstFinished;
+
+        BurstDelivery(@NonNull OnBurstListener listener, boolean fileInGallery) {
+            mListener = listener;
+            mFileInGallery = fileInGallery;
+        }
+
+        @Override
+        public void onPictureTaken(@NonNull File file) {
+            if (!mFileInGallery) {
+                mDelivered++;
+                mListener.onBurstImageCaptured(file);
+                return;
+            }
+            mFiling++;
+            MediaStoreSaver.save(getContext(), file, false /* isVideo */, uri -> {
+                mFiling--;
+                if (uri != null) {
+                    mDelivered++;
+                    mListener.onBurstImageSaved(uri);
+                } else {
+                    // Whatever kept this one out of the gallery keeps the rest out too.
+                    mBurst.end();
+                }
+                reportIfDone();
+            });
+        }
+
+        @Override
+        public void onBurstFinished() {
+            if (CameraView.this.mBurst == mBurst) {
+                CameraView.this.mBurst = null;
+            }
+            mBurstFinished = true;
+            reportIfDone();
+        }
+
+        private void reportIfDone() {
+            if (mBurstFinished && mFiling == 0) {
+                Log.v(TAG, "Finished a burst of " + mDelivered);
+                mListener.onBurstFinished(mDelivered);
+            }
+        }
     }
 
     /**
@@ -1271,6 +1413,13 @@ public class CameraView extends FrameLayout {
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     public void startRecording(File file) {
         Log.v(TAG, "Recording a video");
+        if (mBurst != null) {
+            Log.w(TAG, "Cannot record while a burst is running");
+            if (getOnVideoCapturedListener() != null) {
+                getOnVideoCapturedListener().onFailure();
+            }
+            return;
+        }
         mCameraModule.startRecording(file);
     }
 
@@ -2094,6 +2243,26 @@ public class CameraView extends FrameLayout {
 
         /** The picture could not be taken, or could not be filed. */
         void onFailure();
+    }
+
+    /**
+     * Hears the pictures of a burst as they land, on the main thread. A burst started with
+     * {@link CameraView#startBurst(File, int, OnBurstListener)} reports each picture to
+     * {@link #onBurstImageCaptured(File)}, and one started with
+     * {@link CameraView#startBurst(int, OnBurstListener)} to {@link #onBurstImageSaved(Uri)}.
+     */
+    public interface OnBurstListener {
+        /** A picture has been written into the directory the burst was given. */
+        @UiThread
+        default void onBurstImageCaptured(@NonNull File file) {}
+
+        /** A picture has been filed in the gallery. */
+        @UiThread
+        default void onBurstImageSaved(@NonNull Uri uri) {}
+
+        /** The burst is over, and count pictures arrived. Nothing more arrives after this. */
+        @UiThread
+        void onBurstFinished(int count);
     }
 
     /**

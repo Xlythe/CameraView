@@ -198,6 +198,19 @@ public abstract class ICameraModule {
     }
 
     /**
+     * Takes the pictures of a burst as fast as the camera allows, asking the burst where each
+     * goes and reporting each to it, until it hands out no more files. A backend that cannot take
+     * one right now ends it.
+     *
+     * <p>Every picture is saved and tagged like one from {@link #takePicture}, but without the
+     * flash or the shutter sound.</p>
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    protected void startBurst(@NonNull Burst burst) {
+        burst.end();
+    }
+
+    /**
      * Records a video. Set a OnVideoCapturedListener to be notified of when
      * the video has finished saving.
      */
