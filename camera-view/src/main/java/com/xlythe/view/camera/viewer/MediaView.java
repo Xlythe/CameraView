@@ -83,6 +83,25 @@ import java.util.concurrent.TimeUnit;
  * <p>HDR pictures and videos put the window in HDR colour mode while they show, where the device
  * has one, and it goes back once nothing in the window shows HDR.</p>
  *
+ * <h2>What each release shows</h2>
+ * <ul>
+ *   <li>JPEG, PNG, WebP, GIF and BMP pictures, animated GIFs and animated PNGs, on every
+ *       release.</li>
+ *   <li>HEIF and HEIC pictures, and animated WebP and HEIF sequences, from Android 9. Before it,
+ *       an animated WebP shows as a still where the platform decodes its first frame.</li>
+ *   <li>AVIF pictures, still and animated, from Android 12.</li>
+ *   <li>DNG from Android 7.0. Before it, and on every release for a camera's other raw formats
+ *       (CR2, CR3, NEF, ARW, RAF, ORF and RW2), the largest JPEG the camera embedded in the file
+ *       is shown instead; some cameras embed one smaller than the photo, and a raw with none
+ *       fails.</li>
+ *   <li>Gain maps in HDR from Android 14. Before it, an Ultra HDR picture shows as an ordinary
+ *       one.</li>
+ *   <li>Videos and sound in whichever codecs the device decodes. QuickTime movies that open
+ *       without a file type, as older ones and some Live Photos do, play from a copy the
+ *       platform recognises, kept in the app's cache.</li>
+ *   <li>TIFF, JPEG XL and AVI files fail on every release so far.</li>
+ * </ul>
+ *
  * <h2>Look</h2>
  * <p>The only thing it draws itself is a thin line along its bottom edge that shows how far a
  * video or recording has played, in the theme's {@code colorControlActivated}, and an icon for
