@@ -20,6 +20,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowCamera;
+import org.robolectric.util.ReflectionHelpers;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -139,6 +140,45 @@ public class LegacyCameraModuleTest {
 
         module.setZoomLevel(-20);
         assertEquals(0, module.getZoomLevel());
+    }
+
+    /**
+     * MAX asks for the largest picture the camera lists. The shadowed camera starts at 1280x960
+     * and lists nothing larger than 800x600, so the two are easy to tell apart.
+     */
+    @Test
+    public void aMaxPictureIsTheLargestListed() {
+        module.setQuality(CameraView.Quality.MAX);
+        module.open();
+
+        assertEquals("800x600", pictureSize());
+    }
+
+    /** Every other quality keeps the size the camera started with. */
+    @Test
+    public void otherQualitiesKeepTheCamerasOwnSize() {
+        module.setQuality(CameraView.Quality.HIGH);
+        module.open();
+
+        assertEquals("1280x960", pictureSize());
+    }
+
+    /** A change of quality reaches a camera that is already open, both ways. */
+    @Test
+    public void changingQualityWhileOpenResizesThePicture() {
+        module.open();
+
+        module.setQuality(CameraView.Quality.MAX);
+        assertEquals("800x600", pictureSize());
+
+        module.setQuality(CameraView.Quality.LOW);
+        assertEquals("1280x960", pictureSize());
+    }
+
+    private String pictureSize() {
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        Camera.Size size = camera.getParameters().getPictureSize();
+        return size.width + "x" + size.height;
     }
 
     /** The published scale matches the other backends, so one control drives all three. */

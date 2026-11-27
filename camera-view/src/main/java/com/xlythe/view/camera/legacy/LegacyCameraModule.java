@@ -56,6 +56,12 @@ public class LegacyCameraModule extends ICameraModule {
     /** The preview size chosen for the open camera, or null when no camera is open. */
     @Nullable private Camera.Size mPreviewSize;
 
+    /**
+     * The picture size the open camera started with, which every quality but MAX keeps, or null
+     * when no camera is open. See {@link #applyPictureSize}.
+     */
+    @Nullable private Camera.Size mDefaultPictureSize;
+
     /** The recorder for a recording in progress, or null when nothing is being recorded. */
     private MediaRecorder mVideoRecorder;
 
@@ -89,6 +95,8 @@ public class LegacyCameraModule extends ICameraModule {
             parameters.setPreviewSize(getPreviewWidth(), getPreviewHeight());
             parameters.setPictureFormat(ImageFormat.JPEG);
             parameters.setJpegQuality(getPictureQuality());
+            mDefaultPictureSize = parameters.getPictureSize();
+            applyPictureSize(parameters);
             mCamera.setParameters(parameters);
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
@@ -107,7 +115,42 @@ public class LegacyCameraModule extends ICameraModule {
             }
             mCamera = null;
             mPreviewSize = null;
+            mDefaultPictureSize = null;
         }
+    }
+
+    @Override
+    public void setQuality(CameraView.Quality quality) {
+        super.setQuality(quality);
+        if (mCamera == null) {
+            return;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            applyPictureSize(parameters);
+            mCamera.setParameters(parameters);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Camera would not change its picture size", e);
+        }
+    }
+
+    /**
+     * Asks for the largest picture the camera lists when the quality is MAX, and for the size it
+     * started with otherwise.
+     */
+    private void applyPictureSize(Camera.Parameters parameters) {
+        Camera.Size size = getQuality() == CameraView.Quality.MAX
+                ? largestPictureSize(parameters.getSupportedPictureSizes())
+                : mDefaultPictureSize;
+        if (size != null) {
+            parameters.setPictureSize(size.width, size.height);
+        }
+    }
+
+    @Nullable
+    private static Camera.Size largestPictureSize(@Nullable List<Camera.Size> sizes) {
+        return sizes == null || sizes.isEmpty()
+                ? null : Collections.max(sizes, new CompareSizesByArea());
     }
 
     @Override
@@ -124,6 +167,7 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera.release();
             mCamera = null;
             mPreviewSize = null;
+            mDefaultPictureSize = null;
         }
     }
 
