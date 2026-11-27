@@ -228,7 +228,12 @@ public class CameraView extends FrameLayout {
      * will fall to lower qualities if the Android device cannot support them. Resolutions also may
      * change in the future (if, say, Android adds 8k resolution).
      *
-     * (*) {@link Quality#MAX} will output at 4k.
+     * (*) {@link Quality#MAX} will output video at 4k, and pictures at the largest size the
+     *     camera offers apps. Most phone sensors combine neighbouring pixels into one. On a phone
+     *     that lets apps read the whole sensor, a MAX picture can use every pixel instead, and
+     *     takes longer to capture; many phones keep that to their own camera app. A picture taken
+     *     while recording, or as {@link PictureFormat#ULTRA_HDR} or
+     *     {@link PictureFormat#RAW_JPEG}, keeps to the combined size.
      * (*) {@link Quality#HIGH} will output at 1080p.
      * (*) {@link Quality#MEDIUM} will output at 720.
      * (*) {@link Quality#LOW} will output at 480.

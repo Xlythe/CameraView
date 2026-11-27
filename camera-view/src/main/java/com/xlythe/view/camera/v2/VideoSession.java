@@ -89,6 +89,11 @@ class VideoSession extends PictureSession {
     }
 
     @Override
+    protected boolean allowsMaximumResolution() {
+        return false;
+    }
+
+    @Override
     @SuppressLint({"WrongThread", "ThreadConstraint"})
     protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
             throws CameraAccessException {
