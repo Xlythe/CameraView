@@ -130,9 +130,11 @@ final class GlTextureView extends TextureView implements TextureView.SurfaceText
         @Nullable
         private volatile Handler mHandler;
 
-        /** The surface's size when it arrived. */
-        private final int mWidth;
-        private final int mHeight;
+        /** The surface's width, as last told; only the thread itself uses it after starting. */
+        private int mWidth;
+
+        /** Its height. */
+        private int mHeight;
 
         /** EGL, once the thread has started. */
         private EGL10 mEgl;
@@ -177,6 +179,8 @@ final class GlTextureView extends TextureView implements TextureView.SurfaceText
             post(new Runnable() {
                 @Override
                 public void run() {
+                    mWidth = width;
+                    mHeight = height;
                     if (mSurface != EGL10.EGL_NO_SURFACE) {
                         mRenderer.onSurfaceChanged(null, width, height);
                         draw();

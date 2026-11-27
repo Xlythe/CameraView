@@ -23,6 +23,7 @@ import android.view.ViewParent;
 import android.widget.OverScroller;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.IntDef;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -32,6 +33,8 @@ import androidx.core.view.ViewCompat;
 
 import java.io.File;
 import java.io.IOException;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -106,6 +109,11 @@ public class LargeImageView extends View {
 
     /** Called off before a worker reached it. */
     private static final int REQUEST_CANCELLED = 2;
+
+    /** Where a tile on its way is. */
+    @IntDef({REQUEST_PENDING, REQUEST_RUNNING, REQUEST_CANCELLED})
+    @Retention(RetentionPolicy.SOURCE)
+    private @interface RequestState {}
 
     /** Posts a worker's results back to the main thread. */
     private final Handler mHandler = new Handler(Looper.getMainLooper());
@@ -195,8 +203,10 @@ public class LargeImageView extends View {
     /** The most decoded pixels held at once, for tests of the budget. */
     private long mPeakPixels;
 
-    /** The focus of the last pinch event, so moving the fingers together pans. */
+    /** Where the last pinch event was centred across, so moving the fingers together pans. */
     private float mLastFocusX;
+
+    /** And down. */
     private float mLastFocusY;
 
     /** A double tap's zoom, while it runs. */
@@ -860,7 +870,10 @@ public class LargeImageView extends View {
         /** The pixels set aside for it. */
         final long expectedPixels;
 
-        /** Pending, running or called off; a worker and the main thread race for it. */
+        /**
+         * A {@link RequestState}: pending, running or called off. A worker and the main thread
+         * race for it.
+         */
         final AtomicInteger state = new AtomicInteger(REQUEST_PENDING);
 
         Request(long key, int generation, long expectedPixels) {

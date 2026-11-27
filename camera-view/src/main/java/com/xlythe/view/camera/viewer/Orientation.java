@@ -13,14 +13,22 @@ import androidx.exifinterface.media.ExifInterface;
  * a turned copy of each tile.</p>
  */
 final class Orientation {
-    /** How the upright x follows from the stored x, y and 1: x' = a x + b y + c. */
+    /** How much of the stored x goes into the upright x: x' = a x + b y + c. */
     private final float mA;
+
+    /** How much of the stored y goes into the upright x. */
     private final float mB;
+
+    /** How far the upright x is moved: the picture's width or height when it is mirrored. */
     private final float mC;
 
-    /** How the upright y follows: y' = d x + e y + f. */
+    /** How much of the stored x goes into the upright y: y' = d x + e y + f. */
     private final float mD;
+
+    /** How much of the stored y goes into the upright y. */
     private final float mE;
+
+    /** How far the upright y is moved. */
     private final float mF;
 
     /** The stored picture's width. */

@@ -122,10 +122,16 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
     /** The program, or 0 if it did not build. */
     private int mProgram;
 
-    /** Where the attributes and uniforms are. */
+    /** Where each vertex's position goes in the program. */
     private int mPositionHandle;
+
+    /** Where each vertex's texture coordinate goes. */
     private int mTexCoordHandle;
+
+    /** Where the matrix goes. */
     private int mMvpHandle;
+
+    /** Where the texture unit goes. */
     private int mTextureHandle;
 
     /** A texture waiting to be uploaded. */
@@ -160,6 +166,7 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
 
     /** A patch with its texture. */
     private static final class Patch {
+        /** Where the patch is on the sphere. */
         @NonNull
         final SphereMesh mesh;
 

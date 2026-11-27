@@ -196,12 +196,16 @@ public class PhotosphereView extends FrameLayout {
     /** How far a drag has tipped it. */
     private double mPitchOffset;
 
-    /** Where the fling was at its last step. */
+    /** Where the fling was across at its last step. */
     private int mFlingX;
+
+    /** Where it was down. */
     private int mFlingY;
 
-    /** Where the view looks, for the worker to upload the nearest tiles first. */
+    /** The heading the view looks at, for the worker to upload the nearest tiles first. */
     private volatile double mLookHeading;
+
+    /** The pitch it looks at, likewise. */
     private volatile double mLookPitch;
 
     public PhotosphereView(@NonNull Context context) {
