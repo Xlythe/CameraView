@@ -13,14 +13,15 @@ public class ViewerFragmentTest {
     public void eachChoiceIsAKindOfMedia() {
         int[] ids = {R.id.viewer_type_detect, R.id.viewer_type_picture, R.id.viewer_type_panorama,
                 R.id.viewer_type_photosphere, R.id.viewer_type_video, R.id.viewer_type_motion,
-                R.id.viewer_type_spherical, R.id.viewer_type_audio};
+                R.id.viewer_type_spherical, R.id.viewer_type_audio, R.id.viewer_type_animation};
         int[] types = {MediaView.UNKNOWN, MediaView.PICTURE, MediaView.PANORAMA,
                 MediaView.PHOTOSPHERE, MediaView.VIDEO, MediaView.MOTION_PHOTO,
-                MediaView.SPHERICAL_VIDEO, MediaView.AUDIO};
+                MediaView.SPHERICAL_VIDEO, MediaView.AUDIO, MediaView.ANIMATION};
         int[] labels = {R.string.viewer_mode_detect, R.string.viewer_mode_picture,
                 R.string.viewer_mode_panorama, R.string.viewer_mode_photosphere,
                 R.string.viewer_mode_video, R.string.viewer_mode_motion,
-                R.string.viewer_mode_spherical, R.string.viewer_mode_audio};
+                R.string.viewer_mode_spherical, R.string.viewer_mode_audio,
+                R.string.viewer_mode_animation};
         for (int i = 0; i < ids.length; i++) {
             assertEquals(types[i], ViewerFragment.typeOf(ids[i]));
             assertEquals(labels[i], ViewerFragment.labelOf(types[i]));

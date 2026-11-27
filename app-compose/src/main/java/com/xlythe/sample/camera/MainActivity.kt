@@ -126,7 +126,9 @@ enum class ViewerMode(val label: String, val type: Int) {
     /** As a 360 degree video. */
     SPHERICAL("360°", MediaView.SPHERICAL_VIDEO),
     /** As a recording. */
-    AUDIO("Sound", MediaView.AUDIO);
+    AUDIO("Sound", MediaView.AUDIO),
+    /** As an animated picture. */
+    ANIMATION("Animation", MediaView.ANIMATION);
 
     companion object {
         /** The choice that names a media type, or AUTO for one no choice names. */
@@ -800,6 +802,9 @@ fun describeMedia(tags: MediaTags): String {
     }
     if (tags.motionPhoto != null) {
         parts += "Motion photo"
+    }
+    if (tags.isAnimated) {
+        parts += "Animated"
     }
     return if (parts.isEmpty()) "No metadata" else parts.joinToString(" · ")
 }
