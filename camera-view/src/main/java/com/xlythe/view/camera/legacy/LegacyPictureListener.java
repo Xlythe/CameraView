@@ -9,6 +9,7 @@ import android.util.Log;
 import androidx.annotation.WorkerThread;
 
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -27,13 +28,18 @@ class LegacyPictureListener implements Camera.PictureCallback {
     // True if the picture is mirrored
     private final boolean mIsReversed;
 
+    // How the picture was taken, for the tags the camera's JPEG leaves out
+    private final ExifCaptureParameters mExifParameters;
+
     // The listener to notify when we're done.
     private final LegacyCameraModule mModule;
 
-    LegacyPictureListener(File file, int orientation, boolean mirrored, LegacyCameraModule module) {
+    LegacyPictureListener(File file, int orientation, boolean mirrored,
+            ExifCaptureParameters exifParameters, LegacyCameraModule module) {
         mFile = file;
         mIsReversed = mirrored;
         mOrientation = orientation;
+        mExifParameters = exifParameters;
         mModule = module;
     }
 
@@ -49,6 +55,9 @@ class LegacyPictureListener implements Camera.PictureCallback {
 
                     Exif exif = new Exif(mFile);
                     exif.attachTimestamp();
+                    exif.attachCaptureDevice(mModule.getContext());
+                    exif.attachThumbnail();
+                    mExifParameters.applyTo(exif);
                     exif.rotate(mOrientation);
                     if (mIsReversed) {
                         exif.flipHorizontally();

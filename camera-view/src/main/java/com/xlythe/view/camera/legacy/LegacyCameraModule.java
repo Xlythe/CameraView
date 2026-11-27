@@ -19,6 +19,7 @@ import android.os.Looper;
 import android.util.Log;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.TransformMath;
@@ -239,7 +240,22 @@ public class LegacyCameraModule extends ICameraModule {
             return;
         }
         mCamera.takePicture(this::onShutter, null, new LegacyPictureListener(
-                file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(), this));
+                file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(),
+                exifCaptureParameters(), this));
+    }
+
+    /**
+     * The Exif a picture taken now should carry about how it was taken, read from the camera's
+     * parameters before the capture can change them.
+     */
+    @NonNull
+    private ExifCaptureParameters exifCaptureParameters() {
+        try {
+            return ExifCaptureParameters.forLegacyCamera(mCamera.getParameters());
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Unable to read the camera's parameters for a picture's Exif", error);
+            return new ExifCaptureParameters();
+        }
     }
 
     @Override
