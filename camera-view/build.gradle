@@ -51,6 +51,7 @@ android {
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/x/**'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
+        sourceSets.test.kotlin.filter.exclude '**/com/xlythe/compose/**'
     }
 
     lint {
