@@ -8,6 +8,7 @@ import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import android.content.ContentValues;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -17,12 +18,16 @@ import android.graphics.PixelFormat;
 import android.graphics.SurfaceTexture;
 import android.media.FakeImage;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
 import android.media.ImageReader;
+import android.net.Uri;
+import android.provider.MediaStore;
 import android.util.Size;
 
 import androidx.annotation.NonNull;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.CaptureDelivery;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.gl.FrameRenderThread;
 import com.xlythe.view.camera.gl.FrameRenderer;
@@ -38,13 +43,17 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.GraphicsMode;
+import org.robolectric.shadows.ShadowContentResolver;
+import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowPausedAsyncTask;
 
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -91,6 +100,10 @@ public class FrameEffectSessionTest {
     private RecordingRenderer renderer;
     private final AtomicReference<File> captured = new AtomicReference<>();
     private final AtomicBoolean failed = new AtomicBoolean();
+    /** How many times the shutter was reported. */
+    private final AtomicInteger shutters = new AtomicInteger();
+    /** Where each picture taken without a file was filed, in the order the listener heard. */
+    private final List<Uri> saved = new ArrayList<>();
 
     @Before
     public void setUp() {
@@ -105,8 +118,10 @@ public class FrameEffectSessionTest {
         FakeCamera2.addBackAndFrontCameras(context, FakeCamera2.RawSupport.FULL);
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
         cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onShutter() { shutters.incrementAndGet(); }
             @Override public void onImageConfirmation() {}
             @Override public void onImageCaptured(File file) { captured.set(file); }
+            @Override public void onImageSaved(@NonNull Uri uri) { saved.add(uri); }
             @Override public void onFailure() { failed.set(true); }
         });
         // The drawn picture is saved on AsyncTask's pool. Run it inline, so a capture finishes
@@ -277,6 +292,149 @@ public class FrameEffectSessionTest {
         FakeCamera2.idleMainLooper();
         assertTrue("and RAW is offered again once nothing draws",
                 module.isPictureFormatSupported(CameraView.PictureFormat.RAW));
+    }
+
+    /**
+     * A drawn picture with the flash on waits for auto-exposure to meter with a pre-flash, as a
+     * camera frame does, and reports its shutter once the frame is exposed.
+     */
+    @Test
+    public void aDrawnFlashPictureIsMeteredAndReportsItsShutter() {
+        ShadowCallbackCameraCaptureSession.setAeState(CaptureResult.CONTROL_AE_STATE_PRECAPTURE);
+        module.setFlash(CameraView.Flash.ON);
+        module.setFrameRenderer(renderer);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        FrameRenderThread effect = module.getEffect();
+        assertNotNull(effect);
+        SurfaceTexture still = stillInput(effect);
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals("metering starts first", 1, precaptureTriggers().size());
+        assertEquals("and the picture waits for it", 0, stills().size());
+        assertEquals(0, shutters.get());
+
+        ShadowCallbackCameraCaptureSession.setAeState(
+                CaptureResult.CONTROL_AE_STATE_FLASH_REQUIRED);
+        ShadowCallbackCameraCaptureSession.deliverRepeatingFrame();
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(1, stills().size());
+        assertEquals("the shutter is reported as the frame is exposed", 1, shutters.get());
+        deliverDrawnPicture(still);
+        assertFalse("should not have reported a failure", failed.get());
+        assertEquals(output, captured.get());
+    }
+
+    /**
+     * A drawn picture taken without a file of the caller's is filed in the gallery as a JPEG, and
+     * leaves nothing behind in the cache it was written to first.
+     */
+    @Test
+    public void aDrawnPictureWithoutAFileIsFiled() throws InterruptedException {
+        module.setFrameRenderer(renderer);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        FrameRenderThread effect = module.getEffect();
+        assertNotNull(effect);
+        SurfaceTexture still = stillInput(effect);
+        File own = CaptureDelivery.ownPictureFile(cameraView, CameraView.PictureFormat.JPEG);
+
+        module.takePicture(own);
+        FakeCamera2.idleMainLooper();
+        deliverDrawnPicture(still);
+        awaitFiling();
+
+        assertFalse("should not have reported a failure", failed.get());
+        assertEquals(1, saved.size());
+        List<ShadowContentResolver.InsertStatement> inserts =
+                Shadows.shadowOf(cameraView.getContext().getContentResolver())
+                        .getInsertStatements();
+        assertEquals(1, inserts.size());
+        ContentValues row = inserts.get(0).getContentValues();
+        assertEquals(own.getName(), row.getAsString(MediaStore.MediaColumns.DISPLAY_NAME));
+        assertEquals("image/jpeg", row.getAsString(MediaStore.MediaColumns.MIME_TYPE));
+        File[] left = CaptureDelivery.captureDirectory(cameraView).listFiles();
+        assertTrue("left in the cache: " + Arrays.toString(left),
+                left == null || left.length == 0);
+    }
+
+    /** Closing the camera while a picture is being drawn reports it lost, and leaves no file. */
+    @Test
+    public void closingWhileAPictureIsDrawnReportsItLost() {
+        module.setFrameRenderer(renderer);
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        module.close();
+        FakeCamera2.idleMainLooper();
+
+        assertTrue("the picture is reported lost", failed.get());
+        assertNull(captured.get());
+        assertFalse(output.exists());
+    }
+
+    /**
+     * A second press while a picture is still being drawn takes its place, since the renderer
+     * draws one still at a time, and the first is reported lost rather than never reported.
+     */
+    @Test
+    public void aSecondPressTakesThePlaceOfAPictureStillBeingDrawn() {
+        module.setFrameRenderer(renderer);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        FrameRenderThread effect = module.getEffect();
+        assertNotNull(effect);
+        SurfaceTexture still = stillInput(effect);
+        File first = new File(output.getParentFile(), "first-drawn-picture.jpg");
+
+        module.takePicture(first);
+        FakeCamera2.idleMainLooper();
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        assertTrue("the first press is reported lost", failed.get());
+
+        deliverDrawnPicture(still);
+        assertEquals("the second is written", output, captured.get());
+        assertFalse(first.exists());
+    }
+
+    /** Lands the still's frame on the renderer's input, and hands back what it drew. */
+    private void deliverDrawnPicture(SurfaceTexture still) {
+        ShadowFrameSurfaceTexture.deliverFrame(still);
+        Size upright = new Size(STILL.getHeight(), STILL.getWidth());
+        ImageReader drawn = ShadowInjectableImageReader.latestReader(PixelFormat.RGBA_8888);
+        assertNotNull("the drawing is read back from a reader of its own", drawn);
+        ShadowInjectableImageReader.offerImage(drawn,
+                FakeImage.rgba(upright.getWidth(), upright.getHeight(), 16, MAGENTA));
+        FakeCamera2.idleMainLooper();
+        FakeCamera2.idleMainLooper();
+    }
+
+    /** Runs the main looper until filing, which has a thread of its own, has been heard. */
+    private void awaitFiling() throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 30_000;
+        while (saved.isEmpty() && !failed.get() && System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper();
+            Thread.sleep(10);
+        }
+        assertTrue("the picture was never filed", !saved.isEmpty() || failed.get());
+    }
+
+    /** One-off requests that start a precapture sequence. */
+    private static List<CaptureRequest> precaptureTriggers() {
+        List<CaptureRequest> triggers = new ArrayList<>();
+        for (CaptureRequest request : ShadowCallbackCameraCaptureSession.getCaptures()) {
+            Integer trigger = request.get(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER);
+            if (trigger != null && trigger == CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START) {
+                triggers.add(request);
+            }
+        }
+        return triggers;
     }
 
     /** One-off requests carrying a picture, which are the only ones that set a JPEG quality. */
