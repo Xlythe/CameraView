@@ -95,6 +95,8 @@ public final class FrameEffectDeviceTest {
     private static final int COLOUR_SPREAD = 30;
     /** How near to 255 a clamped channel has to land, allowing for JPEG. */
     private static final int WHITE_FLOOR = 243;
+    /** How far apart two aspect ratios may be and still count as one crop, after rounding. */
+    private static final float ASPECT_TOLERANCE = 0.01f;
     private static final String FILTER_TAG = "FrameEffect";
     /** How long the preview is given to show what the renderer drew, once the camera is open. */
     private static final long PREVIEW_WAIT_MILLIS = 10_000;
@@ -560,13 +562,17 @@ public final class FrameEffectDeviceTest {
     }
 
     /**
-     * A frame drawn straight through comes out the size it would have without the effect.
+     * A frame drawn straight through comes out the shape it would have without the effect.
      *
      * <p>The effect is built with CameraX's only unrestricted constructor, which describes the
      * transformation as arbitrary rather than as the camera-and-surface rotation the processor
      * actually applies. That is a claim about what CameraX may assume downstream, and the place
      * it would show is the geometry of the saved file - a frame rotated a quarter turn, or
-     * cropped to the wrong rectangle, arrives here as different dimensions.</p>
+     * cropped to the wrong rectangle, arrives here turned or at another aspect ratio.</p>
+     *
+     * <p>The pixel count is not compared. CameraX draws every output from one shared stream, so
+     * its drawn still has the preview's resolution, which is smaller than its own still on a
+     * camera that offers more.</p>
      */
     @Test
     public void drawingTheFrameThroughDoesNotChangeItsShape() throws Exception {
@@ -576,8 +582,18 @@ public final class FrameEffectDeviceTest {
             return true;
         });
 
-        assertEquals("an effect that draws the frame through should not reshape the capture",
-                withoutEffect, withEffect);
+        String sizes = withoutEffect + " without the effect, " + withEffect + " with it";
+        assertEquals("an effect that draws the frame through should not turn the capture: "
+                        + sizes,
+                withoutEffect.getWidth() > withoutEffect.getHeight(),
+                withEffect.getWidth() > withEffect.getHeight());
+        assertEquals("an effect that draws the frame through should not recrop the capture: "
+                        + sizes,
+                aspectRatio(withoutEffect), aspectRatio(withEffect), ASPECT_TOLERANCE);
+    }
+
+    private static float aspectRatio(@NonNull Size size) {
+        return (float) size.getWidth() / size.getHeight();
     }
 
     /**
