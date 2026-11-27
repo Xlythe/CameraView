@@ -89,7 +89,8 @@ import java.util.concurrent.TimeUnit;
  *   <li>JPEG, PNG, WebP, GIF and BMP pictures, animated GIFs and animated PNGs, on every
  *       release.</li>
  *   <li>HEIF and HEIC pictures, and animated WebP and HEIF sequences, from Android 9. Before it,
- *       an animated WebP shows as a still where the platform decodes its first frame.</li>
+ *       an animated WebP shows as a still only where the platform decodes its first frame, which
+ *       Android 5 does not.</li>
  *   <li>AVIF pictures, still and animated, from Android 12.</li>
  *   <li>DNG from Android 7.0. Before it, and on every release for a camera's other raw formats
  *       (CR2, CR3, NEF, ARW, RAF, ORF and RW2), the largest JPEG the camera embedded in the file
