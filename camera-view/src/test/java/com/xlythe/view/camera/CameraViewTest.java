@@ -71,23 +71,6 @@ public class CameraViewTest {
     }
 
     @Test
-    public void pinchScaleSpansTheWholeZoomRange() {
-        // A pinch that has not moved stays at the wide end, and a fully spread one has to reach
-        // the maximum rather than stopping short of it.
-        assertEquals(0, CameraView.zoomLevelForScale(1f, 5f, 100));
-        assertEquals(100, CameraView.zoomLevelForScale(5f, 5f, 100));
-        assertEquals(50, CameraView.zoomLevelForScale(3f, 5f, 100));
-
-        // Values outside the pinch range clamp instead of running past the camera's limits.
-        assertEquals(0, CameraView.zoomLevelForScale(0.1f, 5f, 100));
-        assertEquals(100, CameraView.zoomLevelForScale(50f, 5f, 100));
-
-        // A camera that cannot zoom, or a degenerate range, stays at zero.
-        assertEquals(0, CameraView.zoomLevelForScale(5f, 5f, 0));
-        assertEquals(0, CameraView.zoomLevelForScale(5f, 1f, 100));
-    }
-
-    @Test
     public void testPropertySetters() {
         cameraView.setQuality(CameraView.Quality.MAX);
         assertEquals(CameraView.Quality.MAX, cameraView.getQuality());

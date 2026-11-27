@@ -23,6 +23,7 @@ import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.TransformMath;
+import com.xlythe.view.camera.ZoomMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.ByteArrayOutputStream;
@@ -45,9 +46,6 @@ public class LegacyCameraModule extends ICameraModule {
     /** No camera chosen yet, which is not the same as camera zero. */
     private static final int INVALID_CAMERA_ID = -1;
 
-    /** The zoom scale CameraView publishes, matching the Camera2 and CameraX backends. */
-    private static final int MAX_ZOOM_LEVEL = 100;
-
     /** Which of the device's cameras is selected, as an index into Camera.getNumberOfCameras. */
     private int mActiveCamera = INVALID_CAMERA_ID;
 
@@ -56,6 +54,12 @@ public class LegacyCameraModule extends ICameraModule {
 
     /** The preview size chosen for the open camera, or null when no camera is open. */
     @Nullable private Camera.Size mPreviewSize;
+
+    /**
+     * The zoom, as a ratio. While a camera is open it is the entry of its zoom table the camera is
+     * set to; while none is, it is what was asked for, which the next open applies.
+     */
+    private float mZoomRatio = 1f;
 
     /** The recorder for a recording in progress, or null when nothing is being recorded. */
     private MediaRecorder mVideoRecorder;
@@ -93,11 +97,13 @@ public class LegacyCameraModule extends ICameraModule {
             parameters.setPreviewSize(getPreviewWidth(), getPreviewHeight());
             parameters.setPictureFormat(ImageFormat.JPEG);
             parameters.setJpegQuality(getPictureQuality());
+            float zoomRatio = applyZoom(parameters, mZoomRatio);
             mCamera.setParameters(parameters);
             applyShutterSound();
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
             mCamera.startPreview();
+            onZoomRatioApplied(zoomRatio);
         } catch (IOException | RuntimeException e) {
             // A camera opened but never started is worse than no camera: close() would release
             // it, but takePicture() and startRecording() would both act on one configured by
@@ -421,60 +427,102 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     @Override
-    public void setZoomLevel(int zoomLevel) {
+    public void setZoomRatio(float zoomRatio) {
         if (mCamera == null) {
-            Log.w(TAG, "Attempted to set zoom level to " + zoomLevel + " but no camera found");
+            // Nothing open to set, so it waits for open() to apply it.
+            onZoomRatioApplied(zoomRatio);
             return;
         }
-        Camera.Parameters parameters = mCamera.getParameters();
-        if (!parameters.isZoomSupported()) {
-            Log.w(TAG, "Zoom not supported");
-            return;
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            float applied = applyZoom(parameters, zoomRatio);
+            if (applied == mZoomRatio) {
+                return;
+            }
+            mCamera.setParameters(parameters);
+            onZoomRatioApplied(applied);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "The camera would not zoom", e);
         }
-        // The level is a position in the camera's range, as it is on the other backends, while
-        // this API takes an index into the camera's own zoom table. Passing the level straight
-        // through meant the scale differed per device and an out-of-range value reached the
-        // camera unchecked.
-        parameters.setZoom(toZoomIndex(zoomLevel, parameters.getMaxZoom()));
-        mCamera.setParameters(parameters);
     }
 
-    /** Maps a 0..MAX_ZOOM_LEVEL position onto an index into the camera's zoom table. */
-    static int toZoomIndex(int zoomLevel, int maxZoomIndex) {
-        int clamped = Math.max(0, Math.min(zoomLevel, MAX_ZOOM_LEVEL));
-        if (maxZoomIndex <= 0) {
-            return 0;
+    /**
+     * Writes the entry of the camera's zoom table nearest a ratio into its parameters.
+     *
+     * <p>This API takes an index into a table of ratios that differs per device, rather than a
+     * ratio, so the nearest entry is the closest it can come.</p>
+     *
+     * @return the ratio the camera is at once the parameters are applied
+     */
+    private static float applyZoom(@NonNull Camera.Parameters parameters, float zoomRatio) {
+        List<Integer> ratios = parameters.isZoomSupported() ? parameters.getZoomRatios() : null;
+        if (ratios == null || ratios.isEmpty()) {
+            return 1f;
         }
-        return Math.round((float) clamped * maxZoomIndex / MAX_ZOOM_LEVEL);
+        int index = nearestZoomIndex(ratios, zoomRatio);
+        parameters.setZoom(index);
+        return ratios.get(index) / 100f;
     }
 
-    /** Maps an index into the camera's zoom table back onto a 0..MAX_ZOOM_LEVEL position. */
-    static int toZoomLevel(int zoomIndex, int maxZoomIndex) {
-        if (maxZoomIndex <= 0) {
-            return 0;
+    /** The entry of a zoom table, given in hundredths, nearest a ratio. */
+    static int nearestZoomIndex(@NonNull List<Integer> ratios, float zoomRatio) {
+        int nearest = 0;
+        for (int i = 1; i < ratios.size(); i++) {
+            if (Math.abs(ratios.get(i) / 100f - zoomRatio)
+                    < Math.abs(ratios.get(nearest) / 100f - zoomRatio)) {
+                nearest = i;
+            }
         }
-        int clamped = Math.max(0, Math.min(zoomIndex, maxZoomIndex));
-        return Math.round((float) clamped * MAX_ZOOM_LEVEL / maxZoomIndex);
+        return nearest;
+    }
+
+    private void onZoomRatioApplied(float zoomRatio) {
+        if (zoomRatio != mZoomRatio) {
+            mZoomRatio = zoomRatio;
+            onZoomChanged(zoomRatio);
+        }
     }
 
     @Override
-    public int getZoomLevel() {
+    public float getZoomRatio() {
+        return mZoomRatio;
+    }
+
+    /** 1, which is where every zoom table starts. */
+    @Override
+    public float getMinZoomRatio() {
+        return 1f;
+    }
+
+    @Override
+    public float getMaxZoomRatio() {
         if (mCamera == null) {
-            return 0;
+            return 1f;
         }
-        Camera.Parameters parameters = mCamera.getParameters();
-        return toZoomLevel(parameters.getZoom(), parameters.getMaxZoom());
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            List<Integer> ratios =
+                    parameters.isZoomSupported() ? parameters.getZoomRatios() : null;
+            return ratios == null || ratios.isEmpty()
+                    ? 1f : Math.max(1f, ratios.get(ratios.size() - 1) / 100f);
+        } catch (RuntimeException e) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its zoom range", e);
+            return 1f;
+        }
     }
 
+    /**
+     * 1x, 2x and the far end of the zoom table.
+     *
+     * <p>This API publishes nothing about lenses or sensors, so there is nothing more to work stops
+     * out from.</p>
+     */
+    @NonNull
     @Override
-    public int getMaxZoomLevel() {
-        // Fixed, so one zoom control works across every backend.
-        return MAX_ZOOM_LEVEL;
-    }
-
-    @Override
-    public boolean isZoomSupported() {
-        return mCamera != null && mCamera.getParameters().isZoomSupported();
+    public float[] getZoomPresets() {
+        float maxZoomRatio = getMaxZoomRatio();
+        return ZoomMath.presets(1f, maxZoomRatio, new float[] {2f, maxZoomRatio},
+                false /* cropStop */);
     }
 
     @Override
