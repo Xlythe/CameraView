@@ -192,12 +192,8 @@ public class Camera2Module extends ICameraModule {
 
         ImageReader probeReader = null;
         try {
-            CameraCharacteristics characteristics =
-                    mCameraManager.getCameraCharacteristics(getActiveCamera());
-            StreamConfigurationMap map =
-                    characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-            Size stillSize = map == null ? null
-                    : largestWithin(Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)), null);
+            Size stillSize = largestStillSize(
+                    mCameraManager.getCameraCharacteristics(getActiveCamera()));
             if (stillSize == null) {
                 return false;
             }
@@ -226,6 +222,113 @@ public class Camera2Module extends ICameraModule {
                 probeReader.close();
             }
         }
+    }
+
+    /**
+     * The largest still a session may put beside the preview: the unbinned one where a MAX
+     * picture would use it, so that the probe asks about the pair the session configures.
+     */
+    @VisibleForTesting
+    @Nullable
+    Size largestStillSize(@NonNull CameraCharacteristics characteristics) {
+        StreamConfigurationMap map =
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+        Size stillSize = map == null ? null
+                : largestWithin(Arrays.asList(map.getOutputSizes(ImageFormat.JPEG)), null);
+        if (Build.VERSION.SDK_INT >= 31 && getQuality() == CameraView.Quality.MAX) {
+            StreamConfigurationMap unbinned = maximumResolutionMap(characteristics);
+            Size[] sizes = unbinned == null ? null : unbinned.getOutputSizes(ImageFormat.JPEG);
+            Size largest = sizes == null ? null : largestWithin(Arrays.asList(sizes), null);
+            if (largest != null && (stillSize == null || exceeds(largest, stillSize))) {
+                stillSize = largest;
+            }
+        }
+        return stillSize;
+    }
+
+    /**
+     * The stream configurations of this camera's sensor read out unbinned, or null when it has
+     * none a still can use. See {@link #maximumResolutionMap}.
+     */
+    @Nullable
+    StreamConfigurationMap getMaximumResolutionMap() {
+        if (Build.VERSION.SDK_INT < 31) {
+            return null;
+        }
+        try {
+            return maximumResolutionMap(
+                    mCameraManager.getCameraCharacteristics(getActiveCamera()));
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its unbinned sizes", error);
+            return null;
+        }
+    }
+
+    /**
+     * A sensor that combines neighbouring pixels by default can read every pixel out instead,
+     * through a second stream configuration map.
+     *
+     * <p>The map can be present on a camera without the ultra high resolution capability, as a
+     * placeholder whose stream combinations nothing guarantees, so the capability decides.</p>
+     */
+    @RequiresApi(31)
+    @VisibleForTesting
+    @Nullable
+    static StreamConfigurationMap maximumResolutionMap(
+            @NonNull CameraCharacteristics characteristics) {
+        int[] capabilities =
+                characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+        if (capabilities == null) {
+            return null;
+        }
+        for (int capability : capabilities) {
+            if (capability
+                    == CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR) {
+                return characteristics.get(
+                        CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION);
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Moves a region of the active array onto the unbinned sensor's, which is what a request in
+     * maximum resolution mode reads its regions against. Null when either array is unknown,
+     * since a region left in the binned coordinates lands on the wrong part of the scene.
+     */
+    @RequiresApi(31)
+    @Nullable
+    Rect toMaximumResolution(@Nullable Rect region) {
+        if (region == null) {
+            return null;
+        }
+        try {
+            CameraCharacteristics characteristics =
+                    mCameraManager.getCameraCharacteristics(getActiveCamera());
+            return scaleRegion(region,
+                    characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE),
+                    characteristics.get(
+                            CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE_MAXIMUM_RESOLUTION));
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its unbinned array", error);
+            return null;
+        }
+    }
+
+    /** Scales a region from one array onto another, or null when either is unknown or empty. */
+    @VisibleForTesting
+    @Nullable
+    static Rect scaleRegion(@NonNull Rect region, @Nullable Rect from, @Nullable Rect to) {
+        if (from == null || to == null || from.width() <= 0 || from.height() <= 0) {
+            return null;
+        }
+        float scaleX = (float) to.width() / from.width();
+        float scaleY = (float) to.height() / from.height();
+        return new Rect(
+                to.left + Math.round((region.left - from.left) * scaleX),
+                to.top + Math.round((region.top - from.top) * scaleY),
+                to.left + Math.round((region.right - from.left) * scaleX),
+                to.top + Math.round((region.bottom - from.top) * scaleY));
     }
 
     /**
