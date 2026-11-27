@@ -35,6 +35,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
@@ -106,7 +107,11 @@ public class LegacyCameraModule extends ICameraModule {
             mDefaultPictureSize = parameters.getPictureSize();
             applyPictureSize(parameters);
             float zoomRatio = applyZoom(parameters, mZoomRatio);
+            Integer exposureCompensation = applyExposureCompensation(parameters);
             mCamera.setParameters(parameters);
+            if (exposureCompensation != null) {
+                super.setExposureCompensation(exposureCompensation);
+            }
             applyShutterSound();
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
@@ -580,6 +585,149 @@ public class LegacyCameraModule extends ICameraModule {
         float maxZoomRatio = getMaxZoomRatio();
         return ZoomMath.presets(1f, maxZoomRatio, new float[] {2f, maxZoomRatio},
                 false /* cropStop */);
+    }
+
+    /**
+     * Sets the exposure compensation index, in the camera's own steps.
+     *
+     * <p>With no camera open there is no range to hold the index to, so it is kept as given and
+     * clamped once one opens. An open camera that cannot compensate refuses it.</p>
+     */
+    @MainThread
+    @Override
+    public void setExposureCompensation(int exposureCompensation) {
+        if (mCamera == null) {
+            super.setExposureCompensation(exposureCompensation);
+            return;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            if (!offersExposureCompensation(parameters)) {
+                Log.w(TAG,
+                        "Ignoring exposure request because the active camera does not support it");
+                return;
+            }
+            int clamped = clampExposureCompensation(parameters, exposureCompensation);
+            if (clamped == parameters.getExposureCompensation()
+                    && clamped == getExposureCompensation()) {
+                return;
+            }
+            parameters.setExposureCompensation(clamped);
+            mCamera.setParameters(parameters);
+            super.setExposureCompensation(clamped);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "The camera would not take the exposure compensation", e);
+        }
+    }
+
+    @MainThread
+    @Override
+    public int getMinExposureCompensation() {
+        Camera.Parameters parameters = exposureParameters();
+        return parameters == null ? 0 : parameters.getMinExposureCompensation();
+    }
+
+    @MainThread
+    @Override
+    public int getMaxExposureCompensation() {
+        Camera.Parameters parameters = exposureParameters();
+        return parameters == null ? 0 : parameters.getMaxExposureCompensation();
+    }
+
+    @MainThread
+    @Override
+    public float getExposureCompensationStep() {
+        Camera.Parameters parameters = exposureParameters();
+        return parameters == null ? 0f : parameters.getExposureCompensationStep();
+    }
+
+    @MainThread
+    @Override
+    public boolean isExposureCompensationSupported() {
+        return exposureParameters() != null;
+    }
+
+    /**
+     * Refused while a camera without a flash is open, as on the other backends. This backend
+     * drives no flash, so that is every camera it opens; a request made while closed is kept.
+     */
+    @MainThread
+    @Override
+    public void setTorchEnabled(boolean enabled) {
+        if (enabled && mCamera != null && !hasFlash()) {
+            Log.w(TAG, "Ignoring torch request because the active camera has no flash unit");
+            return;
+        }
+        super.setTorchEnabled(enabled);
+    }
+
+    /** Refused while a camera that cannot steady the picture is open, as on the other backends. */
+    @MainThread
+    @Override
+    public void setStabilizationEnabled(boolean enabled) {
+        if (enabled && mCamera != null && !isStabilizationSupported()) {
+            Log.w(TAG, "Ignoring stabilization because the active camera does not support it");
+            return;
+        }
+        super.setStabilizationEnabled(enabled);
+    }
+
+    /** Refused while a camera without low-light boost is open, as on the other backends. */
+    @MainThread
+    @Override
+    public void setLowLightBoostEnabled(boolean enabled) {
+        if (enabled && mCamera != null && !isLowLightBoostSupported()) {
+            Log.w(TAG, "Ignoring low-light boost because the active camera does not support it");
+            return;
+        }
+        super.setLowLightBoostEnabled(enabled);
+    }
+
+    /**
+     * Writes the exposure index into a camera's parameters, held to its range.
+     *
+     * @return the index the camera is at once the parameters are applied, or null for a camera
+     *     that cannot compensate, which keeps the index for the next camera that can
+     */
+    @Nullable
+    private Integer applyExposureCompensation(@NonNull Camera.Parameters parameters) {
+        if (!offersExposureCompensation(parameters)) {
+            return null;
+        }
+        int clamped = clampExposureCompensation(parameters, getExposureCompensation());
+        parameters.setExposureCompensation(clamped);
+        return clamped;
+    }
+
+    private static int clampExposureCompensation(
+            @NonNull Camera.Parameters parameters, int exposureCompensation) {
+        return Math.max(parameters.getMinExposureCompensation(),
+                Math.min(exposureCompensation, parameters.getMaxExposureCompensation()));
+    }
+
+    /** The open camera's parameters, where it can compensate exposure, or null. */
+    @Nullable
+    private Camera.Parameters exposureParameters() {
+        if (mCamera == null) {
+            return null;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            return offersExposureCompensation(parameters) ? parameters : null;
+        } catch (RuntimeException e) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its exposure compensation", e);
+            return null;
+        }
+    }
+
+    /**
+     * Whether a camera can compensate exposure. This API reports a range of 0 to 0 for one that
+     * cannot; a range that stops at zero on either side counts as none too, which is where the
+     * other backends draw the line.
+     */
+    static boolean offersExposureCompensation(@NonNull Camera.Parameters parameters) {
+        return parameters.getMinExposureCompensation() != 0
+                && parameters.getMaxExposureCompensation() != 0;
     }
 
     @Override

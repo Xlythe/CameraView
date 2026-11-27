@@ -107,15 +107,23 @@ class VideoSession extends PictureSession {
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {
         CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_RECORD);
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
+        applyAeMode(builder, false /* withFlashStrategy */);
+        applyExposureCompensation(builder);
         if (mMeteringRectangle != null) {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
         }
         applyZoom(builder);
+        applyStabilization(builder);
         applyFaceDetection(builder);
         builder.addTarget(getPreviewSurface().getSurface());
         builder.addTarget(mVideoSurface.getSurface());
         return builder.build();
+    }
+
+    @Override
+    boolean feedsAnEncoder() {
+        return true;
     }
 
     @Override

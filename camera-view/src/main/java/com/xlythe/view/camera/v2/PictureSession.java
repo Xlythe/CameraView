@@ -277,7 +277,9 @@ class PictureSession extends PreviewSession {
             mRawSurface.initializePicture(dng, picture);
         }
         Targets targets = new Targets(jpeg, raw);
-        if (flashWillFire(hasFlash(), getFlash(), getAeState())) {
+        // The torch takes the flash strategy's place on every request, so nothing fires to meter
+        // for.
+        if (!isTorchLit() && flashWillFire(hasFlash(), getFlash(), getAeState())) {
             if (metersForFlash()) {
                 meterForFlash(device, session, targets);
             } else {
@@ -315,7 +317,8 @@ class PictureSession extends PreviewSession {
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            applyFlash(builder);
+            applyStillAeMode(builder);
+            applyExposureCompensation(builder);
             if (targets.mJpeg) {
                 builder.addTarget(mPictureSurface.getSurface());
             }
@@ -335,6 +338,7 @@ class PictureSession extends PreviewSession {
                 builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{metering});
             }
             applyZoom(builder, cropRegion);
+            applyStabilization(builder);
             builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
             if (Build.VERSION.SDK_INT >= 26 && isZeroShutterLagSupported()) {
                 // Set either way, since some still templates turn it on themselves. A RAW frame
@@ -392,6 +396,9 @@ class PictureSession extends PreviewSession {
         Metering metering = new Metering(device, session, targets);
         try {
             CaptureRequest.Builder builder = newPreviewRequest(device);
+            // In the still's auto-exposure mode rather than the preview's, so that the pre-flash
+            // fires where low-light boost has the preview without one.
+            applyStillAeMode(builder);
             builder.set(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER,
                     CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START);
             mMetering = metering;

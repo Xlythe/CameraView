@@ -124,9 +124,20 @@ data class CameraState(
      * Each has the exact ratio to pass as zoomRatio and a rounded label to show.
      */
     val zoomPresets: List<ZoomPreset> = emptyList(),
+    /**
+     * Whether [Camera]'s exposureCompensation does anything on this camera. Where it is false the
+     * range and the step are all 0.
+     */
     val isExposureCompensationSupported: Boolean = false,
+    /** The lowest index exposureCompensation accepts, which darkens the picture furthest. */
     val minExposureCompensation: Int = 0,
+    /** The highest index exposureCompensation accepts, which brightens the picture furthest. */
     val maxExposureCompensation: Int = 0,
+    /**
+     * How many EV one exposure compensation index is worth, such as 1/3 or 1/6, or 0 where the
+     * camera cannot compensate. An index times the step is the shift in EV to show a user.
+     */
+    val exposureCompensationStep: Float = 0f,
     /** Always holds at least [ColorSpace.SRGB], which every camera can produce. */
     val supportedColorSpaces: Set<ColorSpace> = emptySet(),
     /** Always holds at least [PictureFormat.JPEG], which every camera can write. */
@@ -415,6 +426,7 @@ private fun CameraView.readCameraState(): CameraState {
         isExposureCompensationSupported = isExposureCompensationSupported,
         minExposureCompensation = minExposureCompensation,
         maxExposureCompensation = maxExposureCompensation,
+        exposureCompensationStep = exposureCompensationStep,
         supportedColorSpaces = supported(ColorSpace.entries) {
             isColorSpaceSupported(it.toCameraView())
         },
@@ -495,9 +507,8 @@ private fun Extension.toCameraView() = when (this) {
  * controller's takePicture() and startRecording(), which below API 29 needs
  * WRITE_EXTERNAL_STORAGE.
  *
- * Several of the settings below are read only by the CameraX backend, which is still opt-in; the
- * Camera2 backend that ships enabled logs and drops them. [CameraState] says which ones the
- * active camera will accept.
+ * Several of the settings below depend on what the camera can do. [CameraState] says which ones
+ * the active camera will accept.
  *
  * @param modifier Modifier for layout.
  * @param quality The quality for image and video outputs.
@@ -516,16 +527,26 @@ private fun Extension.toCameraView() = when (this) {
  *  back into it is safe: the camera's own report is not handed back to it.
  * @param animateZoom Eases the camera over to each new zoomRatio, as a tap on a zoom button does
  *  in a phone's camera app, rather than jumping to it.
- * @param exposureCompensation An index within the range [CameraState] reports, where 0 is the
- *  exposure the camera metered for itself.
- * @param torchEnabled Lights the flash continuously, rather than for a capture.
+ * @param exposureCompensation Shifts the camera's automatic exposure brighter (positive) or darker
+ *  (negative) than it would choose by itself, in the preview, pictures and recordings. It biases
+ *  auto-exposure rather than replacing it. The value is an index, not a number of stops: each
+ *  step is worth [CameraState.exposureCompensationStep] EV, so with a step of 1/6, 6 is +1 EV.
+ *  0 is no compensation, and an index outside [CameraState.minExposureCompensation] to
+ *  [CameraState.maxExposureCompensation] is clamped to that range. A camera without
+ *  [CameraState.isExposureCompensationSupported] ignores it.
+ * @param torchEnabled Lights the flash as a steady light, rather than for a capture, on a camera
+ *  with [CameraState.hasFlash]. It stays lit through pictures and recordings. It cannot be
+ *  combined with [lowLightBoostEnabled], which wins when both are asked for.
  * @param colorSpace The range of colours pictures are recorded in.
  * @param pictureFormat The file a picture is written as.
  * @param dynamicRange The dynamic range videos are recorded in.
  * @param extension An optional vendor photo-processing extension.
  * @param pictureQuality How hard a still capture is compressed, from 1 to 100.
- * @param stabilizationEnabled Steadies the preview and recorded video, where the camera can.
- * @param lowLightBoostEnabled Brightens the preview in the dark.
+ * @param stabilizationEnabled Steadies the preview and recorded video against hand shake, on a
+ *  camera with [CameraState.isStabilizationSupported]. A change reconfigures the camera, and one
+ *  made during a recording waits for the recording to end.
+ * @param lowLightBoostEnabled Brightens the preview and recordings in a dark scene, on a camera
+ *  with [CameraState.isLowLightBoostSupported], for which it may lower the frame rate.
  * @param shutterSoundEnabled Plays the platform's click and recording tones. Where the law
  *  requires them, they play regardless.
  * @param shutterSound A raw resource played in place of the platform's click, or 0 for the click.

@@ -7,18 +7,25 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.CaptureRequest;
+import android.util.Range;
+import android.util.Rational;
 
 import androidx.lifecycle.Lifecycle;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAnnouncingCameraManager;
+import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
 import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
+import com.xlythe.view.camera.v2.FakeCamera2;
 
 import org.junit.Test;
 
 import java.io.File;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.List;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
@@ -49,11 +56,32 @@ import org.robolectric.annotation.Config;
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {29, 37}, qualifiers = "w360dp-h800dp-xxxhdpi",
-        shadows = {ShadowAnnouncingCameraManager.class, ShadowListingCamcorderProfile.class})
+        shadows = {ShadowAnnouncingCameraManager.class, ShadowListingCamcorderProfile.class,
+                ShadowCallbackCameraCaptureSession.class})
 public class CameraXHarnessTest {
+    /** The back camera's exposure range. */
+    private static final Range<Integer> BACK_EXPOSURE_RANGE = new Range<>(-12, 12);
+    /** The front camera's, which only goes one way and so counts as none. */
+    private static final Range<Integer> FRONT_EXPOSURE_RANGE = new Range<>(0, 4);
+
     @Test
     public void theBackendBindsReportsCapabilitiesSwitchesLensAndCloses() throws Exception {
+        // Requests are recorded for the exposure step, and no callbacks are delivered, which is
+        // the shipped shadow's behaviour that the rest of this harness was written against.
+        ShadowCallbackCameraCaptureSession.reset();
+        ShadowCallbackCameraCaptureSession.setDeliverCallbacks(false);
         FakeCameraXHost host = new FakeCameraXHost();
+        // Only the back camera can compensate, so the steps below that run on the front camera
+        // still see one that declines.
+        Context application = RuntimeEnvironment.getApplication();
+        FakeCamera2.setCharacteristic(application, FakeCamera2.BACK_ID,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, BACK_EXPOSURE_RANGE);
+        FakeCamera2.setCharacteristic(application, FakeCamera2.BACK_ID,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP, new Rational(1, 6));
+        FakeCamera2.setCharacteristic(application, FakeCamera2.FRONT_ID,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, FRONT_EXPOSURE_RANGE);
+        FakeCamera2.setCharacteristic(application, FakeCamera2.FRONT_ID,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP, new Rational(1, 3));
         CameraXModule module = new CameraXModule(host.getCameraView());
         try {
             // The scale is fixed, so it answers before anything is bound.
@@ -100,6 +128,7 @@ public class CameraXHarnessTest {
             exercisePausedOperations(module);
 
             exerciseResize(module, host);
+            exerciseExposureAcrossARebind(module);
 
             module.close();
             FakeCameraXHost.idle();
@@ -206,7 +235,7 @@ public class CameraXHarnessTest {
             assertEquals(flash, module.getFlash());
         }
 
-        // Declined, because the fake camera reports no exposure range.
+        // Declined, because the front camera reports no usable exposure range.
         assertFalse(module.isExposureCompensationSupported());
         module.setExposureCompensation(3);
         FakeCameraXHost.idle();
@@ -314,11 +343,13 @@ public class CameraXHarnessTest {
 
         assertTrue("the fake camera publishes a zoom range", module.isZoomSupported());
 
-        // An exposure range this camera does not publish, so the bounds collapse rather than
-        // coming back as something a caller could act on.
-        assertEquals("no exposure range means no room above zero",
+        // An exposure range that only goes one way counts as none, so the bounds collapse rather
+        // than coming back as something a caller could act on.
+        assertEquals("no usable exposure range means no room above zero",
                 0, module.getMaxExposureCompensation());
         assertEquals("and none below", 0, module.getMinExposureCompensation());
+        assertEquals("nor a step, although the camera publishes one",
+                0f, module.getExposureCompensationStep(), 0f);
 
         int orientation = module.getRelativeCameraOrientation();
         assertTrue("a camera orientation is one of four right angles: " + orientation,
@@ -378,6 +409,48 @@ public class CameraXHarnessTest {
         FakeCameraXHost.idle();
         assertFalse(module.isPaused());
         assertTrue("and it comes back", FakeCameraXHost.awaitBind(module));
+    }
+
+    /**
+     * An exposure index set just before a rebind is still applied after it.
+     *
+     * <p>The camera confirms an index through a later capture result, and the rebind cancels the
+     * request before that arrives. This camera never confirms one at all, since no results are
+     * delivered, which makes the cancellation certain rather than a race.</p>
+     */
+    private static void exerciseExposureAcrossARebind(CameraXModule module) throws Exception {
+        module.setLensFacing(CameraView.LensFacing.BACK);
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertTrue("the back camera publishes a range", module.isExposureCompensationSupported());
+        assertEquals(-12, module.getMinExposureCompensation());
+        assertEquals(12, module.getMaxExposureCompensation());
+        assertEquals("and a step of its own", 1 / 6f, module.getExposureCompensationStep(), 1e-6f);
+
+        module.setExposureCompensation(3);
+        settle();
+        // Called on the main thread, so the old binding is gone by the time this returns, and
+        // every repeating request after this point comes from the new one.
+        int beforeRebind = ShadowCallbackCameraCaptureSession.getRepeatingRequests().size();
+        module.setQuality(module.getQuality() == CameraView.Quality.LOW
+                ? CameraView.Quality.HIGH : CameraView.Quality.LOW);
+        assertTrue(FakeCameraXHost.awaitBind(module));
+
+        Integer applied = null;
+        for (int attempt = 0; attempt < 100 && !Integer.valueOf(3).equals(applied); attempt++) {
+            settle();
+            List<CaptureRequest> requests =
+                    ShadowCallbackCameraCaptureSession.getRepeatingRequests();
+            applied = requests.size() <= beforeRebind ? null : requests.get(requests.size() - 1)
+                    .get(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION);
+        }
+        assertEquals("the rebind lost the exposure index", Integer.valueOf(3), applied);
+    }
+
+    /** Lets CameraX's own threads catch up, since idling the main looper alone does not. */
+    private static void settle() throws InterruptedException {
+        FakeCameraXHost.idle();
+        Thread.sleep(20);
+        FakeCameraXHost.idle();
     }
 
     /** Anything that changes the bound configuration has to survive a rebind. */

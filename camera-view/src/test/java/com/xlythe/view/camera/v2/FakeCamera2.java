@@ -6,11 +6,15 @@ import android.graphics.Rect;
 import android.util.Range;
 import android.util.SizeF;
 import android.graphics.SurfaceTexture;
+import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
+import android.os.Build;
+import android.util.Range;
+import android.util.Rational;
 import android.util.Size;
 import android.view.TextureView;
 
@@ -37,8 +41,8 @@ import org.robolectric.shadows.StreamConfigurationMapBuilder;
  * empty, and a SurfaceTexture, which a TextureView never produces without a hardware layer.</p>
  */
 public final class FakeCamera2 {
-    static final String BACK_ID = "0";
-    static final String FRONT_ID = "1";
+    public static final String BACK_ID = "0";
+    public static final String FRONT_ID = "1";
 
     static final Size SIZE_1080P = new Size(1920, 1080);
     static final Size SIZE_720P = new Size(1280, 720);
@@ -86,6 +90,20 @@ public final class FakeCamera2 {
      * way out, so getOutputSizes(ImageFormat.JPEG) finds what was added here.</p>
      */
     private static final int HAL_PIXEL_FORMAT_BLOB = 0x21;
+
+    /** Exposure compensation the fake cameras accept, in steps of {@link #EXPOSURE_STEP}. */
+    static final Range<Integer> EXPOSURE_RANGE = new Range<>(-12, 12);
+
+    /** A sixth of a stop per step, so the range above is two stops either way. */
+    static final Rational EXPOSURE_STEP = new Rational(1, 6);
+
+    /**
+     * Auto-exposure modes outside the platform's enumeration, as Samsung's cameras list them.
+     *
+     * <p>Kept in the fake so that anything reading the modes has to look for the one it wants
+     * rather than assume every value is one it knows.</p>
+     */
+    static final int[] VENDOR_AE_MODES = {101, 102, 104};
 
     private FakeCamera2() {}
 
@@ -342,6 +360,77 @@ public final class FakeCamera2 {
             shadow.set(CameraCharacteristics.INFO_DEVICE_TYPE, deviceType);
         }
         return characteristics;
+    }
+
+    /**
+     * Gives a registered camera the controls a phone camera usually offers beyond the basics:
+     * exposure compensation, digital and optical stabilization, and the auto-exposure modes.
+     *
+     * <p>Separate from {@link #addCamera} rather than part of every fake, because the CameraX
+     * harness drives these same cameras and is written around one that offers none of them.</p>
+     */
+    public static void addExposureAndStabilization(Context context, String id) {
+        setCharacteristic(context, id, CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES, aeModes());
+        setCharacteristic(context, id,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, EXPOSURE_RANGE);
+        setCharacteristic(context, id,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP, EXPOSURE_STEP);
+        setCharacteristic(context, id,
+                CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES,
+                videoStabilizationModes());
+        setCharacteristic(context, id,
+                CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION,
+                new int[] {CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF,
+                        CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON});
+    }
+
+    /**
+     * Changes one thing a registered camera reports, for a test about a camera that differs.
+     *
+     * <p>The camera manager hands out the instance it was given, so the change is seen by every
+     * later query, including those of a module that is already open.</p>
+     */
+    public static <T> void setCharacteristic(Context context, String id,
+            CameraCharacteristics.Key<T> key, T value) {
+        try {
+            CameraCharacteristics characteristics =
+                    context.getSystemService(CameraManager.class).getCameraCharacteristics(id);
+            ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
+            shadow.set(key, value);
+        } catch (CameraAccessException error) {
+            throw new AssertionError(error);
+        }
+    }
+
+    /**
+     * Every standard auto-exposure mode a phone with a flash has, the vendor ones beside them,
+     * and low-light boost where the platform has it. Low-light boost comes last, after values
+     * nothing in the platform knows, so a reader that stops at an unknown one never finds it.
+     */
+    private static int[] aeModes() {
+        int[] standard = {CameraMetadata.CONTROL_AE_MODE_OFF, CameraMetadata.CONTROL_AE_MODE_ON,
+                CameraMetadata.CONTROL_AE_MODE_ON_AUTO_FLASH,
+                CameraMetadata.CONTROL_AE_MODE_ON_ALWAYS_FLASH};
+        int extra = Build.VERSION.SDK_INT >= 35 ? 1 : 0;
+        int[] modes = new int[standard.length + VENDOR_AE_MODES.length + extra];
+        System.arraycopy(standard, 0, modes, 0, standard.length);
+        System.arraycopy(VENDOR_AE_MODES, 0, modes, standard.length, VENDOR_AE_MODES.length);
+        if (extra > 0) {
+            modes[modes.length - 1] =
+                    CameraMetadata.CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY;
+        }
+        return modes;
+    }
+
+    /** Digital stabilization for recordings, and for the preview too where the platform has it. */
+    private static int[] videoStabilizationModes() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return new int[] {CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
+                    CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON,
+                    CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION};
+        }
+        return new int[] {CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
+                CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON};
     }
 
     /**
