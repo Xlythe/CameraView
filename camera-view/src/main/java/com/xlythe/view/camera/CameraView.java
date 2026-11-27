@@ -1397,7 +1397,11 @@ public class CameraView extends FrameLayout {
         if (count < 1) {
             throw new IllegalArgumentException("A burst takes at least one picture");
         }
-        if (mBurst != null || !isOpen() || isRecording() || isImageConfirmationPending()) {
+        // A burst writes JPEGs. Writing them where DNGs were asked for would leave the caller no
+        // way to tell, so a RAW format refuses the burst instead.
+        PictureFormat format = getPictureFormat();
+        if (mBurst != null || !isOpen() || isRecording() || isImageConfirmationPending()
+                || format == PictureFormat.RAW || format == PictureFormat.RAW_JPEG) {
             Log.w(TAG, "Cannot start a burst in the camera's current state");
             listener.onBurstFinished(0);
             return;

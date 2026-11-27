@@ -7,6 +7,7 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
 import android.content.Context;
+import android.hardware.camera2.CaptureRequest;
 import android.media.FakeImage;
 import android.media.ImageReader;
 import android.net.Uri;
@@ -90,7 +91,8 @@ public class CameraViewBurstTest {
         ShadowCallbackCameraCaptureSession.reset();
         ShadowInjectableImageReader.reset();
         context = RuntimeEnvironment.getApplication();
-        FakeCamera2.addBackAndFrontCameras(context);
+        // Cameras that write RAW, so that a RAW format can be set for a burst to refuse.
+        FakeCamera2.addBackAndFrontCameras(context, FakeCamera2.RawSupport.FULL);
         ShadowPausedAsyncTask.overrideExecutor(Runnable::run);
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
         cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
@@ -135,6 +137,28 @@ public class CameraViewBurstTest {
     public void stoppingWithNoBurstDoesNothing() {
         cameraView.stopBurst();
         assertEquals(0, heard.finishes.size());
+    }
+
+    /**
+     * A burst writes JPEGs, so a RAW format refuses it rather than writing JPEGs where DNGs were
+     * asked for: it finishes at once with nothing, having asked the camera for nothing.
+     */
+    @Test
+    public void aRawFormatRefusesABurst() {
+        cameraView.setPictureFormat(CameraView.PictureFormat.RAW);
+        open();
+        assertEquals(CameraView.PictureFormat.RAW, cameraView.getPictureFormat());
+
+        cameraView.startBurst(directory, 3, heard);
+        cameraView.setPictureFormat(CameraView.PictureFormat.RAW_JPEG);
+        idle();
+        cameraView.startBurst(directory, 3, heard);
+        idle();
+
+        assertEquals(List.of(0, 0), heard.finishes);
+        for (CaptureRequest request : ShadowCallbackCameraCaptureSession.getCaptures()) {
+            assertFalse("no burst picture should be asked for", request.getTag() instanceof File);
+        }
     }
 
     @Test
