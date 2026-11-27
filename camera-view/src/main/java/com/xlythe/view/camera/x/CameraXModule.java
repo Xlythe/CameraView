@@ -2058,16 +2058,46 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @NonNull private ResolutionSelector createImageResolutionSelector() {
-        return new ResolutionSelector.Builder()
-                .setAspectRatioStrategy(getAspectRatioStrategy())
-                .setResolutionStrategy(new ResolutionStrategy(imageTargetSize(getQuality()),
+        return imageResolutionSelector(getQuality(), getAspectRatioStrategy());
+    }
+
+    /**
+     * How a still is sized for a quality.
+     *
+     * <p>MAX takes the largest picture the camera gives, whatever its shape: the view port crops
+     * every output to the view, and a crop of the whole sensor holds more than a frame already
+     * cut to the view's shape. The higher-resolution mode adds the sizes a camera only delivers
+     * slowly, which is the trade a MAX picture makes.</p>
+     */
+    @NonNull static ResolutionSelector imageResolutionSelector(
+            @NonNull CameraView.Quality quality, @NonNull AspectRatioStrategy aspectRatioStrategy) {
+        ResolutionSelector.Builder builder =
+                new ResolutionSelector.Builder().setAspectRatioStrategy(aspectRatioStrategy);
+        if (quality == CameraView.Quality.MAX) {
+            return builder
+                    .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+                    .setResolutionFilter((sizes, rotationDegrees) -> largestFirst(sizes))
+                    .setAllowedResolutionMode(
+                            ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
+                    .build();
+        }
+        return builder
+                .setResolutionStrategy(new ResolutionStrategy(imageTargetSize(quality),
                         ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
                 .build();
     }
 
+    /** The sizes by area, largest first, which is the order CameraX then tries them in. */
+    @NonNull static List<Size> largestFirst(@NonNull List<Size> sizes) {
+        List<Size> sorted = new ArrayList<>(sizes);
+        Collections.sort(sorted, (a, b) -> Long.compare(
+                (long) b.getWidth() * b.getHeight(), (long) a.getWidth() * a.getHeight()));
+        return sorted;
+    }
+
+    /** The bound a still is held to at every quality but MAX, which has none. */
     @NonNull static Size imageTargetSize(@NonNull CameraView.Quality quality) {
         switch (quality) {
-            case MAX: return new Size(3840, 2160);
             case HIGH: return new Size(1920, 1080);
             case MEDIUM: return new Size(1280, 720);
             case LOW:

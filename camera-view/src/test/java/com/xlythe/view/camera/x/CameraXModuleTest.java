@@ -2,6 +2,7 @@ package com.xlythe.view.camera.x;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.graphics.Matrix;
@@ -9,6 +10,9 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.Size;
 
+import androidx.camera.core.resolutionselector.AspectRatioStrategy;
+import androidx.camera.core.resolutionselector.ResolutionSelector;
+import androidx.camera.core.resolutionselector.ResolutionStrategy;
 import androidx.camera.video.Quality;
 
 import com.xlythe.view.camera.CameraView;
@@ -173,10 +177,51 @@ public final class CameraXModuleTest {
 
     @Test
     public void imageQualityTargetsAreDistinct() {
-        assertEquals(new Size(3840, 2160), CameraXModule.imageTargetSize(CameraView.Quality.MAX));
         assertEquals(new Size(1920, 1080), CameraXModule.imageTargetSize(CameraView.Quality.HIGH));
         assertEquals(new Size(1280, 720), CameraXModule.imageTargetSize(CameraView.Quality.MEDIUM));
         assertEquals(new Size(720, 480), CameraXModule.imageTargetSize(CameraView.Quality.LOW));
+    }
+
+    /**
+     * MAX asks for the largest still the camera gives, slow sizes included, whatever the view's
+     * shape: on a 4:3 view held to a 4K bound it used to settle for 1920x1440 on a 12 MP sensor.
+     */
+    @Test
+    public void aMaxStillIsTheLargestOfAnyShape() {
+        ResolutionSelector selector = CameraXModule.imageResolutionSelector(
+                CameraView.Quality.MAX, AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY);
+
+        assertEquals(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY,
+                selector.getResolutionStrategy());
+        assertEquals(ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE,
+                selector.getAllowedResolutionMode());
+        assertEquals(Arrays.asList(new Size(4080, 3060), new Size(4000, 2252),
+                        new Size(3840, 2160), new Size(1920, 1440)),
+                selector.getResolutionFilter().filter(Arrays.asList(new Size(4000, 2252),
+                        new Size(3840, 2160), new Size(1920, 1440), new Size(4080, 3060)), 90));
+    }
+
+    /** Every other quality stays bounded, at the rate the camera streams at. */
+    @Test
+    public void otherStillsKeepTheirBound() {
+        ResolutionSelector selector = CameraXModule.imageResolutionSelector(
+                CameraView.Quality.HIGH, AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY);
+
+        assertEquals(new Size(1920, 1080), selector.getResolutionStrategy().getBoundSize());
+        assertEquals(ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER,
+                selector.getResolutionStrategy().getFallbackRule());
+        assertEquals(ResolutionSelector.PREFER_CAPTURE_RATE_OVER_HIGHER_RESOLUTION,
+                selector.getAllowedResolutionMode());
+        assertNull(selector.getResolutionFilter());
+        assertEquals(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY,
+                selector.getAspectRatioStrategy());
+    }
+
+    @Test
+    public void largestFirstKeepsEverySize() {
+        assertEquals(Arrays.asList(new Size(640, 480), new Size(480, 640), new Size(320, 240)),
+                CameraXModule.largestFirst(Arrays.asList(
+                        new Size(320, 240), new Size(640, 480), new Size(480, 640))));
     }
 
     @Test
