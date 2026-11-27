@@ -4,6 +4,7 @@ import android.opengl.GLES20;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.VisibleForTesting;
 
 import com.xlythe.view.camera.ArAnchor;
 import com.xlythe.view.camera.gl.FrameRenderer;
@@ -47,7 +48,8 @@ final class PillarRenderer implements FrameRenderer {
     private static final float[] COLOR = {1f, 0.86f, 0.5f};
 
     /** Stands the quad at the anchor, and says how far away each corner is. */
-    private static final String VERTEX_SHADER =
+    @VisibleForTesting
+    static final String VERTEX_SHADER =
             "uniform mat4 uProjection;\n"
                     + "uniform mat4 uView;\n"
                     + "uniform vec3 uBase;\n"
@@ -73,7 +75,8 @@ final class PillarRenderer implements FrameRenderer {
      * alpha, and is sampled where the camera's own picture is: the frame's texture matrix applied
      * to where this fragment lands on the frame.
      */
-    private static final String FRAGMENT_SHADER =
+    @VisibleForTesting
+    static final String FRAGMENT_SHADER =
             "#ifdef GL_FRAGMENT_PRECISION_HIGH\n"
                     + "precision highp float;\n"
                     + "#else\n"
@@ -96,8 +99,8 @@ final class PillarRenderer implements FrameRenderer {
                     + "  if (uHasDepth > 0.5) {\n"
                     + "    vec2 frame = vClip.xy / vClip.w * 0.5 + 0.5;\n"
                     + "    vec2 camera = (uTexMatrix * vec4(frame, 0.0, 1.0)).xy;\n"
-                    + "    vec4 packed = texture2D(uDepth, camera);\n"
-                    + "    float scene = dot(packed.ra, vec2(255.0, 65280.0)) / 1000.0;\n"
+                    + "    vec4 texel = texture2D(uDepth, camera);\n"
+                    + "    float scene = dot(texel.ra, vec2(255.0, 65280.0)) / 1000.0;\n"
                     + "    if (scene > 0.0) {\n"
                     + "      light *= clamp((scene - vDistance) / 0.1 + 1.0, 0.0, 1.0);\n"
                     + "    }\n"
