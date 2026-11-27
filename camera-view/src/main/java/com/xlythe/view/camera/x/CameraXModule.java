@@ -1312,7 +1312,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         // Anything still waiting belongs to a capture that was abandoned.
         mRawPairer.clear();
         RawCapture capture = new RawCapture(operationId, jpeg ? file : null, dng, picture,
-                characteristics, mFrontFacing);
+                characteristics, mFrontFacing, exifCaptureParameters());
         mRawCapture = capture;
         int quality = getPictureQuality();
         imageCapture.takePicture(mMainExecutor, new ImageCapture.OnImageCapturedCallback() {
@@ -1369,7 +1369,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         Location location = getLocation();
         JpegSaver saver;
         try {
-            saver = new JpegSaver(image, quality, capture.mirrored, file) {
+            saver = new JpegSaver(getContext(), image, quality, capture.mirrored, file,
+                    capture.exifParameters) {
                 @Nullable
                 @Override
                 protected Location getLocation() {
@@ -1465,6 +1466,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         @NonNull final CameraCharacteristics characteristics;
         /** Whether the picture is mirrored, as a front lens's preview is. */
         final boolean mirrored;
+        /** How the picture was taken, described as it was asked for, for the JPEG's Exif. */
+        @NonNull final ExifCaptureParameters exifParameters;
         /** How far the frame is turned, which only arrives with the frame. */
         int rotation;
         /** Whether the JPEG has been handed to its writer. */
@@ -1474,13 +1477,14 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
         RawCapture(long operationId, @Nullable File jpeg, @NonNull File dng,
                 @NonNull PendingPicture picture, @NonNull CameraCharacteristics characteristics,
-                boolean mirrored) {
+                boolean mirrored, @NonNull ExifCaptureParameters exifParameters) {
             this.operationId = operationId;
             this.jpeg = jpeg;
             this.dng = dng;
             this.picture = picture;
             this.characteristics = characteristics;
             this.mirrored = mirrored;
+            this.exifParameters = exifParameters;
         }
     }
 

@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.x;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapRegionDecoder;
 import android.graphics.Rect;
@@ -16,6 +17,7 @@ import androidx.annotation.WorkerThread;
 import androidx.camera.core.ImageProxy;
 
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -32,7 +34,8 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
  * RAW_JPEG both images are taken in memory and this writes the JPEG the way CameraX would have:
  * cropped to the viewport the preview showed, turned the right way up, and mirrored on a front
  * lens. The bytes are copied out when the saver is made, for the reason {@link CopiedFrame}
- * gives, and the image goes straight back.</p>
+ * gives, and the image goes straight back. Its Exif is finished as every other backend's JPEG
+ * is: the device, the app, a thumbnail, and how the picture was taken.</p>
  */
 class JpegSaver extends AsyncTask<Void, Void, Boolean> {
     /** The JPEG the camera encoded. */
@@ -59,10 +62,19 @@ class JpegSaver extends AsyncTask<Void, Void, Boolean> {
     @NonNull
     private final File mFile;
 
+    /** The application, whose name and version the picture records as its software. */
+    @NonNull
+    private final Context mContext;
+
+    /** How the picture was taken, for the tags the camera's JPEG leaves out. */
+    @NonNull
+    private final ExifCaptureParameters mExifParameters;
+
     /** Copies the JPEG out of the image and closes it. */
     @MainThread
-    JpegSaver(@NonNull ImageProxy image, @IntRange(from = 1, to = 100) int quality,
-            boolean mirrored, @NonNull File file) {
+    JpegSaver(@NonNull Context context, @NonNull ImageProxy image,
+            @IntRange(from = 1, to = 100) int quality, boolean mirrored, @NonNull File file,
+            @NonNull ExifCaptureParameters exifParameters) {
         try {
             ByteBuffer buffer = image.getPlanes()[0].getBuffer();
             mBytes = new byte[buffer.remaining()];
@@ -76,6 +88,8 @@ class JpegSaver extends AsyncTask<Void, Void, Boolean> {
         mQuality = quality;
         mMirrored = mirrored;
         mFile = file;
+        mContext = context.getApplicationContext();
+        mExifParameters = exifParameters;
     }
 
     /** @return true only when the JPEG reached disk, so a failure is never reported as one. */
@@ -101,6 +115,9 @@ class JpegSaver extends AsyncTask<Void, Void, Boolean> {
                 exif.attachLocation(location);
             }
             exif.attachTimestamp();
+            exif.attachCaptureDevice(mContext);
+            exif.attachThumbnail();
+            mExifParameters.applyTo(exif);
             exif.save();
             return true;
         } catch (IOException | RuntimeException e) {
