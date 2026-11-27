@@ -37,6 +37,11 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
 class VideoSession extends PictureSession {
+    /** Floor for a rescaled bit rate, below which even a small frame looks broken. */
+    private static final int MIN_VIDEO_BIT_RATE = 64_000;
+    /** Ceiling for a rescaled bit rate, so a 4K profile cannot run away on an odd device. */
+    private static final int MAX_VIDEO_BIT_RATE = 100_000_000;
+
     /**
      * The VideoSurface must always check CamcorderProfile to see if the outputs supported by the
      * camera are also supported by MediaRecorder. Bizarre as it sounds,
@@ -44,11 +49,6 @@ class VideoSession extends PictureSession {
      * sizes it gives back. Because MediaRecorder is always (at most) limited to 4k recording, that
      * is our max video size.
      */
-    /** Floor for a rescaled bit rate, below which even a small frame looks broken. */
-    private static final int MIN_VIDEO_BIT_RATE = 64_000;
-    /** Ceiling for a rescaled bit rate, so a 4K profile cannot run away on an odd device. */
-    private static final int MAX_VIDEO_BIT_RATE = 100_000_000;
-
     private final VideoSurface mVideoSurface;
 
     /** Whether this session carries a still output alongside the recording. */
@@ -84,6 +84,11 @@ class VideoSession extends PictureSession {
 
     @Override
     protected boolean allowsUltraHdr() {
+        return false;
+    }
+
+    @Override
+    protected boolean allowsRaw() {
         return false;
     }
 
@@ -154,6 +159,12 @@ class VideoSession extends PictureSession {
         }
 
         session.setRepeatingRequest(createCaptureRequest(device), repeatingCallback(), getHandler());
+    }
+
+    /** A pre-flash would light the recording, so a snapshot is taken as the moment stands. */
+    @Override
+    protected boolean metersForFlash() {
+        return false;
     }
 
     @MainThread
@@ -579,6 +590,7 @@ class VideoSession extends PictureSession {
             }
 
             try {
+                mCameraView.onRecordingStarting();
                 mMediaRecorder.start();
                 mIsRecordingVideo = true;
             } catch (IllegalStateException e) {
@@ -614,13 +626,20 @@ class VideoSession extends PictureSession {
             }
             if (mIsRecordingVideo) {
                 mIsRecordingVideo = false;
+                boolean stopped = false;
                 try {
                     mMediaRecorder.stop();
+                    stopped = true;
+                    mCameraView.onRecordingStopped();
                     mMediaRecorder.reset();
                     showVideoConfirmation(mFile);
                 } catch (RuntimeException e) {
                     // MediaRecorder can crash with 'stop failed.'
                     Log.e(TAG, "Let me guess. 'stop failed.'?", e);
+                    if (!stopped) {
+                        // The recording has ended all the same, so its tone still plays.
+                        mCameraView.onRecordingStopped();
+                    }
                     onVideoFailed();
                 }
             } else {

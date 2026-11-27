@@ -22,5 +22,7 @@
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_resize">Resize</string>
+    <!-- A zoom preset button, such as 0.6x or 2x -->
+    <string name="zoom_preset">%1$sx</string>
 
 </resources>

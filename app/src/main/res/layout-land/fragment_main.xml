@@ -43,6 +43,15 @@
                 android:layout_height="match_parent"
                 camera:quality="high" />
 
+            <!-- Zoom presets, filled in by MainFragment once the camera opens -->
+            <LinearLayout
+                android:id="@+id/zoom_presets"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="bottom|center_horizontal"
+                android:layout_marginBottom="16dp"
+                android:orientation="horizontal" />
+
         </FrameLayout>
 
         <!-- Side Control Bar -->
