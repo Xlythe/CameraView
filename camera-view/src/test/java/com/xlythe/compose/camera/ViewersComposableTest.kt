@@ -13,6 +13,7 @@ import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Constraints
 import com.xlythe.view.camera.viewer.LargeImageView
+import com.xlythe.view.camera.viewer.MediaView
 import com.xlythe.view.camera.viewer.PanoramaView
 import com.xlythe.view.camera.viewer.PhotosphereView
 import org.junit.Assert.assertEquals
@@ -32,8 +33,8 @@ import org.robolectric.shadows.ShadowSensor
 import java.io.File
 
 /**
- * The Compose wrappers around the three viewers: each makes its view, hands it the picture, and
- * reports back through the lambdas the latest composition passed.
+ * The Compose wrappers around the viewers: each makes its view, hands it the file, and reports
+ * back through the lambdas the latest composition passed.
  */
 @RunWith(RobolectricTestRunner::class)
 // The region decoder Robolectric stands in for is the one before API 31.
@@ -134,6 +135,77 @@ class ViewersComposableTest {
         compose.waitForIdle()
         assertFalse(view.isGyroscopeEnabled)
         assertTrue("the same view, not a new one", view === find(PhotosphereView::class.java))
+    }
+
+    /** Media works out what the file is, and shows it as another type when asked. */
+    @Test
+    fun mediaShowsAPictureAsTheTypeAskedFor() {
+        val loaded = mutableListOf<Int>()
+        val type = mutableStateOf(MediaView.UNKNOWN)
+        compose.setContent {
+            Media(
+                modifier = SQUARE,
+                file = picture,
+                type = type.value,
+                onLoaded = { loaded.add(it) },
+            )
+        }
+        awaitTrue { loaded.isNotEmpty() }
+        assertEquals(listOf(MediaView.PICTURE), loaded)
+        val view = find(MediaView::class.java)
+        assertEquals(MediaView.PICTURE, view.mediaType)
+        assertTrue(find(view, LargeImageView::class.java) !is PanoramaView)
+
+        type.value = MediaView.PANORAMA
+        // The new viewer decodes once Compose has laid it out.
+        compose.waitForIdle()
+        awaitTrue { loaded.size > 1 }
+        assertEquals(MediaView.PANORAMA, loaded.last())
+        assertNotNull(find(view, PanoramaView::class.java))
+        assertTrue("the same view, not a new one", view === find(MediaView::class.java))
+    }
+
+    /** Each affordance follows its parameter. */
+    @Test
+    fun mediaFollowsItsParameters() {
+        val on = mutableStateOf(false)
+        compose.setContent {
+            Media(
+                modifier = SQUARE,
+                file = picture,
+                tapToPlay = on.value,
+                holdToPlay = on.value,
+                showProgress = on.value,
+                hdr = on.value,
+            )
+        }
+        compose.waitForIdle()
+        val view = find(MediaView::class.java)
+        assertFalse(view.isTapToPlayEnabled)
+        assertFalse(view.isHoldToPlayEnabled)
+        assertFalse(view.isProgressVisible)
+        assertFalse(view.isHdrEnabled)
+
+        on.value = true
+        compose.waitForIdle()
+        assertTrue(view.isTapToPlayEnabled)
+        assertTrue(view.isHoldToPlayEnabled)
+        assertTrue(view.isProgressVisible)
+        assertTrue(view.isHdrEnabled)
+    }
+
+    @Test
+    fun mediaReportsAFailure() {
+        var failed = 0
+        compose.setContent {
+            Media(
+                modifier = SQUARE,
+                uri = Uri.fromFile(File(picture.parentFile, "missing.mp4")),
+                onFailed = { failed++ },
+            )
+        }
+        awaitTrue { failed > 0 }
+        assertEquals(1, failed)
     }
 
     /** Runs the main thread, while the viewer decodes on its own, until something is true. */
