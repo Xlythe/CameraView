@@ -157,6 +157,7 @@ public final class CameraSurfaceDeviceTest {
      */
     @Test
     public void barcodeScanningStartsAndStops() throws Exception {
+        DeviceState.assumeYuvBuffersWork();
         AtomicInteger results = new AtomicInteger();
         AtomicBoolean started = new AtomicBoolean();
 
