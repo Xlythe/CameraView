@@ -823,8 +823,9 @@ private class ZoomSync {
 
 /**
  * Pushes [Camera]'s frameRenderer and cameraTextureProvider to the view when they change, rather
- * than on every recomposition. A background replacement draws in the renderer's place, and an
- * unrelated recomposition must not undo it; once it ends, [restore] puts the renderer back.
+ * than on every recomposition. A background replacement draws in the renderer's place, and neither
+ * an unrelated recomposition nor a new renderer may undo it; once it ends, [restore] puts the
+ * latest renderer back.
  */
 private class FrameEffectSync {
     /** The frameRenderer [Camera] was last given, which the view starts out matching as null. */
@@ -841,7 +842,9 @@ private class FrameEffectSync {
         }
         if (renderer !== this.renderer) {
             this.renderer = renderer
-            view.frameRenderer = renderer
+            if (!view.isReplacingBackground) {
+                view.frameRenderer = renderer
+            }
         }
     }
 
