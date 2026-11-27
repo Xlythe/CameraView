@@ -273,19 +273,15 @@ public class MediaView extends FrameLayout {
     /** A colour from the theme, or the fallback if the theme has none. */
     @ColorInt
     private static int themeColor(@NonNull Context context, int attribute, @ColorInt int fallback) {
-        TypedValue value = new TypedValue();
-        if (!context.getTheme().resolveAttribute(attribute, value, true)) {
+        // Through the theme's own attributes, which resolve a colour resource on every release.
+        TypedArray array = context.obtainStyledAttributes(new int[] {attribute});
+        try {
+            return array.getColor(0, fallback);
+        } catch (RuntimeException notAColor) {
             return fallback;
+        } finally {
+            array.recycle();
         }
-        if (value.resourceId != 0) {
-            try {
-                return ContextCompat.getColor(context, value.resourceId);
-            } catch (RuntimeException notAColor) {
-                return fallback;
-            }
-        }
-        return value.type >= TypedValue.TYPE_FIRST_COLOR_INT
-                && value.type <= TypedValue.TYPE_LAST_COLOR_INT ? value.data : fallback;
     }
 
     // ---------- What to show ----------
