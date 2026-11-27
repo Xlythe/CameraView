@@ -4,6 +4,7 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.location.Location;
 import android.net.Uri;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
@@ -18,12 +19,16 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.nio.ByteBuffer;
+import java.nio.channels.FileChannel;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.Arrays;
@@ -32,6 +37,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.regex.Matcher;
@@ -193,13 +199,40 @@ public final class MediaTags {
         InputStream open() throws IOException;
     }
 
-    /** The file, when it can be written, or null. */
-    @Nullable
-    private final File mFile;
+    /** Where copies of content to edit are kept, under the app's cache. */
+    private static final String EDIT_DIRECTORY = "cameraview-tags";
 
-    /** Opens the file again, for a reader that wants its own stream. */
+    /** How old a copy left behind by an edit that was never saved is before it is deleted. */
+    private static final long STALE_EDIT_MILLIS = 24L * 60 * 60 * 1000;
+
+    /** The formats this writes, for answering whether a Uri not yet edited is read only. */
+    private static final Set<Integer> WRITTEN_FORMATS = new HashSet<>(Arrays.asList(
+            FORMAT_JPEG, FORMAT_PNG, FORMAT_WEBP, FORMAT_HEIF, FORMAT_AVIF, FORMAT_MP4,
+            FORMAT_QUICKTIME, FORMAT_3GP, FORMAT_M4A, FORMAT_MP3, FORMAT_WAV, FORMAT_FLAC,
+            FORMAT_OGG, FORMAT_OPUS));
+
+    /**
+     * The file edits are made in: the file itself, a copy of a Uri's content once an edit
+     * begins, or null while nothing can be or has been edited.
+     */
+    @Nullable
+    private File mFile;
+
+    /** Opens the content again, for a reader that wants its own stream. */
     @Nullable
     private final StreamOpener mOpener;
+
+    /** The app's context, for a content Uri, or null. */
+    @Nullable
+    private final Context mContext;
+
+    /** The content Uri, or null for a file. */
+    @Nullable
+    private final Uri mUri;
+
+    /** Whether the content Uri can be written: null until asked. */
+    @Nullable
+    private Boolean mUriWritable;
 
     /** The format's own metadata. */
     @NonNull
@@ -207,8 +240,15 @@ public final class MediaTags {
 
     private MediaTags(@Nullable File file, @Nullable StreamOpener opener,
             @NonNull MediaContainer container) {
+        this(file, opener, null, null, container);
+    }
+
+    private MediaTags(@Nullable File file, @Nullable StreamOpener opener,
+            @Nullable Context context, @Nullable Uri uri, @NonNull MediaContainer container) {
         mFile = file;
         mOpener = opener;
+        mContext = context;
+        mUri = uri;
         mContainer = container;
     }
 
@@ -230,8 +270,9 @@ public final class MediaTags {
     }
 
     /**
-     * Opens the metadata of a file behind a Uri, such as one in the gallery. Only a file Uri can
-     * be written; for any other, every setter returns false.
+     * Opens the metadata of a file behind a Uri, such as one in the gallery. It can be written
+     * where the app may write the Uri: a file, a document it was granted write access to, or,
+     * from Android 10, a MediaStore item it created. For any other, every setter returns false.
      *
      * @throws IOException if the Uri cannot be read, or its metadata is malformed beyond reading
      */
@@ -251,7 +292,8 @@ public final class MediaTags {
             return stream;
         };
         try (ByteSource source = ByteSource.of(opener.open())) {
-            return new MediaTags(null, opener, read(source, null, opener));
+            return new MediaTags(null, opener, context.getApplicationContext(), uri,
+                    read(source, null, opener));
         } catch (RuntimeException e) {
             throw new IOException("Unable to read the metadata of " + uri, e);
         }
@@ -418,11 +460,131 @@ public final class MediaTags {
         return mContainer.kind();
     }
 
-    /** Whether nothing can be written, because of the file's format or how it was opened. */
-    @AnyThread
+    /**
+     * Whether nothing can be written, because of the file's format or how it was opened. For a
+     * content Uri, this asks its provider whether the app may write it.
+     */
+    @WorkerThread
     public boolean isReadOnly() {
-        return mFile == null || !(mContainer.maxXmpBytes() > 0 || mContainer.canWriteExif()
-                || anyNative());
+        if (mFile == null) {
+            return mUri == null || !WRITTEN_FORMATS.contains(getFormat()) || !uriWritable();
+        }
+        return !(mContainer.maxXmpBytes() > 0 || mContainer.canWriteExif() || anyNative());
+    }
+
+    /**
+     * Whether an edit can be made, beginning one if it can: a content Uri the app may write is
+     * copied, and its metadata read again from the copy, the first time.
+     */
+    @WorkerThread
+    private boolean editable() {
+        if (mFile != null) {
+            return true;
+        }
+        if (mUri == null || mContext == null || !WRITTEN_FORMATS.contains(getFormat())
+                || !uriWritable()) {
+            return false;
+        }
+        File copy = null;
+        try {
+            File directory = new File(mContext.getCacheDir(), EDIT_DIRECTORY);
+            if (!directory.isDirectory() && !directory.mkdirs()) {
+                throw new IOException("Unable to make " + directory);
+            }
+            deleteStaleCopies(directory);
+            copy = File.createTempFile("edit", ".tmp", directory);
+            try (InputStream input = Objects.requireNonNull(mOpener).open();
+                    OutputStream output = new FileOutputStream(copy)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, read);
+                }
+            }
+            MediaContainer container;
+            try (ByteSource source = ByteSource.of(copy)) {
+                container = read(source, copy, mOpener);
+            }
+            mContainer.release();
+            mContainer = container;
+            mFile = copy;
+            return true;
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "Unable to begin editing " + mUri, e);
+            if (copy != null && !copy.delete()) {
+                Log.w(TAG, "Unable to delete " + copy);
+            }
+            return false;
+        }
+    }
+
+    /** Whether the app may write the content Uri, asked of its provider once. */
+    @WorkerThread
+    private boolean uriWritable() {
+        if (mUriWritable == null) {
+            boolean writable;
+            try (ParcelFileDescriptor descriptor = Objects.requireNonNull(mContext)
+                    .getContentResolver().openFileDescriptor(Objects.requireNonNull(mUri),
+                            "rw")) {
+                writable = descriptor != null;
+            } catch (IOException | SecurityException | IllegalArgumentException
+                    | UnsupportedOperationException e) {
+                writable = false;
+            }
+            mUriWritable = writable;
+        }
+        return mUriWritable;
+    }
+
+    /** Deletes copies earlier edits left behind without saving. */
+    @WorkerThread
+    private static void deleteStaleCopies(@NonNull File directory) {
+        File[] copies = directory.listFiles();
+        if (copies == null) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        for (File old : copies) {
+            if (now - old.lastModified() > STALE_EDIT_MILLIS && !old.delete()) {
+                Log.w(TAG, "Unable to delete " + old);
+            }
+        }
+    }
+
+    /** Writes an edited copy back over the content Uri it was made from. */
+    @WorkerThread
+    private void writeBack(@NonNull File copy) throws IOException {
+        Uri uri = Objects.requireNonNull(mUri);
+        ContentResolver resolver = Objects.requireNonNull(mContext).getContentResolver();
+        try (ParcelFileDescriptor descriptor = resolver.openFileDescriptor(uri, "rw")) {
+            if (descriptor == null) {
+                throw new FileNotFoundException("Unable to write " + uri);
+            }
+            try (FileOutputStream output = new FileOutputStream(descriptor.getFileDescriptor());
+                    FileInputStream input = new FileInputStream(copy)) {
+                FileChannel to = output.getChannel();
+                FileChannel from = input.getChannel();
+                long length = from.size();
+                ByteBuffer buffer = ByteBuffer.allocate(64 * 1024);
+                long position = 0;
+                while (true) {
+                    buffer.clear();
+                    int read = from.read(buffer);
+                    if (read < 0) {
+                        break;
+                    }
+                    buffer.flip();
+                    while (buffer.hasRemaining()) {
+                        position += to.write(buffer, position);
+                    }
+                }
+                if (position != length) {
+                    throw new IOException("Wrote " + position + " of " + length + " bytes");
+                }
+                to.truncate(length);
+                to.force(true);
+            }
+        }
     }
 
     private boolean anyNative() {
@@ -573,7 +735,7 @@ public final class MediaTags {
 
     private boolean setText(@MediaContainer.Field int field, @NonNull String namespace,
             @NonNull String name, @Nullable String value, int form) {
-        if (mFile == null) {
+        if (!editable()) {
             return false;
         }
         String text = value == null || value.trim().isEmpty() ? null : value;
@@ -613,6 +775,9 @@ public final class MediaTags {
     /** The packet, if the file can keep one and it can be edited, or null. */
     @Nullable
     private Xmp writableXmp() {
+        if (!editable()) {
+            return null;
+        }
         Xmp xmp = mContainer.xmp();
         return mFile != null && mContainer.maxXmpBytes() > 0 && xmp.isWritable() ? xmp : null;
     }
@@ -729,7 +894,7 @@ public final class MediaTags {
      */
     @WorkerThread
     public boolean setCaptureTime(long millis) {
-        if (mFile == null) {
+        if (!editable()) {
             return false;
         }
         final String iso = millis < 0 ? null : formatIsoTime(millis, TimeZone.getDefault());
@@ -769,7 +934,7 @@ public final class MediaTags {
      */
     @WorkerThread
     public boolean setLocation(@Nullable Location location) {
-        if (mFile == null) {
+        if (!editable()) {
             return false;
         }
         try {
@@ -878,7 +1043,7 @@ public final class MediaTags {
      */
     @WorkerThread
     public boolean setHeading(float degrees) {
-        if (mFile == null) {
+        if (!editable()) {
             return false;
         }
         try {
@@ -949,7 +1114,7 @@ public final class MediaTags {
      */
     @WorkerThread
     public boolean setOrientation(int rotation, boolean mirrored) {
-        if (mFile == null || rotation % 90 != 0 || mContainer.kind() == KIND_AUDIO) {
+        if (rotation % 90 != 0 || mContainer.kind() == KIND_AUDIO || !editable()) {
             return false;
         }
         final int orientation = toExifOrientation(((rotation % 360) + 360) % 360, mirrored);
@@ -1046,7 +1211,7 @@ public final class MediaTags {
      */
     @WorkerThread
     public boolean setAmbientConditions(@Nullable AmbientConditions conditions) {
-        if (mFile == null) {
+        if (!editable()) {
             return false;
         }
         try {
@@ -1099,7 +1264,7 @@ public final class MediaTags {
      */
     @WorkerThread
     public boolean setPanorama(@Nullable Panorama panorama) {
-        if (mFile == null) {
+        if (!editable()) {
             return false;
         }
         return editXmp(xmp -> {
@@ -1189,7 +1354,7 @@ public final class MediaTags {
      */
     @WorkerThread
     public boolean setCoverArt(@Nullable byte[] image) {
-        if (mFile == null || !mContainer.keeps(MediaContainer.COVER_ART)) {
+        if (!editable() || !mContainer.keeps(MediaContainer.COVER_ART)) {
             return false;
         }
         try {
@@ -1224,7 +1389,7 @@ public final class MediaTags {
      */
     @WorkerThread
     public boolean setExifTag(int tag, @Exif.TagType int type, @Nullable String value) {
-        if (mFile == null) {
+        if (!editable()) {
             return false;
         }
         try {
@@ -1257,7 +1422,7 @@ public final class MediaTags {
      */
     @WorkerThread
     public boolean setVideoTag(@NonNull VideoMetadata.Tag tag, @Nullable String value) {
-        return mFile != null && mContainer.setVideoTag(tag, value);
+        return editable() && mContainer.setVideoTag(tag, value);
     }
 
     // ---------- Copying ----------
@@ -1274,7 +1439,7 @@ public final class MediaTags {
     @WorkerThread
     @SuppressWarnings("deprecation")
     public boolean copyTo(@NonNull MediaTags destination) {
-        if (destination.mFile == null) {
+        if (!destination.editable()) {
             return false;
         }
         boolean complete = true;
@@ -1374,19 +1539,42 @@ public final class MediaTags {
      */
     @WorkerThread
     public void save() throws IOException {
-        if (mFile == null) {
+        File file = mFile;
+        if (file == null) {
+            if (mUri != null) {
+                // Nothing was edited.
+                return;
+            }
             throw new IOException("Opened to read only");
         }
         if (!mContainer.isDirty()) {
             return;
         }
+        if (mUri == null) {
+            try {
+                mContainer.save(file);
+            } finally {
+                mContainer.release();
+                // What was read before is out of date; read it all again.
+                try (ByteSource source = ByteSource.of(file)) {
+                    mContainer = read(source, file, mOpener);
+                }
+            }
+            return;
+        }
+        // A content Uri: the copy is saved, then written back, and the next edit copies again.
         try {
-            mContainer.save(mFile);
+            mContainer.save(file);
+            writeBack(file);
         } finally {
             mContainer.release();
-            // What was read before is out of date; read it all again.
-            try (ByteSource source = ByteSource.of(mFile)) {
-                mContainer = read(source, mFile, mOpener);
+            mFile = null;
+            try (ByteSource source = ByteSource.of(file)) {
+                mContainer = read(source, null, mOpener);
+            } finally {
+                if (!file.delete()) {
+                    Log.w(TAG, "Unable to delete " + file);
+                }
             }
         }
     }
