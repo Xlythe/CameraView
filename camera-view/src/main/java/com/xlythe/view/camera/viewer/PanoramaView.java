@@ -11,10 +11,9 @@ import androidx.annotation.Nullable;
  * Shows a panorama as a strip to pan along. It fills the view from top to bottom, and is dragged
  * or flung across and pinched to zoom, with a double tap to zoom in and back out.
  *
- * <p>A panorama whose photo sphere metadata says it goes all the way round, as a full sweep from
- * {@link com.xlythe.view.camera.CameraView} does, has no ends: panning past its right edge
- * carries straight on into its left. It opens looking the way its metadata says to, or at its
- * middle. Any other picture is shown the same way, with ends.</p>
+ * <p>A panorama whose photo sphere (GPano) metadata says it goes all the way round has no ends:
+ * panning past its right edge carries straight on into its left. It opens looking the way its
+ * metadata says to, or at its middle. Any other picture is shown the same way, with ends.</p>
  *
  * <p>The panorama is decoded in tiles, and holds no more memory than a
  * {@link LargeImageView} the same size: at most five times the view's own pixel count in decoded

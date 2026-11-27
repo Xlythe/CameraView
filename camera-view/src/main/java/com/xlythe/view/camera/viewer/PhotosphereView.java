@@ -54,18 +54,18 @@ import java.util.concurrent.TimeUnit;
  * Shows a photo sphere from the inside: drag to look around, pinch to zoom, and fling to keep
  * turning. With {@link #setGyroscopeEnabled(boolean)} on, turning the phone looks around too.
  *
- * <p>The picture is equirectangular, and its photo sphere metadata says how much of the sphere
- * it covers and which way it faces, as {@link com.xlythe.view.camera.CameraView}'s sweeps
- * write it. A partial sphere, such as a panorama that covers only a band around the horizon, is
+ * <p>The picture is equirectangular, and its photo sphere (GPano) metadata says how much of the
+ * sphere it covers and which way it faces. A partial sphere, such as a panorama that covers only a band around the horizon, is
  * shown where it was taken and the rest is left black. A picture without the metadata is taken
  * to go all the way round. It opens looking the way the metadata says to, or at the middle of
  * the picture.</p>
  *
  * <h2>Memory</h2>
- * <p>The picture is uploaded to the GPU in tiles: a low-resolution copy first, then up to 16 MP
- * at full detail (64 MB of GPU memory), nearest the view first. A larger picture is shrunk to
- * fit. While it loads, the app holds at most one tile's decode at a time, under 6 MP (24 MB);
- * once loaded it holds none.</p>
+ * <p>The picture is uploaded to the GPU in tiles: a copy of at most 1 MP first, so it shows at
+ * once, then up to 16 MP at full detail (64 MB of GPU memory), the tiles nearest the view first,
+ * and the copy is let go once they are all in. A larger picture is shrunk to fit. While it loads,
+ * the app holds at most one tile's decode at a time, under 6 MP (24 MB); once loaded it holds
+ * none.</p>
  *
  * <p>It draws with OpenGL ES 2.0, which every Android device has.</p>
  */
