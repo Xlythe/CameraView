@@ -232,15 +232,30 @@ public final class FakeCamera2 {
      *     camera can publish the unbinned map without it, as a placeholder.
      */
     static void addUltraHighResolutionCamera(Context context, boolean capability) {
+        addUltraHighResolutionCamera(context, capability, RawSupport.NONE);
+    }
+
+    /** As {@link #addUltraHighResolutionCamera(Context, boolean)}, with RAW as described. */
+    static void addUltraHighResolutionCamera(
+            Context context, boolean capability, RawSupport rawSupport) {
         CameraCharacteristics characteristics = characteristics(CameraMetadata.LENS_FACING_BACK,
                 90, CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, true /* faceDetection */,
-                CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL, RawSupport.NONE);
+                CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL, rawSupport);
         ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
-        shadow.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, capability
-                ? new int[] {
-                        CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
-                        CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR}
-                : new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
+        List<Integer> capabilities = new ArrayList<>();
+        capabilities.add(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE);
+        if (capability) {
+            capabilities.add(
+                    CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR);
+        }
+        if (rawSupport.hasCapability()) {
+            capabilities.add(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW);
+        }
+        int[] published = new int[capabilities.size()];
+        for (int i = 0; i < published.length; i++) {
+            published[i] = capabilities.get(i);
+        }
+        shadow.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, published);
         StreamConfigurationMapBuilder unbinned = StreamConfigurationMapBuilder.newBuilder();
         unbinned.addOutputSize(SIZE_UNBINNED);
         unbinned.addOutputSize(HAL_PIXEL_FORMAT_BLOB, SIZE_UNBINNED);

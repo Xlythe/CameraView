@@ -21,6 +21,7 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader;
+import com.xlythe.view.camera.shadow.ShadowListingCameraCharacteristics;
 
 import org.junit.After;
 import org.junit.Before;
@@ -54,7 +55,10 @@ public class MaximumResolutionTest {
 
     @Before
     public void setUp() {
+        // Robolectric runs no resetter for a shadow a test declares itself.
         ShadowCallbackCameraCaptureSession.reset();
+        ShadowInjectableImageReader.reset();
+        ShadowListingCameraCharacteristics.reset();
         context = RuntimeEnvironment.getApplication();
     }
 
@@ -64,13 +68,20 @@ public class MaximumResolutionTest {
         module.close();
         FakeCamera2.idleMainLooper();
         cameraView.release();
+        ShadowListingCameraCharacteristics.reset();
     }
 
     private void open(boolean capability, CameraView.Quality quality) {
-        FakeCamera2.addUltraHighResolutionCamera(context, capability);
+        open(capability, quality, FakeCamera2.RawSupport.NONE, CameraView.PictureFormat.JPEG);
+    }
+
+    private void open(boolean capability, CameraView.Quality quality,
+            FakeCamera2.RawSupport rawSupport, CameraView.PictureFormat format) {
+        FakeCamera2.addUltraHighResolutionCamera(context, capability, rawSupport);
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
         module = new Camera2Module(cameraView);
         module.setQuality(quality);
+        module.setPictureFormat(format);
         module.open();
         FakeCamera2.idleMainLooper();
     }
@@ -121,6 +132,51 @@ public class MaximumResolutionTest {
         assertNotNull("the focus point should reach the still", regions);
         assertTrue("the focus point should be centred on the unbinned array: " + regions[0],
                 regions[0].getRect().contains(4000, 3000));
+    }
+
+    /**
+     * One request reads all of its outputs in one pixel mode, and a DNG is written at the binned
+     * sensor's size, so a MAX still beside one stays binned.
+     */
+    @Test
+    public void aStillBesideADngStaysBinned() {
+        open(true /* capability */, CameraView.Quality.MAX, FakeCamera2.RawSupport.FULL,
+                CameraView.PictureFormat.RAW_JPEG);
+        assertEquals(CameraView.PictureFormat.RAW_JPEG, module.getPictureFormat());
+
+        ImageReader jpeg = ShadowInjectableImageReader.latestReader(ImageFormat.JPEG);
+        assertNotNull(jpeg);
+        assertEquals(FakeCamera2.SIZE_1080P, new Size(jpeg.getWidth(), jpeg.getHeight()));
+        assertNotNull("the DNG output is still there",
+                ShadowInjectableImageReader.latestReader(ImageFormat.RAW_SENSOR));
+
+        module.takePicture(new File(context.getCacheDir(), "beside-a-dng.jpg"));
+        FakeCamera2.idleMainLooper();
+        assertNull(lastCapture().get(CaptureRequest.SENSOR_PIXEL_MODE));
+    }
+
+    /** The camera's buffer holds binned frames, so an unbinned still is always a fresh one. */
+    @Test
+    public void anUnbinnedStillNeverComesFromTheBuffer() {
+        ShadowListingCameraCharacteristics.setAvailableCaptureRequestKeys(
+                CaptureRequest.CONTROL_ENABLE_ZSL);
+        open(true /* capability */, CameraView.Quality.MAX);
+        module.setFlash(CameraView.Flash.OFF);
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(new File(context.getCacheDir(), "unbinned.jpg"));
+        FakeCamera2.idleMainLooper();
+        CaptureRequest unbinned = lastCapture();
+        assertEquals(Integer.valueOf(CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION),
+                unbinned.get(CaptureRequest.SENSOR_PIXEL_MODE));
+        assertEquals(Boolean.FALSE, unbinned.get(CaptureRequest.CONTROL_ENABLE_ZSL));
+
+        module.setQuality(CameraView.Quality.HIGH);
+        FakeCamera2.idleMainLooper();
+        module.takePicture(new File(context.getCacheDir(), "binned.jpg"));
+        FakeCamera2.idleMainLooper();
+        assertEquals("a binned still may come from it", Boolean.TRUE,
+                lastCapture().get(CaptureRequest.CONTROL_ENABLE_ZSL));
     }
 
     @Test
