@@ -38,6 +38,7 @@ import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
@@ -569,6 +570,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mState = State.CLOSED;
     }
 
+    /**
+     * Moves this module's lifecycle, unless it is destroyed. A recording the host's end stopped
+     * still reports afterwards, and the registry throws rather than leave DESTROYED.
+     */
+    @MainThread
+    private void moveLifecycleTo(@NonNull Lifecycle.State state) {
+        if (mDestroyed) return;
+        mLifecycleRegistry.setCurrentState(state);
+    }
+
     private void onHostActivityStartedChanged(@NonNull Activity activity, boolean started) {
 
         if (activity != mHostActivity) return;
@@ -599,11 +610,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private void updateBackendLifecycle() {
         if (mDestroyed) return;
         if (!mOpenRequested) {
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+            moveLifecycleTo(Lifecycle.State.CREATED);
             return;
         }
         if (isHostActive()) {
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.STARTED);
+            moveLifecycleTo(Lifecycle.State.STARTED);
             if (mCameraProvider != null && mVideoRecording == null
                     && mBoundUseCases.isEmpty() && !mPaused) {
                 reconcileUseCases(true);
@@ -615,7 +626,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         unbindCurrentUseCases();
-        mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+        moveLifecycleTo(Lifecycle.State.CREATED);
         mState = State.SUSPENDED;
     }
 
@@ -654,7 +665,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             return;
         }
         releaseAllUseCases();
-        mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+        moveLifecycleTo(Lifecycle.State.CREATED);
         mState = State.CLOSED;
         publishSnapshot();
     }
@@ -1762,6 +1773,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         if (!(event instanceof VideoRecordEvent.Finalize)) return;
         VideoRecordEvent.Finalize finalized = (VideoRecordEvent.Finalize) event;
+        boolean success = isSuccessfulFinalize(finalized) && file.exists();
+        if (!success) {
+            Log.e(TAG, "CameraX recording failed: " + describeFinalize(finalized),
+                    finalized.getCause());
+        }
+        onRecordingFinalized(file, success);
+    }
+
+    /**
+     * Settles the camera once a recording has ended, and tells the caller how it went. It can
+     * arrive after the camera closed, and after the host is gone, since a close stops the
+     * recording rather than waiting for it.
+     */
+    @MainThread
+    @VisibleForTesting
+    void onRecordingFinalized(@NonNull File file, boolean success) {
         if (mVideoStarted) {
             mVideoStarted = false;
             onRecordingStopped();
@@ -1773,24 +1800,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mVideoCapture = null;
         mVideoFile = null;
         applyPendingLensFacing();
-        boolean success = isSuccessfulFinalize(finalized) && file.exists();
         if (mCriticalCameraFailure) {
             releaseAllUseCases();
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+            moveLifecycleTo(Lifecycle.State.CREATED);
             mState = State.ERROR;
         } else if (mOpenRequested && isHostActive()) {
             mState = State.OPEN;
             if (!mPaused) reconcileUseCases(false);
         } else {
             releaseAllUseCases();
-            mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+            moveLifecycleTo(Lifecycle.State.CREATED);
             mState = mOpenRequested ? State.SUSPENDED : State.CLOSED;
         }
         publishSnapshot();
         if (success) {
             showVideoConfirmation(file);
         } else {
-            Log.e(TAG, "CameraX recording failed: " + describeFinalize(finalized), finalized.getCause());
             onVideoFailed();
         }
     }
@@ -1834,7 +1859,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 if (!mPaused) reconcileUseCases(false);
             } else {
                 releaseAllUseCases();
-                mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+                moveLifecycleTo(Lifecycle.State.CREATED);
                 mState = mCriticalCameraFailure ? State.ERROR
                         : (mOpenRequested ? State.SUSPENDED : State.CLOSED);
             }
@@ -1882,7 +1907,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 if (!mPaused) reconcileUseCases(false);
             } else {
                 releaseAllUseCases();
-                mLifecycleRegistry.setCurrentState(Lifecycle.State.CREATED);
+                moveLifecycleTo(Lifecycle.State.CREATED);
                 mState = mCriticalCameraFailure ? State.ERROR
                         : (mOpenRequested ? State.SUSPENDED : State.CLOSED);
             }
