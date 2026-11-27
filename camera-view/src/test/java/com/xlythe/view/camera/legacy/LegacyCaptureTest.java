@@ -1,18 +1,27 @@
 package com.xlythe.view.camera.legacy;
 
+import static com.xlythe.view.camera.FakeLocation.LATITUDE;
+import static com.xlythe.view.camera.FakeLocation.LONGITUDE;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.content.Context;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
+import android.location.Location;
+import android.location.LocationManager;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.FakeLocation;
+import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
+import com.xlythe.view.camera.shadow.ShadowGeotaggingMediaRecorder;
 import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
 
 import org.junit.After;
@@ -26,6 +35,7 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowCamcorderProfile;
 import org.robolectric.shadows.ShadowCamera;
 import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.shadows.ShadowPausedAsyncTask;
 
 import java.io.File;
 import java.io.IOException;
@@ -42,8 +52,17 @@ import java.util.concurrent.atomic.AtomicReference;
  * and the frame handed back as the driver would.</p>
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = {29, 37}, shadows = {ShadowListingCamcorderProfile.class})
+@Config(sdk = {29, 37}, shadows = {
+        ShadowAvailableTextureView.class,
+        ShadowGeotaggingMediaRecorder.class,
+        ShadowListingCamcorderProfile.class})
 public class LegacyCaptureTest {
+    /** The smallest JPEG that EXIF can be written into, for the tests that read it back. */
+    private static final byte[] EMPTY_JPEG = {
+            (byte) 0xFF, (byte) 0xD8, // SOI
+            (byte) 0xFF, (byte) 0xD9, // EOI
+    };
+
     private Context context;
     private TestCameraView cameraView;
     private LegacyCameraModule module;
@@ -75,17 +94,93 @@ public class LegacyCaptureTest {
         addCamera(1, Camera.CameraInfo.CAMERA_FACING_FRONT, 270);
         addRecorderProfiles();
 
+        // So that a test opening the camera through the view drives this backend too.
+        CameraView.setDefaultBackend(CameraView.Backend.LEGACY);
         cameraView = new TestCameraView(context);
         cameraView.layout(0, 0, 1080, 1920);
         module = new LegacyCameraModule(cameraView);
+        ShadowGeotaggingMediaRecorder.forgetLocation();
     }
 
     @After
     public void tearDown() {
         module.close();
+        cameraView.close();
         idle();
         cameraView.release();
+        CameraView.setDefaultBackend(CameraView.Backend.AUTO);
         ShadowCamera.clearCameraInfo();
+    }
+
+    /**
+     * A picture is tagged with the fix the camera has followed since it opened, which is still
+     * there once the system has forgotten its own.
+     */
+    @Test
+    public void aPictureIsTaggedWithWhereTheDeviceIs() throws IOException {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+        cameraView.open();
+        idle();
+        FakeLocation.deliver(context,
+                FakeLocation.fix(LocationManager.GPS_PROVIDER, LATITUDE, LONGITUDE, 5));
+        FakeLocation.setLastKnown(context, LocationManager.GPS_PROVIDER, null);
+
+        File file = savePicture();
+
+        Location tagged = new Exif(file).getLocation();
+        assertNotNull("expected the picture to carry a location", tagged);
+        assertEquals(LATITUDE, tagged.getLatitude(), 1e-4);
+        assertEquals(LONGITUDE, tagged.getLongitude(), 1e-4);
+        assertEquals("the capture asks for nothing of its own",
+                2, FakeLocation.listeners(context));
+    }
+
+    /** A recording is tagged with the fix the camera has followed since it opened. */
+    @Test
+    public void aRecordingIsTaggedWithWhereTheDeviceIs() throws IOException {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+        cameraView.open();
+        idle();
+        FakeLocation.deliver(context,
+                FakeLocation.fix(LocationManager.GPS_PROVIDER, LATITUDE, LONGITUDE, 5));
+        FakeLocation.setLastKnown(context, LocationManager.GPS_PROVIDER, null);
+        File file = File.createTempFile("legacy", ".mp4");
+        file.deleteOnExit();
+
+        cameraView.startRecording(file);
+        idle();
+
+        float[] tagged = ShadowGeotaggingMediaRecorder.getLocation();
+        assertNotNull("expected the recording to carry a location", tagged);
+        assertEquals(LATITUDE, tagged[0], 1e-4);
+        assertEquals(LONGITUDE, tagged[1], 1e-4);
+        assertEquals("the recording asks for nothing of its own",
+                2, FakeLocation.listeners(context));
+        cameraView.stopRecording();
+        idle();
+    }
+
+    /** With no fix to be had, a picture and a recording go untagged rather than waiting. */
+    @Test
+    public void noCaptureWaitsForAFix() throws IOException {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+        module.open();
+        idle();
+        File video = File.createTempFile("legacy", ".mp4");
+        video.deleteOnExit();
+
+        File picture = savePicture();
+        module.startRecording(video);
+        idle();
+        module.stopRecording();
+        idle();
+
+        assertEquals("nothing may be asked of the radio", 0, FakeLocation.listeners(context));
+        assertNull(new Exif(picture).getLocation());
+        assertNull(ShadowGeotaggingMediaRecorder.getLocation());
     }
 
     /** A capture hands the frame to the listener, which writes it and reports success. */
@@ -233,6 +328,26 @@ public class LegacyCaptureTest {
         idle();
 
         assertTrue(module.hasFrontFacingCamera());
+    }
+
+    /**
+     * Hands the picture listener a frame and lets it save.
+     *
+     * <p>The shadow camera hands its listener an empty frame, which leaves nothing to write EXIF
+     * into, so this hands it a real one as the driver would.</p>
+     */
+    private File savePicture() throws IOException {
+        File file = File.createTempFile("legacy", ".jpg");
+        file.deleteOnExit();
+        ShadowPausedAsyncTask.overrideExecutor(Runnable::run);
+        Camera camera = Camera.open(1);
+        try {
+            new LegacyPictureListener(file, 0, false, module).onPictureTaken(EMPTY_JPEG, camera);
+            idle();
+        } finally {
+            camera.release();
+        }
+        return file;
     }
 
     /** Lets the capture's background write finish, since it is handed to an executor. */

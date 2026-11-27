@@ -21,6 +21,7 @@ object Permissions {
                 )
                 OPTIONAL_PERMISSIONS = arrayOf(
                     Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.VIBRATE,
                 )
             }
@@ -32,6 +33,7 @@ object Permissions {
                 )
                 OPTIONAL_PERMISSIONS = arrayOf(
                     Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.VIBRATE,
                     Manifest.permission.READ_MEDIA_IMAGES,
                     Manifest.permission.READ_MEDIA_VIDEO
@@ -46,6 +48,7 @@ object Permissions {
                 OPTIONAL_PERMISSIONS = arrayOf(
                     Manifest.permission.WRITE_EXTERNAL_STORAGE,
                     Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.VIBRATE
                 )
             }
@@ -58,6 +61,7 @@ object Permissions {
                 )
                 OPTIONAL_PERMISSIONS = arrayOf(
                     Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.VIBRATE
                 )
             }
