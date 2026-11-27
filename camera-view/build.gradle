@@ -1,3 +1,5 @@
+import groovy.xml.XmlSlurper
+
 plugins {
     id 'com.android.library'
     id 'maven-publish'
@@ -195,11 +197,23 @@ dependencies {
     // wants a newer androidx than we happened to build against should not have to override
     // us to get it. The floors are the versions whose APIs the code actually uses.
     api fileTree(include: ['*.jar'], dir: 'libs')
-    api 'androidx.legacy:legacy-support-v4:[1.0.0,)'
-    api 'androidx.exifinterface:exifinterface:[1.4.1,)'
     api 'androidx.concurrent:concurrent-futures:[1.3.0,)'
     api 'com.google.mlkit:barcode-scanning:[17.3.0,)'
-    if (!coreOnly) {
+    if (coreOnly) {
+        // The core build is the exception: these have a ceiling too, at releases that declare a
+        // minSdk the core build supports, because a dependency's floor becomes the app's. An app
+        // that wants a newer release still gets it by asking for one. verifyCoreMinSdk checks
+        // these and everything they pull in.
+        api 'androidx.legacy:legacy-support-v4:[1.0.0,1.1)'
+        // Named for CameraFragment's registerReceiver flags, rather than left to whichever
+        // version something else happens to bring.
+        api 'androidx.core:core:[1.9.0,1.10)'
+        api 'androidx.exifinterface:exifinterface:[1.3.6,1.4)'
+    } else {
+        api 'androidx.legacy:legacy-support-v4:[1.0.0,)'
+        // Below 1.5, whose releases need API 24 where this build declares 21, and whose
+        // pre-releases an open range would otherwise pick.
+        api 'androidx.exifinterface:exifinterface:[1.4.1,1.5)'
         // CameraX's futures and media3's lists are Guava types, so only this build needs it.
         api 'com.google.guava:guava:[31.1-android,)'
         // 1.7.0 rather than the older floor the rest keep: the slow-motion and frame-effect
@@ -233,6 +247,37 @@ dependencies {
         }
         implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8:2.3.21") {
             because("kotlin-stdlib-jdk8 is now a part of kotlin-stdlib")
+        }
+    }
+}
+
+// A dependency's minSdk becomes the app's, so one release raising its floor would quietly raise
+// the core build's along with it. This fails the build instead, naming the dependency. Jars
+// declare no minSdk, so only Android libraries are read.
+if (coreOnly) {
+    tasks.register('verifyCoreMinSdk') {
+        int coreMinSdk = android.defaultConfig.minSdk
+        def manifests = configurations.releaseRuntimeClasspath.incoming.artifactView {
+            attributes { attribute(Attribute.of('artifactType', String), 'android-manifest') }
+        }.artifacts
+        group = 'verification'
+        description = "Fails if a dependency of the core build needs more than API ${coreMinSdk}."
+        inputs.files(manifests.artifactFiles)
+        doLast {
+            List<String> tooNew = []
+            manifests.artifacts.each { artifact ->
+                def usesSdk = new XmlSlurper(false, false).parse(artifact.file).'uses-sdk'
+                String declared = usesSdk.@'android:minSdkVersion'.text()
+                int minSdk = declared ? declared.toInteger() : 1
+                logger.info("${artifact.id.componentIdentifier.displayName}: minSdk ${minSdk}")
+                if (minSdk > coreMinSdk) {
+                    tooNew << "${artifact.id.componentIdentifier.displayName} (minSdk ${minSdk})"
+                }
+            }
+            if (!tooNew.isEmpty()) {
+                throw new GradleException("The core build supports API ${coreMinSdk}, but these "
+                        + "dependencies need more: ${tooNew.join(', ')}")
+            }
         }
     }
 }
