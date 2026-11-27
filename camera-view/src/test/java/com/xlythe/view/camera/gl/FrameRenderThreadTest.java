@@ -252,7 +252,7 @@ public class FrameRenderThreadTest {
                 ShadowRecordingGles20.draws().size());
     }
 
-    /** A renderer swapped while running draws the next frame; clearing it brings the camera back. */
+    /** A renderer swapped while running draws the next frame; clearing it restores the camera. */
     @Test
     public void aRendererSwappedWhileRunningDrawsTheNextFrame() {
         RecordingRenderer first = new RecordingRenderer();
