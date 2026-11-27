@@ -94,6 +94,25 @@ public final class ExifCoverageDeviceTest {
             ExifInterface.TAG_GPS_PROCESSING_METHOD,
     };
 
+    /**
+     * How the picture was taken. Which of these a camera writes is its own choice, so each is
+     * logged, and checked for sense only where it is present.
+     */
+    private static final String[] CAPTURE_PARAMETERS = {
+            ExifInterface.TAG_EXPOSURE_TIME, ExifInterface.TAG_F_NUMBER,
+            ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, ExifInterface.TAG_FOCAL_LENGTH,
+            ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, ExifInterface.TAG_FLASH,
+            ExifInterface.TAG_WHITE_BALANCE, ExifInterface.TAG_METERING_MODE,
+            ExifInterface.TAG_EXPOSURE_BIAS_VALUE, ExifInterface.TAG_DIGITAL_ZOOM_RATIO,
+            ExifInterface.TAG_SUBJECT_DISTANCE, ExifInterface.TAG_LENS_SPECIFICATION,
+            ExifInterface.TAG_LENS_MAKE, ExifInterface.TAG_LENS_MODEL,
+            ExifInterface.TAG_EXPOSURE_PROGRAM, ExifInterface.TAG_SCENE_CAPTURE_TYPE,
+            ExifInterface.TAG_EXPOSURE_MODE, ExifInterface.TAG_APERTURE_VALUE,
+            ExifInterface.TAG_SHUTTER_SPEED_VALUE, ExifInterface.TAG_MAX_APERTURE_VALUE,
+            ExifInterface.TAG_SENSING_METHOD, ExifInterface.TAG_FILE_SOURCE,
+            ExifInterface.TAG_SCENE_TYPE, ExifInterface.TAG_IMAGE_UNIQUE_ID,
+    };
+
     @Parameterized.Parameters(name = "{0}")
     public static Collection<CameraView.Backend> backends() {
         return Arrays.asList(
@@ -219,6 +238,87 @@ public final class ExifCoverageDeviceTest {
                 exif.getAttribute(ExifInterface.TAG_GPS_TRACK));
         assertNotNull("the datum Android fixes are in belongs in GPSMapDatum",
                 exif.getAttribute(ExifInterface.TAG_GPS_MAP_DATUM));
+    }
+
+    /**
+     * What each backend's file says about how the picture was taken. Logged rather than
+     * asserted: these are the camera's own values, and a camera that writes nonsense is reported
+     * rather than failed, since the library leaves what a camera wrote alone.
+     */
+    @Test
+    public void aCaptureSaysHowItWasTaken() throws Exception {
+        ExifInterface exif = new ExifInterface(capture().getAbsolutePath());
+
+        List<String> carried = new ArrayList<>();
+        List<String> missing = new ArrayList<>();
+        for (String tag : CAPTURE_PARAMETERS) {
+            String value = exif.getAttribute(tag);
+            if (value != null) {
+                carried.add(tag + "=" + value);
+            } else {
+                missing.add(tag);
+            }
+        }
+        Log.i(TAG, backend + " capture parameters carried: " + carried);
+        Log.i(TAG, backend + " capture parameters missing: " + missing);
+        List<String> implausible = implausibleCaptureParameters(exif);
+        if (!implausible.isEmpty()) {
+            Log.w(TAG, backend + " capture parameters out of range: " + implausible);
+        }
+    }
+
+    /** The capture parameters whose values no camera could have meant. */
+    @NonNull
+    private static List<String> implausibleCaptureParameters(@NonNull ExifInterface exif) {
+        List<String> implausible = new ArrayList<>();
+        checkRange(exif, ExifInterface.TAG_EXPOSURE_TIME, Double.MIN_VALUE, 3600, implausible);
+        checkRange(exif, ExifInterface.TAG_F_NUMBER, Double.MIN_VALUE, 100, implausible);
+        checkRange(exif, ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY, 1, 65535, implausible);
+        checkRange(exif, ExifInterface.TAG_FOCAL_LENGTH, Double.MIN_VALUE, 1000, implausible);
+        // Zero is how the standard says "unknown" for these.
+        checkRange(exif, ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM, 0, 2000, implausible);
+        checkRange(exif, ExifInterface.TAG_DIGITAL_ZOOM_RATIO, 0, 1000, implausible);
+        checkRange(exif, ExifInterface.TAG_SUBJECT_DISTANCE, 0, Double.MAX_VALUE, implausible);
+        checkRange(exif, ExifInterface.TAG_EXPOSURE_BIAS_VALUE, -10, 10, implausible);
+        // Bits 0 to 6 are all the flash tag defines.
+        checkRange(exif, ExifInterface.TAG_FLASH, 0, 0x7F, implausible);
+        checkRange(exif, ExifInterface.TAG_WHITE_BALANCE, 0, 1, implausible);
+        checkRange(exif, ExifInterface.TAG_EXPOSURE_PROGRAM, 0, 8, implausible);
+        checkRange(exif, ExifInterface.TAG_EXPOSURE_MODE, 0, 2, implausible);
+        checkRange(exif, ExifInterface.TAG_SCENE_CAPTURE_TYPE, 0, 3, implausible);
+        int metering = exif.getAttributeInt(ExifInterface.TAG_METERING_MODE, 0);
+        if ((metering < 0 || metering > 6) && metering != 255) {
+            implausible.add(ExifInterface.TAG_METERING_MODE + "=" + metering);
+        }
+        String lens = exif.getAttribute(ExifInterface.TAG_LENS_SPECIFICATION);
+        if (lens != null) {
+            String[] parts = lens.split(",");
+            if (parts.length != 4 || rational(parts[0]) > rational(parts[1])) {
+                implausible.add(ExifInterface.TAG_LENS_SPECIFICATION + "=" + lens);
+            }
+        }
+        return implausible;
+    }
+
+    private static void checkRange(@NonNull ExifInterface exif, @NonNull String tag, double min,
+            double max, @NonNull List<String> implausible) {
+        if (exif.getAttribute(tag) == null) {
+            return;
+        }
+        double value = exif.getAttributeDouble(tag, Double.NaN);
+        if (!(value >= min && value <= max)) {
+            implausible.add(tag + "=" + exif.getAttribute(tag));
+        }
+    }
+
+    /** A rational as ExifInterface prints one, "1/3", as a number; 0/0 is unknown, so zero. */
+    private static double rational(@NonNull String value) {
+        String[] parts = value.split("/");
+        if (parts.length != 2) {
+            return Double.parseDouble(value);
+        }
+        double denominator = Double.parseDouble(parts[1]);
+        return denominator == 0 ? 0 : Double.parseDouble(parts[0]) / denominator;
     }
 
     private File capture() throws Exception {
