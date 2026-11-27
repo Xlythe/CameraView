@@ -5,13 +5,17 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.location.Location;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
 import android.util.Log;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
+import androidx.annotation.RestrictTo;
 
 import com.xlythe.view.camera.stream.VideoRecorder;
 
@@ -77,6 +81,19 @@ public abstract class ICameraModule {
 
     public int getHeight() {
         return mView.getHeight();
+    }
+
+    /**
+     * Where to tag a capture, or null when that is unknown or the app holds no location
+     * permission.
+     *
+     * <p>Never waits for a fix, so a capture can ask from whichever thread it finishes on.</p>
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @AnyThread
+    @Nullable
+    public final Location getLocation() {
+        return mView.getLocationTracker().getLocation();
     }
 
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {

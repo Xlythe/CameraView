@@ -1,6 +1,5 @@
 package com.xlythe.view.camera.v2;
 
-import android.Manifest;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.graphics.Rect;
@@ -20,8 +19,6 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
-import com.xlythe.view.camera.LocationProvider;
-import com.xlythe.view.camera.PermissionChecker;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -30,6 +27,7 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
@@ -39,9 +37,6 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 
 @TargetApi(21)
 abstract class SessionImpl implements Camera2Module.Session {
-    private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
-    private static final long GPS_TIMEOUT_MILLIS = 10;
-
     static final Size SIZE_4K = new Size(3840, 2160);
     static final Size SIZE_1080P = new Size(1920, 1080);
     static final Size SIZE_720P = new Size(1280, 720);
@@ -358,6 +353,13 @@ abstract class SessionImpl implements Camera2Module.Session {
             return mCameraView.getContext();
         }
 
+        /** Where to tag a capture. Never waits for a fix. */
+        @AnyThread
+        @Nullable
+        Location getLocation() {
+            return mCameraView.getLocation();
+        }
+
         CameraView.Quality getQuality() {
             return mCameraView.getQuality();
         }
@@ -596,17 +598,6 @@ abstract class SessionImpl implements Camera2Module.Session {
                 availableSizes.add(size);
             }
             return availableSizes;
-        }
-
-        @SuppressWarnings({"MissingPermission"})
-        @Nullable
-        static Location getLocation(Context context) {
-            if (PermissionChecker.hasPermissions(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
-                // Our GPS timeout is purposefully low. We're not intending to wait until GPS is acquired
-                // but we want a last known location for the next time a picture is taken.
-                return LocationProvider.getGPSLocation(context, STALE_LOCATION_MILLIS, GPS_TIMEOUT_MILLIS);
-            }
-            return null;
         }
 
         static <T> T[] concat(T[] first, T[] second) {
