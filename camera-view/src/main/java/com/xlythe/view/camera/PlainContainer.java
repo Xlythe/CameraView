@@ -11,7 +11,7 @@ final class PlainContainer extends MediaContainer {
     @MediaTags.Format
     private final int mFormat;
 
-    /** What it holds, or -1 to tell from the format. */
+    /** What it holds. */
     @MediaTags.Kind
     private final int mKind;
 
@@ -19,7 +19,7 @@ final class PlainContainer extends MediaContainer {
     private final Xmp mXmp = Xmp.empty();
 
     PlainContainer(@MediaTags.Format int format) {
-        this(format, -1);
+        this(format, kindOf(format));
     }
 
     PlainContainer(@MediaTags.Format int format, @MediaTags.Kind int kind) {
@@ -34,10 +34,13 @@ final class PlainContainer extends MediaContainer {
 
     @Override
     int kind() {
-        if (mKind >= 0) {
-            return mKind;
-        }
-        switch (mFormat) {
+        return mKind;
+    }
+
+    /** What a format holds, when nothing else in the file says. */
+    @MediaTags.Kind
+    private static int kindOf(@MediaTags.Format int format) {
+        switch (format) {
             case MediaTags.FORMAT_GIF:
                 return MediaTags.KIND_IMAGE;
             case MediaTags.FORMAT_MATROSKA:
