@@ -224,16 +224,27 @@ interface CameraController {
     ): Boolean
 
     /**
-     * Sweeps a panorama or a photosphere into [file], with the guide drawn over the preview.
+     * Sweeps a panorama or a photosphere, with the guide drawn over the preview, and files it
+     * where the gallery looks. Below API 29 that needs WRITE_EXTERNAL_STORAGE, and without it
+     * [onFailed] is called instead.
      *
      * The sweep finishes on its own once everything is covered, or with what it has when
-     * [stopPanorama] is called, and [onCaptured] or [onFailed] says what came of it. [onProgress]
+     * [stopPanorama] is called, and [onSaved] or [onFailed] says what came of it. [onProgress]
      * runs from 0 to 1 along the way. All three are called on the main thread.
      *
      * @return whether the sweep started. False on a device that cannot report its rotation.
      * @throws IllegalStateException if the camera is not open, a sweep is already running, or
      *     the camera's frames are already going to a barcode scanner, an analyzer or a recording
      */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    fun startPanorama(
+        mode: PanoramaMode = PanoramaMode.PANORAMA,
+        onProgress: (progress: Float) -> Unit = {},
+        onSaved: (uri: Uri) -> Unit = {},
+        onFailed: () -> Unit = {}
+    ): Boolean
+
+    /** [startPanorama], written to [file] and reported to [onCaptured] rather than filed. */
     @RequiresPermission(Manifest.permission.CAMERA)
     fun startPanorama(
         file: File,
@@ -414,6 +425,24 @@ private class CameraControllerImpl(
 
     @RequiresPermission(Manifest.permission.CAMERA)
     override fun startPanorama(
+        mode: PanoramaMode,
+        onProgress: (progress: Float) -> Unit,
+        onSaved: (uri: Uri) -> Unit,
+        onFailed: () -> Unit
+    ): Boolean {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for startPanorama")
+            return false
+        }
+        val started = view.startPanorama(mode.toCameraView(),
+            panoramaListener(onProgress, {}, onSaved, onFailed))
+        onCameraStateChanged()
+        return started
+    }
+
+    @RequiresPermission(Manifest.permission.CAMERA)
+    override fun startPanorama(
         file: File,
         mode: PanoramaMode,
         onProgress: (progress: Float) -> Unit,
@@ -426,23 +455,36 @@ private class CameraControllerImpl(
             return false
         }
         val started = view.startPanorama(file, mode.toCameraView(),
-            object : CameraView.PanoramaListener {
-                override fun onPanoramaProgress(progress: Float) {
-                    onProgress(progress)
-                }
-
-                override fun onPanoramaCaptured(file: File) {
-                    onCameraStateChanged()
-                    onCaptured(file)
-                }
-
-                override fun onPanoramaFailed() {
-                    onCameraStateChanged()
-                    onFailed()
-                }
-            })
+            panoramaListener(onProgress, onCaptured, {}, onFailed))
         onCameraStateChanged()
         return started
+    }
+
+    /** Passes a sweep's news on, republishing the state when it ends. */
+    private fun panoramaListener(
+        onProgress: (progress: Float) -> Unit,
+        onCaptured: (file: File) -> Unit,
+        onSaved: (uri: Uri) -> Unit,
+        onFailed: () -> Unit
+    ) = object : CameraView.PanoramaListener {
+        override fun onPanoramaProgress(progress: Float) {
+            onProgress(progress)
+        }
+
+        override fun onPanoramaCaptured(file: File) {
+            onCameraStateChanged()
+            onCaptured(file)
+        }
+
+        override fun onPanoramaSaved(uri: Uri) {
+            onCameraStateChanged()
+            onSaved(uri)
+        }
+
+        override fun onPanoramaFailed() {
+            onCameraStateChanged()
+            onFailed()
+        }
     }
 
     override fun stopPanorama() {

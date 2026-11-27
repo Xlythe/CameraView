@@ -5,7 +5,9 @@ import android.content.pm.ActivityInfo;
 import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.net.Uri;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
@@ -21,13 +23,14 @@ import com.google.android.material.button.MaterialButtonToggleGroup;
 import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.CameraView;
 
-import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 
 /**
- * Sweeps a panorama or a photosphere, and shows what was saved.
+ * Sweeps a panorama or a photosphere into the gallery, and shows what was saved.
  *
  * <p>CameraView draws the guide over its own preview, so this screen is only the controls: which
- * kind of sweep, a button to start and finish it, and the picture once it is written.</p>
+ * kind of sweep, a button to start and finish it, and the picture once it is filed.</p>
  */
 public class PanoramaFragment extends CameraFragment implements CameraView.PanoramaListener {
     /** The widest the saved picture is decoded for showing, which is plenty for a phone screen. */
@@ -108,11 +111,9 @@ public class PanoramaFragment extends CameraFragment implements CameraView.Panor
                 != PackageManager.PERMISSION_GRANTED) {
             return;
         }
-        File file = new File(requireContext().getCacheDir(),
-                "panorama_" + System.currentTimeMillis() + ".jpg");
         CameraView.PanoramaMode mode = mModes.getCheckedButtonId() == R.id.panorama_mode_sphere
                 ? CameraView.PanoramaMode.PHOTOSPHERE : CameraView.PanoramaMode.PANORAMA;
-        if (!mCameraView.startPanorama(file, mode, this)) {
+        if (!mCameraView.startPanorama(mode, this)) {
             mStatus.setText(R.string.panorama_unsupported);
             return;
         }
@@ -126,10 +127,10 @@ public class PanoramaFragment extends CameraFragment implements CameraView.Panor
     }
 
     @Override
-    public void onPanoramaCaptured(@NonNull File file) {
+    public void onPanoramaSaved(@NonNull Uri uri) {
         showSweeping(false);
         showHint();
-        showResult(file);
+        showResult(uri);
     }
 
     @Override
@@ -158,22 +159,33 @@ public class PanoramaFragment extends CameraFragment implements CameraView.Panor
         }
     }
 
-    private void showResult(@NonNull File file) {
+    private void showResult(@NonNull Uri uri) {
         BitmapFactory.Options bounds = new BitmapFactory.Options();
         bounds.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(file.getPath(), bounds);
+        decode(uri, bounds);
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inSampleSize = 1;
         while (bounds.outWidth / options.inSampleSize > PREVIEW_WIDTH) {
             options.inSampleSize *= 2;
         }
-        Bitmap bitmap = BitmapFactory.decodeFile(file.getPath(), options);
+        Bitmap bitmap = decode(uri, options);
         if (bitmap == null) {
             mStatus.setText(R.string.panorama_failed);
             return;
         }
         mResultImage.setImageBitmap(bitmap);
         mResultText.setText(getString(R.string.panorama_result, bounds.outWidth, bounds.outHeight));
+        mResultText.append("\n" + getString(R.string.panorama_saved));
         mResult.setVisibility(View.VISIBLE);
+    }
+
+    @Nullable
+    private Bitmap decode(@NonNull Uri uri, @NonNull BitmapFactory.Options options) {
+        try (InputStream input = requireContext().getContentResolver().openInputStream(uri)) {
+            return BitmapFactory.decodeStream(input, null, options);
+        } catch (IOException | SecurityException error) {
+            Log.w(MainActivity.TAG, "Could not read " + uri, error);
+            return null;
+        }
     }
 }

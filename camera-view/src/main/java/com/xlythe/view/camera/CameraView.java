@@ -1566,16 +1566,41 @@ public class CameraView extends FrameLayout {
         PHOTOSPHERE
     }
 
-    /** Told how a sweep is going and what came of it, on the main thread. */
+    /**
+     * Told how a sweep is going and what came of it, on the main thread. A sweep started with
+     * {@link #startPanorama(File, PanoramaMode, PanoramaListener)} arrives at
+     * {@link #onPanoramaCaptured(File)}, and one started with
+     * {@link #startPanorama(PanoramaMode, PanoramaListener)} at {@link #onPanoramaSaved(Uri)}.
+     */
     public interface PanoramaListener {
         /** How much of what the sweep covers is done, from 0 to 1. */
-        void onPanoramaProgress(@FloatRange(from = 0.0, to = 1.0) float progress);
+        default void onPanoramaProgress(@FloatRange(from = 0.0, to = 1.0) float progress) {}
 
-        /** The sweep was saved, as a JPEG carrying photo sphere metadata. */
-        void onPanoramaCaptured(@NonNull File file);
+        /** The sweep was written to its file, as a JPEG carrying photo sphere metadata. */
+        default void onPanoramaCaptured(@NonNull File file) {}
 
-        /** Nothing was saved: the sweep ended before a frame was taken, or could not be written. */
+        /** The sweep was filed in the gallery, as a JPEG carrying photo sphere metadata. */
+        default void onPanoramaSaved(@NonNull Uri uri) {}
+
+        /**
+         * Nothing was saved: the sweep ended before a frame was taken, or could not be written
+         * or filed.
+         */
         void onPanoramaFailed();
+    }
+
+    /**
+     * Sweeps a panorama or a photosphere, as {@link #startPanorama(File, PanoramaMode,
+     * PanoramaListener)} does, and files it where the gallery looks, under Pictures, reporting
+     * where it went to {@link PanoramaListener#onPanoramaSaved(Uri)}. Below API 29 that needs
+     * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}, and without it
+     * {@link PanoramaListener#onPanoramaFailed()} is called instead.
+     */
+    @UiThread
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public boolean startPanorama(@NonNull PanoramaMode mode, @NonNull PanoramaListener listener) {
+        return startPanorama(newCaptureFile(getContext(), false /* isVideo */), mode, listener,
+                true /* gallery */);
     }
 
     /**
@@ -1600,6 +1625,13 @@ public class CameraView extends FrameLayout {
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean startPanorama(@NonNull File file, @NonNull PanoramaMode mode,
             @NonNull PanoramaListener listener) {
+        return startPanorama(file, mode, listener, false /* gallery */);
+    }
+
+    @UiThread
+    @RequiresPermission(Manifest.permission.CAMERA)
+    private boolean startPanorama(@NonNull File file, @NonNull PanoramaMode mode,
+            @NonNull PanoramaListener listener, boolean gallery) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
             return false;
         }
@@ -1613,7 +1645,7 @@ public class CameraView extends FrameLayout {
                 || isRecording()) {
             throw new IllegalStateException("The camera's frames are already in use");
         }
-        PanoramaCallback callback = new PanoramaCallback(listener);
+        PanoramaCallback callback = new PanoramaCallback(listener, gallery);
         PanoramaSession session = new PanoramaSession(getContext(),
                 mode == PanoramaMode.PHOTOSPHERE, file, getPictureQuality(),
                 getHorizontalFieldOfView(), getVerticalFieldOfView(), callback, mHandler::post);
@@ -1704,12 +1736,16 @@ public class CameraView extends FrameLayout {
         /** The app's listener. */
         private final PanoramaListener mListener;
 
+        /** Whether the picture is filed in the gallery rather than left in the app's file. */
+        private final boolean mGallery;
+
         /** The sweep this reports for, set once it is built. */
         @Nullable
         PanoramaSession mSession;
 
-        PanoramaCallback(@NonNull PanoramaListener listener) {
+        PanoramaCallback(@NonNull PanoramaListener listener, boolean gallery) {
             mListener = listener;
+            mGallery = gallery;
         }
 
         @Override
@@ -1731,7 +1767,17 @@ public class CameraView extends FrameLayout {
             if (mSession != null) {
                 endPanorama(mSession);
             }
-            mListener.onPanoramaCaptured(file);
+            if (!mGallery) {
+                mListener.onPanoramaCaptured(file);
+                return;
+            }
+            MediaStoreSaver.save(getContext(), file, false /* isVideo */, uri -> {
+                if (uri != null) {
+                    mListener.onPanoramaSaved(uri);
+                } else {
+                    mListener.onPanoramaFailed();
+                }
+            });
         }
 
         @Override

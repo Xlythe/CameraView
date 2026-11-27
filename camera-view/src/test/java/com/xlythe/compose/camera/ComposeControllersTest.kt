@@ -3,6 +3,7 @@ package com.xlythe.compose.camera
 import android.content.Context
 import android.graphics.Matrix
 import android.graphics.Rect
+import android.net.Uri
 import androidx.compose.runtime.mutableStateOf
 import com.xlythe.view.camera.Barcode
 import com.xlythe.view.camera.CameraView
@@ -120,6 +121,13 @@ class ComposeControllersTest {
 
             override fun setFaceDetectionListener(
                 listener: ((faces: List<Face>, faceToView: Matrix) -> Unit)?
+            ): Boolean = false
+
+            override fun startPanorama(
+                mode: PanoramaMode,
+                onProgress: (progress: Float) -> Unit,
+                onSaved: (uri: Uri) -> Unit,
+                onFailed: () -> Unit
             ): Boolean = false
 
             override fun startPanorama(

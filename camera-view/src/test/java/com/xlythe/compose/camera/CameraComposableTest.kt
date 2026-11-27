@@ -502,7 +502,7 @@ class CameraComposableTest {
         assertFalse(requireNotNull(state.value).isCapturingPanorama)
 
         // Stopping with nothing swept saves nothing, and says so.
-        assertTrue(camera.startPanorama(file, onFailed = { failed = true }))
+        assertTrue(camera.startPanorama(onFailed = { failed = true }))
         camera.stopPanorama()
         val deadline = System.currentTimeMillis() + 10_000
         while (!failed && System.currentTimeMillis() < deadline) {

@@ -139,10 +139,11 @@ camera cannot report faces, in which case the listener is never called.
 ```kotlin
 cameraController.setFaceDetectionListener { faces, faceToView -> ... }
 ```
-Sweeps a panorama or a photosphere into a file, with the guide drawn over the preview, until
-everything is covered or stopPanorama is called. See Panoramas below.
+Sweeps a panorama or a photosphere, with the guide drawn over the preview, until everything is
+covered or stopPanorama is called, and files it in the gallery. Given a file, it is written there
+and reported to onCaptured instead. See Panoramas below.
 ```kotlin
-cameraController.startPanorama(file, PanoramaMode.PHOTOSPHERE, onCaptured = { file -> ... })
+cameraController.startPanorama(PanoramaMode.PHOTOSPHERE, onSaved = { uri -> ... })
 cameraController.stopPanorama()   // or cancelPanorama()
 ```
 
@@ -401,20 +402,22 @@ mCameraView.stopFrameAnalysis();
 
 Panoramas
 -----------------
-startPanorama sweeps a panorama or a photosphere into a file. CameraView draws the guide over its
-own preview - the target to aim at next, how much is covered, and which way to turn - so the
-person only has to turn on the spot. A panorama finishes once it has gone all the way round, and a
+startPanorama sweeps a panorama or a photosphere. CameraView draws the guide over its own
+preview - the target to aim at next, how much is covered, and which way to turn - so the person
+only has to turn on the spot. A panorama finishes once it has gone all the way round, and a
 photosphere once the whole sphere is covered, straight up and down included. stopPanorama saves
 what was covered so far, and cancelPanorama saves nothing.
 
-The file is a JPEG carrying photo sphere metadata, so galleries and panorama viewers show it as a
-panorama. startPanorama returns false on a device that cannot report which way it is pointing.
-Lock the screen's orientation while a sweep runs, or turning the phone will rotate it.
+The picture is a JPEG carrying photo sphere metadata, so galleries and panorama viewers show it as
+a panorama. Without a file it is filed in the gallery, under Pictures, and reported to
+onPanoramaSaved(Uri); given a file it is written there and reported to onPanoramaCaptured(File).
+startPanorama returns false on a device that cannot report which way it is pointing. Lock the
+screen's orientation while a sweep runs, or turning the phone will rotate it.
 ```java
-mCameraView.startPanorama(file, CameraView.PanoramaMode.PHOTOSPHERE,
+mCameraView.startPanorama(CameraView.PanoramaMode.PHOTOSPHERE,
     new CameraView.PanoramaListener() {
       @Override public void onPanoramaProgress(float progress) {}
-      @Override public void onPanoramaCaptured(File file) {}
+      @Override public void onPanoramaSaved(Uri uri) {}
       @Override public void onPanoramaFailed() {}
     });
 mCameraView.stopPanorama();

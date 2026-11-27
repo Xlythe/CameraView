@@ -14,6 +14,7 @@ import android.hardware.Sensor;
 import android.hardware.SensorManager;
 import android.media.FakeImage;
 import android.media.ImageReader;
+import android.net.Uri;
 import android.os.SystemClock;
 import android.view.View;
 
@@ -170,6 +171,26 @@ public class PanoramaCaptureTest {
     }
 
     @Test
+    public void aSweepWithoutAFile_isFiledInTheGallery() throws Exception {
+        addRotationSensor();
+        openCamera2();
+        assertTrue(cameraView.startPanorama(CameraView.PanoramaMode.PANORAMA, recorder));
+        ImageReader reader = awaitReader();
+        long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
+        while (!hasPainted() && System.currentTimeMillis() < deadline) {
+            holdStill();
+            ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv420(64, 48, 0, 2));
+            Thread.sleep(50);
+            idle();
+        }
+        assertTrue("no frame was painted", hasPainted());
+        cameraView.stopPanorama();
+        awaitResult();
+        assertNotNull("expected the sweep in the gallery", recorder.filed);
+        assertNull("a filed sweep is not also reported as a file", recorder.saved);
+    }
+
+    @Test
     public void closingTheCamera_savesTheSweep() throws Exception {
         addRotationSensor();
         openCamera2();
@@ -268,13 +289,14 @@ public class PanoramaCaptureTest {
 
     private void awaitResult() throws InterruptedException {
         long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
-        while (recorder.saved == null && !recorder.failed
+        while (recorder.saved == null && recorder.filed == null && !recorder.failed
                 && System.currentTimeMillis() < deadline) {
             idle();
             Thread.sleep(20);
         }
         idle();
-        assertTrue("the sweep never reported back", recorder.saved != null || recorder.failed);
+        assertTrue("the sweep never reported back",
+                recorder.saved != null || recorder.filed != null || recorder.failed);
     }
 
     private PanoramaGuideView guide() {
@@ -310,6 +332,7 @@ public class PanoramaCaptureTest {
     /** Remembers what the sweep said. */
     private static final class Recorder implements CameraView.PanoramaListener {
         @Nullable volatile File saved;
+        @Nullable volatile Uri filed;
         volatile boolean failed;
         volatile float progress;
 
@@ -321,6 +344,11 @@ public class PanoramaCaptureTest {
         @Override
         public void onPanoramaCaptured(@NonNull File file) {
             saved = file;
+        }
+
+        @Override
+        public void onPanoramaSaved(@NonNull Uri uri) {
+            filed = uri;
         }
 
         @Override

@@ -79,7 +79,6 @@ import com.xlythe.compose.camera.Video
 import com.xlythe.compose.camera.VideoController
 import com.xlythe.sample.camera.ui.theme.CameraViewTheme
 import kotlinx.coroutines.launch
-import java.io.File
 
 enum class DemoScreen(val title: String) {
     SIMPLE("Simple Demo"),
@@ -413,7 +412,6 @@ fun ResizingDemoScreen() {
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
 fun PanoramaDemoScreen() {
-    val context = LocalContext.current
     val cameraController = remember { mutableStateOf<CameraController?>(null) }
     val cameraState = remember { mutableStateOf<CameraState?>(null) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
@@ -475,12 +473,10 @@ fun PanoramaDemoScreen() {
                             controller.stopPanorama()
                             return@Button
                         }
-                        val file = File(context.cacheDir, "panorama_${System.currentTimeMillis()}.jpg")
                         val started = controller.startPanorama(
-                            file,
                             mode,
                             onProgress = { status = "${Math.round(it * 100)}% covered" },
-                            onCaptured = { saved -> status = "Saved ${saved.name}" },
+                            onSaved = { uri -> status = "Saved to $uri" },
                             onFailed = { status = "Nothing was captured" })
                         if (!started) {
                             status = "This device cannot report which way it is pointing"
