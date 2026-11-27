@@ -2,7 +2,6 @@ package com.xlythe.view.camera;
 
 import android.graphics.Rect;
 import android.hardware.Camera;
-import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
@@ -190,7 +189,9 @@ public final class ExifCaptureParameters {
                 }
             }
             return forCamera(characteristics, physicalCameras);
-        } catch (CameraAccessException | RuntimeException error) {
+        } catch (Exception error) {
+            // Exception rather than CameraAccessException: the legacy camera's releases load this
+            // class too, and before API 19 a catch of an exception type they lack fails to load it.
             Log.w(TAG, "Unable to read the camera's optics for its Exif", error);
             return new ExifCaptureParameters();
         }
