@@ -10,7 +10,6 @@ import android.view.Surface;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 
-import com.google.common.primitives.Ints;
 import com.xlythe.view.camera.CameraView;
 
 import java.io.IOException;
@@ -261,7 +260,7 @@ public class VideoPlayer {
   private int readInt() throws IOException {
     byte[] buffer = new byte[4];
     readFully(buffer);
-    return Ints.fromByteArray(buffer);
+    return ByteBuffer.wrap(buffer).getInt();
   }
 
   private void readFully(byte[] buffer) throws IOException {
