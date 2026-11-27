@@ -2,6 +2,7 @@ package com.xlythe.sample.camera;
 
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
+import android.net.Uri;
 import android.opengl.GLES20;
 import android.os.Bundle;
 import android.util.Log;
@@ -18,7 +19,6 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.gl.GlFrame;
 
-import java.io.File;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -62,15 +62,13 @@ public class EffectFragment extends CameraFragment {
     }
 
     @Override
-    public void onImageCaptured(final File file) {
-        CaptureSaver.save(requireContext(), file, false /* isVideo */, uri ->
-                report(uri == null ? "Could not save the picture" : "Picture saved to " + uri));
+    public void onImageSaved(@NonNull Uri uri) {
+        report("Picture saved to " + uri);
     }
 
     @Override
-    public void onVideoCaptured(final File file) {
-        CaptureSaver.save(requireContext(), file, true /* isVideo */, uri ->
-                report(uri == null ? "Could not save the video" : "Video saved to " + uri));
+    public void onVideoSaved(@NonNull Uri uri) {
+        report("Video saved to " + uri);
     }
 
     @Override
