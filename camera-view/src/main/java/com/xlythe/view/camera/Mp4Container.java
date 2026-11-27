@@ -808,6 +808,11 @@ final class Mp4Container extends MediaContainer {
                         (int) child.end()));
             } else if ("vpcC".equals(child.type) && child.dataSize() >= 9) {
                 stream = transferOf(Bytes.u8(mMoov, at + 8));
+            } else if ("avcC".equals(child.type)) {
+                stream = transferOf(AvcParameters.transferCharacteristics(mMoov, at,
+                        (int) child.end()));
+            } else if ("esds".equals(child.type)) {
+                stream = transferOf(AvcParameters.esdsTransfer(mMoov, at, (int) child.end()));
             }
         }
         if (dolby != MediaTags.TRANSFER_UNKNOWN) {
@@ -830,14 +835,15 @@ final class Mp4Container extends MediaContainer {
                 return MediaTags.TRANSFER_PQ;
             case 18:
                 return MediaTags.TRANSFER_HLG;
-            case 1:
-            case 6:
-            case 13:
-            case 14:
-            case 15:
-                return MediaTags.TRANSFER_SDR;
-            default:
+            case 0:
+            case 2:
+            case 3:
+                // Reserved, and unspecified.
                 return MediaTags.TRANSFER_UNKNOWN;
+            default:
+                // Every other curve H.273 defines is a standard dynamic range one.
+                return code > 0 && code <= 17 ? MediaTags.TRANSFER_SDR
+                        : MediaTags.TRANSFER_UNKNOWN;
         }
     }
 
