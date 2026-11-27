@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.legacy;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
@@ -23,6 +24,7 @@ import org.robolectric.shadows.ShadowCamera;
 import org.robolectric.util.ReflectionHelpers;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
@@ -187,27 +189,64 @@ public class LegacyCameraModuleTest {
         assertEquals(100, module.getMaxZoomLevel());
     }
 
+    /** This API takes an index into a table of ratios, so a ratio picks the nearest entry. */
     @Test
-    public void zoomLevelsMapOntoTheCamerasOwnZoomTable() {
-        // A camera offering 30 steps: the ends line up and the middle lands mid-table.
-        assertEquals(0, LegacyCameraModule.toZoomIndex(0, 30));
-        assertEquals(30, LegacyCameraModule.toZoomIndex(100, 30));
-        assertEquals(15, LegacyCameraModule.toZoomIndex(50, 30));
+    public void aRatioPicksTheNearestEntryOfTheZoomTable() {
+        List<Integer> table = Arrays.asList(100, 150, 200, 300, 400);
 
-        // Out-of-range positions clamp instead of reaching the camera.
-        assertEquals(0, LegacyCameraModule.toZoomIndex(-50, 30));
-        assertEquals(30, LegacyCameraModule.toZoomIndex(Integer.MAX_VALUE, 30));
+        assertEquals(0, LegacyCameraModule.nearestZoomIndex(table, 1f));
+        assertEquals(2, LegacyCameraModule.nearestZoomIndex(table, 2f));
+        assertEquals("2.4x is nearer 2x than 3x",
+                2, LegacyCameraModule.nearestZoomIndex(table, 2.4f));
+        assertEquals(3, LegacyCameraModule.nearestZoomIndex(table, 2.6f));
 
-        // A camera that cannot zoom has no table to index into.
-        assertEquals(0, LegacyCameraModule.toZoomIndex(100, 0));
+        // Beyond either end is that end.
+        assertEquals(0, LegacyCameraModule.nearestZoomIndex(table, 0.5f));
+        assertEquals(4, LegacyCameraModule.nearestZoomIndex(table, 10f));
     }
 
+    /** A ratio set on an open camera lands on the table and reads back as the entry it chose. */
     @Test
-    public void zoomIndexesMapBackOntoTheLevel() {
-        assertEquals(0, LegacyCameraModule.toZoomLevel(0, 30));
-        assertEquals(100, LegacyCameraModule.toZoomLevel(30, 30));
-        assertEquals(50, LegacyCameraModule.toZoomLevel(15, 30));
-        assertEquals(0, LegacyCameraModule.toZoomLevel(5, 0));
+    public void aRatioRoundTripsThroughTheZoomTable() throws Exception {
+        module.open();
+        giveTheCameraAZoomTable();
+        assertTrue(module.isZoomSupported());
+        assertEquals(1f, module.getMinZoomRatio(), 0f);
+        assertEquals(4f, module.getMaxZoomRatio(), 0f);
+
+        module.setZoomRatio(2f);
+        assertEquals(2f, module.getZoomRatio(), 0f);
+        assertEquals("the camera is on the 2x entry", 2, openCamera().getParameters().getZoom());
+
+        module.setZoomRatio(2.9f);
+        assertEquals("the nearest entry", 3f, module.getZoomRatio(), 0f);
+
+        module.setZoomLevel(module.getMaxZoomLevel());
+        assertEquals(4f, module.getZoomRatio(), 0f);
+        assertEquals(module.getMaxZoomLevel(), module.getZoomLevel());
+    }
+
+    /** 1x, 2x and the far end of the table, since this API says nothing about lenses. */
+    @Test
+    public void presetsAreOneTwoAndTheMaximum() throws Exception {
+        assertArrayEquals("a closed camera has nothing but 1x",
+                new float[] {1f}, module.getZoomPresets(), 0f);
+
+        module.open();
+        giveTheCameraAZoomTable();
+
+        assertArrayEquals(new float[] {1f, 2f, 4f}, module.getZoomPresets(), 0f);
+    }
+
+    /** A zoom asked for while closed waits for open, and a camera that cannot zoom drops it. */
+    @Test
+    public void aZoomSetWhileClosedWaitsForTheCamera() {
+        module.setZoomRatio(3f);
+        assertEquals("held until there is a camera to give it to", 3f, module.getZoomRatio(), 0f);
+
+        module.open();
+
+        assertEquals("the shadowed camera cannot zoom at all", 1f, module.getZoomRatio(), 0f);
     }
 
     /** Querying zoom before opening must answer rather than throw. */
@@ -276,5 +315,26 @@ public class LegacyCameraModuleTest {
         module.open();
         module.close();
         module.close();
+    }
+
+    /**
+     * Gives the open camera a zoom table of 1x, 1.5x, 2x, 3x and 4x.
+     *
+     * <p>The shadowed camera starts with none, so it reports that it cannot zoom. Its parameters
+     * are held by the camera and handed out as the same object every time, which is what lets them
+     * be changed here.</p>
+     */
+    private void giveTheCameraAZoomTable() throws Exception {
+        Camera.Parameters parameters = openCamera().getParameters();
+        parameters.set("zoom-supported", "true");
+        parameters.set("max-zoom", 4);
+        parameters.set("zoom-ratios", "100,150,200,300,400");
+        parameters.set("zoom", 0);
+    }
+
+    private Camera openCamera() throws Exception {
+        java.lang.reflect.Field field = LegacyCameraModule.class.getDeclaredField("mCamera");
+        field.setAccessible(true);
+        return (Camera) field.get(module);
     }
 }

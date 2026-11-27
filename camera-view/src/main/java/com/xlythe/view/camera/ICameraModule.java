@@ -6,12 +6,15 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.location.Location;
+import android.media.MediaActionSound;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -20,6 +23,9 @@ import androidx.annotation.RestrictTo;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -29,6 +35,9 @@ public abstract class ICameraModule {
     public static final boolean DEBUG = CameraView.DEBUG;
     /** Maximum wait for a backend to detach a custom encoder surface on the main thread. */
     private static final long SURFACE_DETACH_TIMEOUT_SECONDS = 2;
+
+    /** The location role that says a video was recorded there, rather than that it shows it. */
+    private static final String LOCATION_ROLE_SHOOTING = "0";
 
     /** Owning CameraView used for view state and callbacks. */
     private final CameraView mView;
@@ -55,6 +64,10 @@ public abstract class ICameraModule {
     private boolean mTorchEnabled;
     /** Whether CameraX low-light boost is requested. */
     private boolean mLowLightBoostEnabled;
+    /** Whether the camera's sounds are wanted. Set from any thread, read on the camera's. */
+    private volatile boolean mShutterSoundEnabled = true;
+    /** The click and recording tones, for a backend the platform plays none for. */
+    private final CameraSounds mSounds = new CameraSounds();
     /** Listener receiving still-image terminal callbacks. */
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;
     /** Listener receiving video terminal callbacks. */
@@ -193,8 +206,88 @@ public abstract class ICameraModule {
         mView.showImageConfirmation(file);
     }
 
+    /**
+     * Shows a photo that wrote more than one file, as RAW_JPEG writes a JPEG and a DNG.
+     *
+     * @param file the file the photo is reported as
+     * @param files every file the photo wrote, in the order they are filed in the gallery
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public void showImageConfirmation(@NonNull File file, @NonNull List<File> files) {
+        mView.showImageConfirmation(file, files);
+    }
+
     public void onImageFailed() {
         mView.onImageFailed();
+    }
+
+    /** Called as a picture is exposed: the click plays, and the listener hears of it. */
+    public void onShutter() {
+        if (playsOwnClick()) {
+            mSounds.play(getContext(), MediaActionSound.SHUTTER_CLICK, mShutterSoundEnabled);
+        }
+        mView.onShutter();
+    }
+
+    /**
+     * Called just before the recorder starts. The tone plays first so that as little of it as
+     * possible ends up in the recording.
+     */
+    public void onRecordingStarting() {
+        if (!playsSystemSounds()) {
+            mSounds.play(getContext(), MediaActionSound.START_VIDEO_RECORDING,
+                    mShutterSoundEnabled);
+        }
+    }
+
+    /** Called once the recorder has stopped, so the tone is not in the recording. */
+    public void onRecordingStopped() {
+        if (!playsSystemSounds()) {
+            mSounds.play(getContext(), MediaActionSound.STOP_VIDEO_RECORDING,
+                    mShutterSoundEnabled);
+        }
+    }
+
+    /** Whether the platform plays this backend's camera sounds, as it does for the old API. */
+    protected boolean playsSystemSounds() {
+        return false;
+    }
+
+    /**
+     * Whether the library plays the shutter click. A backend whose platform plays its own may
+     * still hand the click over, to play the app's sound in its place.
+     */
+    protected boolean playsOwnClick() {
+        return !playsSystemSounds();
+    }
+
+    /** Sets a sound of the app's own for the shutter, or 0 for the platform's click. */
+    public void setShutterSound(@RawRes int soundRes) {
+        mSounds.setShutterSound(soundRes);
+    }
+
+    @RawRes
+    public int getShutterSound() {
+        return mSounds.getShutterSound();
+    }
+
+    public void setShutterSoundEnabled(boolean enabled) {
+        mShutterSoundEnabled = enabled;
+    }
+
+    public boolean isShutterSoundEnabled() {
+        return mShutterSoundEnabled;
+    }
+
+    /** Loads the sounds as the camera opens, so the first picture's click is not late. */
+    void loadSounds() {
+        if (playsOwnClick() && (mShutterSoundEnabled || CameraSounds.isRequired())) {
+            mSounds.load(getContext());
+        }
+    }
+
+    void releaseSounds() {
+        mSounds.release();
     }
 
     /**
@@ -218,7 +311,47 @@ public abstract class ICameraModule {
      * Informs the CameraView to pause and show the taken video
      */
     public void showVideoConfirmation(File file) {
+        attachVideoMetadata(file);
         mView.showVideoConfirmation(file);
+    }
+
+    /**
+     * Writes which device recorded the video, when, and where if the app may know, which
+     * MediaRecorder leaves out, as both user data and keyed metadata. Done before the caller is
+     * told, so it is handed a finished file.
+     */
+    private void attachVideoMetadata(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        VideoMetadata.Builder metadata = new VideoMetadata.Builder()
+                .set(VideoMetadata.Tag.MAKE, Build.MANUFACTURER)
+                .set(VideoMetadata.Tag.MODEL, Build.MODEL)
+                .set(VideoMetadata.Tag.SOFTWARE, Exif.softwareName(getContext()))
+                .set(VideoMetadata.Tag.CREATION_DATE, isoDate(now))
+                .set(VideoMetadata.Tag.YEAR, year(now));
+        Location location = getLocation();
+        if (location != null) {
+            metadata.setLocation(location.getLatitude(), location.getLongitude())
+                    .set(VideoMetadata.Tag.LOCATION_ROLE, LOCATION_ROLE_SHOOTING);
+            if (location.getTime() > 0) {
+                metadata.set(VideoMetadata.Tag.LOCATION_DATE, isoDate(location.getTime()));
+            }
+        }
+        VideoMetadata.write(file, metadata);
+    }
+
+    /** ISO 8601, which is what a reader expects to find in the creation-date box. */
+    private static String isoDate(long timestamp) {
+        SimpleDateFormat format =
+                new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US);
+        return format.format(new Date(timestamp));
+    }
+
+    /** The year, in the timezone the recording was made in. */
+    private static String year(long timestamp) {
+        return new SimpleDateFormat("yyyy", Locale.US).format(new Date(timestamp));
     }
 
     public void onVideoFailed() {
@@ -239,13 +372,54 @@ public abstract class ICameraModule {
 
     public abstract void focus(Rect focus, Rect metering);
 
-    public abstract void setZoomLevel(int zoomLevel);
+    /**
+     * Zooms to a ratio in the camera's own terms, where 1 is the main lens, held to
+     * {@link #getMinZoomRatio} and {@link #getMaxZoomRatio}. A backend calls
+     * {@link #onZoomChanged} whenever the ratio it answers {@link #getZoomRatio} with changes.
+     */
+    public abstract void setZoomRatio(float zoomRatio);
 
-    public abstract int getZoomLevel();
+    public abstract float getZoomRatio();
 
-    public abstract int getMaxZoomLevel();
+    /** Below 1 on a camera that can switch to an ultra-wide lens, and otherwise 1. */
+    public abstract float getMinZoomRatio();
 
-    public abstract boolean isZoomSupported();
+    /** 1 on a camera that cannot zoom. */
+    public abstract float getMaxZoomRatio();
+
+    /**
+     * The exact ratios worth a button, in increasing order. See {@link ZoomMath#presets}.
+     * CameraView labels them.
+     */
+    @NonNull
+    public abstract float[] getZoomPresets();
+
+    /**
+     * Zooms to a position in the camera's range, from 0 to {@link #getMaxZoomLevel}.
+     *
+     * <p>Worked out from the ratio here rather than by each backend, so that a level is the same
+     * zoom on all of them.</p>
+     */
+    public final void setZoomLevel(int zoomLevel) {
+        setZoomRatio(ZoomMath.ratioForLevel(zoomLevel, getMinZoomRatio(), getMaxZoomRatio()));
+    }
+
+    public final int getZoomLevel() {
+        return ZoomMath.levelForRatio(getZoomRatio(), getMinZoomRatio(), getMaxZoomRatio());
+    }
+
+    public final int getMaxZoomLevel() {
+        return ZoomMath.MAX_ZOOM_LEVEL;
+    }
+
+    public final boolean isZoomSupported() {
+        return getMaxZoomRatio() > getMinZoomRatio();
+    }
+
+    /** Tells the view the zoom is now at this ratio. */
+    protected final void onZoomChanged(float zoomRatio) {
+        onMainThread(() -> getView().onZoomChanged(zoomRatio));
+    }
 
     protected abstract int getRelativeCameraOrientation();
 

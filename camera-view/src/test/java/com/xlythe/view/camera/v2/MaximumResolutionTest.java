@@ -201,7 +201,7 @@ public class MaximumResolutionTest {
     }
 
     private static CaptureRequest lastCapture() {
-        List<CaptureRequest> requests = ShadowCallbackCameraCaptureSession.getCaptureRequests();
+        List<CaptureRequest> requests = ShadowCallbackCameraCaptureSession.getCaptures();
         assertFalse("no still was requested", requests.isEmpty());
         return requests.get(requests.size() - 1);
     }

@@ -10,7 +10,9 @@ import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
 import android.location.LocationManager;
+import android.media.MediaActionSound;
 
+import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
@@ -24,6 +26,7 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowMediaActionSound;
 
 import java.io.File;
 import java.util.concurrent.atomic.AtomicReference;
@@ -51,6 +54,9 @@ public class VideoRecordingTest {
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
         module = new Camera2Module(cameraView);
         output = new File(context.getCacheDir(), "recording-test.mp4");
+        CameraSoundsTest.resetSounds();
+        // Robolectric runs no resetter for a shadow a test declares itself.
+        ShadowCallbackCameraCaptureSession.reset();
         ShadowGeotaggingMediaRecorder.forgetLocation();
     }
 
@@ -105,10 +111,13 @@ public class VideoRecordingTest {
 
     @Test
     public void captureCallbacksReachTheSessionDuringRecording() {
+        // With the flash off the preview registers no callback, so only a recording asks to be
+        // told about frames.
+        module.setFlash(CameraView.Flash.OFF);
         module.open();
         FakeCamera2.idleMainLooper();
+        assertEquals(0, ShadowCallbackCameraCaptureSession.getCompletedCaptureCount());
 
-        // The preview registers no callback, so only a recording asks to be told about frames.
         module.startRecording(output);
         FakeCamera2.idleMainLooper();
 
@@ -140,6 +149,42 @@ public class VideoRecordingTest {
 
         assertFalse(module.isRecording());
         assertTrue("expected a PictureSession again", activeSession() instanceof PictureSession);
+    }
+
+    /** A tone as the recorder starts and another once it has stopped, so neither is recorded. */
+    @Test
+    public void aRecordingIsBracketedByItsTones() {
+        module.open();
+        FakeCamera2.idleMainLooper();
+        module.startRecording(output);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(1,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.START_VIDEO_RECORDING));
+        assertEquals(0,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.STOP_VIDEO_RECORDING));
+
+        module.stopRecording();
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(1,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.STOP_VIDEO_RECORDING));
+    }
+
+    @Test
+    public void silencedRecordingsHaveNoTones() {
+        module.setShutterSoundEnabled(false);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        module.startRecording(output);
+        FakeCamera2.idleMainLooper();
+        module.stopRecording();
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(0,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.START_VIDEO_RECORDING));
+        assertEquals(0,
+                ShadowMediaActionSound.getPlayCount(MediaActionSound.STOP_VIDEO_RECORDING));
     }
 
     @Test

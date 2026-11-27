@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.x;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -143,22 +144,30 @@ public class CameraXHarnessTest {
      * value kept, rather than throwing or being silently accepted and then ignored.</p>
      */
     private static void exerciseControls(CameraXModule module) {
-        // The level only advances once the camera confirms the zoom, so on a camera whose
-        // control cannot apply it the request is declined and the previous level stands. Either
-        // way it has to stay inside the published range rather than echoing what was asked.
+        // The fake camera crops to 4x at most, and has no lens but its own to stop at.
+        assertEquals(1f, module.getMinZoomRatio(), 0f);
+        assertEquals(4f, module.getMaxZoomRatio(), 0f);
+        assertArrayEquals(new float[] {1f}, module.getZoomPresets(), 0f);
+
+        // A ratio is reported as soon as it is asked for, held to the range, as it is on the
+        // other backends.
+        module.setZoomRatio(2f);
+        FakeCameraXHost.idle();
+        assertEquals(2f, module.getZoomRatio(), 0f);
+
+        module.setZoomRatio(40f);
+        FakeCameraXHost.idle();
+        assertEquals("held to the top of the range", 4f, module.getZoomRatio(), 0f);
+
+        // And a level is a position on a log scale across that range.
         module.setZoomLevel(50);
         FakeCameraXHost.idle();
-        assertTrue("zoom stays in range", module.getZoomLevel() >= 0
-                && module.getZoomLevel() <= module.getMaxZoomLevel());
-
-        module.setZoomLevel(Integer.MAX_VALUE);
-        FakeCameraXHost.idle();
-        assertTrue("an out-of-range request never escapes the range",
-                module.getZoomLevel() >= 0 && module.getZoomLevel() <= module.getMaxZoomLevel());
+        assertEquals(2f, module.getZoomRatio(), 0.0001f);
+        assertEquals(50, module.getZoomLevel());
 
         module.setZoomLevel(-100);
         FakeCameraXHost.idle();
-        assertTrue("a negative request never goes below zero", module.getZoomLevel() >= 0);
+        assertEquals(1f, module.getZoomRatio(), 0f);
 
         for (CameraView.Flash flash : CameraView.Flash.values()) {
             module.setFlash(flash);
@@ -191,11 +200,15 @@ public class CameraXHarnessTest {
         FakeCameraXHost.idle();
         assertEquals(CameraView.DynamicRange.SDR, module.getDynamicRange());
 
-        // And so is Ultra HDR, leaving pictures as JPEG.
-        assertFalse(module.isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR));
-        module.setPictureFormat(CameraView.PictureFormat.ULTRA_HDR);
-        FakeCameraXHost.idle();
-        assertEquals(CameraView.PictureFormat.JPEG, module.getPictureFormat());
+        // And so are Ultra HDR and RAW, leaving pictures as JPEG.
+        for (CameraView.PictureFormat format : new CameraView.PictureFormat[] {
+                CameraView.PictureFormat.ULTRA_HDR, CameraView.PictureFormat.RAW,
+                CameraView.PictureFormat.RAW_JPEG}) {
+            assertFalse(format.name(), module.isPictureFormatSupported(format));
+            module.setPictureFormat(format);
+            FakeCameraXHost.idle();
+            assertEquals(CameraView.PictureFormat.JPEG, module.getPictureFormat());
+        }
 
         // CameraX flips a front recording itself, so the file matches the preview.
         assertTrue(module.isFrontVideoMirrored());
@@ -268,9 +281,7 @@ public class CameraXHarnessTest {
     private static void exerciseQueries(CameraXModule module) {
         assertTrue("a bound camera is a ready camera", module.isCameraReady());
 
-        // The fake camera publishes a zoom range, so this is supported even though applying it
-        // is declined by a control that cannot execute.
-        module.isZoomSupported();
+        assertTrue("the fake camera publishes a zoom range", module.isZoomSupported());
 
         // An exposure range this camera does not publish, so the bounds collapse rather than
         // coming back as something a caller could act on.

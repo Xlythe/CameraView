@@ -11,8 +11,9 @@ import java.io.PipedOutputStream;
  * <p>There are two ways to write to it, and they have different guarantees.</p>
  *
  * <p>{@link #writeFrame(byte[], boolean)} is the one to use for anything whose records depend on
- * each other, such as encoded video. It discards a record as a unit and never discards one that
- * later records are decoded against.</p>
+ * each other, such as encoded video. It discards a record as a unit, holds on to the ones others
+ * are decoded against for longest, and once it has discarded one, discards the records predicted
+ * from it as well.</p>
  *
  * <p>The inherited {@link #write} methods drop at the granularity of a single call, and the
  * caller is responsible for the consequences: a record split across several calls can be dropped
@@ -36,12 +37,26 @@ public class LossyPipedOutputStream extends PipedOutputStream {
    */
   private static final int HARD_CEILING_MULTIPLIER = 4;
 
+  /** The backlog past which droppable frames, and byte writes after a flush, are discarded. */
   private volatile int maxBufferedBytes;
+
+  /** The backlog past which even frames others depend on are discarded. */
   private volatile int hardCeilingBytes;
 
+  /** The reader's end, whose unread bytes are the backlog every decision is made on. */
   private PipedInputStream snk;
+
+  /** Whether the last byte write was followed by a flush, so the next one starts a new record. */
   private boolean canDropNextPacket = false;
+
+  /** Whether the producer should make a key frame, because the reader is missing the last one. */
   private boolean resyncRequested = false;
+
+  /**
+   * Whether a frame has been discarded since the last frame others depend on was written. While it
+   * is set, every droppable frame would be predicted from something the reader never got.
+   */
+  private boolean chainBroken = false;
 
   public LossyPipedOutputStream() {
     this(DEFAULT_MAX_BUFFERED_BYTES);
@@ -76,28 +91,41 @@ public class LossyPipedOutputStream extends PipedOutputStream {
    * <p>A frame is only ever written in full, so the reader never sees a partial record.</p>
    *
    * @param frame the complete frame, including whatever length prefix the format uses
-   * @param droppable whether later frames can still be decoded without this one. Pass false for a
-   *     key frame, for a codec-configuration frame, and for a stream header: those are written
-   *     even when the reader is behind, because discarding one corrupts every frame that follows
-   *     until the next key frame rather than costing a single frame.
+   * @param droppable whether the stream survives losing this frame. Pass true for a delta frame,
+   *     which costs at most the rest of its group of pictures, and false for a key frame, a
+   *     codec-configuration frame and a stream header: those are written even when the reader is
+   *     behind, because nothing after them decodes without them.
    * @return true when the frame was written, false when it was dropped
    */
   public synchronized boolean writeFrame(byte[] frame, boolean droppable) throws IOException {
     PipedInputStream sink = requireSink();
     int buffered = sink.available();
     if (droppable) {
-      if (buffered > maxBufferedBytes) {
+      if (chainBroken || buffered > maxBufferedBytes) {
+        // H.264 predicts each delta from the frame before it, so once one is gone every delta
+        // until the next key frame decodes to garbage. Sending them would spend the link on
+        // frames the reader cannot show, so drop them too and ask for that key frame early.
+        if (!chainBroken) {
+          chainBroken = true;
+          resyncRequested = true;
+        }
         return false;
       }
     } else if (buffered > hardCeilingBytes) {
       // Reference frames are piling up too. Only the newest one is ever needed to resume, and
       // the queued ones describe a moment that has already passed, so stop feeding the backlog
       // and let the reader drain. Ask for a fresh one via consumeResyncRequest once it has.
+      chainBroken = true;
       resyncRequested = true;
       return false;
     }
     super.write(frame, 0, frame.length);
     super.flush();
+    if (!droppable) {
+      // Everything after this frame is decoded against it, so nothing lost before it matters.
+      chainBroken = false;
+      resyncRequested = false;
+    }
     // The frame API owns its own decision, so leave the byte-level path's state alone.
     canDropNextPacket = false;
     return true;
@@ -107,13 +135,13 @@ public class LossyPipedOutputStream extends PipedOutputStream {
    * Whether the producer should now make a new frame that nothing else depends on, because the
    * ones it had were discarded.
    *
-   * <p>Returns true once, and only after the reader has caught back up, so the producer spends a
-   * key frame when it will actually get through rather than onto a backlog that is still too
-   * deep. Until then the reader has nothing it can decode, which is the cost of having been that
-   * far behind.</p>
+   * <p>Returns true once, and only after the reader has read everything it was given. A key frame
+   * is the largest frame there is, so one asked for any sooner lands on a backlog that is still
+   * too deep, pushes it back over the threshold and costs the next group of pictures too. Until
+   * then the reader holds its last picture, which is the cost of having fallen behind.</p>
    */
   public synchronized boolean consumeResyncRequest() throws IOException {
-    if (!resyncRequested || requireSink().available() > maxBufferedBytes) {
+    if (!resyncRequested || requireSink().available() > 0) {
       return false;
     }
     resyncRequested = false;

@@ -1,6 +1,9 @@
 package com.xlythe.view.camera;
 
 import android.Manifest;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
@@ -25,12 +28,14 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
@@ -41,6 +46,8 @@ import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
@@ -146,6 +153,13 @@ public class CameraView extends FrameLayout {
     private static final long FOCUS_TIMEOUT_MILLIS = 3000;
 
     /**
+     * How long an animated {@link #setZoomRatio(float, boolean)} takes. About what a phone's own
+     * camera app takes on a tap of a zoom button: long enough to see the lenses change, short
+     * enough that nobody waits for it.
+     */
+    private static final long ZOOM_ANIMATION_MILLIS = 300;
+
+    /**
      * The cache directory {@link #takePicture()} and {@link #startRecording()} write to. A capture
      * that arrives from inside it is one of ours to file rather than a file the caller chose,
      * which is also how a pending confirmation is recognised again after state is restored.
@@ -162,9 +176,12 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_SUPER = "super";
     private static final String EXTRA_MODULE = "module";
     private static final String EXTRA_QUALITY = "quality";
-    private static final String EXTRA_ZOOM_LEVEL = "zoom_level";
+    /**
+     * Saved-state key for the zoom. A ratio rather than a level, because a level is only a zoom
+     * once the camera's range is known, and on restore the camera may not be open yet.
+     */
+    private static final String EXTRA_ZOOM_RATIO = "zoom_ratio";
     private static final String EXTRA_PINCH_TO_ZOOM_ENABLED = "pinch_to_zoom_enabled";
-    private static final String EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR = "pinch_to_zoom_scale_factor";
     private static final String EXTRA_FLASH = "flash";
     private static final String EXTRA_LENS_FACING = "lens_facing";
     private static final String EXTRA_MAX_VIDEO_DURATION = "max_video_duration";
@@ -172,6 +189,8 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_CONFIRM_IMAGE = "confirm_image";
     private static final String EXTRA_CONFIRM_VIDEO = "confirm_video";
     private static final String EXTRA_PENDING_IMAGE_FILE_PATH = "pending_image_file_path";
+    /** Saved-state key for every file the picture awaiting confirmation wrote. */
+    private static final String EXTRA_PENDING_IMAGE_FILE_PATHS = "pending_image_file_paths";
     private static final String EXTRA_PENDING_VIDEO_FILE_PATH = "pending_video_file_path";
     private static final String EXTRA_MATCH_PREVIEW_ASPECT_RATIO = "match_preview_aspect_ratio";
     /** Saved-state key for dynamic range. */
@@ -186,6 +205,10 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_TORCH = "torch";
     /** Saved-state key for low-light boost state. */
     private static final String EXTRA_LOW_LIGHT_BOOST = "low_light_boost";
+    /** Saved-state key for whether the camera's sounds play. */
+    private static final String EXTRA_SHUTTER_SOUND = "shutter_sound";
+    /** Saved-state key for the app's own shutter sound. */
+    private static final String EXTRA_SHUTTER_SOUND_RES = "shutter_sound_res";
 
     /**
      * The lifecycle state of the camera and its preview surface.
@@ -346,11 +369,20 @@ public class CameraView extends FrameLayout {
      *
      * <p>{@link #ULTRA_HDR} is a JPEG carrying a gain map: an HDR display uses it to brighten the
      * highlights, and anything else shows the JPEG beneath.</p>
+     *
+     * <p>{@link #RAW} is a DNG of the sensor's own readings, before the camera has processed them.
+     * It is several times the size of a JPEG and needs an editor rather than a gallery to open,
+     * which is what {@link #RAW_JPEG} is for: the JPEG at the file given to
+     * {@link #takePicture(File)}, and the DNG beside it under the same name, so {@code IMG_1.jpg}
+     * gets {@code IMG_1.dng}. Either way the capture is reported once, after every file it writes
+     * is on disk. {@link #takePicture()} files both in the gallery, under the same name.</p>
      */
     public enum PictureFormat {
         /** What every camera writes. */
         JPEG,
-        ULTRA_HDR
+        ULTRA_HDR,
+        RAW,
+        RAW_JPEG
     }
 
     /**
@@ -427,6 +459,23 @@ public class CameraView extends FrameLayout {
     private PinchToZoomGestureDetector mScaleDetector;
     private boolean mIsPinchToZoomEnabled = true;
 
+    /** Told of every zoom change. See {@link #setOnZoomChangedListener}. */
+    @Nullable
+    private OnZoomChangedListener mOnZoomChangedListener;
+    /**
+     * The ratio the zoom listener was last told about, so a backend reporting a ratio twice is
+     * passed on once. Kept with no listener too, so one set later hears only real changes.
+     */
+    private float mLastReportedZoomRatio = Float.NaN;
+    /** Eases the zoom over to {@link #mZoomAnimationTarget}, or null while no animation runs. */
+    @Nullable
+    private ValueAnimator mZoomAnimator;
+    /**
+     * Where the running zoom animation lands. Saved in place of the zoom it has reached, so a
+     * restore lands there too.
+     */
+    private float mZoomAnimationTarget;
+
     private ICameraModule mCameraModule;
 
     /** Follows the device's location while the camera is open, for the backend to tag captures. */
@@ -443,6 +492,11 @@ public class CameraView extends FrameLayout {
     private VideoView mVideoPreview;
 
     private File mImagePendingConfirmation;
+    /**
+     * Every file the picture awaiting confirmation wrote, {@link #mImagePendingConfirmation}
+     * first. More than one for {@link PictureFormat#RAW_JPEG}, and empty when nothing is pending.
+     */
+    private List<File> mImagePendingFiles = Collections.emptyList();
     private File mVideoPendingConfirmation;
 
     private boolean mIsImageConfirmationEnabled;
@@ -564,6 +618,8 @@ public class CameraView extends FrameLayout {
             setImageConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmImages, isImageConfirmationEnabled()));
             setVideoConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmVideos, isVideoConfirmationEnabled()));
             setMatchPreviewAspectRatio(a.getBoolean(R.styleable.CameraView_matchPreviewAspectRatio, isMatchPreviewAspectRatioEnabled()));
+            setShutterSoundEnabled(a.getBoolean(R.styleable.CameraView_shutterSoundEnabled, isShutterSoundEnabled()));
+            setShutterSound(a.getResourceId(R.styleable.CameraView_shutterSound, getShutterSound()));
             setDynamicRange(DynamicRange.fromId(a.getInteger(R.styleable.CameraView_dynamicRange, getDynamicRange().id)));
             setExtension(Extension.fromId(a.getInteger(R.styleable.CameraView_extension, getExtension().id)));
             setStabilizationEnabled(a.getBoolean(R.styleable.CameraView_stabilizationEnabled, isStabilizationEnabled()));
@@ -618,9 +674,9 @@ public class CameraView extends FrameLayout {
         state.putParcelable(EXTRA_SUPER, super.onSaveInstanceState());
         state.putParcelable(EXTRA_MODULE, mCameraModule.onSaveInstanceState());
         state.putInt(EXTRA_QUALITY, getQuality().id);
-        state.putInt(EXTRA_ZOOM_LEVEL, getZoomLevel());
+        state.putFloat(EXTRA_ZOOM_RATIO,
+                mZoomAnimator != null ? mZoomAnimationTarget : getZoomRatio());
         state.putBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED, isPinchToZoomEnabled());
-        state.putFloat(EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR, mScaleDetector.getCumulativeScaleFactor());
         state.putInt(EXTRA_FLASH, getFlash().id);
         state.putInt(EXTRA_LENS_FACING, getLensFacing().id);
         state.putLong(EXTRA_MAX_VIDEO_DURATION, getMaxVideoDuration());
@@ -634,8 +690,15 @@ public class CameraView extends FrameLayout {
         state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
         state.putBoolean(EXTRA_TORCH, isTorchEnabled());
         state.putBoolean(EXTRA_LOW_LIGHT_BOOST, isLowLightBoostEnabled());
+        state.putBoolean(EXTRA_SHUTTER_SOUND, isShutterSoundEnabled());
+        state.putInt(EXTRA_SHUTTER_SOUND_RES, getShutterSound());
         if (mImagePendingConfirmation != null) {
             state.putString(EXTRA_PENDING_IMAGE_FILE_PATH, mImagePendingConfirmation.getAbsolutePath());
+            String[] paths = new String[mImagePendingFiles.size()];
+            for (int i = 0; i < paths.length; i++) {
+                paths[i] = mImagePendingFiles.get(i).getAbsolutePath();
+            }
+            state.putStringArray(EXTRA_PENDING_IMAGE_FILE_PATHS, paths);
         }
         if (mVideoPendingConfirmation != null) {
             state.putString(EXTRA_PENDING_VIDEO_FILE_PATH, mVideoPendingConfirmation.getAbsolutePath());
@@ -651,9 +714,8 @@ public class CameraView extends FrameLayout {
             super.onRestoreInstanceState(state.getParcelable(EXTRA_SUPER));
             mCameraModule.onRestoreInstanceState(state.getParcelable(EXTRA_MODULE));
             setQuality(Quality.fromId(state.getInt(EXTRA_QUALITY)));
-            setZoomLevel(state.getInt(EXTRA_ZOOM_LEVEL));
+            setZoomRatio(state.getFloat(EXTRA_ZOOM_RATIO, 1f));
             setPinchToZoomEnabled(state.getBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED));
-            mScaleDetector.setCumulativeScaleFactor(state.getFloat(EXTRA_PINCH_TO_ZOOM_SCALE_FACTOR, mScaleDetector.getCumulativeScaleFactor()));
             setFlash(Flash.fromId(state.getInt(EXTRA_FLASH)));
             setLensFacing(LensFacing.fromId(state.getInt(EXTRA_LENS_FACING)));
             setMaxVideoDuration(state.getLong(EXTRA_MAX_VIDEO_DURATION));
@@ -667,11 +729,14 @@ public class CameraView extends FrameLayout {
             setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
             setTorchEnabled(state.getBoolean(EXTRA_TORCH));
             setLowLightBoostEnabled(state.getBoolean(EXTRA_LOW_LIGHT_BOOST));
+            setShutterSoundEnabled(state.getBoolean(EXTRA_SHUTTER_SOUND, true));
+            setShutterSound(state.getInt(EXTRA_SHUTTER_SOUND_RES));
 
             if (state.containsKey(EXTRA_PENDING_IMAGE_FILE_PATH)) {
                 File file = new File(state.getString(EXTRA_PENDING_IMAGE_FILE_PATH));
                 if (file.exists()) {
-                    showImageConfirmation(file);
+                    showImageConfirmation(file,
+                            filesOf(state.getStringArray(EXTRA_PENDING_IMAGE_FILE_PATHS), file));
                 }
             }
             if (state.containsKey(EXTRA_PENDING_VIDEO_FILE_PATH)) {
@@ -905,28 +970,79 @@ public class CameraView extends FrameLayout {
     }
 
     void showImageConfirmation(File file) {
+        showImageConfirmation(file, Collections.singletonList(file));
+    }
+
+    /**
+     * Shows or hands over a finished picture.
+     *
+     * @param file the file the picture is reported as
+     * @param files every file the picture wrote, such as the JPEG and the DNG of
+     *     {@link PictureFormat#RAW_JPEG}. They are filed in this order after {@code file}, and
+     *     rejecting the picture deletes them all.
+     */
+    @UiThread
+    void showImageConfirmation(File file, List<File> files) {
         Log.d(TAG, "Saved the picture to " + file);
+        List<File> written = reportedFirst(file, files);
         if (isImageConfirmationEnabled()) {
             mCameraModule.pause();
             mImagePreview.setVisibility(View.VISIBLE);
             Image.with(getContext()).load(file).into(mImagePreview);
             mImagePendingConfirmation = file;
+            mImagePendingFiles = written;
 
             if (getOnImageCapturedListener() != null) {
                 getOnImageCapturedListener().onImageConfirmation();
             }
         } else {
-            deliverPicture(file);
+            deliverPicture(file, written);
         }
     }
 
-    /** Hands over a finished picture: filed and reported by uri if it is ours, as a file if not. */
-    private void deliverPicture(File file) {
+    /** {@code files} with {@code file} at the front, once, so it is filed and reported first. */
+    private static List<File> reportedFirst(File file, List<File> files) {
+        List<File> ordered = new ArrayList<>(files.size() + 1);
+        ordered.add(file);
+        for (File each : files) {
+            if (!each.equals(file)) {
+                ordered.add(each);
+            }
+        }
+        return Collections.unmodifiableList(ordered);
+    }
+
+    /** The files saved with a pending picture, or the picture alone for state that has none. */
+    private static List<File> filesOf(@Nullable String[] paths, File file) {
+        if (paths == null) {
+            return Collections.singletonList(file);
+        }
+        List<File> files = new ArrayList<>(paths.length);
+        for (String path : paths) {
+            files.add(new File(path));
+        }
+        return files;
+    }
+
+    /**
+     * Hands over a finished picture: filed and reported by uri if it is ours, as a file if not.
+     * A picture given a file is reported by that file alone, since the caller named it and the
+     * others are documented as lying beside it.
+     */
+    private void deliverPicture(File file, List<File> files) {
         if (isOwnCapture(file)) {
-            fileCapture(file, false /* isVideo */);
+            fileCapture(files, false /* isVideo */);
         } else if (getOnImageCapturedListener() != null) {
             getOnImageCapturedListener().onImageCaptured(file);
         }
+    }
+
+    void onShutter() {
+        runOnMainThread(() -> {
+            if (getOnImageCapturedListener() != null) {
+                getOnImageCapturedListener().onShutter();
+            }
+        });
     }
 
     void onImageFailed() {
@@ -970,7 +1086,7 @@ public class CameraView extends FrameLayout {
     /** Hands over a finished video: filed and reported by uri if it is ours, as a file if not. */
     private void deliverVideo(File file) {
         if (isOwnCapture(file)) {
-            fileCapture(file, true /* isVideo */);
+            fileCapture(Collections.singletonList(file), true /* isVideo */);
         } else if (getOnVideoCapturedListener() != null) {
             getOnVideoCapturedListener().onVideoCaptured(file);
         }
@@ -982,30 +1098,36 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Files a capture of ours where the gallery looks and reports where it went, or that it could
-     * not be filed. The cache copy goes either way, since the caller never had it.
+     * Files the files of a capture of ours where the gallery looks and reports where each went,
+     * in order, once all of them are filed, or that they could not be. A capture that loses any
+     * of its files is filed nowhere. The cache copies go either way, since the caller never had
+     * them.
      */
-    private void fileCapture(File capture, boolean isVideo) {
-        MediaStoreSaver.save(getContext(), capture, isVideo, uri -> {
+    private void fileCapture(List<File> captures, boolean isVideo) {
+        MediaStoreSaver.save(getContext(), captures, isVideo, uris -> {
             if (isVideo) {
                 OnVideoCapturedListener listener = getOnVideoCapturedListener();
                 if (listener == null) {
                     return;
                 }
-                if (uri == null) {
+                if (uris == null) {
                     listener.onFailure();
                 } else {
-                    listener.onVideoSaved(uri);
+                    for (Uri uri : uris) {
+                        listener.onVideoSaved(uri);
+                    }
                 }
             } else {
                 OnImageCapturedListener listener = getOnImageCapturedListener();
                 if (listener == null) {
                     return;
                 }
-                if (uri == null) {
+                if (uris == null) {
                     listener.onFailure();
                 } else {
-                    listener.onImageSaved(uri);
+                    for (Uri uri : uris) {
+                        listener.onImageSaved(uri);
+                    }
                 }
             }
         });
@@ -1017,15 +1139,29 @@ public class CameraView extends FrameLayout {
         return new File(context.getCacheDir(), CAPTURE_DIRECTORY);
     }
 
-    /** A cache file for a capture that has no destination of its own, named for the moment. */
+    /**
+     * A cache file for a capture that has no destination of its own, named for the moment.
+     *
+     * @param extension what the capture is written as, such as {@code ".jpg"}, which MediaStore
+     *     checks the filed type against
+     */
     @VisibleForTesting
-    static File newCaptureFile(Context context, boolean isVideo) {
+    static File newCaptureFile(Context context, String extension) {
         File directory = captureDirectory(context);
         if (!directory.isDirectory() && !directory.mkdirs()) {
             Log.w(TAG, "Could not create " + directory);
         }
         String name = new SimpleDateFormat(CAPTURE_NAME, Locale.US).format(new Date());
-        return new File(directory, name + (isVideo ? ".mp4" : ".jpg"));
+        return new File(directory, name + extension);
+    }
+
+    /**
+     * What a picture without a destination is first written as. RAW writes only a DNG, so its
+     * cache file is named as one. RAW_JPEG writes its DNG beside the JPEG under the same name.
+     */
+    @VisibleForTesting
+    static String pictureExtension(PictureFormat format) {
+        return format == PictureFormat.RAW ? ".dng" : ".jpg";
     }
 
     void onVideoFailed() {
@@ -1067,9 +1203,6 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Gets the current quality for image and video outputs.
-     */
-    /**
      * How hard a still capture is compressed, from 1 to 100, 95 by default.
      *
      * <p>Without this every device picks its own number, which is not the same on any two phones.
@@ -1083,6 +1216,9 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getPictureQuality();
     }
 
+    /**
+     * Gets the current quality for image and video outputs.
+     */
     public Quality getQuality() {
         return mCameraModule.getQuality();
     }
@@ -1127,6 +1263,7 @@ public class CameraView extends FrameLayout {
     }
 
     protected void onOpen() {
+        mCameraModule.loadSounds();
         mCameraModule.open();
         // After the camera, so that one that throws on opening leaves nothing listening.
         mLocationTracker.start();
@@ -1150,7 +1287,9 @@ public class CameraView extends FrameLayout {
             stopFrameAnalysis();
         }
         mLocationTracker.stop();
+        finishZoomAnimation();
         mCameraModule.close();
+        mCameraModule.releaseSounds();
 
         if (!mHasSavedState) {
             // Destroy the TextureView we used for the previous round of camera activity. This is
@@ -1172,12 +1311,16 @@ public class CameraView extends FrameLayout {
      * {@link OnImageCapturedListener#onImageSaved(Uri)} with where it went. Only this overload
      * files into MediaStore; {@link #takePicture(File)} leaves the picture where it was written.
      *
+     * <p>{@link PictureFormat#RAW} is filed as a DNG. {@link PictureFormat#RAW_JPEG} files both
+     * the JPEG and the DNG under the same name, and calls
+     * {@link OnImageCapturedListener#onImageSaved(Uri)} for each.</p>
+     *
      * <p>Below API 29 that means writing to shared storage, which needs
      * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}. Without it the picture cannot be filed,
      * and {@link OnImageCapturedListener#onFailure()} is called instead.</p>
      */
     public void takePicture() {
-        takePicture(newCaptureFile(getContext(), false /* isVideo */));
+        takePicture(newCaptureFile(getContext(), pictureExtension(getPictureFormat())));
     }
 
     /**
@@ -1225,12 +1368,14 @@ public class CameraView extends FrameLayout {
 
         Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
-        deliverPicture(mImagePendingConfirmation);
+        deliverPicture(mImagePendingConfirmation, mImagePendingFiles);
         mImagePendingConfirmation = null;
+        mImagePendingFiles = Collections.emptyList();
     }
 
     /**
-     * Rejects a picture that is currently being displayed on the preview.
+     * Rejects a picture that is currently being displayed on the preview, and deletes every file
+     * it wrote.
      */
     public void rejectPicture() {
         if (mImagePendingConfirmation == null) {
@@ -1242,10 +1387,13 @@ public class CameraView extends FrameLayout {
 
         Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
-        if (!mImagePendingConfirmation.delete()) {
-            Log.w(TAG, "Attempted to clean up pending image file, but failed");
+        for (File file : mImagePendingFiles) {
+            if (file.exists() && !file.delete()) {
+                Log.w(TAG, "Attempted to clean up pending image file " + file + ", but failed");
+            }
         }
         mImagePendingConfirmation = null;
+        mImagePendingFiles = Collections.emptyList();
     }
 
     /**
@@ -1260,7 +1408,7 @@ public class CameraView extends FrameLayout {
      */
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     public void startRecording() {
-        startRecording(newCaptureFile(getContext(), true /* isVideo */));
+        startRecording(newCaptureFile(getContext(), ".mp4"));
     }
 
     /**
@@ -1620,6 +1768,7 @@ public class CameraView extends FrameLayout {
      * the front and back facing cameras.
      */
     public void toggleCamera() {
+        cancelZoomAnimation();
         mCameraModule.toggleCamera();
     }
 
@@ -1631,6 +1780,7 @@ public class CameraView extends FrameLayout {
             return;
         }
 
+        cancelZoomAnimation();
         mCameraModule.setLensFacing(lensFacing);
     }
 
@@ -1748,6 +1898,38 @@ public class CameraView extends FrameLayout {
 
     public boolean isFocusReticleEnabled() {
         return mFocusReticleEnabled;
+    }
+
+    /**
+     * Plays the platform's camera sounds: a click as a picture is taken, and a tone as a
+     * recording starts and stops. On by default, as in the platform's own camera app.
+     *
+     * <p>Some countries require these sounds, and there they play whatever this is set to.</p>
+     */
+    public void setShutterSoundEnabled(boolean enabled) {
+        mCameraModule.setShutterSoundEnabled(enabled);
+    }
+
+    /** Returns whether the camera's sounds are wanted. */
+    public boolean isShutterSoundEnabled() {
+        return mCameraModule.isShutterSoundEnabled();
+    }
+
+    /**
+     * Plays a sound of the app's own in place of the platform's shutter click, or the click
+     * again for 0. Recordings keep the platform's tones.
+     *
+     * <p>Where a shutter sound is required this one counts, and plays just as the click would.
+     * </p>
+     */
+    public void setShutterSound(@RawRes int soundRes) {
+        mCameraModule.setShutterSound(soundRes);
+    }
+
+    /** Returns the app's own shutter sound, or 0 for the platform's click. */
+    @RawRes
+    public int getShutterSound() {
+        return mCameraModule.getShutterSound();
     }
 
     /**
@@ -1983,26 +2165,6 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Maps a cumulative pinch scale onto a zoom level.
-     *
-     * <p>The scale starts at 1 rather than 0, so the usable range of a pinch is maxScale - 1. A
-     * fully spread pinch has to land on the camera's maximum zoom; dividing by maxScale instead
-     * stopped at four fifths of it and left the last of the range unreachable.</p>
-     *
-     * @param scaleFactor the cumulative scale, between 1 and maxScale
-     * @param maxScale the scale a fully spread pinch reaches
-     * @param maxZoomLevel the zoom level that scale maps to
-     */
-    static int zoomLevelForScale(float scaleFactor, float maxScale, int maxZoomLevel) {
-        if (maxScale <= 1f || maxZoomLevel <= 0) {
-            return 0;
-        }
-        float clamped = Math.max(1f, Math.min(scaleFactor, maxScale));
-        int zoomLevel = (int) ((clamped - 1f) * maxZoomLevel / (maxScale - 1f));
-        return Math.min(Math.max(zoomLevel, 0), maxZoomLevel);
-    }
-
-    /**
      * When enabled, the user can pinch the camera to zoom in/out.
      */
     public void setPinchToZoomEnabled(boolean enabled) {
@@ -2017,22 +2179,138 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Sets the current zoom level, from 0 to {@link #getMaxZoomLevel()}.
+     * Zooms to a ratio in the camera's own terms, where 1 is the main lens.
+     *
+     * <p>Held to {@link #getMinZoomRatio()} and {@link #getMaxZoomRatio()}. On a phone with
+     * several lenses the camera switches between them as the ratio crosses from one to the next,
+     * so the whole range is one smooth zoom.</p>
      */
-    public void setZoomLevel(int zoomLevel) {
-        mCameraModule.setZoomLevel(zoomLevel);
+    public void setZoomRatio(float zoomRatio) {
+        setZoomRatio(zoomRatio, false /* animate */);
     }
 
     /**
-     * @return The current zoom level.
+     * Zooms to a ratio, easing over to it when animate is true rather than jumping, as a phone's
+     * camera app does on a tap of a zoom button.
+     *
+     * <p>The animation passes through every ratio in between, on a log scale so that 0.6x to 1x
+     * moves like 1x to 3x. A phone with several lenses switches between them along the way, and
+     * {@link #setOnZoomChangedListener} hears each step. A pinch, a zoom that is not animated or
+     * a lens switch stops it where it is; closing the camera lands it on the ratio it was heading
+     * for. Before the camera is open there is nothing to watch, so the zoom is set at once.</p>
      */
+    @UiThread
+    public void setZoomRatio(float zoomRatio, boolean animate) {
+        if (!(zoomRatio > 0f) || Float.isInfinite(zoomRatio)) {
+            Log.w(TAG, "Ignoring a zoom ratio of " + zoomRatio);
+            return;
+        }
+        if (!animate || !isOpen() || !isZoomSupported()) {
+            cancelZoomAnimation();
+            mCameraModule.setZoomRatio(zoomRatio);
+            return;
+        }
+
+        // Held to the range first, so the animation spends its whole length moving rather than
+        // reaching the end of the range early and sitting there.
+        float target = ZoomMath.clamp(zoomRatio, getMinZoomRatio(), getMaxZoomRatio());
+        if (mZoomAnimator != null && target == mZoomAnimationTarget) {
+            // Already on its way there. Starting again would only slow it down.
+            return;
+        }
+        cancelZoomAnimation();
+        float from = getZoomRatio();
+        if (from == target) {
+            return;
+        }
+
+        ValueAnimator animator = ValueAnimator.ofFloat(0f, 1f);
+        animator.setDuration(ZOOM_ANIMATION_MILLIS);
+        animator.setInterpolator(new AccelerateDecelerateInterpolator());
+        // Each step goes to the module rather than to setZoomRatio, which would cancel this
+        // animation.
+        animator.addUpdateListener(animation -> mCameraModule.setZoomRatio(
+                ZoomMath.interpolate(from, target, (Float) animation.getAnimatedValue())));
+        animator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (mZoomAnimator == animation) {
+                    mZoomAnimator = null;
+                }
+            }
+        });
+        mZoomAnimator = animator;
+        mZoomAnimationTarget = target;
+        animator.start();
+    }
+
+    /** Stops a running zoom animation wherever it has got to. */
+    private void cancelZoomAnimation() {
+        ValueAnimator animator = mZoomAnimator;
+        if (animator == null) {
+            return;
+        }
+        mZoomAnimator = null;
+        animator.cancel();
+    }
+
+    /** Stops a running zoom animation at the ratio it was heading for. */
+    private void finishZoomAnimation() {
+        if (mZoomAnimator == null) {
+            return;
+        }
+        float target = mZoomAnimationTarget;
+        cancelZoomAnimation();
+        mCameraModule.setZoomRatio(target);
+    }
+
+    /** The current zoom. See {@link #setZoomRatio}. */
+    public float getZoomRatio() {
+        return mCameraModule.getZoomRatio();
+    }
+
+    /** The widest the camera can see: below 1 on a phone with an ultra-wide lens, otherwise 1. */
+    public float getMinZoomRatio() {
+        return mCameraModule.getMinZoomRatio();
+    }
+
+    /** The furthest the camera can zoom in, or 1 if it cannot zoom. */
+    public float getMaxZoomRatio() {
+        return mCameraModule.getMaxZoomRatio();
+    }
+
+    /**
+     * The zoom stops worth a button each, in increasing order, such as 0.6, 1, 3 and 5. Each has
+     * the exact ratio to zoom to and a rounded label to show, so a 2.74x lens is labelled "3".
+     *
+     * <p>Android does not publish the stops a phone's own camera app offers, so these are worked
+     * out from its lenses: always 1, the wide end when it is below 1, one stop per lens, and 2
+     * where the main sensor can crop to it without upscaling. They belong to the lens in use, so
+     * read them again after switching.</p>
+     */
+    @NonNull
+    public List<ZoomPreset> getZoomPresets() {
+        return ZoomPreset.of(mCameraModule.getZoomPresets(), Locale.getDefault());
+    }
+
+    /**
+     * Zooms to a position from 0 to {@link #getMaxZoomLevel()}, for a slider.
+     *
+     * <p>The levels span the same range as {@link #setZoomRatio}, from the minimum ratio at 0 to
+     * the maximum at the top, on a log scale so that equal travel multiplies the zoom by the same
+     * amount.</p>
+     */
+    public void setZoomLevel(int zoomLevel) {
+        cancelZoomAnimation();
+        mCameraModule.setZoomLevel(zoomLevel);
+    }
+
+    /** The current zoom, as a level. See {@link #setZoomLevel}. */
     public int getZoomLevel() {
         return mCameraModule.getZoomLevel();
     }
 
-    /**
-     * @return The maximum zoom level.
-     */
+    /** The top of the zoom level scale, which is the same on every camera. */
     public int getMaxZoomLevel() {
         return mCameraModule.getMaxZoomLevel();
     }
@@ -2042,6 +2320,27 @@ public class CameraView extends FrameLayout {
      */
     public boolean isZoomSupported() {
         return mCameraModule.isZoomSupported();
+    }
+
+    /**
+     * Reports every change of zoom, however it came about: {@link #setZoomRatio}, each step of an
+     * animated one, {@link #setZoomLevel}, a pinch, or a lens switch to a camera that cannot reach
+     * the old zoom. This is what keeps preset buttons in step with a pinch.
+     */
+    public void setOnZoomChangedListener(@Nullable OnZoomChangedListener listener) {
+        mOnZoomChangedListener = listener;
+    }
+
+    /** Passes a zoom change on to the listener, unless it is the ratio last passed on. */
+    @UiThread
+    void onZoomChanged(float zoomRatio) {
+        if (zoomRatio == mLastReportedZoomRatio) {
+            return;
+        }
+        mLastReportedZoomRatio = zoomRatio;
+        if (mOnZoomChangedListener != null) {
+            mOnZoomChangedListener.onZoomChanged(zoomRatio);
+        }
     }
 
     /**
@@ -2086,16 +2385,30 @@ public class CameraView extends FrameLayout {
      * overrides whichever its pictures use.
      */
     public interface OnImageCapturedListener {
+        /**
+         * Called as the picture is exposed, before it is saved. This is the moment for a shutter
+         * animation, or for a sound of the app's own with {@link #setShutterSoundEnabled} off.
+         */
+        default void onShutter() {}
+
         /** A picture is showing in the preview, waiting for confirmPicture or rejectPicture. */
         void onImageConfirmation();
 
         /** A picture from {@link CameraView#takePicture(File)} has been written to that file. */
         default void onImageCaptured(File file) {}
 
-        /** A picture from {@link CameraView#takePicture()} has been filed in the gallery. */
+        /**
+         * A picture from {@link CameraView#takePicture()} has been filed in the gallery.
+         *
+         * <p>Called once for each file filed. {@link PictureFormat#RAW_JPEG} files two, and this
+         * hears the JPEG first and then the DNG, only once both are filed.</p>
+         */
         default void onImageSaved(@NonNull Uri uri) {}
 
-        /** The picture could not be taken, or could not be filed. */
+        /**
+         * The picture could not be taken, or could not be filed. A picture of two files that
+         * loses either is filed as neither.
+         */
         void onFailure();
     }
 
@@ -2127,9 +2440,26 @@ public class CameraView extends FrameLayout {
         void onCameraClosed();
     }
 
+    /** Hears every change of zoom. See {@link #setOnZoomChangedListener}. */
+    public interface OnZoomChangedListener {
+        /** Called on the main thread, once per change. */
+        @UiThread
+        void onZoomChanged(float zoomRatio);
+    }
+
     private class PinchToZoomGestureDetector extends ScaleGestureDetector implements ScaleGestureDetector.OnScaleGestureListener {
-        final float MAX_SCALE = 5f;
-        float mScaleFactor = 1f;
+        /**
+         * The zoom the pinch has reached, which each step of it multiplies.
+         *
+         * <p>Kept here rather than read back from the camera each step: the old camera API snaps
+         * to the nearest entry of its zoom table, and the small steps of a pinch multiplied onto a
+         * snapped zoom would never leave it.</p>
+         */
+        private float mZoomRatio = 1f;
+        /** The bottom of the range the pinch is held to, read once as it starts. */
+        private float mMinZoomRatio = 1f;
+        /** The top of the range the pinch is held to, read once as it starts. */
+        private float mMaxZoomRatio = 1f;
 
         PinchToZoomGestureDetector(Context context) {
             this(context, new S());
@@ -2140,28 +2470,29 @@ public class CameraView extends FrameLayout {
             s.setRealGestureDetector(this);
         }
 
-        float getCumulativeScaleFactor() {
-            return mScaleFactor;
-        }
-
-        void setCumulativeScaleFactor(float scaleFactor) {
-            mScaleFactor = scaleFactor;
-        }
-
         @Override
-        public boolean onScale(ScaleGestureDetector detector) {
-            mScaleFactor *= detector.getScaleFactor();
-
-            // Don't let the object get too small or too large.
-            mScaleFactor = Math.max(1f, Math.min(mScaleFactor, MAX_SCALE));
-
-            setZoomLevel(zoomLevelForScale(mScaleFactor, MAX_SCALE, getMaxZoomLevel()));
+        public boolean onScaleBegin(ScaleGestureDetector detector) {
+            if (!isPinchToZoomEnabled() || !isZoomSupported()) {
+                return false;
+            }
+            // The fingers take over from wherever an animation has got to, and its next frame
+            // would otherwise move the zoom out from under them.
+            cancelZoomAnimation();
+            mZoomRatio = getZoomRatio();
+            mMinZoomRatio = getMinZoomRatio();
+            mMaxZoomRatio = getMaxZoomRatio();
             return true;
         }
 
         @Override
-        public boolean onScaleBegin(ScaleGestureDetector detector) {
-            return false;
+        public boolean onScale(ScaleGestureDetector detector) {
+            // Multiplied, so spreading the fingers twice as far apart zooms in twice as far from
+            // wherever the zoom started. Held to the range at every step rather than once at the
+            // end, so a pinch that overshoots turns around as soon as the fingers do.
+            mZoomRatio = ZoomMath.clamp(
+                    mZoomRatio * detector.getScaleFactor(), mMinZoomRatio, mMaxZoomRatio);
+            setZoomRatio(mZoomRatio);
+            return true;
         }
 
         @Override
@@ -2173,6 +2504,11 @@ public class CameraView extends FrameLayout {
 
         void setRealGestureDetector(ScaleGestureDetector.OnScaleGestureListener l) {
             listener = l;
+        }
+
+        @Override
+        public boolean onScaleBegin(ScaleGestureDetector detector) {
+            return listener.onScaleBegin(detector);
         }
 
         @Override
