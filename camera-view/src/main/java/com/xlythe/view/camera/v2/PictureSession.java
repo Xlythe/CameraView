@@ -22,6 +22,7 @@ import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -132,7 +133,7 @@ class PictureSession extends PreviewSession {
             onImageFailed();
             return;
         }
-        mPictureSurface.initializePicture(file);
+        mPictureSurface.initializePicture(file, exifCaptureParameters());
         try {
             CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
@@ -173,12 +174,17 @@ class PictureSession extends PreviewSession {
         // The file to save the image to
         private final File mFile;
 
-        ImageSaver(Context context, Image image, int orientation, boolean reversed, File file) {
+        // How the picture was taken, for the tags the camera's JPEG leaves out
+        private final ExifCaptureParameters mExifParameters;
+
+        ImageSaver(Context context, Image image, int orientation, boolean reversed, File file,
+                ExifCaptureParameters exifParameters) {
             mContext = context.getApplicationContext();
             mImage = image;
             mOrientation = orientation;
             mIsReversed = reversed;
             mFile = file;
+            mExifParameters = exifParameters;
         }
 
         /** @return true only when the picture reached disk, so a failure is never reported as one. */
@@ -211,6 +217,7 @@ class PictureSession extends PreviewSession {
                 Exif exif = new Exif(mFile);
                 exif.attachTimestamp();
                 exif.attachCaptureDevice(mContext);
+                mExifParameters.applyTo(exif);
                 exif.rotate(mOrientation);
                 if (mIsReversed) {
                     exif.flipHorizontally();
@@ -356,7 +363,8 @@ class PictureSession extends PreviewSession {
                                 image,
                                 mCameraView.getRelativeCameraOrientation(),
                                 isUsingFrontFacingCamera(),
-                                mFile) {
+                                mFile,
+                                mExifParameters) {
                             @UiThread
                             @Override
                             protected void onPostExecute(Boolean saved) {
@@ -382,6 +390,9 @@ class PictureSession extends PreviewSession {
         private final CameraSurface mPreviewSurface;
         private ImageReader mImageReader;
         private File mFile;
+
+        /** How the picture for {@link #mFile} is being taken, described when it was asked for. */
+        private ExifCaptureParameters mExifParameters = new ExifCaptureParameters();
 
         /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
         private int mImageFormat = IMAGE_FORMAT_DEFAULT;
@@ -425,8 +436,9 @@ class PictureSession extends PreviewSession {
             return getImageFormat(getQuality());
         }
 
-        void initializePicture(File file) {
+        void initializePicture(File file, ExifCaptureParameters exifParameters) {
             mFile = file;
+            mExifParameters = exifParameters;
             if (mFile.exists()) {
                 Log.w(TAG, "File already exists. Deleting.");
                 if (!mFile.delete()) {

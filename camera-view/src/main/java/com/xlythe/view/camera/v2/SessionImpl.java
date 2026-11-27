@@ -18,6 +18,7 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.LocationProvider;
 import com.xlythe.view.camera.PermissionChecker;
 
@@ -145,6 +146,11 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     int getPictureQuality() {
         return mCamera2Module.getPictureQuality();
+    }
+
+    @NonNull
+    ExifCaptureParameters exifCaptureParameters() {
+        return mCamera2Module.exifCaptureParameters();
     }
 
     void applyFlash(@NonNull CaptureRequest.Builder builder) {

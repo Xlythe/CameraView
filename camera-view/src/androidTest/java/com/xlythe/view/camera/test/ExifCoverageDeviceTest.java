@@ -241,9 +241,10 @@ public final class ExifCoverageDeviceTest {
     }
 
     /**
-     * What each backend's file says about how the picture was taken. Logged rather than
-     * asserted: these are the camera's own values, and a camera that writes nonsense is reported
-     * rather than failed, since the library leaves what a camera wrote alone.
+     * What each backend's file says about how the picture was taken. The camera's own values are
+     * logged rather than asserted, and nonsense from a camera is reported rather than failed,
+     * since the library leaves what a camera wrote alone. What the library fills wherever the
+     * camera did not is asserted present and sane.
      */
     @Test
     public void aCaptureSaysHowItWasTaken() throws Exception {
@@ -265,6 +266,47 @@ public final class ExifCoverageDeviceTest {
         if (!implausible.isEmpty()) {
             Log.w(TAG, backend + " capture parameters out of range: " + implausible);
         }
+
+        // Every capture the library makes is automatic, unbiased and of a standard scene, which
+        // it can always say.
+        assertInRange(exif, ExifInterface.TAG_EXPOSURE_MODE, 0, 2);
+        assertInRange(exif, ExifInterface.TAG_EXPOSURE_PROGRAM, 0, 8);
+        assertInRange(exif, ExifInterface.TAG_WHITE_BALANCE, 0, 1);
+        assertInRange(exif, ExifInterface.TAG_SCENE_CAPTURE_TYPE, 0, 3);
+        assertInRange(exif, ExifInterface.TAG_EXPOSURE_BIAS_VALUE, -10, 10);
+        assertNotNull(backend + " wrote no FileSource",
+                exif.getAttribute(ExifInterface.TAG_FILE_SOURCE));
+        assertNotNull(backend + " wrote no SceneType",
+                exif.getAttribute(ExifInterface.TAG_SCENE_TYPE));
+        String id = exif.getAttribute(ExifInterface.TAG_IMAGE_UNIQUE_ID);
+        assertTrue(backend + " wrote no ImageUniqueID", id != null && !id.trim().isEmpty());
+        // The APEX forms follow from the exposure and aperture wherever those are known.
+        if (exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME) != null) {
+            assertInRange(exif, ExifInterface.TAG_SHUTTER_SPEED_VALUE, -20, 30);
+        }
+        if (exif.getAttribute(ExifInterface.TAG_F_NUMBER) != null) {
+            assertInRange(exif, ExifInterface.TAG_APERTURE_VALUE, 0, 20);
+        }
+        // A camera2 camera publishes the focal lengths and apertures of its lenses, which the
+        // specification spans. Camera1 publishes no aperture, so legacy has none to write.
+        if (backend != CameraView.Backend.LEGACY) {
+            String lens = exif.getAttribute(ExifInterface.TAG_LENS_SPECIFICATION);
+            assertNotNull(backend + " wrote no LensSpecification", lens);
+            String[] parts = lens.split(",");
+            assertTrue("a lens specification is four rationals: " + lens, parts.length == 4);
+            assertTrue("a lens specification runs from short to long: " + lens,
+                    rational(parts[0]) > 0 && rational(parts[0]) <= rational(parts[1]));
+            assertTrue("a lens specification has an f-number at each end: " + lens,
+                    rational(parts[2]) > 0 && rational(parts[3]) > 0);
+        }
+    }
+
+    private void assertInRange(
+            @NonNull ExifInterface exif, @NonNull String tag, double min, double max) {
+        String value = exif.getAttribute(tag);
+        assertNotNull(backend + " wrote no " + tag, value);
+        double number = exif.getAttributeDouble(tag, Double.NaN);
+        assertTrue(backend + " wrote " + tag + " = " + value, number >= min && number <= max);
     }
 
     /** The capture parameters whose values no camera could have meant. */
