@@ -4,6 +4,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
+import java.util.Arrays;
+
 /**
  * Writes the thumbnail Exif keeps in IFD1, which camera2 and CameraX leave out and androidx's
  * ExifInterface cannot write.
@@ -51,7 +53,52 @@ final class ExifThumbnail {
         return room > 0 ? room : -1;
     }
 
+    /**
+     * The thumbnail IFD1 names, as the JPEG it is.
+     *
+     * @return a copy of its bytes, or null when the file has none
+     */
+    @Nullable
+    static byte[] thumbnailBytes(@NonNull byte[] jpeg) {
+        ExifSegment.Segment segment = ExifSegment.find(jpeg);
+        Existing existing = segment == null ? null : findExistingThumbnail(jpeg, segment);
+        if (existing == null) {
+            return null;
+        }
+        int start = segment.tiffOffset + existing.offset;
+        return Arrays.copyOfRange(jpeg, start, start + existing.length);
+    }
 
+    /**
+     * Takes the thumbnail out of the file to free the room it takes: IFD0 stops naming IFD1, and
+     * the thumbnail's bytes are cut from the end of the segment. IFD1 itself is left behind,
+     * unreferenced, since only what ends the segment can be cut without moving anything else.
+     *
+     * @return the file without it, or null when there is none or something follows it
+     */
+    @Nullable
+    static byte[] detach(@NonNull byte[] jpeg) {
+        ExifSegment.Segment segment = ExifSegment.find(jpeg);
+        if (segment == null) {
+            return null;
+        }
+        Existing existing = findExistingThumbnail(jpeg, segment);
+        int pointerOffset = nextIfdPointerOffset(jpeg, segment);
+        if (existing == null || pointerOffset < 0) {
+            return null;
+        }
+        int start = segment.tiffOffset + existing.offset;
+        if (start + existing.length != segment.end() || start <= pointerOffset) {
+            return null;
+        }
+        byte[] out = new byte[jpeg.length - existing.length];
+        System.arraycopy(jpeg, 0, out, 0, start);
+        System.arraycopy(jpeg, segment.end(), out, start, jpeg.length - segment.end());
+        ExifSegment.putU32(out, pointerOffset, 0, segment.littleEndian);
+        ExifSegment.putU16Big(out, segment.lengthOffset,
+                segment.payloadLength - existing.length + 2);
+        return out;
+    }
 
     /**
      * Where IFD0's "next directory" pointer lives, which is the field IFD1 hangs from.

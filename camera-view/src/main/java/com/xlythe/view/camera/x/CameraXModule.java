@@ -36,6 +36,8 @@ import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
+import androidx.annotation.WorkerThread;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
 import androidx.camera.camera2.interop.Camera2CameraInfo;
@@ -92,6 +94,7 @@ import com.google.common.util.concurrent.ListenableFuture;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifNoRoomException;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.Barcode;
@@ -1314,21 +1317,32 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private void finishExif(@NonNull File file, @Nullable Location location,
             @NonNull ExifCaptureParameters exifParameters, @NonNull Runnable then) {
         AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
-            try {
-                Exif exif = new Exif(file);
-                exif.attachTimestamp();
-                exif.attachCaptureDevice(getContext());
-                exif.attachThumbnail();
-                exifParameters.applyTo(exif);
-                if (location != null) {
-                    exif.attachLocation(location);
-                }
-                exif.save();
-            } catch (IOException | RuntimeException error) {
-                Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
-            }
+            writeExif(getContext(), file, location, exifParameters);
             mMainHandler.post(then);
         });
+    }
+
+    /** The Exif {@link #finishExif} writes, which never fails the capture. */
+    @VisibleForTesting
+    @WorkerThread
+    static void writeExif(@NonNull Context context, @NonNull File file,
+            @Nullable Location location, @NonNull ExifCaptureParameters exifParameters) {
+        try {
+            Exif exif = new Exif(file);
+            exif.attachTimestamp();
+            exif.attachCaptureDevice(context);
+            exif.attachThumbnail();
+            exifParameters.applyTo(exif);
+            if (location != null) {
+                exif.attachLocation(location);
+            }
+            exif.save();
+        } catch (ExifNoRoomException error) {
+            // The picture keeps everything else, and is never failed over its metadata.
+            Log.w(TAG, "Saved the picture without some of its Exif tags", error);
+        } catch (IOException | RuntimeException error) {
+            Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
+        }
     }
 
     /**

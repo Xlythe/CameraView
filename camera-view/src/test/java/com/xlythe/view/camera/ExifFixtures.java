@@ -1,6 +1,7 @@
 package com.xlythe.view.camera;
 
 import java.io.ByteArrayOutputStream;
+import java.util.Arrays;
 
 /** JPEGs whose Exif private directory carries exactly the entries a test needs. */
 public final class ExifFixtures {
@@ -15,8 +16,21 @@ public final class ExifFixtures {
     /** The TIFF types the fixtures write. */
     private static final int TYPE_SHORT = 3;
     private static final int TYPE_LONG = 4;
+    private static final int TYPE_UNDEFINED = 7;
 
     private ExifFixtures() {}
+
+    /**
+     * A camera's picture whose private directory carries a tag no standard defines, so large that
+     * it fits the block as the camera wrote it but not once a capture has added its own tags. It
+     * has no image to decode.
+     */
+    public static byte[] overfullCapture() {
+        byte[] value = new byte[65000];
+        Arrays.fill(value, (byte) 'x');
+        return exifJpeg(true,
+                new int[] {TAG_UNDEFINED_BY_ANY_STANDARD, TYPE_UNDEFINED, value.length}, value);
+    }
 
     /**
      * An Exif JPEG with an IFD0 pointing at a private directory that carries ExifVersion and then

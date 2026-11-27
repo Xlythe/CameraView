@@ -476,6 +476,8 @@ the library.
 exif.setAttribute("ImageEditor", "A. Editor");
 exif.setTag(0xA4F0, Exif.TYPE_ASCII, "A tag from a later standard");
 ```
+If the file has no room for some of its tags, save() writes everything else and throws an
+ExifNoRoomException naming them.
 
 VideoView
 -----------------

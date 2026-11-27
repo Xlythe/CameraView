@@ -26,6 +26,7 @@ import android.view.Surface;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifNoRoomException;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -439,6 +440,9 @@ class PictureSession extends PreviewSession {
                     exif.attachLocation(mLocation);
                 }
                 exif.save();
+            } catch (ExifNoRoomException e) {
+                // The picture keeps everything else, and is never failed over its metadata.
+                Log.w(TAG, "Saved the picture without some of its Exif tags", e);
             } catch (IOException e) {
                 Log.e(TAG, "Failed to update EXIF", e);
             }

@@ -33,6 +33,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.TreeMap;
+import java.util.TreeSet;
 import java.util.UUID;
 
 import androidx.annotation.AnyThread;
@@ -320,6 +321,8 @@ public class Exif {
     /**
      * Writes the changes to the file.
      *
+     * @throws ExifNoRoomException if the file has no room for some of its tags, which
+     *     {@link ExifNoRoomException#getTags()} names; everything else is still written
      * @throws IOException if the file cannot be written
      */
     @WorkerThread
@@ -337,21 +340,35 @@ public class Exif {
      * Adds what saveAttributes cannot write to the block it has just written: the private
      * directory entries it drops, the removals by number, and the thumbnail, whose bytes it
      * cannot add and whose Compression tag it can lose. This follows restoreUndefinedTypes,
-     * since the private directory is copied as it stands. The tags go first and the thumbnail
-     * takes the room they leave.
+     * since the private directory is copied as it stands.
+     *
+     * <p>The tags go first and the thumbnail takes the room they leave. When they do not fit
+     * beside a thumbnail the file already holds, the thumbnail gives way, as the library derives
+     * it: it comes out, and goes back as it was, or re-encoded smaller, if there is room after
+     * the tags. Tags that still do not fit are left out, largest first, and named once
+     * everything else is written.</p>
+     *
+     * @throws ExifNoRoomException if tags were left out
      */
     @WorkerThread
     private void finishBlock() throws IOException {
         boolean thumbnail = mHasThumbnail || mThumbnailRequested;
-        if (mFilePath == null || !mCanWriteTags
-                || (mTags.isEmpty() && mRemovedTags.isEmpty() && !thumbnail)) {
-            // A stream has no file to add any of this to, and only a JPEG's private directory
-            // can be written here.
+        if (mFilePath == null || (mTags.isEmpty() && mRemovedTags.isEmpty() && !thumbnail)) {
+            // A stream has no file to add any of this to.
+            return;
+        }
+        if (!mCanWriteTags) {
+            // Only a JPEG's private directory can be written here.
+            if (!mTags.isEmpty()) {
+                throw new ExifNoRoomException(mTags.keySet());
+            }
             return;
         }
         File file = new File(mFilePath);
         byte[] original;
         byte[] jpeg;
+        byte[] givenWay = null;
+        Set<Integer> leftOut = new TreeSet<>();
         try {
             original = read(file);
             if (original == null) {
@@ -362,18 +379,27 @@ public class Exif {
                 jpeg = original.clone();
                 ExifTags.remove(jpeg, mRemovedTags);
             }
-            byte[] withTags = mTags.isEmpty() ? jpeg : ExifTags.write(jpeg, mTags);
+            Map<Integer, ExifTags.Value> tags = new TreeMap<>(mTags);
+            byte[] withTags = tags.isEmpty() ? jpeg : ExifTags.write(jpeg, tags);
             if (withTags == null) {
-                // A picture without these tags is still a picture, and a save that otherwise
-                // succeeded is never failed over metadata that did not fit.
-                Log.w(TAG, "No room in the Exif block for " + mTags.keySet());
-            } else {
-                jpeg = withTags;
+                byte[] detached = ExifThumbnail.detach(jpeg);
+                if (detached != null) {
+                    givenWay = ExifThumbnail.thumbnailBytes(jpeg);
+                    jpeg = detached;
+                    withTags = ExifTags.write(jpeg, tags);
+                }
             }
+            while (withTags == null) {
+                int largest = largest(tags);
+                tags.remove(largest);
+                leftOut.add(largest);
+                withTags = tags.isEmpty() ? jpeg : ExifTags.write(jpeg, tags);
+            }
+            jpeg = withTags;
         } catch (RuntimeException | OutOfMemoryError error) {
             throw new IOException("Unable to write the Exif tags", error);
         }
-        jpeg = withThumbnail(file, jpeg);
+        jpeg = withThumbnail(file, jpeg, givenWay);
         if (jpeg != original) {
             try (FileOutputStream out = new FileOutputStream(file)) {
                 out.write(jpeg);
@@ -381,6 +407,23 @@ public class Exif {
         }
         mHasThumbnail = ExifThumbnail.hasThumbnail(jpeg);
         mDirectory = ExifTags.readAll(jpeg);
+        if (!leftOut.isEmpty()) {
+            throw new ExifNoRoomException(leftOut);
+        }
+    }
+
+    /** The tag whose value takes the most room, the higher numbered one of two that tie. */
+    private static int largest(@NonNull Map<Integer, ExifTags.Value> tags) {
+        int largest = -1;
+        int most = -1;
+        for (Map.Entry<Integer, ExifTags.Value> tag : tags.entrySet()) {
+            int cost = ExifTags.cost(tag.getValue());
+            if (cost >= most) {
+                most = cost;
+                largest = tag.getKey();
+            }
+        }
+        return largest;
     }
 
     /**
@@ -807,24 +850,34 @@ public class Exif {
 
     /**
      * The file with its thumbnail written into the block saveAttributes has just rewritten: the
-     * one the file holds, declared again, or a new one if {@link #attachThumbnail()} asked for
-     * it. The bytes go straight into the file, since ExifInterface cannot add a thumbnail.
+     * one that gave way to the tags, put back as it was or re-encoded to fit; the one the file
+     * holds, declared again; or a new one if {@link #attachThumbnail()} asked for it. The bytes
+     * go straight into the file, since ExifInterface cannot add a thumbnail.
      *
+     * @param givenWay the thumbnail taken out to make room for the tags, or null
      * @return the updated file, or the one given when there is nothing to do or no room
      */
     @WorkerThread
     @NonNull
-    private byte[] withThumbnail(@NonNull File file, @NonNull byte[] jpeg) {
+    private byte[] withThumbnail(@NonNull File file, @NonNull byte[] jpeg,
+            @Nullable byte[] givenWay) {
         if (!mHasThumbnail && !mThumbnailRequested) {
             return jpeg;
         }
         try {
             int orientation = getOrientation();
-            // A camera's own thumbnail often loses its Compression tag when the block is
-            // rewritten, and naming it again is cheaper than encoding a new one.
-            byte[] declared = ExifThumbnail.declareExistingThumbnail(jpeg, orientation);
-            if (declared != null) {
-                return declared;
+            if (givenWay != null) {
+                byte[] restored = ExifThumbnail.attach(jpeg, givenWay, orientation);
+                if (restored != null) {
+                    return restored;
+                }
+            } else {
+                // A camera's own thumbnail often loses its Compression tag when the block is
+                // rewritten, and naming it again is cheaper than encoding a new one.
+                byte[] declared = ExifThumbnail.declareExistingThumbnail(jpeg, orientation);
+                if (declared != null) {
+                    return declared;
+                }
             }
             int room = ExifThumbnail.roomForThumbnail(jpeg);
             if (room <= 0) {

@@ -572,9 +572,12 @@ public class ExifTagsSaveTest {
         }
     }
 
-    /** A PNG keeps none of these tags, and still saves everything else. */
+    /**
+     * A PNG keeps none of these tags, and its save says so after saving everything else, rather
+     * than leaving the caller to find them missing.
+     */
     @Test
-    public void aPngKeepsNoTags() throws IOException {
+    public void aPngSaysItKeptNoTags() throws IOException {
         File png = File.createTempFile("tags", ".png");
         png.deleteOnExit();
         try (FileOutputStream out = new FileOutputStream(png)) {
@@ -585,19 +588,19 @@ public class ExifTagsSaveTest {
         assertTrue(exif.setTag(TAG_UNDEFINED_BY_ANY_STANDARD, Exif.TYPE_ASCII, "nowhere"));
         exif.setTitle("nowhere either");
         exif.setDescription("Kept");
-        exif.save();
+        ExifNoRoomException error = assertThrows(ExifNoRoomException.class, exif::save);
 
-        Exif saved = new Exif(png);
-        assertNull(saved.getTitle());
-        assertEquals("Kept", saved.getDescription());
+        assertArrayEquals(new int[] {TAG_IMAGE_TITLE, TAG_UNDEFINED_BY_ANY_STANDARD},
+                error.getTags());
+        assertEquals("Kept", new Exif(png).getDescription());
     }
 
     /**
-     * A block with no room left for a tag leaves it out and keeps everything else the save wrote,
-     * rather than failing a save, such as a capture's, over metadata.
+     * A block with no room left for a tag leaves it out, keeps everything else the save wrote,
+     * and says which tag it left out.
      */
     @Test
-    public void aBlockWithNoRoomLeavesTheTagOut() throws IOException {
+    public void aBlockWithNoRoomNamesWhatItLeftOut() throws IOException {
         String makerNote = fillBlock(file, 400);
         char[] title = new char[1000];
         Arrays.fill(title, 't');
@@ -606,8 +609,10 @@ public class ExifTagsSaveTest {
         exif.setAttribute(ExifInterface.TAG_MAKER_NOTE, makerNote);
         exif.setTitle(new String(title));
         exif.setDescription("Kept");
-        exif.save();
+        ExifNoRoomException error = assertThrows(ExifNoRoomException.class, exif::save);
 
+        assertArrayEquals(new int[] {TAG_IMAGE_TITLE}, error.getTags());
+        assertTrue(error.getMessage(), error.getMessage().contains("ImageTitle (0xA436)"));
         Exif saved = new Exif(file);
         assertEquals(makerNote, saved.getAttribute(ExifInterface.TAG_MAKER_NOTE));
         assertEquals("Kept", saved.getDescription());
@@ -615,6 +620,52 @@ public class ExifTagsSaveTest {
         assertTrue(ExifSegment.find(readAll(file)).payloadLength <= ExifSegment.MAX_APP1_PAYLOAD);
         assertEquals("it still reads as set, for a later save with room",
                 new String(title), exif.getTitle());
+    }
+
+    /** Of several tags that do not all fit, the largest are left out and the rest written. */
+    @Test
+    public void theLargestTagsAreLeftOutFirst() throws IOException {
+        String makerNote = fillBlock(file, 700);
+        char[] title = new char[1000];
+        Arrays.fill(title, 't');
+
+        Exif exif = new Exif(file);
+        exif.setAttribute(ExifInterface.TAG_MAKER_NOTE, makerNote);
+        exif.setTitle(new String(title));
+        exif.setTag(TAG_COMPOSITE_IMAGE, Exif.TYPE_SHORT, "2");
+        exif.setPhotographer("Short");
+        ExifNoRoomException error = assertThrows(ExifNoRoomException.class, exif::save);
+
+        assertArrayEquals(new int[] {TAG_IMAGE_TITLE}, error.getTags());
+        Exif saved = new Exif(file);
+        assertEquals("2", saved.getTag(TAG_COMPOSITE_IMAGE));
+        assertEquals("Short", saved.getTag(TAG_PHOTOGRAPHER));
+        assertNull(saved.getTitle());
+    }
+
+    /**
+     * A camera's own tag that fits the block as the camera wrote it, but not beside what a
+     * capture adds, is named by the save, which keeps everything else. This is the file the
+     * capture tests hand each backend.
+     */
+    @Test
+    public void aCamerasOwnTagThatNoLongerFitsIsNamed() throws IOException {
+        try (FileOutputStream out = new FileOutputStream(file)) {
+            out.write(ExifFixtures.overfullCapture());
+        }
+        Exif exif = new Exif(file);
+        assertNotNull("the camera's tag reads", exif.getTag(TAG_UNDEFINED_BY_ANY_STANDARD));
+        exif.attachTimestamp();
+        exif.attachCaptureDevice(RuntimeEnvironment.getApplication());
+        exif.attachThumbnail();
+
+        ExifNoRoomException error = assertThrows(ExifNoRoomException.class, exif::save);
+
+        assertArrayEquals(new int[] {TAG_UNDEFINED_BY_ANY_STANDARD}, error.getTags());
+        Exif saved = new Exif(file);
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_MAKE));
+        assertNull(saved.getTag(TAG_UNDEFINED_BY_ANY_STANDARD));
     }
 
     /** Removing a tag needs no room, so it works in a block that is full. */

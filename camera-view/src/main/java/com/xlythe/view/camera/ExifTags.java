@@ -491,6 +491,11 @@ final class ExifTags {
         return ExifSegment.append(jpeg, segment, addition, pointerEntry + 8);
     }
 
+    /** How many bytes a value adds to the block: its entry, and its bytes if they don't fit. */
+    static int cost(@NonNull Value value) {
+        return ExifSegment.ENTRY_BYTES + (value.bytes.length > 4 ? value.bytes.length : 0);
+    }
+
     private static int sizeOf(int type) {
         if (type == Exif.TYPE_UTF8) {
             return 1;
