@@ -1472,17 +1472,21 @@ public class CameraView extends FrameLayout {
             }
             mFiling++;
             MediaStoreSaver.save(getContext(), Collections.singletonList(file),
-                    false /* isVideo */, uris -> {
-                mFiling--;
-                if (uris != null) {
-                    mDelivered++;
-                    mListener.onBurstImageSaved(uris.get(0));
-                } else {
-                    // Whatever kept this one out of the gallery keeps the rest out too.
-                    mBurst.end();
-                }
-                reportIfDone();
-            });
+                    false /* isVideo */, this::onFiled);
+        }
+
+        /** Hears where a picture was filed, or that it could not be. */
+        @UiThread
+        private void onFiled(@Nullable List<Uri> uris) {
+            mFiling--;
+            if (uris != null) {
+                mDelivered++;
+                mListener.onBurstImageSaved(uris.get(0));
+            } else {
+                // Whatever kept this one out of the gallery keeps the rest out too.
+                mBurst.end();
+            }
+            reportIfDone();
         }
 
         @Override

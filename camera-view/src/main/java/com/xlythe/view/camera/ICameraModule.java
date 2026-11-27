@@ -249,6 +249,7 @@ public abstract class ICameraModule {
      * Called as each picture of a burst is exposed. A burst is silent, so the click plays only
      * where it is required, and the image listener is not told: the burst reports its own.
      */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
     public void onBurstShutter() {
         if (playsOwnClick()) {
             mSounds.play(getContext(), MediaActionSound.SHUTTER_CLICK, false /* wanted */);

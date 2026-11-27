@@ -669,6 +669,9 @@ class PictureSession extends PreviewSession {
          * camera serves queued requests ahead of the repeating one and the preview would
          * otherwise freeze for the whole burst. An unbinned still is the exception: the preview
          * cannot be read out in that mode, and the readout holds it up anyway.
+         *
+         * <p>Never from the zero-shutter-lag buffer: pictures asked for back to back could be
+         * handed the same buffered frame, or frames from before the burst began.</p>
          */
         private void requestFrame(@NonNull File file) {
             mPictureSurface.expectBurstPicture(file, burstExifParameters());
