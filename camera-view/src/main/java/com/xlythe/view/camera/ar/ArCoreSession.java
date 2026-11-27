@@ -35,7 +35,9 @@ import com.google.ar.core.SharedCamera;
 import com.google.ar.core.Trackable;
 import com.google.ar.core.TrackingState;
 import com.google.ar.core.exceptions.CameraNotAvailableException;
+import com.google.ar.core.exceptions.FatalException;
 import com.google.ar.core.exceptions.NotYetAvailableException;
+import com.google.ar.core.exceptions.UnavailableDeviceNotCompatibleException;
 import com.google.ar.core.exceptions.UnavailableException;
 import com.xlythe.view.camera.ArAnchor;
 import com.xlythe.view.camera.CameraView;
@@ -221,9 +223,20 @@ public final class ArCoreSession implements ArTracker {
     @MainThread
     @Nullable
     public static ArCoreSession create(@NonNull Context context) {
-        Session session = null;
+        Session session;
         try {
             session = new Session(context, EnumSet.of(Session.Feature.SHARED_CAMERA));
+        } catch (FatalException | UnavailableDeviceNotCompatibleException error) {
+            // ARCore said this device runs AR before it tried the device's camera. One it cannot
+            // use is found out here, for good, so AR stops being offered.
+            Log.w(TAG, "ARCore will not start a session on this device", error);
+            ArSupport.onSessionRefused();
+            return null;
+        } catch (UnavailableException | RuntimeException | LinkageError error) {
+            Log.w(TAG, "ARCore will not start a session here", error);
+            return null;
+        }
+        try {
             List<CameraConfig> backConfigs = session.getSupportedCameraConfigs(
                     new CameraConfigFilter(session)
                             .setFacingDirection(CameraConfig.FacingDirection.BACK));
@@ -262,12 +275,10 @@ public final class ArCoreSession implements ArTracker {
             return new ArCoreSession(session, sharedCamera, cameraId,
                     cameraConfig.getTextureSize(), depthSupported,
                     orientation == null ? 90 : orientation);
-        } catch (UnavailableException | android.hardware.camera2.CameraAccessException
-                | RuntimeException | LinkageError error) {
+        } catch (android.hardware.camera2.CameraAccessException | RuntimeException
+                | LinkageError error) {
             Log.w(TAG, "ARCore will not start a session here", error);
-            if (session != null) {
-                session.close();
-            }
+            session.close();
             return null;
         }
     }

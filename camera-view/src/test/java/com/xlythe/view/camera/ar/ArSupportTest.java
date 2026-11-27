@@ -60,6 +60,25 @@ public final class ArSupportTest {
                 availability == ArSupport.UNSUPPORTED || availability == ArSupport.UNKNOWN);
     }
 
+    /**
+     * A device ARCore would not start a session on is not offered AR again, whatever ARCore
+     * answers about it, until the app starts afresh.
+     */
+    @Test
+    public void aDeviceArcoreRefusedIsNotOfferedArAgain() {
+        declareAr();
+        assertEquals("still being asked, so worth trying", ArSupport.UNKNOWN,
+                ArSupport.availability(context));
+
+        ArSupport.onSessionRefused();
+        assertEquals(ArSupport.UNSUPPORTED, ArSupport.availability(context));
+        assertEquals("the answer is kept", ArSupport.UNSUPPORTED,
+                ArSupport.availability(context));
+
+        ArSupport.reset();
+        assertEquals(ArSupport.UNKNOWN, ArSupport.availability(context));
+    }
+
     /** Only installed and supported is ready; still being checked is worth trying. */
     @Test
     public void everyAnswerArcoreGivesMeansSomething() {

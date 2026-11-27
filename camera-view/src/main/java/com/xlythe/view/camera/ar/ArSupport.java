@@ -58,6 +58,13 @@ public final class ArSupport {
     /** Whether the manifest declares AR, which cannot change while the app runs either. */
     private static volatile Boolean sDeclared;
 
+    /**
+     * Whether ARCore has refused to start a session on this device. It says a device runs AR
+     * before it has tried the device's camera, so a camera it cannot use is only found out when a
+     * session starts, and that does not change while the app runs.
+     */
+    private static volatile boolean sRefused;
+
     private ArSupport() {}
 
     /**
@@ -68,10 +75,21 @@ public final class ArSupport {
     @AnyThread
     @Availability
     public static int availability(@NonNull Context context) {
-        if (Build.VERSION.SDK_INT < 24 || !isLibraryPresent() || !isDeclared(context)) {
+        if (Build.VERSION.SDK_INT < 24 || !isLibraryPresent() || !isDeclared(context)
+                || sRefused) {
             return UNSUPPORTED;
         }
         return Installed.availability(context);
+    }
+
+    /**
+     * Records that ARCore would not start a session on this device, so AR is not offered again.
+     * Only for a refusal about the device itself, never one that installing or updating Google
+     * Play Services for AR could change.
+     */
+    @AnyThread
+    public static void onSessionRefused() {
+        sRefused = true;
     }
 
     /** Whether ARCore's client library is in the app. */
@@ -96,6 +114,7 @@ public final class ArSupport {
     static void reset() {
         sLibraryPresent = null;
         sDeclared = null;
+        sRefused = false;
     }
 
     /**

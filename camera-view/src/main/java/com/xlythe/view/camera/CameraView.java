@@ -1763,7 +1763,8 @@ public class CameraView extends FrameLayout {
      * installed, the app's own {@code com.google.ar:core} dependency, and the
      * {@code com.google.ar.core} meta-data in the app's manifest. Never blocks: the first answer
      * after the app starts can be false while the phone is still being checked, so ask again
-     * when it matters.</p>
+     * when it matters. A phone can also pass every check and still have a camera AR cannot use,
+     * which {@link #enterAr} finds out; from then on this is false.</p>
      */
     public boolean isArSupported() {
         return ArSupport.availability(getContext()) == ArSupport.READY;
