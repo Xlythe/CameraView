@@ -8,6 +8,7 @@ import android.graphics.Point
 import android.graphics.Rect
 import android.hardware.display.DisplayManager
 import android.hardware.display.DisplayManager.DisplayListener
+import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.os.Parcelable
@@ -133,7 +134,21 @@ data class CameraState(
 )
 
 interface CameraController {
+    /**
+     * Takes a picture and files it where the gallery looks, reporting it to [Camera]'s
+     * onImageSaved. Only this overload files into MediaStore. Below API 29 that needs
+     * WRITE_EXTERNAL_STORAGE, and without it onImageCaptureFailed is called instead.
+     */
+    fun takePicture()
     fun takePicture(file: File)
+
+    /**
+     * Records a video and files it where the gallery looks, reporting it to [Camera]'s
+     * onVideoSaved. Only this overload files into MediaStore. Below API 29 that needs
+     * WRITE_EXTERNAL_STORAGE, and without it onVideoCaptureFailed is called instead.
+     */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    fun startRecording()
 
     /** Records audio alongside the video, so the microphone is needed here and not at Camera. */
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -211,9 +226,25 @@ private class CameraControllerImpl(
         return viewProvider()
     }
 
+    override fun takePicture() {
+        getView()?.takePicture()
+            ?: Log.e(TAG, "View not available for takePicture")
+    }
+
     override fun takePicture(file: File) {
         getView()?.takePicture(file)
             ?: Log.e(TAG, "View not available for takePicture")
+    }
+
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    override fun startRecording() {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for startRecording")
+            return
+        }
+        view.startRecording()
+        onCameraStateChanged()
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -437,8 +468,10 @@ private fun Extension.toCameraView() = when (this) {
  * Use conditional rendering based on permission status at the call site.
  *
  * Showing a preview and taking pictures need nothing else. The microphone is only required by
- * [CameraController.startRecording] and [CameraController.stream], which ask for it themselves,
- * and outputs are written to the [File] you pass in, so no storage permission is involved.
+ * [CameraController.startRecording] and [CameraController.stream], which ask for it themselves.
+ * Outputs are written to the [File] you pass in, or filed where the gallery looks by the
+ * controller's takePicture() and startRecording(), which below API 29 needs
+ * WRITE_EXTERNAL_STORAGE.
  *
  * Several of the settings below are read only by the CameraX backend, which is still opt-in; the
  * Camera2 backend that ships enabled logs and drops them. [CameraState] says which ones the
@@ -475,6 +508,12 @@ private fun Extension.toCameraView() = when (this) {
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
  * @param onShutter Called as a picture is exposed, before it is saved: the moment for a shutter
  *  animation, or for a sound of the app's own with [shutterSoundEnabled] off.
+ * @param onImageCaptured Receives a picture from [CameraController.takePicture] given a file.
+ * @param onImageSaved Receives where a picture from [CameraController.takePicture] without a file
+ *  was filed.
+ * @param onVideoCaptured Receives a video from [CameraController.startRecording] given a file.
+ * @param onVideoSaved Receives where a video from [CameraController.startRecording] without a
+ *  file was filed.
  */
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
@@ -506,9 +545,11 @@ fun Camera(
     onShutter: () -> Unit = {},
     onImageConfirmation: () -> Unit = {},
     onImageCaptured: (file: File) -> Unit = {},
+    onImageSaved: (uri: Uri) -> Unit = {},
     onImageCaptureFailed: () -> Unit = {},
     onVideoConfirmation: () -> Unit = {},
     onVideoCaptured: (file: File) -> Unit = {},
+    onVideoSaved: (uri: Uri) -> Unit = {},
     onVideoCaptureFailed: () -> Unit = {},
     onCameraOpened: () -> Unit = {},
     onCameraClosed: () -> Unit = {},
@@ -524,9 +565,11 @@ fun Camera(
     val currentOnShutter by rememberUpdatedState(onShutter)
     val currentOnImageConfirmation by rememberUpdatedState(onImageConfirmation)
     val currentOnImageCaptured by rememberUpdatedState(onImageCaptured)
+    val currentOnImageSaved by rememberUpdatedState(onImageSaved)
     val currentOnImageCaptureFailed by rememberUpdatedState(onImageCaptureFailed)
     val currentOnVideoConfirmation by rememberUpdatedState(onVideoConfirmation)
     val currentOnVideoCaptured by rememberUpdatedState(onVideoCaptured)
+    val currentOnVideoSaved by rememberUpdatedState(onVideoSaved)
     val currentOnVideoCaptureFailed by rememberUpdatedState(onVideoCaptureFailed)
     val currentOnCameraOpened by rememberUpdatedState(onCameraOpened)
     val currentOnCameraClosed by rememberUpdatedState(onCameraClosed)
@@ -561,6 +604,10 @@ fun Camera(
                     currentOnImageCaptured(file)
                 }
 
+                override fun onImageSaved(uri: Uri) {
+                    currentOnImageSaved(uri)
+                }
+
                 override fun onFailure() {
                     currentOnImageCaptureFailed()
                 }
@@ -577,6 +624,11 @@ fun Camera(
                     // where stopRecording was asked for.
                     publishState(this@apply)
                     currentOnVideoCaptured(file)
+                }
+
+                override fun onVideoSaved(uri: Uri) {
+                    publishState(this@apply)
+                    currentOnVideoSaved(uri)
                 }
 
                 override fun onFailure() {
