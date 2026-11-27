@@ -64,9 +64,13 @@ final class WebpContainer extends ExifImageContainer {
     /** Whether the packet has changed. */
     private boolean mXmpDirty;
 
+    /** Whether the file holds more than one animation frame. */
+    private final boolean mAnimated;
+
     private WebpContainer(@NonNull ByteSource source, @Nullable byte[] tiff, @NonNull Xmp xmp,
-            boolean writable) throws IOException {
+            boolean animated, boolean writable) throws IOException {
         super(writable);
+        mAnimated = animated;
         mTiff = tiff;
         mXmp = xmp;
         setReadExif(tiff == null ? null : readTiff(tiff));
@@ -77,14 +81,18 @@ final class WebpContainer extends ExifImageContainer {
     static WebpContainer read(@NonNull ByteSource source, boolean writable) throws IOException {
         byte[] tiff = null;
         Xmp xmp = null;
+        int frames = 0;
         for (Chunk chunk : chunks(source)) {
-            if ("EXIF".equals(chunk.type) && tiff == null) {
+            if ("ANMF".equals(chunk.type)) {
+                frames++;
+            } else if ("EXIF".equals(chunk.type) && tiff == null) {
                 tiff = tiffOf(source.bytes(chunk.data(), chunk.length));
             } else if ("XMP ".equals(chunk.type) && xmp == null) {
                 xmp = Xmp.parse(source.bytes(chunk.data(), chunk.length));
             }
         }
-        return new WebpContainer(source, tiff, xmp == null ? Xmp.empty() : xmp, writable);
+        return new WebpContainer(source, tiff, xmp == null ? Xmp.empty() : xmp, frames > 1,
+                writable);
     }
 
     @NonNull
@@ -113,6 +121,11 @@ final class WebpContainer extends ExifImageContainer {
     @Override
     int format() {
         return MediaTags.FORMAT_WEBP;
+    }
+
+    @Override
+    boolean animated() {
+        return mAnimated;
     }
 
     @Override

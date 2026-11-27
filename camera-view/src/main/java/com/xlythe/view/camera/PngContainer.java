@@ -97,10 +97,14 @@ final class PngContainer extends ExifImageContainer {
     /** Whether the packet has changed. */
     private boolean mXmpDirty;
 
+    /** Whether an acTL chunk says the picture has more than one frame. */
+    private final boolean mAnimated;
+
     private PngContainer(@NonNull ByteSource source, @Nullable byte[] tiff,
-            @NonNull Map<String, String> text, @NonNull Xmp xmp, boolean writable)
-            throws IOException {
+            @NonNull Map<String, String> text, @NonNull Xmp xmp, boolean animated,
+            boolean writable) throws IOException {
         super(writable);
+        mAnimated = animated;
         mTiff = tiff;
         mText = text;
         mXmp = xmp;
@@ -113,8 +117,11 @@ final class PngContainer extends ExifImageContainer {
         byte[] tiff = null;
         Map<String, String> text = new LinkedHashMap<>();
         Xmp xmp = null;
+        boolean animated = false;
         for (Chunk chunk : chunks(source)) {
-            if ("eXIf".equals(chunk.type) && tiff == null) {
+            if ("acTL".equals(chunk.type) && chunk.length >= 8) {
+                animated = Bytes.u32(source.bytes(chunk.data(), 4), 0) > 1;
+            } else if ("eXIf".equals(chunk.type) && tiff == null) {
                 tiff = tiffOf(source.bytes(chunk.data(), chunk.length));
             } else if ("tEXt".equals(chunk.type) || "zTXt".equals(chunk.type)
                     || "iTXt".equals(chunk.type)) {
@@ -143,7 +150,8 @@ final class PngContainer extends ExifImageContainer {
                 }
             }
         }
-        return new PngContainer(source, tiff, text, xmp == null ? Xmp.empty() : xmp, writable);
+        return new PngContainer(source, tiff, text, xmp == null ? Xmp.empty() : xmp, animated,
+                writable);
     }
 
     /** The chunks, in order, up to the end chunk or the end of the file. */
@@ -283,6 +291,11 @@ final class PngContainer extends ExifImageContainer {
         } finally {
             inflater.end();
         }
+    }
+
+    @Override
+    boolean animated() {
+        return mAnimated;
     }
 
     @Override

@@ -217,6 +217,11 @@ abstract class MediaContainer {
         return null;
     }
 
+    /** Whether the picture is animated: more than one frame, shown in turn. */
+    boolean animated() {
+        return false;
+    }
+
     /** Which kind of gain map the file carries, as one of {@link MediaTags}'s gain maps. */
     @MediaTags.GainMap
     int gainMap() {

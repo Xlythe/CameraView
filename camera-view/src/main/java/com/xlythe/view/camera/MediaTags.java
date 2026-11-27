@@ -311,6 +311,10 @@ public final class MediaTags {
                 return FlacContainer.read(source, writable);
             case FORMAT_OGG:
                 return OggContainer.read(source, writable);
+            case FORMAT_MATROSKA:
+                return MatroskaContainer.read(source);
+            case FORMAT_GIF:
+                return GifContainer.read(source);
             default:
                 return new PlainContainer(format);
         }
@@ -1111,6 +1115,15 @@ public final class MediaTags {
     @Nullable
     public MotionPhoto getMotionPhoto() {
         return mContainer.motionPhoto();
+    }
+
+    /**
+     * Whether a picture is animated, showing more than one frame in turn: an animated GIF, WebP
+     * or PNG, or an AVIF or HEIF image sequence.
+     */
+    @AnyThread
+    public boolean isAnimated() {
+        return mContainer.animated();
     }
 
     /** The kind of gain map an HDR picture carries, or {@link #GAIN_MAP_NONE}. */
