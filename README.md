@@ -65,8 +65,9 @@ Camera(
 
 Camera also accepts zoomRatio [minZoomRatio to maxZoomRatio, or null to leave the zoom to
 pinchToZoom], animateZoom [boolean], shutterSoundEnabled [boolean], shutterSound [raw resource],
-pictureQuality [1 to 100], colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr],
-exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
+pictureQuality [1 to 100], colorSpace [srgb, displayP3],
+pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [integer],
+torchEnabled [boolean], dynamicRange [sdr, hdr],
 extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
 lowLightBoostEnabled [boolean]. Not every camera can do all of these, so CameraState below says
 which this one supports.
@@ -127,6 +128,8 @@ cameraController.startRecording()
 ```
 Only these calls without a file put anything in the gallery, and they report where it went.
 Given a file, takePicture(file) and startRecording(file) write there instead and report the file.
+A raw picture is filed as a DNG. A rawJpeg picture files both, under the same name, and
+onImageSaved hears each: the JPEG, then the DNG.
 ```kotlin
 Camera(
     controller = cameraController,
@@ -297,7 +300,8 @@ Only these overloads without a file put anything in the gallery, and the listene
 went in onImageSaved(Uri) and onVideoSaved(Uri). Given a file, takePicture(file) and
 startRecording(file) write there instead, and report the file in onImageCaptured(File) and
 onVideoCaptured(File). Every method but the confirmation and failure ones has a default, so
-override the ones you use.
+override the ones you use. A RAW picture is filed as a DNG. A RAW_JPEG picture files both, under
+the same name, and onImageSaved(Uri) hears each: the JPEG, then the DNG.
 ```java
 mCameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
   @Override public void onImageConfirmation() {}
@@ -323,7 +327,7 @@ mCameraView.setOnCameraStateChangedListener(listener);
 ```
 With confirmation enabled, a capture is shown in CameraView's own preview and onImageConfirmation()
 or onVideoConfirmation() fires before it is reported. Accept or discard it to continue; rejecting
-also deletes the file, and files nothing in the gallery. Enable matchPreviewAspectRatio alongside
+also deletes every file it wrote, and files nothing in the gallery. Enable matchPreviewAspectRatio alongside
 this so the capture and the preview are framed the same.
 ```java
 mCameraView.setImageConfirmationEnabled(true);

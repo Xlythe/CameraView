@@ -20,6 +20,10 @@ import static android.os.Process.setThreadPriority;
  * A fire-once class. When created, you must pass a {@link InputStream}. Once {@link #start()} is
  * called, the input stream will be read from until either {@link #stop()} is called or the stream
  * ends.
+ *
+ * <p>The stream is live, so the player keeps up with it rather than playing everything it is
+ * given: audio that waited unplayed through a whole second is discarded, down to a small cushion,
+ * instead of being played late for the rest of the stream.</p>
  */
 public class AudioPlayer {
   private static final String TAG = CameraView.class.getSimpleName();
@@ -76,7 +80,7 @@ public class AudioPlayer {
                 Buffer buffer = new Buffer();
                 InputStream audio = mInputStream;
                 int sampleRate = buffer.getSampleRate();
-                int channels = AudioFormat.CHANNEL_OUT_MONO;
+                int channelCount = 1;
                 try {
                   AudioStreamHeader.Read read = AudioStreamHeader.read(mInputStream);
                   audio = read.stream;
@@ -84,13 +88,14 @@ public class AudioPlayer {
                     // The recorder said what it is sending, which beats guessing from this
                     // device's hardware: the two are not the same device.
                     sampleRate = read.header.getSampleRate();
-                    channels = read.header.getChannelCount() > 1
-                            ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO;
+                    channelCount = read.header.getChannelCount() > 1 ? 2 : 1;
                   }
                 } catch (IOException error) {
                   Log.e(TAG, "Failed to read the audio stream's description", error);
                 }
 
+                int channels = channelCount > 1
+                        ? AudioFormat.CHANNEL_OUT_STEREO : AudioFormat.CHANNEL_OUT_MONO;
                 int size = AudioTrack.getMinBufferSize(
                         sampleRate, channels, AudioFormat.ENCODING_PCM_16BIT);
                 if (size <= 0) {
@@ -107,10 +112,31 @@ public class AudioPlayer {
                 audioTrack.play();
                 Log.d(TAG, "Started playing audio at " + sampleRate + "Hz");
 
-                int len;
+                AudioCatchUp catchUp = new AudioCatchUp(sampleRate, channelCount);
+                int frameBytes = catchUp.getFrameBytes();
+                byte[] data = buffer.data();
+                // AudioTrack writes whole frames and silently drops the rest, so a read that ends
+                // mid-frame - which a socket is free to return - would shift every sample after
+                // it. The tail of such a read waits at the front of the buffer for the rest.
+                int carried = 0;
                 try {
-                  while (isPlaying() && (len = audio.read(buffer.data())) > 0) {
-                    audioTrack.write(buffer.data(), 0, len);
+                  while (isPlaying()) {
+                    int skip = catchUp.bytesToSkip(audio.available());
+                    if (skip > 0) {
+                      // A partial frame from before the skip is part of what is discarded.
+                      discard(audio, data, skip - carried);
+                      carried = 0;
+                    }
+                    int len = audio.read(data, carried, data.length - carried);
+                    if (len <= 0) {
+                      break;
+                    }
+                    int total = carried + len;
+                    int whole = total - total % frameBytes;
+                    audioTrack.write(data, 0, whole);
+                    catchUp.onPlayed(whole);
+                    carried = total - whole;
+                    System.arraycopy(data, whole, data, 0, carried);
                   }
                 } catch (IOException e) {
                   Log.e(TAG, "Exception with playing audio stream", e);
@@ -126,6 +152,20 @@ public class AudioPlayer {
               }
             };
     mThread.start();
+  }
+
+  /**
+   * Reads and throws away bytes. InputStream#skip would seek, which a pipe or a socket refuses.
+   */
+  private static void discard(InputStream inputStream, byte[] scratch, int bytes)
+          throws IOException {
+    while (bytes > 0) {
+      int read = inputStream.read(scratch, 0, Math.min(scratch.length, bytes));
+      if (read < 0) {
+        return;
+      }
+      bytes -= read;
+    }
   }
 
   private void stopInternal() {

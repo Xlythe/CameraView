@@ -166,6 +166,14 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getPictureQuality();
     }
 
+    CameraView.PictureFormat getPictureFormat() {
+        return mCamera2Module.getPictureFormat();
+    }
+
+    boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        return mCamera2Module.isPictureFormatSupported(format);
+    }
+
     @NonNull
     ExifCaptureParameters exifCaptureParameters() {
         return mCamera2Module.exifCaptureParameters();
@@ -269,6 +277,15 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     @Override
     public void close() {}
+
+    void showImageConfirmation(File file) {
+        mCamera2Module.showImageConfirmation(file);
+    }
+
+    /** Shows a picture that wrote every one of {@code files}, reported as {@code file}. */
+    void showImageConfirmation(@NonNull File file, @NonNull List<File> files) {
+        mCamera2Module.showImageConfirmation(file, files);
+    }
 
     void onImageFailed() {
         mCamera2Module.onImageFailed();
