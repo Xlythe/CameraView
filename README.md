@@ -68,9 +68,10 @@ pinchToZoom], animateZoom [boolean], shutterSoundEnabled [boolean], shutterSound
 pictureQuality [1 to 100], colorSpace [srgb, displayP3],
 pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [integer],
 torchEnabled [boolean], dynamicRange [sdr, hdr],
-extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
-lowLightBoostEnabled [boolean]. Not every camera can do all of these, so CameraState below says
-which this one supports.
+extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean],
+lowLightBoostEnabled [boolean], frameRenderer [FrameRenderer, see Filters and masks below] and
+cameraTextureProvider [CameraTextureProvider]. Not every camera can do all of these, so
+CameraState below says which this one supports.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
 opens, and is republished when the camera reconfigures, so ask it before offering a control: a
@@ -95,7 +96,8 @@ minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
 minExposureCompensation, maxExposureCompensation, supportedColorSpaces, supportedPictureFormats,
 supportedDynamicRanges, supportedExtensions, isStabilizationSupported, isLowLightBoostSupported,
 isSnapshotWhileRecordingSupported, isFaceDetectionSupported, horizontalFieldOfView,
-verticalFieldOfView, isRecording and isAnalyzingFrames.
+verticalFieldOfView, isRecording, isAnalyzingFrames, isFrameEffectSupported and
+isReplacingBackground.
 
 Pass onZoomChanged to hear the zoom ratio whenever it changes, a pinch included, so that buttons
 for zoomPresets can follow it. Writing it back into zoomRatio is safe, and animateZoom eases over
@@ -164,6 +166,12 @@ Reports the faces the camera is already tracking, or stops when given null. Retu
 camera cannot report faces, in which case the listener is never called.
 ```kotlin
 cameraController.setFaceDetectionListener { faces, faceToView -> ... }
+```
+Segments the subject out of each frame and draws it over a colour or an image, in place of
+frameRenderer, until exitBackgroundReplacement. Returns false if this camera cannot.
+```kotlin
+cameraController.enterBackgroundReplacement(BackgroundReplacer().apply { setBackgroundImage(bitmap) })
+cameraController.exitBackgroundReplacement()
 ```
 
 CameraFragment
