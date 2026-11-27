@@ -1523,7 +1523,8 @@ public class CameraView extends FrameLayout {
     /**
      * Starts reporting the barcodes the camera can see.
      *
-     * @return whether scanning started. False below API 21, when the app does not include ML Kit's
+     * @return whether scanning started. False below API 21, while the background is being
+     *     replaced, when the app does not include ML Kit's
      *     {@code com.google.mlkit:barcode-scanning}, or when its barcode model is not available on
      *     this device.
      */
@@ -1535,6 +1536,11 @@ public class CameraView extends FrameLayout {
 
         if (mBarcodeScanner != null || mUsingModuleBarcodeScanner) {
             throw new IllegalStateException("Barcode scanner cannot be started twice");
+        }
+
+        if (mReplacingBackground) {
+            Log.w(TAG, "Barcodes cannot be scanned while the background is being replaced");
+            return false;
         }
 
         if (Build.VERSION.SDK_INT < 21 || !BarcodeScanner.isAvailable()) {
@@ -1571,12 +1577,13 @@ public class CameraView extends FrameLayout {
      * preview, the recording and the pictures, until {@link #exitBackgroundReplacement()}. The
      * replacer becomes the frame renderer, in place of any other.
      *
-     * <p>It reads the frames an analyzer would, so it cannot run alongside
-     * {@link #startFrameAnalysis} or the barcode scanner. To use a segmentation model of your
-     * own, set a {@link BackgroundReplacer} with {@link #setFrameRenderer} and hand it masks with
-     * {@link BackgroundReplacer#setMask} instead.</p>
+     * <p>To use a segmentation model of your own, set a {@link BackgroundReplacer} with
+     * {@link #setFrameRenderer} and hand it masks with {@link BackgroundReplacer#setMask}
+     * instead.</p>
      *
-     * @return whether it started. False where frames cannot be drawn, which
+     * @return whether it started. Returns false, changing nothing, while
+     *     {@link #startFrameAnalysis frame analysis} or the barcode scanner is running, since it
+     *     reads the same frames. False also where frames cannot be drawn, which
      *     {@link #isFrameEffectSupported()} says in advance, when the app does not include ML
      *     Kit's {@code com.google.mlkit:segmentation-selfie}, or when its model is not available
      *     on this device.
@@ -1587,6 +1594,10 @@ public class CameraView extends FrameLayout {
         if (!isOpen()) {
             throw new IllegalStateException(
                     "Camera must be open before replacing the background");
+        }
+        if (isReadingFrames()) {
+            Log.w(TAG, "The background cannot be replaced while frames are being analyzed");
+            return false;
         }
         if (!isFrameEffectSupported()) {
             Log.w(TAG, "This backend draws no effects, so there is nothing to composite with");
@@ -1616,6 +1627,11 @@ public class CameraView extends FrameLayout {
         return mReplacingBackground;
     }
 
+    /** Whether frame analysis or the barcode scanner is reading frames. */
+    private boolean isReadingFrames() {
+        return mFrameStream != null || mBarcodeScanner != null || mUsingModuleBarcodeScanner;
+    }
+
     public void exitBarcodeScanner() {
         if (Build.VERSION.SDK_INT >= 21 && mBarcodeScanner != null) {
             mBarcodeScanner.stop();
@@ -1638,8 +1654,8 @@ public class CameraView extends FrameLayout {
      * <p>This runs alongside the preview and recording, and stays attached across a lens switch.
      * Call {@link #stopFrameAnalysis()} to let the camera give the buffers back.</p>
      *
-     * @return whether analysis started. False below API 21, and on a backend that cannot produce
-     *     frames to read.
+     * @return whether analysis started. False below API 21, on a backend that cannot produce
+     *     frames to read, and while the background is being replaced.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
      */
     @RequiresPermission(Manifest.permission.CAMERA)
@@ -1660,6 +1676,10 @@ public class CameraView extends FrameLayout {
         }
         if (mFrameStream != null) {
             throw new IllegalStateException("Frame analysis cannot be started twice");
+        }
+        if (mReplacingBackground) {
+            Log.w(TAG, "Frames cannot be analyzed while the background is being replaced");
+            return false;
         }
         if (Build.VERSION.SDK_INT < 19 || !mCameraModule.isFrameAnalysisSupported()) {
             Log.w(TAG, "The " + getBackend() + " backend cannot analyze frames");

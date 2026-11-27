@@ -468,7 +468,8 @@ frame.getWidth and frame.getHeight are the size of that upright picture.
 
 For a mask rather than a filter, enterBackgroundReplacement segments the subject out of each frame
 and draws it over a colour or an image, in place of any frame renderer. It takes the frames an
-analyzer would, so it cannot run at the same time as startFrameAnalysis or the barcode scanner.
+analyzer would, so it returns false while startFrameAnalysis or the barcode scanner is running,
+and they return false while it is.
 ```java
 BackgroundReplacer replacer = new BackgroundReplacer();
 replacer.setBackgroundImage(bitmap); // or setBackgroundColor(Color.BLUE)

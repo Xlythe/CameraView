@@ -225,7 +225,8 @@ interface CameraController {
      * The frame's image belongs to the camera and is recycled as soon as the call returns, so
      * anything that outlives it has to be copied out.
      *
-     * @return whether analysis started. False on a camera that cannot produce frames to read.
+     * @return whether analysis started. False on a camera that cannot produce frames to read,
+     *     and while [enterBackgroundReplacement] is in force.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
      */
     @RequiresPermission(Manifest.permission.CAMERA)
@@ -251,12 +252,12 @@ interface CameraController {
 
     /**
      * Segments the subject out of each frame and draws it over [replacer]'s background, in place
-     * of [Camera]'s frameRenderer, until [exitBackgroundReplacement]. It reads the frames an
-     * analyzer would, so it cannot run alongside [startFrameAnalysis] or the barcode scanner.
+     * of [Camera]'s frameRenderer, until [exitBackgroundReplacement].
      *
-     * @return whether it started. False on a camera that cannot draw frames, which
-     *     [CameraState.isFrameEffectSupported] says in advance, and where the segmentation model
-     *     is unavailable.
+     * @return whether it started. Returns false, changing nothing, while [startFrameAnalysis] or
+     *     the barcode scanner is running, since it reads the same frames. False also on a camera
+     *     that cannot draw frames, which [CameraState.isFrameEffectSupported] says in advance, and
+     *     where the segmentation model is unavailable.
      * @throws IllegalStateException if the camera is not open
      */
     @RequiresPermission(Manifest.permission.CAMERA)
