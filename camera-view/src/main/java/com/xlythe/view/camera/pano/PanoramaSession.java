@@ -95,8 +95,11 @@ public final class PanoramaSession implements GuideState.Source {
     /** A frame aimed this fraction of the frame's narrower side from every painted one is new. */
     static final float PAINT_SPACING = 0.25f;
 
-    /** A photosphere frame that would cover this many new cells is worth painting anyway. */
-    static final int MIN_FRESH_CELLS = 30;
+    /**
+     * A photosphere frame that would cover this much that is new is worth painting anyway, which
+     * is what fills the gaps a sweep leaves between rows.
+     */
+    static final float MIN_UNCOVERED_SHARE = 0.25f;
 
     /** Aimed within this of the target the guide points at, a frame finishes it off. */
     static final float ALIGNED_DEGREES = 6f;
@@ -457,12 +460,16 @@ public final class PanoramaSession implements GuideState.Source {
         if (nearest >= PAINT_SPACING * pose.narrowestFov()) {
             return true;
         }
-        int fresh = coverage.countUncovered(pose);
-        if (fresh == 0) {
+        if (mPhotosphere) {
+            float uncovered = coverage.uncoveredShare(pose);
+            if (uncovered >= MIN_UNCOVERED_SHARE) {
+                return true;
+            }
+            if (uncovered == 0f) {
+                return false;
+            }
+        } else if (coverage.countUncovered(pose) == 0) {
             return false;
-        }
-        if (mPhotosphere && fresh >= MIN_FRESH_CELLS) {
-            return true;
         }
         if (mNextTarget < 0) {
             return false;

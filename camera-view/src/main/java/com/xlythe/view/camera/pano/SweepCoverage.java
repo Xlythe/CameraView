@@ -1,6 +1,7 @@
 package com.xlythe.view.camera.pano;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -191,15 +192,29 @@ final class SweepCoverage {
      * @return how many cells this frame was the first to cover
      */
     int cover(@NonNull CameraPose pose) {
-        return visit(pose, true);
+        return visit(pose, true, null);
     }
 
     /** How many cells a frame would cover that are not covered yet, without marking them. */
     int countUncovered(@NonNull CameraPose pose) {
-        return visit(pose, false);
+        return visit(pose, false, null);
     }
 
-    private int visit(@NonNull CameraPose pose, boolean mark) {
+    /** What share of the cells a frame would cover are not covered yet, from 0 to 1. */
+    float uncoveredShare(@NonNull CameraPose pose) {
+        int[] seen = new int[1];
+        int fresh = visit(pose, false, seen);
+        return seen[0] == 0 ? 0f : (float) fresh / seen[0];
+    }
+
+    /**
+     * Visits the cells a frame saw.
+     *
+     * @param seen if not null, its first element is set to how many cells the frame saw, covered
+     *     or not
+     * @return how many of them were not covered yet
+     */
+    private int visit(@NonNull CameraPose pose, boolean mark, @Nullable int[] seen) {
         Footprint footprint = Footprint.of(pose);
         int top = Math.max(0, (int) Math.floor((90f - footprint.maxPitch) / CELL_DEGREES));
         int bottom = Math.min(ROWS - 1,
@@ -228,14 +243,19 @@ final class SweepCoverage {
         float margin = pose.focal * (float) Math.tan(Math.toRadians(CELL_DEGREES));
         float[] point = new float[2];
         int found = 0;
+        int inside = 0;
         for (int row = top; row <= bottom; row++) {
             for (int i = 0; i < columns; i++) {
                 int cell = row * COLUMNS + (first + i) % COLUMNS;
-                if (mCovered[cell]) {
+                if (mCovered[cell] && seen == null) {
                     continue;
                 }
                 if (!pose.project(mCellDirections[cell * 3], mCellDirections[cell * 3 + 1],
                         mCellDirections[cell * 3 + 2], point) || !pose.contains(point, margin)) {
+                    continue;
+                }
+                inside++;
+                if (mCovered[cell]) {
                     continue;
                 }
                 found++;
@@ -250,6 +270,9 @@ final class SweepCoverage {
                     }
                 }
             }
+        }
+        if (seen != null) {
+            seen[0] = inside;
         }
         return found;
     }

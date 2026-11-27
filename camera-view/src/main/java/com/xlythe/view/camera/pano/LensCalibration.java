@@ -27,8 +27,11 @@ final class LensCalibration {
     /** Frames are compared this small along their long side, which is plenty to align. */
     static final int THUMBNAIL_SIDE = 160;
 
-    /** Below this turn between two frames the focal length hardly changes where pixels land. */
-    static final float MIN_TURN_DEGREES = 4f;
+    /**
+     * Below this turn between two frames the focal length changes where pixels land by too little
+     * to measure it to within {@link #AGREEMENT}.
+     */
+    static final float MIN_TURN_DEGREES = 8f;
 
     /** The scales tried, from this far below the published focal length... */
     static final float MIN_SCALE = 0.4f;
@@ -46,7 +49,7 @@ final class LensCalibration {
      * After comparing this many pairs without agreement, the published focal length is kept: the
      * frames are kept until the calibration settles, so it cannot go on for ever.
      */
-    static final int MAX_PAIRS = 8;
+    static final int MAX_PAIRS = 10;
 
     /** Below this correlation the two pictures have too little in common to say anything. */
     static final float MIN_CORRELATION = 0.5f;

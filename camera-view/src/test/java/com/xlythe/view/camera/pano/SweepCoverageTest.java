@@ -76,6 +76,18 @@ public class SweepCoverageTest {
     }
 
     @Test
+    public void uncoveredShare_isWhatPartOfAFrameIsNew() {
+        SweepCoverage coverage = SweepCoverage.forPhotosphere(0f, NARROWEST);
+        assertEquals(1f, coverage.uncoveredShare(pose(0f, 0f, 0f)), 0f);
+        coverage.cover(pose(0f, 0f, 0f));
+        assertEquals(0f, coverage.uncoveredShare(pose(0f, 0f, 0f)), 0f);
+        // Turned by half its width, about half of it is new.
+        assertEquals(0.5f, coverage.uncoveredShare(pose(23.4f, 0f, 0f)), 0.1f);
+        // Nothing of a frame aimed straight behind the lens has been seen.
+        assertEquals(1f, coverage.uncoveredShare(pose(180f, 0f, 0f)), 0f);
+    }
+
+    @Test
     public void aFrameAcrossTheGridsEdge_coversBothSides() {
         SweepCoverage coverage = SweepCoverage.forPhotosphere(0f, NARROWEST);
         coverage.cover(pose(180f, 0f, 0f));

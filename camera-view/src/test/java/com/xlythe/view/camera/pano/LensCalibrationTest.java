@@ -54,9 +54,9 @@ public class LensCalibrationTest {
         int[] grey = new int[WIDTH * HEIGHT];
         Arrays.fill(grey, 0xFF808080);
         for (int i = 0; i < 20 && !calibration.isDone(); i++) {
-            CameraPose pose = pose(i * 8f, TRUE_FOCAL);
+            CameraPose pose = pose(i * 9f, TRUE_FOCAL);
             calibration.offer(new ArgbImage(grey, WIDTH, HEIGHT),
-                    matrixOf(uprightFacing(i * 8f)), pose);
+                    matrixOf(uprightFacing(i * 9f)), pose);
         }
         // Nothing can be measured from a blank wall, so after a few tries it gives up.
         assertTrue(calibration.isDone());
