@@ -8,7 +8,7 @@ import androidx.annotation.WorkerThread;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -21,6 +21,9 @@ import java.util.Set;
  * full-size preview; some embed only a smaller one.
  */
 final class RawPreview {
+    /** The charset of box and chunk names, by name, which every release has. */
+    private static final Charset ASCII = Charset.forName("US-ASCII");
+
     /** The TIFF tag of an IFD's sub-IFDs. */
     private static final int TAG_SUB_IFDS = 0x014A;
 
@@ -293,7 +296,7 @@ final class RawPreview {
         while (at + 8 <= end) {
             byte[] header = read(at, 16);
             long size = u32(header, 0, false);
-            String type = new String(header, 4, 4, StandardCharsets.US_ASCII);
+            String type = new String(header, 4, 4, ASCII);
             int headerSize = 8;
             if (size == 1 && header.length >= 16) {
                 size = u64(header, 8);
@@ -335,7 +338,7 @@ final class RawPreview {
         while (at + 8 <= end) {
             byte[] header = read(at, 24);
             long size = u32(header, 0, false);
-            String type = new String(header, 4, 4, StandardCharsets.US_ASCII);
+            String type = new String(header, 4, 4, ASCII);
             if (size < 8 || at + size > end) {
                 return;
             }
@@ -366,7 +369,7 @@ final class RawPreview {
         while (at + 8 <= end) {
             byte[] header = read(at, 8);
             long size = u32(header, 0, false);
-            String type = new String(header, 4, 4, StandardCharsets.US_ASCII);
+            String type = new String(header, 4, 4, ASCII);
             if (size < 8 || at + size > end) {
                 // The box's own eight bytes come first; step past them once.
                 at += 8;
@@ -455,7 +458,7 @@ final class RawPreview {
     }
 
     private static boolean startsWith(@NonNull byte[] data, int at, @NonNull String text) {
-        byte[] ascii = text.getBytes(StandardCharsets.US_ASCII);
+        byte[] ascii = text.getBytes(ASCII);
         if (at + ascii.length > data.length) {
             return false;
         }

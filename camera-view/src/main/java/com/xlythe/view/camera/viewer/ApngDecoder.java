@@ -15,7 +15,7 @@ import androidx.annotation.WorkerThread;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.CRC32;
@@ -28,6 +28,9 @@ import java.util.zip.CRC32;
  * at full size would hold more than a budget.
  */
 final class ApngDecoder {
+    /** The charset of box and chunk names, by name, which every release has. */
+    private static final Charset ASCII = Charset.forName("US-ASCII");
+
     /** The eight bytes every PNG starts with. */
     private static final byte[] SIGNATURE = {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'};
 
@@ -124,7 +127,7 @@ final class ApngDecoder {
         int at = SIGNATURE.length;
         while (at + 12 <= png.length) {
             int length = u32(png, at);
-            String type = new String(png, at + 4, 4, StandardCharsets.US_ASCII);
+            String type = new String(png, at + 4, 4, ASCII);
             int data = at + 8;
             if (length < 0 || data + length + 4 > png.length) {
                 break;
@@ -284,7 +287,7 @@ final class ApngDecoder {
 
     private static void chunk(@NonNull ByteArrayOutputStream out, @NonNull String type,
             @NonNull byte[] data) {
-        byte[] name = type.getBytes(StandardCharsets.US_ASCII);
+        byte[] name = type.getBytes(ASCII);
         byte[] length = new byte[4];
         putU32(length, 0, data.length);
         out.write(length, 0, 4);
