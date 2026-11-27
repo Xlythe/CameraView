@@ -213,6 +213,11 @@ public class LegacyCameraModule extends ICameraModule {
             mPlaysOwnClick = false;
             return;
         }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
+            // The click cannot be silenced before API 17, so it plays in place of the app's own.
+            mPlaysOwnClick = false;
+            return;
+        }
         boolean custom = getShutterSound() != 0;
         try {
             boolean applied = mCamera.enableShutterSound(isShutterSoundEnabled() && !custom);
