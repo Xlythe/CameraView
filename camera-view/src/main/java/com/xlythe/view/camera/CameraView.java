@@ -4,7 +4,6 @@ import android.Manifest;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Matrix;
@@ -530,7 +529,7 @@ public class CameraView extends FrameLayout {
         init(context, attrs);
     }
 
-    @TargetApi(21)
+    @RequiresApi(21)
     public CameraView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
         init(context, attrs);
@@ -572,7 +571,9 @@ public class CameraView extends FrameLayout {
             return (ICameraModule) Class.forName("com.xlythe.view.camera.x.CameraXModule")
                     .getConstructor(CameraView.class)
                     .newInstance(this);
-        } catch (ReflectiveOperationException | LinkageError | RuntimeException error) {
+        } catch (Exception | LinkageError error) {
+            // Not ReflectiveOperationException, which is API 19: a handler for a class the platform
+            // lacks fails verification of all of CameraView.
             if (DEBUG) Log.d(TAG, "CameraX is unavailable", error);
             return null;
         }
@@ -581,7 +582,8 @@ public class CameraView extends FrameLayout {
     /** Which implementation this view ended up driving. */
     @NonNull
     public Backend getBackend() {
-        if (mCameraModule instanceof LegacyCameraModule) {
+        // Below 21 there is only legacy, and asking about Camera2Module would load it.
+        if (Build.VERSION.SDK_INT < 21 || mCameraModule instanceof LegacyCameraModule) {
             return Backend.LEGACY;
         }
         if (mCameraModule instanceof Camera2Module) {
@@ -1175,7 +1177,6 @@ public class CameraView extends FrameLayout {
     /**
      * Attempts to match image and video outputs to the preview aspect ratio.
      */
-    @TargetApi(21)
     public void setMatchPreviewAspectRatio(boolean enabled) {
         mCameraModule.setMatchPreviewAspectRatio(enabled);
     }
@@ -1279,10 +1280,8 @@ public class CameraView extends FrameLayout {
     }
 
     protected void onClose() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-            exitBarcodeScanner();
-            stopFrameAnalysis();
-        }
+        exitBarcodeScanner();
+        stopFrameAnalysis();
         mLocationTracker.stop();
         finishZoomAnimation();
         mCameraModule.close();
@@ -1412,7 +1411,8 @@ public class CameraView extends FrameLayout {
      * Takes a video and calls {@link OnVideoCapturedListener#onVideoCaptured(File)} when done.
      *
      * <p>Records audio alongside the video, so this is where the microphone is needed rather
-     * than at {@link #open()}.</p>
+     * than at {@link #open()}. Needs API 16; below it, {@link OnVideoCapturedListener#onFailure()}
+     * is called instead.</p>
      *
      * @param file The destination.
      */
@@ -1516,10 +1516,10 @@ public class CameraView extends FrameLayout {
     /**
      * Starts reporting the barcodes the camera can see.
      *
-     * @return whether scanning started. False when ML Kit's barcode model is not available on
+     * @return whether scanning started. False below API 21, when the app does not include ML Kit's
+     *     {@code com.google.mlkit:barcode-scanning}, or when its barcode model is not available on
      *     this device.
      */
-    @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean enterBarcodeScanner(BarcodeDetectorListener listener, @Barcode.Format int format, @Barcode.Format int... formats) {
         if (!isOpen()) {
@@ -1528,6 +1528,11 @@ public class CameraView extends FrameLayout {
 
         if (mBarcodeScanner != null || mUsingModuleBarcodeScanner) {
             throw new IllegalStateException("Barcode scanner cannot be started twice");
+        }
+
+        if (Build.VERSION.SDK_INT < 21 || !BarcodeScanner.isAvailable()) {
+            Log.w(TAG, "Barcode scanning needs API 21 and ML Kit's barcode-scanning library");
+            return false;
         }
 
         mUsingModuleBarcodeScanner = mCameraModule.startBarcodeScanner(listener, format, formats);
@@ -1548,9 +1553,8 @@ public class CameraView extends FrameLayout {
         return true;
     }
 
-    @RequiresApi(19)
     public void exitBarcodeScanner() {
-        if (mBarcodeScanner != null) {
+        if (Build.VERSION.SDK_INT >= 21 && mBarcodeScanner != null) {
             mBarcodeScanner.stop();
             mBarcodeScanner = null;
         }
@@ -1571,10 +1575,10 @@ public class CameraView extends FrameLayout {
      * <p>This runs alongside the preview and recording, and stays attached across a lens switch.
      * Call {@link #stopFrameAnalysis()} to let the camera give the buffers back.</p>
      *
-     * @return whether analysis started. False on a backend that cannot produce frames to read.
+     * @return whether analysis started. False below API 21, and on a backend that cannot produce
+     *     frames to read.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
      */
-    @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean startFrameAnalysis(@NonNull FrameStream.Analyzer analyzer) {
         return startFrameAnalysis(analyzer, new FrameStream.Params());
@@ -1585,7 +1589,6 @@ public class CameraView extends FrameLayout {
      *
      * @see FrameStream.Params#setMaxSize
      */
-    @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean startFrameAnalysis(
             @NonNull FrameStream.Analyzer analyzer, @NonNull FrameStream.Params params) {
@@ -1595,7 +1598,7 @@ public class CameraView extends FrameLayout {
         if (mFrameStream != null) {
             throw new IllegalStateException("Frame analysis cannot be started twice");
         }
-        if (!mCameraModule.isFrameAnalysisSupported()) {
+        if (Build.VERSION.SDK_INT < 19 || !mCameraModule.isFrameAnalysisSupported()) {
             Log.w(TAG, "The " + getBackend() + " backend cannot analyze frames");
             return false;
         }
@@ -1627,7 +1630,6 @@ public class CameraView extends FrameLayout {
     }
 
     /** Stops the analyzer started by {@link #startFrameAnalysis}. */
-    @RequiresApi(19)
     public void stopFrameAnalysis() {
         if (mFrameStream != null) {
             mFrameStream.close();
@@ -1636,7 +1638,6 @@ public class CameraView extends FrameLayout {
     }
 
     /** Whether an analyzer is receiving frames. */
-    @RequiresApi(19)
     public boolean isAnalyzingFrames() {
         return mFrameStream != null && mFrameStream.isAnalyzing();
     }

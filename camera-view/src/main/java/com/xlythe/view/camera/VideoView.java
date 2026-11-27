@@ -1,7 +1,6 @@
 package com.xlythe.view.camera;
 
 import android.annotation.SuppressLint;
-import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Matrix;
@@ -9,6 +8,7 @@ import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.media.MediaMetadataRetriever;
 import android.media.AudioAttributes;
+import android.media.AudioManager;
 import android.media.MediaPlayer;
 import android.net.Uri;
 import android.os.Build;
@@ -16,7 +16,6 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.AttributeSet;
 import android.util.Log;
-import android.util.Size;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.Surface;
@@ -125,7 +124,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         init(context, attrs);
     }
 
-    @TargetApi(21)
+    @RequiresApi(21)
     public VideoView(Context context, AttributeSet attrs, int defStyleAttr, int defStyleRes) {
         super(context, attrs, defStyleAttr, defStyleRes);
         init(context, attrs);
@@ -390,7 +389,9 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             }
             int width = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
             int height = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
-            int rotation = extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
+            int rotation = Build.VERSION.SDK_INT >= 17
+                    ? extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                    : 0;
             if (DEBUG) Log.d(TAG, String.format(
                     "Video metadata: width=%d, height=%d, rotation=%d", width, height, rotation));
             return rotation == 90 || rotation == 270
@@ -436,10 +437,14 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 mMediaPlayer.setDataSource(getContext(), uri);
             }
             mMediaPlayer.setSurface(surface);
-            mMediaPlayer.setAudioAttributes(new AudioAttributes.Builder()
-                    .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .build());
+            if (Build.VERSION.SDK_INT >= 21) {
+                mMediaPlayer.setAudioAttributes(new AudioAttributes.Builder()
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE)
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .build());
+            } else {
+                mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
+            }
             mMediaPlayer.setOnPreparedListener(mediaPlayer -> {
                 mediaPlayer.setOnPreparedListener(null);
                 closePreparingInputStream();
@@ -529,6 +534,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
     }
 
+    @RequiresApi(18)
     private void onStreamEnded(VideoStream videoStream, boolean audio) {
         if (mPreparedVideoStream != videoStream) {
             videoStream.close();
@@ -586,8 +592,11 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         super.onDetachedFromWindow();
     }
 
-    @RequiresApi(18)
     private void releaseStreamPlayback(boolean closeStream) {
+        if (Build.VERSION.SDK_INT < 18) {
+            // Streams need API 18, so there is never one to release below it.
+            return;
+        }
         AudioPlayer audioPlayer = mAudioPlayer;
         VideoPlayer videoPlayer = mVideoPlayer;
         VideoStream preparedStream = mPreparedVideoStream;
@@ -852,13 +861,12 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         // Asking for a mirrored view of a mirrored recording shows it the way round it was
         // taken, so the two cancel.
         boolean mirrored = flipped != isMirrored();
-        Size frame = new Size(videoWidth, videoHeight);
         mTextureView.setTransform(TransformMath.asTextureTransform(
                 TransformMath.centerCrop(
                         new RectF(0f, 0f, videoWidth, videoHeight),
                         TransformMath.within360(cameraOrientation),
                         mirrored, viewWidth, viewHeight),
-                frame, viewWidth, viewHeight));
+                videoWidth, videoHeight, viewWidth, viewHeight));
     }
 
     /**

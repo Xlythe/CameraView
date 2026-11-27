@@ -19,6 +19,7 @@ import java.io.IOException;
 import androidx.annotation.IntRange;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.WorkerThread;
 import androidx.exifinterface.media.ExifInterface;
@@ -32,6 +33,7 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
  * written the same way whichever is running. The frame is closed once the write is over, however
  * it went.</p>
  */
+@RequiresApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class DngWriter extends AsyncTask<Void, Void, Boolean> {
     /** The sensor's colour matrices, black levels and geometry, which DngCreator reads. */

@@ -1,6 +1,5 @@
 package com.xlythe.view.camera.v2;
 
-import android.annotation.TargetApi;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
@@ -14,6 +13,7 @@ import android.util.Size;
 import android.view.Surface;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 
 import com.xlythe.view.camera.stream.VideoRecorder;
 
@@ -24,7 +24,7 @@ import java.util.List;
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
-@TargetApi(21)
+@RequiresApi(21)
 class StreamSession extends PreviewSession {
 
     private final StreamSurface mStreamSurface;

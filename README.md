@@ -2,9 +2,10 @@ Camera View
 ====================
 
 CameraView provides a simple wrapper around the Android camera APIs, with backwards compatibility
-to API 21. Rather than directly manipulating the camera, here you have an Android View that can be
-placed within your app. This View displays a preview and has the methods takePicture(),
-startRecording() and stopRecording(). For simple use cases, CameraFragment exists as well.
+to API 21, or to API 14 with the core build described below. Rather than directly manipulating the
+camera, here you have an Android View that can be placed within your app. This View displays a
+preview and has the methods takePicture(), startRecording() and stopRecording(). For simple use
+cases, CameraFragment exists as well.
 If you inflate a CameraFragment with Views that have the correct ids (eg. @id/capture),
 CameraFragment will bind to them to control the CameraView.
 
@@ -18,9 +19,12 @@ dependencies {
 ```
 
 If your minSdk is below 24, build with `-Pcameraview.core=true`, which leaves out the parts that
-cannot reach that far back and covers API 21 and up. This is not hypothetical: `camera-camera2`
+cannot reach that far back and covers API 14 and up. This is not hypothetical: `camera-camera2`
 pulls in `camera-camera2-pipe`, which declares a minSdk of 24, and a dependency's floor becomes
-your app's floor whatever this library declares.
+your app's floor whatever this library declares. In that build, barcode scanning needs API 21 and
+`com.google.mlkit:barcode-scanning` in your own dependencies, frame analysis needs API 21,
+streaming API 18 and recording API 16. Without them, `enterBarcodeScanner` and `startFrameAnalysis`
+return false and `startRecording` reports `onFailure`.
 
 Permissions
 -----------------
