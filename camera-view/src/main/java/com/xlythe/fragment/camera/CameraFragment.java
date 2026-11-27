@@ -39,6 +39,10 @@ import androidx.fragment.app.Fragment;
 
 public abstract class CameraFragment extends Fragment implements CameraView.OnImageCapturedListener, CameraView.OnVideoCapturedListener, CameraView.OnCameraStateChangedListener {
     private static final String[] REQUIRED_PERMISSIONS;
+    /**
+     * Permissions asked for but not needed. Coarse location is listed beside fine because Android
+     * 12 ignores a request for fine location alone; the person then picks precise or approximate.
+     */
     private static final String[] OPTIONAL_PERMISSIONS;
 
     static {
@@ -51,6 +55,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             };
             OPTIONAL_PERMISSIONS = new String[] {
                     Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.VIBRATE,
             };
         } else if (Build.VERSION.SDK_INT >= 33) {
@@ -61,6 +66,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             };
             OPTIONAL_PERMISSIONS = new String[] {
                     Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.VIBRATE,
                     Manifest.permission.READ_MEDIA_IMAGES,
                     Manifest.permission.READ_MEDIA_VIDEO
@@ -74,6 +80,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             OPTIONAL_PERMISSIONS = new String[] {
                     Manifest.permission.WRITE_EXTERNAL_STORAGE,
                     Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.VIBRATE
             };
         } else {
@@ -84,6 +91,7 @@ public abstract class CameraFragment extends Fragment implements CameraView.OnIm
             };
             OPTIONAL_PERMISSIONS = new String[] {
                     Manifest.permission.ACCESS_FINE_LOCATION,
+                    Manifest.permission.ACCESS_COARSE_LOCATION,
                     Manifest.permission.VIBRATE
             };
         }
