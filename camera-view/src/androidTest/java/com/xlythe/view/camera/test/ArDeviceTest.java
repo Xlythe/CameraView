@@ -142,16 +142,23 @@ public final class ArDeviceTest {
     }
 
     /**
-     * Keeps the emulator's camera moving as a hand-held phone does: swaying side to side and a
-     * little forward, and turning a few degrees, while looking down at the room, so AR sees it from
-     * more than one place and finds the floor and the table.
+     * Keeps the emulator's camera moving as a hand-held phone does: drifting side to side and a
+     * little forward at a speed that changes gently, and turning a few degrees, while looking down
+     * at the room, so AR sees it from more than one place and finds the floor.
+     *
+     * <p>The camera is steered by its speed, not by where it should be next: a new place every
+     * step starts and stops it each time, jolts AR loses its footing on, where a gently changing
+     * speed is the steady motion it tracks.</p>
      */
     private static final class Walk implements AutoCloseable {
-        /** How often the camera is given somewhere new to glide to. */
+        /** How often the camera is given a new speed and a new way to face. */
         private static final long STEP_MILLIS = 250;
 
-        /** How far round the loop each step goes, in radians: a loop takes about six seconds. */
-        private static final double STEP_RADIANS = 0.25;
+        /** The camera's top speed across the room, in metres a second. */
+        private static final double SPEED = 0.15;
+
+        /** How fast the speed swings from side to side, in radians a second: about 11 s a sway. */
+        private static final double SWAY_RADIANS_PER_SECOND = 0.55;
 
         /** How far the camera looks down, in degrees. */
         private static final float PITCH_DEGREES = -25f;
@@ -184,15 +191,16 @@ public final class ArDeviceTest {
         }
 
         private void walk() {
-            double t = 0;
+            long start = SystemClock.uptimeMillis();
             int failedSteps = 0;
             while (!mStopped) {
-                t += STEP_RADIANS;
+                double seconds = (SystemClock.uptimeMillis() - start) / 1000.0;
+                double sway = SWAY_RADIANS_PER_SECOND * seconds;
                 try {
-                    mScene.moveTo((float) (0.3 * Math.sin(t)), (float) (0.05 * Math.sin(2 * t)),
-                            (float) (-0.2 * (1 - Math.cos(t))));
-                    mScene.turnTo((float) (PITCH_DEGREES + 5 * Math.sin(1.3 * t)),
-                            (float) (10 * Math.sin(0.7 * t)), 0f);
+                    mScene.moveAt((float) (SPEED * Math.cos(sway)), 0f,
+                            (float) (-0.3 * SPEED * Math.sin(sway)));
+                    mScene.turnTo((float) (PITCH_DEGREES + 3 * Math.sin(0.33 * seconds)),
+                            (float) (8 * Math.sin(0.23 * seconds)), 0f);
                     failedSteps = 0;
                 } catch (IOException error) {
                     if (++failedSteps >= MAX_FAILED_STEPS) {
@@ -208,7 +216,7 @@ public final class ArDeviceTest {
             }
         }
 
-        /** Where the camera has been told to be, in metres, which is where it is heading. */
+        /** Where the camera is, in metres. */
         @NonNull
         float[] getPosition() throws IOException {
             return mScene.getPosition();
@@ -222,6 +230,7 @@ public final class ArDeviceTest {
             }
         }
 
+        /** Stops the camera where it is, so it does not drift on through the room. */
         @Override
         public void close() {
             mStopped = true;
@@ -231,6 +240,12 @@ public final class ArDeviceTest {
             } catch (InterruptedException error) {
                 Thread.currentThread().interrupt();
             }
+            try {
+                mScene.moveAt(0f, 0f, 0f);
+            } catch (IOException error) {
+                Log.w(TAG, "the emulator's camera may still be moving", error);
+            }
+            mScene.close();
         }
     }
 

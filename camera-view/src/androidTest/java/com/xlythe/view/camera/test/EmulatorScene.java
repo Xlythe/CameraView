@@ -8,6 +8,7 @@ import androidx.annotation.WorkerThread;
 import androidx.test.platform.app.InstrumentationRegistry;
 
 import java.io.ByteArrayOutputStream;
+import java.io.Closeable;
 import java.io.DataInputStream;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -24,15 +25,17 @@ import java.nio.charset.StandardCharsets;
  * <p>The emulator moves the virtual scene camera and the motion sensors from one physical model,
  * so what the camera sees and what the sensors feel agree, which is what AR tracks by. The model
  * is driven through the emulator's gRPC endpoint on the host, which the emulator reaches at
- * {@value #HOST}. Nothing the tests depend on speaks HTTP/2, so this speaks the least of it that a
- * unary gRPC call needs: one stream, literal headers, and the reply's data frame as the answer.</p>
+ * {@value #HOST}. Nothing the tests depend on speaks HTTP/2, so this speaks the least of it that
+ * unary gRPC calls need: one connection, a stream for each call, literal headers, and the reply's
+ * data frame as the answer. The connection stays open between calls, because a busy emulator is
+ * slow to let the guest open a new one to the host.</p>
  *
  * <p>Launch the emulator with {@code -grpc <port> -grpc-use-token}, read the token from its
  * discovery file ({@code grpc.token} in {@code avd/running/pid_<pid>.ini} under the temp
  * directory), and pass both to the instrumentation:
  * {@code -e emulatorGrpcPort <port> -e emulatorGrpcToken <token>}.</p>
  */
-final class EmulatorScene {
+final class EmulatorScene implements Closeable {
     /** The host, as the emulator sees it. */
     private static final String HOST = "10.0.2.2";
 
@@ -54,6 +57,9 @@ final class EmulatorScene {
     /** {@code PhysicalModelValue.PhysicalType.ROTATION}: degrees about x, y and z. */
     private static final int ROTATION = 1;
 
+    /** {@code PhysicalModelValue.PhysicalType.VELOCITY}: metres a second along x, y and z. */
+    private static final int VELOCITY = 8;
+
     /** The HTTP/2 frame carrying a message. */
     private static final int DATA = 0;
 
@@ -68,6 +74,9 @@ final class EmulatorScene {
 
     /** The HTTP/2 frame closing the connection. */
     private static final int GOAWAY = 7;
+
+    /** The HTTP/2 frame giving the sender room for more data. */
+    private static final int WINDOW_UPDATE = 8;
 
     /** The flag on the last frame of a stream. */
     private static final int END_STREAM = 0x1;
@@ -84,6 +93,13 @@ final class EmulatorScene {
     /** The endpoint's token, or null for an endpoint that asks for none. */
     @Nullable
     private final String mToken;
+
+    /** The connection calls go over, or null before the first call and after a failed one. */
+    @Nullable
+    private Socket mSocket;
+
+    /** The stream the next call opens: odd and rising, as a client's must be. */
+    private int mNextStream;
 
     private EmulatorScene(int port, @Nullable String token) {
         mPort = port;
@@ -105,6 +121,12 @@ final class EmulatorScene {
     @WorkerThread
     void moveTo(float x, float y, float z) throws IOException {
         set(POSITION, x, y, z);
+    }
+
+    /** Sets the camera moving, in metres a second along each axis of the room, until told again. */
+    @WorkerThread
+    void moveAt(float x, float y, float z) throws IOException {
+        set(VELOCITY, x, y, z);
     }
 
     /** Glides the camera to face a way, in degrees about each axis of the room. */
@@ -181,61 +203,103 @@ final class EmulatorScene {
      */
     @WorkerThread
     @NonNull
-    private byte[] call(@NonNull String method, @NonNull byte[] message) throws IOException {
-        try (Socket socket = new Socket()) {
+    private synchronized byte[] call(@NonNull String method, @NonNull byte[] message)
+            throws IOException {
+        try {
+            return exchange(method, message);
+        } catch (IOException error) {
+            // Whatever state the connection was left in, the next call starts a new one.
+            close();
+            throw error;
+        }
+    }
+
+    @WorkerThread
+    @NonNull
+    private byte[] exchange(@NonNull String method, @NonNull byte[] message) throws IOException {
+        Socket socket = mSocket;
+        if (socket == null) {
+            socket = new Socket();
+            mSocket = socket;
+            mNextStream = 1;
             socket.connect(new InetSocketAddress(HOST, mPort), TIMEOUT_MILLIS);
             socket.setSoTimeout(TIMEOUT_MILLIS);
-            OutputStream out = socket.getOutputStream();
-            ByteArrayOutputStream headers = new ByteArrayOutputStream();
-            literal(headers, ":method", "POST");
-            literal(headers, ":scheme", "http");
-            literal(headers, ":path", SERVICE + method);
-            literal(headers, ":authority", "localhost");
-            literal(headers, "content-type", "application/grpc");
-            literal(headers, "te", "trailers");
-            if (mToken != null) {
-                literal(headers, "authorization", "Bearer " + mToken);
-            }
-            ByteBuffer body = ByteBuffer.allocate(5 + message.length);
-            body.put((byte) 0).putInt(message.length).put(message);
-            out.write("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
-            writeFrame(out, SETTINGS, 0, 0, new byte[0]);
-            writeFrame(out, HEADERS, END_HEADERS, 1, headers.toByteArray());
-            writeFrame(out, DATA, END_STREAM, 1, body.array());
-            out.flush();
+            socket.getOutputStream().write(
+                    "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n".getBytes(StandardCharsets.US_ASCII));
+            writeFrame(socket.getOutputStream(), SETTINGS, 0, 0, new byte[0]);
+        }
+        int id = mNextStream;
+        mNextStream += 2;
+        OutputStream out = socket.getOutputStream();
+        ByteArrayOutputStream headers = new ByteArrayOutputStream();
+        literal(headers, ":method", "POST");
+        literal(headers, ":scheme", "http");
+        literal(headers, ":path", SERVICE + method);
+        literal(headers, ":authority", "localhost");
+        literal(headers, "content-type", "application/grpc");
+        literal(headers, "te", "trailers");
+        if (mToken != null) {
+            literal(headers, "authorization", "Bearer " + mToken);
+        }
+        ByteBuffer body = ByteBuffer.allocate(5 + message.length);
+        body.put((byte) 0).putInt(message.length).put(message);
+        writeFrame(out, HEADERS, END_HEADERS, id, headers.toByteArray());
+        writeFrame(out, DATA, END_STREAM, id, body.array());
+        out.flush();
 
-            DataInputStream in = new DataInputStream(socket.getInputStream());
-            ByteArrayOutputStream reply = new ByteArrayOutputStream();
-            boolean answered = false;
-            while (true) {
-                int length = (in.readUnsignedByte() << 16) | in.readUnsignedShort();
-                int type = in.readUnsignedByte();
-                int flags = in.readUnsignedByte();
-                int stream = in.readInt() & 0x7fffffff;
-                byte[] payload = new byte[length];
-                in.readFully(payload);
-                if (type == SETTINGS && (flags & ACK) == 0) {
-                    writeFrame(out, SETTINGS, ACK, 0, new byte[0]);
-                } else if (type == PING && (flags & ACK) == 0) {
-                    writeFrame(out, PING, ACK, 0, payload);
-                } else if (type == DATA && stream == 1) {
+        DataInputStream in = new DataInputStream(socket.getInputStream());
+        ByteArrayOutputStream reply = new ByteArrayOutputStream();
+        boolean answered = false;
+        while (true) {
+            int length = (in.readUnsignedByte() << 16) | in.readUnsignedShort();
+            int type = in.readUnsignedByte();
+            int flags = in.readUnsignedByte();
+            int stream = in.readInt() & 0x7fffffff;
+            byte[] payload = new byte[length];
+            in.readFully(payload);
+            if (type == SETTINGS && (flags & ACK) == 0) {
+                writeFrame(out, SETTINGS, ACK, 0, new byte[0]);
+            } else if (type == PING && (flags & ACK) == 0) {
+                writeFrame(out, PING, ACK, 0, payload);
+            } else if (type == DATA) {
+                if (length > 0) {
+                    // Gives back the room the reply took, or over a long walk the emulator runs
+                    // out of it and stops answering.
+                    writeFrame(out, WINDOW_UPDATE, 0, 0,
+                            ByteBuffer.allocate(4).putInt(length).array());
+                }
+                if (stream == id) {
                     reply.write(payload);
                     answered = true;
-                } else if (type == GOAWAY) {
-                    break;
                 }
-                if (stream == 1 && (flags & END_STREAM) != 0) {
-                    break;
-                }
+            } else if (type == GOAWAY) {
+                throw new IOException("The emulator closed the connection");
             }
-            byte[] framed = reply.toByteArray();
-            if (!answered || framed.length < 5) {
-                throw new IOException("The emulator refused " + method
-                        + "; check " + PORT_ARGUMENT + " and " + TOKEN_ARGUMENT);
+            if (stream == id && (flags & END_STREAM) != 0) {
+                break;
             }
-            byte[] result = new byte[framed.length - 5];
-            System.arraycopy(framed, 5, result, 0, result.length);
-            return result;
+        }
+        byte[] framed = reply.toByteArray();
+        if (!answered || framed.length < 5) {
+            throw new IOException("The emulator refused " + method
+                    + "; check " + PORT_ARGUMENT + " and " + TOKEN_ARGUMENT);
+        }
+        byte[] result = new byte[framed.length - 5];
+        System.arraycopy(framed, 5, result, 0, result.length);
+        return result;
+    }
+
+    /** Closes the connection to the emulator, which the next call opens again. */
+    @Override
+    public synchronized void close() {
+        Socket socket = mSocket;
+        mSocket = null;
+        if (socket != null) {
+            try {
+                socket.close();
+            } catch (IOException error) {
+                // Already gone, which is all closing asks.
+            }
         }
     }
 
