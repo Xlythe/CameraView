@@ -270,7 +270,8 @@ class PictureSession extends PreviewSession {
                 if (drawn == null) {
                     return;
                 }
-                new DrawnImageSaver(getContext(), toBitmap(drawn), file, getPictureQuality(), this)
+                new DrawnImageSaver(getModule().getLocation(), toBitmap(drawn), file,
+                        getPictureQuality(), this)
                         .executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
             } catch (RuntimeException error) {
                 Log.e(TAG, "Failed to read back a drawn picture", error);
@@ -341,15 +342,20 @@ class PictureSession extends PreviewSession {
      * the library missing them.</p>
      */
     private static final class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
-        private final Context mContext;
+        /** Where the picture was taken, read when the frame arrived, or null if unknown. */
+        @Nullable private final Location mLocation;
+        /** The drawn picture, recycled once written. */
         private final Bitmap mBitmap;
+        /** Where the JPEG goes. */
         private final File mFile;
+        /** The JPEG quality, from 0 to 100. */
         private final int mQuality;
+        /** Told how the save went, on the main thread. */
         private final PictureSession mSession;
 
-        private DrawnImageSaver(@NonNull Context context, @NonNull Bitmap bitmap,
+        private DrawnImageSaver(@Nullable Location location, @NonNull Bitmap bitmap,
                 @NonNull File file, int quality, @NonNull PictureSession session) {
-            mContext = context.getApplicationContext();
+            mLocation = location;
             mBitmap = bitmap;
             mFile = file;
             mQuality = quality;
@@ -376,9 +382,8 @@ class PictureSession extends PreviewSession {
             try {
                 Exif exif = new Exif(mFile);
                 exif.attachTimestamp();
-                Location location = SessionImpl.CameraSurface.getLocation(mContext);
-                if (location != null) {
-                    exif.attachLocation(location);
+                if (mLocation != null) {
+                    exif.attachLocation(mLocation);
                 }
                 exif.save();
             } catch (IOException error) {
