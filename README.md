@@ -88,8 +88,8 @@ CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, is
 maxZoomLevel, isExposureCompensationSupported, minExposureCompensation, maxExposureCompensation,
 supportedColorSpaces, supportedPictureFormats, supportedDynamicRanges, supportedExtensions,
 isStabilizationSupported, isLowLightBoostSupported, isSnapshotWhileRecordingSupported,
-isFaceDetectionSupported, horizontalFieldOfView, verticalFieldOfView, isRecording and
-isAnalyzingFrames.
+isFaceDetectionSupported, horizontalFieldOfView, verticalFieldOfView, isRecording,
+isAnalyzingFrames and isCapturingPanorama.
 
 Camera's methods are rather straight forward.
 
@@ -126,6 +126,12 @@ Reports the faces the camera is already tracking, or stops when given null. Retu
 camera cannot report faces, in which case the listener is never called.
 ```kotlin
 cameraController.setFaceDetectionListener { faces, faceToView -> ... }
+```
+Sweeps a panorama or a photosphere into a file, with the guide drawn over the preview, until
+everything is covered or stopPanorama is called. See Panoramas below.
+```kotlin
+cameraController.startPanorama(file, PanoramaMode.PHOTOSPHERE, onCaptured = { file -> ... })
+cameraController.stopPanorama()   // or cancelPanorama()
 ```
 
 CameraFragment
@@ -364,6 +370,27 @@ mCameraView.startFrameAnalysis(frame -> {
   // ... and frame.getFrameToViewTransform() maps a result onto the view
 }, new FrameStream.Params().setMaxSize(new Size(640, 480)));
 mCameraView.stopFrameAnalysis();
+```
+
+Panoramas
+-----------------
+startPanorama sweeps a panorama or a photosphere into a file. CameraView draws the guide over its
+own preview - the target to aim at next, how much is covered, and which way to turn - so the
+person only has to turn on the spot. A panorama finishes once it has gone all the way round, and a
+photosphere once the whole sphere is covered, straight up and down included. stopPanorama saves
+what was covered so far, and cancelPanorama saves nothing.
+
+The file is a JPEG carrying photo sphere metadata, so galleries and panorama viewers show it as a
+panorama. startPanorama returns false on a device that cannot report which way it is pointing.
+Lock the screen's orientation while a sweep runs, or turning the phone will rotate it.
+```java
+mCameraView.startPanorama(file, CameraView.PanoramaMode.PHOTOSPHERE,
+    new CameraView.PanoramaListener() {
+      @Override public void onPanoramaProgress(float progress) {}
+      @Override public void onPanoramaCaptured(File file) {}
+      @Override public void onPanoramaFailed() {}
+    });
+mCameraView.stopPanorama();
 ```
 
 Streaming
