@@ -8,6 +8,7 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -33,16 +34,20 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
+import androidx.annotation.VisibleForTesting;
 
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 /**
- * A {@link View} that displays a preview of the camera with methods {@link #takePicture(File)},
- * {@link #startRecording(File)} and {@link #stopRecording()}.
+ * A {@link View} that displays a preview of the camera with methods {@link #takePicture()},
+ * {@link #startRecording()} and {@link #stopRecording()}.
  *
  * Because the Camera is a limited resource and consumes a high amount of power, CameraView must be
  * opened/closed. It's recommended to call {@link #open()} in
@@ -139,6 +144,20 @@ public class CameraView extends FrameLayout {
      * is never coming.</p>
      */
     private static final long FOCUS_TIMEOUT_MILLIS = 3000;
+
+    /**
+     * The cache directory {@link #takePicture()} and {@link #startRecording()} write to. A capture
+     * that arrives from inside it is one of ours to file rather than a file the caller chose,
+     * which is also how a pending confirmation is recognised again after state is restored.
+     */
+    private static final String CAPTURE_DIRECTORY = "com.xlythe.view.camera";
+
+    /**
+     * How a capture without a file is named, which is the name the gallery shows. Milliseconds,
+     * because two captures inside one second is an ordinary double tap, and dashes, because
+     * MediaStore rejects a colon in a display name.
+     */
+    private static final String CAPTURE_NAME = "yyyy-MM-dd-HH-mm-ss-SSS";
 
     private static final String EXTRA_SUPER = "super";
     private static final String EXTRA_MODULE = "module";
@@ -693,8 +712,10 @@ public class CameraView extends FrameLayout {
      * phone has granted Manifest.permission.CAMERA.
      *
      * Showing a preview and taking pictures need nothing else. The microphone is only required
-     * by the methods that record or stream audio, which ask for it themselves, and outputs are
-     * written to the File you pass in, so no storage permission is involved.
+     * by the methods that record or stream audio, which ask for it themselves. Outputs are written
+     * to the File you pass in, or filed where the gallery looks by {@link #takePicture()} and
+     * {@link #startRecording()}, which below API 29 needs
+     * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}.
      */
     @RequiresPermission(Manifest.permission.CAMERA)
     public synchronized void open() {
@@ -844,15 +865,16 @@ public class CameraView extends FrameLayout {
 
     /**
      * When enabled, requires images to be confirmed before
-     * {@link OnImageCapturedListener#onImageCaptured(File)} is triggered. A preview of the image
-     * will be displayed in CameraView's preview.
+     * {@link OnImageCapturedListener#onImageCaptured(File)} or
+     * {@link OnImageCapturedListener#onImageSaved(Uri)} is triggered. A preview of the image will
+     * be displayed in CameraView's preview.
      */
     public void setImageConfirmationEnabled(boolean enabled) {
         mIsImageConfirmationEnabled = enabled;
     }
 
     /**
-     * When true, {@link #takePicture(File)} will trigger the
+     * When true, {@link #takePicture()} and {@link #takePicture(File)} will trigger the
      * {@link OnImageCapturedListener#onImageConfirmation()} callback. To continue,  call
      * {@link #confirmPicture()}.
      */
@@ -862,15 +884,16 @@ public class CameraView extends FrameLayout {
 
     /**
      * When enabled, requires videos to be confirmed before
-     * {@link OnVideoCapturedListener#onVideoCaptured(File)} is triggered. A preview of the video
-     * will be displayed in CameraView's preview.
+     * {@link OnVideoCapturedListener#onVideoCaptured(File)} or
+     * {@link OnVideoCapturedListener#onVideoSaved(Uri)} is triggered. A preview of the video will
+     * be displayed in CameraView's preview.
      */
     public void setVideoConfirmationEnabled(boolean enabled) {
         mIsVideoConfirmationEnabled = enabled;
     }
 
     /**
-     * When true, {@link #startRecording(File)} will trigger the
+     * When true, {@link #startRecording()} and {@link #startRecording(File)} will trigger the
      * {@link OnVideoCapturedListener#onVideoConfirmation()} callback. To continue,  call
      * {@link #confirmVideo()}.
      */
@@ -890,9 +913,16 @@ public class CameraView extends FrameLayout {
                 getOnImageCapturedListener().onImageConfirmation();
             }
         } else {
-            if (getOnImageCapturedListener() != null) {
-                getOnImageCapturedListener().onImageCaptured(file);
-            }
+            deliverPicture(file);
+        }
+    }
+
+    /** Hands over a finished picture: filed and reported by uri if it is ours, as a file if not. */
+    private void deliverPicture(File file) {
+        if (isOwnCapture(file)) {
+            fileCapture(file, false /* isVideo */);
+        } else if (getOnImageCapturedListener() != null) {
+            getOnImageCapturedListener().onImageCaptured(file);
         }
     }
 
@@ -930,10 +960,69 @@ public class CameraView extends FrameLayout {
                 getOnVideoCapturedListener().onVideoConfirmation();
             }
         } else {
-            if (getOnVideoCapturedListener() != null) {
-                getOnVideoCapturedListener().onVideoCaptured(file);
-            }
+            deliverVideo(file);
         }
+    }
+
+    /** Hands over a finished video: filed and reported by uri if it is ours, as a file if not. */
+    private void deliverVideo(File file) {
+        if (isOwnCapture(file)) {
+            fileCapture(file, true /* isVideo */);
+        } else if (getOnVideoCapturedListener() != null) {
+            getOnVideoCapturedListener().onVideoCaptured(file);
+        }
+    }
+
+    /** Whether a capture was written by {@link #takePicture()} or {@link #startRecording()}. */
+    private boolean isOwnCapture(File file) {
+        return captureDirectory(getContext()).equals(file.getParentFile());
+    }
+
+    /**
+     * Files a capture of ours where the gallery looks and reports where it went, or that it could
+     * not be filed. The cache copy goes either way, since the caller never had it.
+     */
+    private void fileCapture(File capture, boolean isVideo) {
+        MediaStoreSaver.save(getContext(), capture, isVideo, uri -> {
+            if (isVideo) {
+                OnVideoCapturedListener listener = getOnVideoCapturedListener();
+                if (listener == null) {
+                    return;
+                }
+                if (uri == null) {
+                    listener.onFailure();
+                } else {
+                    listener.onVideoSaved(uri);
+                }
+            } else {
+                OnImageCapturedListener listener = getOnImageCapturedListener();
+                if (listener == null) {
+                    return;
+                }
+                if (uri == null) {
+                    listener.onFailure();
+                } else {
+                    listener.onImageSaved(uri);
+                }
+            }
+        });
+    }
+
+    /** Where {@link #newCaptureFile} puts captures. */
+    @VisibleForTesting
+    static File captureDirectory(Context context) {
+        return new File(context.getCacheDir(), CAPTURE_DIRECTORY);
+    }
+
+    /** A cache file for a capture that has no destination of its own, named for the moment. */
+    @VisibleForTesting
+    static File newCaptureFile(Context context, boolean isVideo) {
+        File directory = captureDirectory(context);
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            Log.w(TAG, "Could not create " + directory);
+        }
+        String name = new SimpleDateFormat(CAPTURE_NAME, Locale.US).format(new Date());
+        return new File(directory, name + (isVideo ? ".mp4" : ".jpg"));
     }
 
     void onVideoFailed() {
@@ -1076,6 +1165,19 @@ public class CameraView extends FrameLayout {
     }
 
     /**
+     * Takes a picture and files it where the gallery looks, under Pictures, then calls
+     * {@link OnImageCapturedListener#onImageSaved(Uri)} with where it went. Only this overload
+     * files into MediaStore; {@link #takePicture(File)} leaves the picture where it was written.
+     *
+     * <p>Below API 29 that means writing to shared storage, which needs
+     * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}. Without it the picture cannot be filed,
+     * and {@link OnImageCapturedListener#onFailure()} is called instead.</p>
+     */
+    public void takePicture() {
+        takePicture(newCaptureFile(getContext(), false /* isVideo */));
+    }
+
+    /**
      * Takes a picture and calls {@link OnImageCapturedListener#onImageCaptured(File)} when done.
      * @param file The destination.
      */
@@ -1120,9 +1222,7 @@ public class CameraView extends FrameLayout {
 
         Image.clear(mImagePreview);
         mImagePreview.setVisibility(View.GONE);
-        if (getOnImageCapturedListener() != null) {
-            getOnImageCapturedListener().onImageCaptured(mImagePendingConfirmation);
-        }
+        deliverPicture(mImagePendingConfirmation);
         mImagePendingConfirmation = null;
     }
 
@@ -1143,6 +1243,21 @@ public class CameraView extends FrameLayout {
             Log.w(TAG, "Attempted to clean up pending image file, but failed");
         }
         mImagePendingConfirmation = null;
+    }
+
+    /**
+     * Takes a video and files it where the gallery looks, under Movies, then calls
+     * {@link OnVideoCapturedListener#onVideoSaved(Uri)} with where it went. Only this overload
+     * files into MediaStore; {@link #startRecording(File)} leaves the video where it was written.
+     *
+     * <p>Records audio alongside the video, so this is where the microphone is needed rather
+     * than at {@link #open()}. Below API 29, filing means writing to shared storage, which needs
+     * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}. Without it the video cannot be filed,
+     * and {@link OnVideoCapturedListener#onFailure()} is called instead.</p>
+     */
+    @RequiresPermission(Manifest.permission.RECORD_AUDIO)
+    public void startRecording() {
+        startRecording(newCaptureFile(getContext(), true /* isVideo */));
     }
 
     /**
@@ -1191,9 +1306,7 @@ public class CameraView extends FrameLayout {
 
         mVideoPreview.pause();
         mVideoPreview.setVisibility(View.GONE);
-        if (getOnVideoCapturedListener() != null) {
-            getOnVideoCapturedListener().onVideoCaptured(mVideoPendingConfirmation);
-        }
+        deliverVideo(mVideoPendingConfirmation);
         mVideoPendingConfirmation = null;
     }
 
@@ -1963,15 +2076,46 @@ public class CameraView extends FrameLayout {
         return mOnCameraStateChangedListener;
     }
 
+    /**
+     * Hears how a picture turned out. One taken with {@link CameraView#takePicture(File)}
+     * arrives at {@link #onImageCaptured(File)}, and one taken with
+     * {@link CameraView#takePicture()} at {@link #onImageSaved(Uri)}, so an implementation
+     * overrides whichever its pictures use.
+     */
     public interface OnImageCapturedListener {
+        /** A picture is showing in the preview, waiting for confirmPicture or rejectPicture. */
         void onImageConfirmation();
-        void onImageCaptured(File file);
+
+        /** A picture from {@link CameraView#takePicture(File)} has been written to that file. */
+        default void onImageCaptured(File file) {}
+
+        /** A picture from {@link CameraView#takePicture()} has been filed in the gallery. */
+        default void onImageSaved(@NonNull Uri uri) {}
+
+        /** The picture could not be taken, or could not be filed. */
         void onFailure();
     }
 
+    /**
+     * Hears how a video turned out. One recorded with {@link CameraView#startRecording(File)}
+     * arrives at {@link #onVideoCaptured(File)}, and one recorded with
+     * {@link CameraView#startRecording()} at {@link #onVideoSaved(Uri)}, so an implementation
+     * overrides whichever its videos use.
+     */
     public interface OnVideoCapturedListener {
+        /** A video is playing in the preview, waiting for confirmVideo or rejectVideo. */
         void onVideoConfirmation();
-        void onVideoCaptured(File file);
+
+        /** A video from {@link CameraView#startRecording(File)} has been written to that file. */
+        default void onVideoCaptured(File file) {}
+
+        /**
+         * A video from {@link CameraView#startRecording()} has been filed in the gallery.
+         * {@link VideoView#setUri(Uri)} plays it.
+         */
+        default void onVideoSaved(@NonNull Uri uri) {}
+
+        /** The video could not be recorded, or could not be filed. */
         void onFailure();
     }
 
