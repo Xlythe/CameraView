@@ -26,9 +26,11 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 import java.io.File;
 import java.text.SimpleDateFormat;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 public abstract class ICameraModule {
@@ -158,13 +160,36 @@ public abstract class ICameraModule {
     @RequiresApi(18)
     public VideoRecorder.Canvas getCanvas() {
         return new VideoRecorder.Canvas() {
+            /**
+             * Surfaces whose attach is waiting on the main thread. One detached before its attach
+             * runs is never attached: the stream that would fill it has stopped, and attaching it
+             * would hold the main thread until the wait for its surface gave up, then fail the
+             * session and with it the camera.
+             */
+            private final Set<VideoRecorder.SurfaceProvider> mPendingAttaches = new HashSet<>();
+
             @Override
             public void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-                new Handler(Looper.getMainLooper()).post(() -> ICameraModule.this.attachSurface(surfaceProvider));
+                synchronized (mPendingAttaches) {
+                    mPendingAttaches.add(surfaceProvider);
+                }
+                new Handler(Looper.getMainLooper()).post(() -> {
+                    synchronized (mPendingAttaches) {
+                        if (!mPendingAttaches.remove(surfaceProvider)) {
+                            return;
+                        }
+                    }
+                    ICameraModule.this.attachSurface(surfaceProvider);
+                });
             }
 
             @Override
             public void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+                synchronized (mPendingAttaches) {
+                    if (mPendingAttaches.remove(surfaceProvider)) {
+                        return;
+                    }
+                }
                 if (Looper.myLooper() == Looper.getMainLooper()) {
                     ICameraModule.this.detachSurface(surfaceProvider);
                     return;

@@ -233,6 +233,36 @@ public class PanoramaCaptureTest {
         assertNull("a filed sweep is not also reported as a file", recorder.saved);
     }
 
+    /**
+     * A sweep cancelled before its frames were set up never claims the camera's frames, so the
+     * camera stays open and the next sweep gets them.
+     */
+    @Test
+    public void aSweepCancelledAtOnce_leavesTheCameraForTheNext() throws Exception {
+        addRotationSensor();
+        openCamera2();
+        assertTrue(cameraView.startPanorama(file, CameraView.PanoramaMode.PANORAMA, recorder));
+        // Before the main thread has run anything the sweep asked of it.
+        cameraView.cancelPanorama();
+        idle();
+        assertTrue("the camera was lost", cameraView.isOpen());
+        assertFalse(cameraView.isCapturingPanorama());
+
+        assertTrue(cameraView.startPanorama(file, CameraView.PanoramaMode.PANORAMA, recorder));
+        ImageReader reader = awaitReader();
+        long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
+        while (!hasPainted() && System.currentTimeMillis() < deadline) {
+            holdStill();
+            ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv420(64, 48, 0, 2));
+            Thread.sleep(50);
+            idle();
+        }
+        assertTrue("no frame reached the second sweep", hasPainted());
+        cameraView.stopPanorama();
+        awaitResult();
+        assertEquals(file, recorder.saved);
+    }
+
     @Test
     public void closingTheCamera_savesTheSweep() throws Exception {
         addRotationSensor();
