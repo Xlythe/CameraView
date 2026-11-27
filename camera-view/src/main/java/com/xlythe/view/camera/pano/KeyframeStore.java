@@ -6,6 +6,7 @@ import android.graphics.BitmapFactory;
 import android.util.Log;
 import android.util.SparseArray;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.WorkerThread;
@@ -34,13 +35,15 @@ abstract class KeyframeStore {
     /** Forgets every frame. */
     abstract void release();
 
-    /** A store in the app's cache directory, for a real sweep. */
+    /** A store in the app's cache directory, for a real sweep. Nothing is written yet. */
+    @AnyThread
     @NonNull
     static KeyframeStore inCache(@NonNull Context context) {
         return new Files(new File(context.getCacheDir(), "panorama-" + System.nanoTime()));
     }
 
     /** A store in memory, for a sweep of a few small frames. */
+    @AnyThread
     @NonNull
     static KeyframeStore inMemory() {
         return new Memory();

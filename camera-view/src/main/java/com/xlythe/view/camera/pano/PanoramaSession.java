@@ -276,6 +276,7 @@ public final class PanoramaSession implements GuideState.Source {
      * @param sensorHorizontalFov the lens's angle of view across the sensor's width
      * @param sensorVerticalFov its angle of view down the sensor's height
      */
+    @AnyThread
     public PanoramaSession(@NonNull Context context, boolean photosphere, @NonNull File file,
             int quality, float sensorHorizontalFov, float sensorVerticalFov,
             @NonNull Callback callback, @NonNull Executor mainExecutor) {

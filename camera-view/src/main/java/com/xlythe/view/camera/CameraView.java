@@ -1836,7 +1836,8 @@ public class CameraView extends FrameLayout {
      * fills takes it. The person should turn on the spot rather than walk. A panorama finishes once
      * it has gone all the way round and a photosphere once every dot is taken, straight up and down
      * included; either is also saved, with whatever it covered, when {@link #stopPanorama} is
-     * called or the camera closes.</p>
+     * called or the camera closes. Once it ends, its frames are aligned by what they show and
+     * blended into one picture, which takes several seconds before the listener hears of it.</p>
      *
      * <p>The file is a JPEG with the Exif any picture has, the device's location included when the
      * app holds a location permission, and photo sphere XMP metadata, so a gallery or a panorama
