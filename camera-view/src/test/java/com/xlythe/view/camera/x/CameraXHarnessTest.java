@@ -15,7 +15,9 @@ import android.util.Range;
 import android.util.Rational;
 
 import androidx.annotation.NonNull;
+import androidx.camera.core.ImageCapture;
 import androidx.camera.core.ImageProxy;
+import androidx.camera.extensions.ExtensionMode;
 
 import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.CameraXFrameAnalyzer;
@@ -31,6 +33,7 @@ import com.xlythe.view.camera.v2.FakeCamera2;
 import org.junit.Test;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.List;
 import org.junit.runner.RunWith;
@@ -112,8 +115,9 @@ public class CameraXHarnessTest {
             // throwing, which publishSnapshot used to do from inside a callback.
             assertTrue(module.isDynamicRangeSupported(CameraView.DynamicRange.SDR));
             assertFalse(module.isDynamicRangeSupported(CameraView.DynamicRange.HDR));
-            assertTrue(module.isExtensionSupported(CameraView.Extension.NONE));
-            assertFalse(module.isExtensionSupported(CameraView.Extension.BOKEH));
+            assertTrue(module.isPhotoModeSupported(CameraView.PhotoMode.NONE));
+            assertTrue("the library blurs the background itself where the camera cannot",
+                    module.isPhotoModeSupported(CameraView.PhotoMode.BACKGROUND_BLUR));
 
             // Pausing is a flag on this backend, for the reason recorded on pause().
             module.pause();
@@ -131,6 +135,7 @@ public class CameraXHarnessTest {
             exerciseControls(module);
             exerciseQueries(module);
             exerciseFrameEffectFallback(module);
+            exercisePhotoMode(module);
             exerciseAnalysis(module);
             exerciseStillBesideAnalysis(module);
             exerciseRebinds(module);
@@ -468,6 +473,46 @@ public class CameraXHarnessTest {
                 module.isFrameEffectSupported());
         assertNull("no renderer until a caller sets one", module.getFrameRenderer());
         assertNull("nor a texture provider", module.getCameraTextureProvider());
+    }
+
+    /**
+     * While a photo mode is on the still is a JPEG with the flash off, and the camera's own mode
+     * is named to CameraX as its extension. The view is not open, so the library's blur does not
+     * start, and nothing here needs GL.
+     */
+    private static void exercisePhotoMode(CameraXModule module) throws Exception {
+        assertEquals(ExtensionMode.BOKEH,
+                CameraXModule.toExtensionMode(CameraView.PhotoMode.BACKGROUND_BLUR));
+        assertEquals(ExtensionMode.HDR, CameraXModule.toExtensionMode(CameraView.PhotoMode.HDR));
+        assertEquals(ExtensionMode.NIGHT,
+                CameraXModule.toExtensionMode(CameraView.PhotoMode.NIGHT));
+        assertEquals(ExtensionMode.FACE_RETOUCH,
+                CameraXModule.toExtensionMode(CameraView.PhotoMode.FACE_RETOUCH));
+        assertEquals(ExtensionMode.AUTO, CameraXModule.toExtensionMode(CameraView.PhotoMode.AUTO));
+        assertEquals(ExtensionMode.NONE, CameraXModule.toExtensionMode(CameraView.PhotoMode.NONE));
+
+        module.setFlash(CameraView.Flash.ON);
+        module.setPhotoMode(CameraView.PhotoMode.BACKGROUND_BLUR);
+        assertTrue("a new mode rebinds", FakeCameraXHost.awaitBind(module));
+        assertEquals(ImageCapture.FLASH_MODE_OFF, boundImageCapture(module).getFlashMode());
+        assertFalse(module.isPictureFormatSupported(CameraView.PictureFormat.RAW));
+        assertTrue(module.isPictureFormatSupported(CameraView.PictureFormat.JPEG));
+
+        module.setPhotoMode(CameraView.PhotoMode.NONE);
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertEquals("the flash is back once the mode is off",
+                ImageCapture.FLASH_MODE_ON, boundImageCapture(module).getFlashMode());
+        module.setFlash(CameraView.Flash.AUTO);
+        FakeCameraXHost.idle();
+    }
+
+    /** The still use case the module last bound, which it keeps private. */
+    private static ImageCapture boundImageCapture(CameraXModule module) throws Exception {
+        Field field = CameraXModule.class.getDeclaredField("mImageCapture");
+        field.setAccessible(true);
+        ImageCapture imageCapture = (ImageCapture) field.get(module);
+        assertNotNull("expected a still use case", imageCapture);
+        return imageCapture;
     }
 
     /** Toggling is the shorthand an app's flip button calls, and it has to rebind. */

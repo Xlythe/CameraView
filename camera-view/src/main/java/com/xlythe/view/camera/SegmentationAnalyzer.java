@@ -2,6 +2,7 @@ package com.xlythe.view.camera;
 
 import android.util.Log;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
@@ -51,6 +52,9 @@ public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeab
     /** How long a frame may take before it is logged as slow. It is waited for regardless. */
     private static final long SLOW_FRAME_MILLIS = 10_000;
 
+    /** A class only ML Kit's selfie segmentation has, looked up to see whether the app has it. */
+    private static final String ML_KIT_CLASS = "com.google.mlkit.vision.segmentation.Segmentation";
+
     /** The ML Kit selfie segmenter, released by {@link #close}. */
     private final Segmenter mSegmenter;
     /** Hears each mask, on {@link #mCallbackExecutor}. */
@@ -66,6 +70,22 @@ public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeab
                 Segmentation.getClient(new SelfieSegmenterOptions.Builder()
                         .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE)
                         .build()));
+    }
+
+    /**
+     * Whether ML Kit's selfie segmentation can be loaded.
+     *
+     * <p>Checked by name and without initializing the class, so a missing dependency is a false
+     * here rather than a NoClassDefFoundError out of the constructor.</p>
+     */
+    @AnyThread
+    static boolean isAvailable() {
+        try {
+            Class.forName(ML_KIT_CLASS, false, SegmentationAnalyzer.class.getClassLoader());
+            return true;
+        } catch (ClassNotFoundException | LinkageError error) {
+            return false;
+        }
     }
 
     /** Runs frames through the given segmenter, which a test supplies in ML Kit's place. */

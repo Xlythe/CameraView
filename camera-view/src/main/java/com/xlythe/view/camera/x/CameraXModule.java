@@ -121,7 +121,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -408,8 +408,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private float mSnapshotExposureStep;
     /** Snapshot of low-light boost availability guarded by mSnapshotLock. */
     private boolean mSnapshotLowLightBoostSupported;
-    /** Snapshot of supported vendor extensions guarded by mSnapshotLock. */
-    private Set<CameraView.Extension> mSnapshotExtensions = Collections.singleton(CameraView.Extension.NONE);
+    /**
+     * Snapshot of the photo modes the active lens runs through the phone maker's processing,
+     * guarded by mSnapshotLock.
+     */
+    private Set<Integer> mSnapshotPhotoModes = Collections.emptySet();
 
     public CameraXModule(CameraView cameraView) {
         super(cameraView);
@@ -431,7 +434,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     private void publishSnapshot() {
         boolean hasFrontCamera = false;
-        Set<CameraView.Extension> supportedExtensions = EnumSet.of(CameraView.Extension.NONE);
+        Set<Integer> photoModes = new HashSet<>();
         ProcessCameraProvider provider = mCameraProvider;
         if (provider != null) {
             try {
@@ -440,10 +443,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 if (extensionsManager != null) {
                     CameraSelector selector = selectorFor(mFrontFacing
                             ? CameraSelector.LENS_FACING_FRONT : CameraSelector.LENS_FACING_BACK);
-                    for (CameraView.Extension extension : CameraView.Extension.values()) {
-                        if (extension != CameraView.Extension.NONE
-                                && extensionsManager.isExtensionAvailable(selector, toExtensionMode(extension))) {
-                            supportedExtensions.add(extension);
+                    for (int photoMode : OWN_PHOTO_MODES) {
+                        if (extensionsManager.isExtensionAvailable(
+                                selector, toExtensionMode(photoMode))) {
+                            photoModes.add(photoMode);
                         }
                     }
                 }
@@ -523,7 +526,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mSnapshotMaxExposure = maxExposure;
             mSnapshotExposureStep = exposureStep;
             mSnapshotLowLightBoostSupported = lowLightBoostSupported;
-            mSnapshotExtensions = Collections.unmodifiableSet(EnumSet.copyOf(supportedExtensions));
+            mSnapshotPhotoModes = Collections.unmodifiableSet(photoModes);
         }
     }
 
@@ -733,20 +736,19 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mExtensionsManagerFuture.addListener(() -> {
             try {
                 mExtensionsManager = mExtensionsManagerFuture.get();
-                if (!isExtensionAvailableInternal(getExtension())) {
-                    super.setExtension(CameraView.Extension.NONE);
-                }
                 publishSnapshot();
+                // The camera may turn out to blur on its own, which takes over from the
+                // library's blur, or to have the mode it was asked for, which a bind applies.
+                applyFrameEffectForPhotoMode();
                 if (mOpenRequested && mVideoRecording == null && !mPaused && isHostActive()) {
                     reconcileUseCases(true);
                 }
+                applyBlurFallback();
             } catch (ExecutionException error) {
-                Log.w(TAG, "CameraX extensions are unavailable", error.getCause());
-                super.setExtension(CameraView.Extension.NONE);
+                Log.w(TAG, "The phone maker's photo modes are unavailable", error.getCause());
             } catch (InterruptedException error) {
                 Thread.currentThread().interrupt();
-                Log.w(TAG, "CameraX extension initialization was interrupted", error);
-                super.setExtension(CameraView.Extension.NONE);
+                Log.w(TAG, "Asking for the phone maker's photo modes was interrupted", error);
             }
         }, mMainExecutor);
     }
@@ -1068,50 +1070,68 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
     }
 
-    @Override public void setExtension(CameraView.Extension extension) {
-        if (extension == null) throw new NullPointerException("extension cannot be null");
-        runOnMainThread(() -> {
-            if (extension != CameraView.Extension.NONE && mExtensionsManager != null
-                    && !isExtensionAvailableInternal(extension)) {
-                Log.w(TAG, "Ignoring unsupported CameraX extension " + extension);
-                return;
-            }
-            super.setExtension(extension);
-            if (mOpenRequested && mVideoRecording == null && !mPaused && isHostActive()) {
-                reconcileUseCases(true);
-            }
-        });
-    }
+    /** The photo modes a phone maker's processing can run, in the order they are asked about. */
+    private static final int[] OWN_PHOTO_MODES = {
+            CameraView.PhotoMode.BACKGROUND_BLUR,
+            CameraView.PhotoMode.HDR,
+            CameraView.PhotoMode.NIGHT,
+            CameraView.PhotoMode.FACE_RETOUCH,
+            CameraView.PhotoMode.AUTO,
+    };
 
-    @Override public boolean isExtensionSupported(CameraView.Extension extension) {
-        if (extension == null) return false;
+    @AnyThread
+    @Override protected boolean offersOwnPhotoMode(@CameraView.PhotoMode int photoMode) {
         synchronized (mSnapshotLock) {
-            return mSnapshotExtensions.contains(extension);
+            return mSnapshotPhotoModes.contains(photoMode);
         }
     }
 
-    private boolean isExtensionAvailableInternal(@NonNull CameraView.Extension extension) {
-        if (extension == CameraView.Extension.NONE) return true;
-        ExtensionsManager manager = mExtensionsManager;
-        if (manager == null || mCameraProvider == null) return false;
-        CameraSelector selector = selectorFor(mFrontFacing
-                ? CameraSelector.LENS_FACING_FRONT : CameraSelector.LENS_FACING_BACK);
-        try {
-            return manager.isExtensionAvailable(selector, toExtensionMode(extension));
-        } catch (IllegalArgumentException | IllegalStateException error) {
-            Log.w(TAG, "Unable to query CameraX extension " + extension, error);
-            return false;
+    /**
+     * Binds again around the new mode: through the camera's own processing, or an ordinary bind,
+     * with the frames drawn or not to match.
+     */
+    @MainThread
+    @Override protected void onPhotoModeChanged() {
+        if (mDestroyed) return;
+        applyFrameEffectForPhotoMode();
+        if (mOpenRequested && mVideoRecording == null && !mPaused && isHostActive()) {
+            reconcileUseCases(true);
         }
     }
 
-    private static int toExtensionMode(@NonNull CameraView.Extension extension) {
-        switch (extension) {
-            case BOKEH: return ExtensionMode.BOKEH;
-            case HDR: return ExtensionMode.HDR;
-            case NIGHT: return ExtensionMode.NIGHT;
-            case FACE_RETOUCH: return ExtensionMode.FACE_RETOUCH;
-            case AUTO: return ExtensionMode.AUTO;
-            case NONE:
+    @MainThread
+    @Override protected void onFrameDrawingChanged() {
+        runOnMainThread(this::applyFrameEffect);
+    }
+
+    /**
+     * Lets the effect go if what is to be drawn no longer matches it, for a caller that binds
+     * again anyway, which brings up the one wanted.
+     */
+    @MainThread
+    private void applyFrameEffectForPhotoMode() {
+        FrameEffect effect = mFrameEffect;
+        if (effect == null) return;
+        FrameRenderer renderer = getDrawingRenderer();
+        CameraTextureProvider textureProvider = getDrawingTextureProvider();
+        if ((renderer != null || textureProvider != null)
+                && effect.usesTextureFrom(textureProvider)) {
+            effect.setFrameRenderer(renderer);
+        } else {
+            releaseFrameEffect();
+        }
+    }
+
+    /** CameraX's name for a photo mode. */
+    @VisibleForTesting
+    static int toExtensionMode(@CameraView.PhotoMode int photoMode) {
+        switch (photoMode) {
+            case CameraView.PhotoMode.BACKGROUND_BLUR: return ExtensionMode.BOKEH;
+            case CameraView.PhotoMode.HDR: return ExtensionMode.HDR;
+            case CameraView.PhotoMode.NIGHT: return ExtensionMode.NIGHT;
+            case CameraView.PhotoMode.FACE_RETOUCH: return ExtensionMode.FACE_RETOUCH;
+            case CameraView.PhotoMode.AUTO: return ExtensionMode.AUTO;
+            case CameraView.PhotoMode.NONE:
             default: return ExtensionMode.NONE;
         }
     }
@@ -1230,7 +1250,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             }
         }
         super.setTorchEnabled(enabled);
-        if (camera == null) return;
+        if (camera == null || (enabled && isPhotoModeOn())) return;
         ListenableFuture<Void> result = camera.getCameraControl().enableTorch(enabled);
         reportControlFailure("Torch", result);
     }
@@ -1254,7 +1274,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             if (camera != null) camera.getCameraControl().enableTorch(false);
         }
         super.setLowLightBoostEnabled(enabled);
-        if (camera == null || !camera.getCameraInfo().isLowLightBoostSupported()) return;
+        if (camera == null || !camera.getCameraInfo().isLowLightBoostSupported()
+                || (enabled && isPhotoModeOn())) {
+            return;
+        }
         ListenableFuture<Void> result = camera.getCameraControl().enableLowLightBoostAsync(enabled);
         reportControlFailure("Low-light boost", result);
     }
@@ -1758,7 +1781,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /**
      * The Exif a picture taken now should carry about how it was taken: the camera's optics,
      * read through the camera2 characteristics underneath, and the zoom, exposure compensation,
-     * flash and extension CameraX was asked for.
+     * flash and photo mode CameraX was asked for.
      */
     @OptIn(markerClass = ExperimentalCamera2Interop.class)
     @NonNull
@@ -1783,8 +1806,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         return parameters
                 .setExposureCompensation(info.getExposureState().getExposureCompensationIndex())
-                .setFlash(getFlash(), info.hasFlashUnit())
-                .setExtension(getExtension());
+                .setFlash(getEffectiveFlash(), info.hasFlashUnit())
+                .setPhotoMode(getPhotoModeInUse());
     }
 
     private void scheduleImageTimeout(long operationId) {
@@ -2263,8 +2286,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             if (mRequestedExposureCompensation != 0) {
                 setExposureCompensationOnMainThread(mRequestedExposureCompensation);
             }
-            if (isTorchEnabled()) setTorchEnabledOnMainThread(true);
-            if (isLowLightBoostEnabled()) setLowLightBoostEnabledOnMainThread(true);
+            if (isTorchEnabled() && !isPhotoModeOn()) setTorchEnabledOnMainThread(true);
+            if (isLowLightBoostEnabled() && !isPhotoModeOn()) {
+                setLowLightBoostEnabledOnMainThread(true);
+            }
             return true;
         } catch (CameraInfoUnavailableException | IllegalArgumentException | IllegalStateException error) {
             unbindCurrentUseCases();
@@ -2316,8 +2341,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     private void applyFrameEffect() {
         if (mDestroyed) return;
-        FrameRenderer renderer = getFrameRenderer();
-        CameraTextureProvider textureProvider = getCameraTextureProvider();
+        FrameRenderer renderer = getDrawingRenderer();
+        CameraTextureProvider textureProvider = getDrawingTextureProvider();
         FrameEffect effect = mFrameEffect;
         boolean wanted = renderer != null || textureProvider != null;
         if (effect != null && wanted && effect.usesTextureFrom(textureProvider)) {
@@ -2341,8 +2366,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     private void ensureFrameEffect() {
         if (mFrameEffect != null || mGlUnavailable) return;
-        FrameRenderer renderer = getFrameRenderer();
-        CameraTextureProvider textureProvider = getCameraTextureProvider();
+        FrameRenderer renderer = getDrawingRenderer();
+        CameraTextureProvider textureProvider = getDrawingTextureProvider();
         if (renderer == null && textureProvider == null) return;
         mFrameEffect = FrameEffect.create(FrameEffect.ALL_TARGETS, mMainExecutor, renderer,
                 textureProvider, this::onFrameEffectFailed);
@@ -2388,8 +2413,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     private boolean prepareFrameEffect(boolean hasCustomStream) {
         if (!canBindFrameEffect(hasCustomStream)) {
-            if (mFrameEffect != null || getFrameRenderer() != null
-                    || getCameraTextureProvider() != null) {
+            if (mFrameEffect != null || getDrawingRenderer() != null
+                    || getDrawingTextureProvider() != null) {
                 Log.w(TAG, "Camera frames bypass GL: a custom stream is attached");
             }
             return false;
@@ -2470,7 +2495,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         Preview.Builder builder = new Preview.Builder()
                 .setResolutionSelector(createResolutionSelector())
                 .setTargetRotation(getTargetRotation());
-        if (allowStabilization && isStabilizationEnabled()
+        if (allowStabilization && isStabilizationEnabled() && !isPhotoModeOn()
                 && Preview.getPreviewCapabilities(cameraInfo).isStabilizationSupported()) {
             builder.setPreviewStabilizationEnabled(true);
         }
@@ -2718,7 +2743,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @NonNull private ImageCapture createImageCapture(
             @NonNull CameraInfo cameraInfo, boolean drawing, boolean analyzing) {
         boolean plain = drawing || analyzing;
-        CameraView.PictureFormat format = boundPictureFormat(getPictureFormat(), plain);
+        CameraView.PictureFormat format =
+                boundPictureFormat(getPictureFormat(), plain || isPhotoModeOn());
         ImageCapture.Builder builder = new ImageCapture.Builder()
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
@@ -2827,6 +2853,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     @Override public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        if (format != CameraView.PictureFormat.JPEG && isPhotoModeOn()) {
+            // A photo mode writes the JPEG its processing makes, or the library draws.
+            return false;
+        }
         Camera camera = mActiveCamera;
         if (writesRaw(format)) {
             // A drawn picture is a JPEG, so there is no sensor frame to write a DNG from.
@@ -3019,21 +3049,25 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY;
     }
 
+    /**
+     * The lens, through the camera's own photo mode while one is on. Only a bind of a preview and
+     * a still runs one: a recording, a stream or analysis already bound keeps the ordinary
+     * camera, as a photo mode refuses to start beside them.
+     */
     @NonNull private CameraSelector getCameraSelector() {
         CameraSelector selector = selectorFor(mFrontFacing
                 ? CameraSelector.LENS_FACING_FRONT : CameraSelector.LENS_FACING_BACK);
-        CameraView.Extension extension = getExtension();
+        int photoMode = getOwnPhotoMode();
         ExtensionsManager manager = mExtensionsManager;
-        if (mVideoCapture == null && extension != CameraView.Extension.NONE && manager != null) {
+        if (photoMode != CameraView.PhotoMode.NONE && manager != null && mVideoCapture == null
+                && mFrameAnalyzer == null && mSurfaceProviders.isEmpty()) {
             try {
-                int extensionMode = toExtensionMode(extension);
-                boolean analysisCompatible = mFrameAnalyzer == null
-                        || manager.isImageAnalysisSupported(selector, extensionMode);
-                if (analysisCompatible && manager.isExtensionAvailable(selector, extensionMode)) {
+                int extensionMode = toExtensionMode(photoMode);
+                if (manager.isExtensionAvailable(selector, extensionMode)) {
                     return manager.getExtensionEnabledCameraSelector(selector, extensionMode);
                 }
             } catch (IllegalArgumentException | IllegalStateException error) {
-                Log.w(TAG, "Unable to enable CameraX extension " + extension, error);
+                Log.w(TAG, "Unable to run the camera's photo mode " + photoMode, error);
             }
         }
         return selector;
@@ -3043,8 +3077,13 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return new CameraSelector.Builder().requireLensFacing(lensFacing).build();
     }
 
+    /** The flash strategy a still is taken with: OFF while a photo mode is on. */
+    @NonNull private CameraView.Flash getEffectiveFlash() {
+        return isPhotoModeOn() ? CameraView.Flash.OFF : getFlash();
+    }
+
     private int getFlashMode() {
-        switch (getFlash()) {
+        switch (getEffectiveFlash()) {
             case ON: return ImageCapture.FLASH_MODE_ON;
             case OFF: return ImageCapture.FLASH_MODE_OFF;
             case AUTO:

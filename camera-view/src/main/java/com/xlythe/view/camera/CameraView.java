@@ -33,6 +33,7 @@ import android.widget.FrameLayout;
 import android.widget.ImageView;
 
 import androidx.annotation.ColorInt;
+import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RawRes;
@@ -50,6 +51,8 @@ import com.xlythe.view.camera.legacy.LegacyCameraModule;
 import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -200,8 +203,8 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_MATCH_PREVIEW_ASPECT_RATIO = "match_preview_aspect_ratio";
     /** Saved-state key for dynamic range. */
     private static final String EXTRA_DYNAMIC_RANGE = "dynamic_range";
-    /** Saved-state key for the CameraX photo extension. */
-    private static final String EXTRA_EXTENSION = "extension";
+    /** Saved-state key for the photo mode. */
+    private static final String EXTRA_PHOTO_MODE = "photo_mode";
     /** Saved-state key for stabilization. */
     private static final String EXTRA_STABILIZATION = "stabilization";
     /** Saved-state key for exposure compensation. */
@@ -301,22 +304,69 @@ public class CameraView extends FrameLayout {
         }
     }
 
-    /** Selects an optional CameraX vendor photo-processing extension. */
+    /**
+     * The phone maker's own processing for a picture. See {@link #setPhotoMode}.
+     *
+     * <p>{@link #BACKGROUND_BLUR} is the one mode a phone without it can still have: the library
+     * then blurs the background itself.</p>
+     */
+    @IntDef({PhotoMode.NONE, PhotoMode.BACKGROUND_BLUR, PhotoMode.HDR, PhotoMode.NIGHT,
+            PhotoMode.FACE_RETOUCH, PhotoMode.AUTO})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface PhotoMode {
+        /** The camera's ordinary pictures. */
+        int NONE = 0;
+        /** Keeps the subject sharp and blurs what is behind them, as a portrait mode does. */
+        int BACKGROUND_BLUR = 1;
+        /** Combines several exposures, so a scene's bright and dark parts both keep detail. */
+        int HDR = 2;
+        /** Combines several exposures of a dark scene into one brighter, less noisy picture. */
+        int NIGHT = 3;
+        /** Smooths skin and evens out the faces in the picture. */
+        int FACE_RETOUCH = 4;
+        /** Lets the camera choose among its other modes, scene by scene. */
+        int AUTO = 5;
+    }
+
+    /** The highest {@link PhotoMode}, for checking that a number is one. */
+    private static final int LAST_PHOTO_MODE = PhotoMode.AUTO;
+
+    /**
+     * Throws for a number that is not a {@link PhotoMode}.
+     *
+     * @throws IllegalArgumentException if it is not one
+     */
+    static void checkPhotoMode(int photoMode) {
+        if (photoMode < PhotoMode.NONE || photoMode > LAST_PHOTO_MODE) {
+            throw new IllegalArgumentException("Not a photo mode: " + photoMode);
+        }
+    }
+
+    /**
+     * Selects one of the phone maker's own photo modes.
+     *
+     * @deprecated Use {@link PhotoMode} with {@link #setPhotoMode}. {@link #BOKEH} is
+     *     {@link PhotoMode#BACKGROUND_BLUR}, and each other value is the mode of the same name.
+     */
+    @Deprecated
     public enum Extension {
-        NONE(0), BOKEH(1), HDR(2), NIGHT(3), FACE_RETOUCH(4), AUTO(5);
+        NONE(PhotoMode.NONE), BOKEH(PhotoMode.BACKGROUND_BLUR), HDR(PhotoMode.HDR),
+        NIGHT(PhotoMode.NIGHT), FACE_RETOUCH(PhotoMode.FACE_RETOUCH), AUTO(PhotoMode.AUTO);
 
-        /** Stable XML and saved-state identifier. */
-        private final int id;
+        /** The photo mode this stands for, which is also its XML identifier. */
+        @PhotoMode
+        final int photoMode;
 
-        Extension(int id) {
-            this.id = id;
+        Extension(@PhotoMode int photoMode) {
+            this.photoMode = photoMode;
         }
 
-        static Extension fromId(int id) {
+        /** The extension named for a photo mode, or for its XML identifier. */
+        static Extension fromPhotoMode(@PhotoMode int photoMode) {
             for (Extension extension : values()) {
-                if (extension.id == id) return extension;
+                if (extension.photoMode == photoMode) return extension;
             }
-            throw new IllegalArgumentException();
+            throw new IllegalArgumentException("Not a photo mode: " + photoMode);
         }
     }
 
@@ -639,7 +689,9 @@ public class CameraView extends FrameLayout {
             setShutterSoundEnabled(a.getBoolean(R.styleable.CameraView_shutterSoundEnabled, isShutterSoundEnabled()));
             setShutterSound(a.getResourceId(R.styleable.CameraView_shutterSound, getShutterSound()));
             setDynamicRange(DynamicRange.fromId(a.getInteger(R.styleable.CameraView_dynamicRange, getDynamicRange().id)));
-            setExtension(Extension.fromId(a.getInteger(R.styleable.CameraView_extension, getExtension().id)));
+            // The older attribute first, so a layout that sets both gets the newer one.
+            setPhotoMode(a.getInteger(R.styleable.CameraView_extension, getPhotoMode()));
+            setPhotoMode(a.getInteger(R.styleable.CameraView_photoMode, getPhotoMode()));
             setStabilizationEnabled(a.getBoolean(R.styleable.CameraView_stabilizationEnabled, isStabilizationEnabled()));
             setExposureCompensation(a.getInteger(R.styleable.CameraView_exposureCompensation, getExposureCompensation()));
             setTorchEnabled(a.getBoolean(R.styleable.CameraView_torchEnabled, isTorchEnabled()));
@@ -703,7 +755,7 @@ public class CameraView extends FrameLayout {
         state.putBoolean(EXTRA_CONFIRM_VIDEO, isVideoConfirmationEnabled());
         state.putBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO, isMatchPreviewAspectRatioEnabled());
         state.putInt(EXTRA_DYNAMIC_RANGE, getDynamicRange().id);
-        state.putInt(EXTRA_EXTENSION, getExtension().id);
+        state.putInt(EXTRA_PHOTO_MODE, getPhotoMode());
         state.putBoolean(EXTRA_STABILIZATION, isStabilizationEnabled());
         state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
         state.putBoolean(EXTRA_TORCH, isTorchEnabled());
@@ -742,7 +794,7 @@ public class CameraView extends FrameLayout {
             setVideoConfirmationEnabled(state.getBoolean(EXTRA_CONFIRM_VIDEO));
             setMatchPreviewAspectRatio(state.getBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO));
             setDynamicRange(DynamicRange.fromId(state.getInt(EXTRA_DYNAMIC_RANGE, DynamicRange.SDR.id)));
-            setExtension(Extension.fromId(state.getInt(EXTRA_EXTENSION, Extension.NONE.id)));
+            setPhotoMode(state.getInt(EXTRA_PHOTO_MODE, PhotoMode.NONE));
             setStabilizationEnabled(state.getBoolean(EXTRA_STABILIZATION));
             setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
             setTorchEnabled(state.getBoolean(EXTRA_TORCH));
@@ -842,6 +894,12 @@ public class CameraView extends FrameLayout {
      * device has to open and the session has to be configured, both asynchronously. An app that
      * enabled its shutter on the earlier signal lost its first capture.</p>
      */
+    /** Whether the camera is opening or open, rather than closed, closing or failed. */
+    boolean isCameraActive() {
+        Status status = getStatus();
+        return status == Status.OPENING || status == Status.OPEN;
+    }
+
     void onCameraReady() {
         runOnMainThread(() -> {
             if (getStatus() != Status.OPENING) {
@@ -1283,6 +1341,7 @@ public class CameraView extends FrameLayout {
         mCameraModule.loadSounds();
         mCameraModule.open();
         resumeBackgroundReplacement();
+        mCameraModule.applyBlurFallback();
         // After the camera, so that one that throws on opening leaves nothing listening.
         mLocationTracker.start();
     }
@@ -1304,6 +1363,9 @@ public class CameraView extends FrameLayout {
         stopFrameAnalysis();
         mLocationTracker.stop();
         finishZoomAnimation();
+        // Before the camera, so the segmenter stops with the frames it reads. It starts again
+        // when the camera reopens.
+        mCameraModule.stopBlurFallback();
         mCameraModule.close();
         mCameraModule.releaseSounds();
 
@@ -1431,13 +1493,18 @@ public class CameraView extends FrameLayout {
      * Takes a video and calls {@link OnVideoCapturedListener#onVideoCaptured(File)} when done.
      *
      * <p>Records audio alongside the video, so this is where the microphone is needed rather
-     * than at {@link #open()}. Needs API 16; below it, {@link OnVideoCapturedListener#onFailure()}
-     * is called instead.</p>
+     * than at {@link #open()}. Needs API 16; below it, and while a {@link #setPhotoMode photo
+     * mode} is on, {@link OnVideoCapturedListener#onFailure()} is called instead.</p>
      *
      * @param file The destination.
      */
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     public void startRecording(File file) {
+        if (mCameraModule.isPhotoModeOn()) {
+            Log.w(TAG, "A video cannot be recorded while a photo mode is on");
+            onVideoFailed();
+            return;
+        }
         Log.v(TAG, "Recording a video");
         mCameraModule.startRecording(file);
     }
@@ -1515,6 +1582,8 @@ public class CameraView extends FrameLayout {
      * Starts a video stream. The stream will continue until {@link VideoStream#close} is called.
      *
      * @return A stream that can be shared to a remote device.
+     * @throws IllegalStateException if the stream has video and the camera is not open, or a
+     *     {@link #setPhotoMode photo mode} is on
      */
     @RequiresPermission(allOf = {
             Manifest.permission.CAMERA,
@@ -1524,6 +1593,9 @@ public class CameraView extends FrameLayout {
     public VideoStream stream(VideoStream.Params params) {
         if (params.isVideoEnabled() && !isOpen()) {
             throw new IllegalStateException("Camera must be open before starting a video stream");
+        }
+        if (params.isVideoEnabled() && mCameraModule.isPhotoModeOn()) {
+            throw new IllegalStateException("A video stream cannot start while a photo mode is on");
         }
 
         return new VideoStream.Builder().attach(mCameraModule).setParams(params).build();
@@ -1537,9 +1609,9 @@ public class CameraView extends FrameLayout {
      * Starts reporting the barcodes the camera can see.
      *
      * @return whether scanning started. False below API 21, while the background is being
-     *     replaced, when the app does not include ML Kit's
-     *     {@code com.google.mlkit:barcode-scanning}, or when its barcode model is not available on
-     *     this device.
+     *     replaced or a {@link #setPhotoMode photo mode} is on, when the app does not include ML
+     *     Kit's {@code com.google.mlkit:barcode-scanning}, or when its barcode model is not
+     *     available on this device.
      */
     @RequiresPermission(Manifest.permission.CAMERA)
     public boolean enterBarcodeScanner(BarcodeDetectorListener listener, @Barcode.Format int format, @Barcode.Format int... formats) {
@@ -1553,6 +1625,11 @@ public class CameraView extends FrameLayout {
 
         if (mReplacingBackground) {
             Log.w(TAG, "Barcodes cannot be scanned while the background is being replaced");
+            return false;
+        }
+
+        if (mCameraModule.isPhotoModeOn()) {
+            Log.w(TAG, "Barcodes cannot be scanned while a photo mode is on");
             return false;
         }
 
@@ -1597,7 +1674,8 @@ public class CameraView extends FrameLayout {
      *
      * @return whether it started. Returns false, changing nothing, while
      *     {@link #startFrameAnalysis frame analysis} or the barcode scanner is running, since it
-     *     reads the same frames. False also where frames cannot be drawn, which
+     *     reads the same frames, and while a {@link #setPhotoMode photo mode} is on. False also
+     *     where frames cannot be drawn, which
      *     {@link #isFrameEffectSupported()} says in advance, when the app does not include ML
      *     Kit's {@code com.google.mlkit:segmentation-selfie}, or when its model is not available
      *     on this device.
@@ -1611,6 +1689,10 @@ public class CameraView extends FrameLayout {
         }
         if (isReadingFrames()) {
             Log.w(TAG, "The background cannot be replaced while frames are being analyzed");
+            return false;
+        }
+        if (mCameraModule.isPhotoModeOn()) {
+            Log.w(TAG, "The background cannot be replaced while a photo mode is on");
             return false;
         }
         if (!isFrameEffectSupported()) {
@@ -1694,8 +1776,9 @@ public class CameraView extends FrameLayout {
      * <p>This runs alongside the preview and recording, and stays attached across a lens switch.
      * Call {@link #stopFrameAnalysis()} to let the camera give the buffers back.</p>
      *
-     * @return whether analysis started. False below API 21, on a backend that cannot produce
-     *     frames to read, and while the background is being replaced.
+     * @return whether analysis started. False below API 21, on a camera that cannot produce
+     *     frames to read, while the background is being replaced, and while a
+     *     {@link #setPhotoMode photo mode} is on.
      * @throws IllegalStateException if the camera is not open, or analysis is already running
      */
     @RequiresPermission(Manifest.permission.CAMERA)
@@ -1719,6 +1802,10 @@ public class CameraView extends FrameLayout {
         }
         if (mReplacingBackground) {
             Log.w(TAG, "Frames cannot be analyzed while the background is being replaced");
+            return false;
+        }
+        if (mCameraModule.isPhotoModeOn()) {
+            Log.w(TAG, "Frames cannot be analyzed while a photo mode is on");
             return false;
         }
         if (Build.VERSION.SDK_INT < 19 || !mCameraModule.isFrameAnalysisSupported()) {
@@ -1863,7 +1950,8 @@ public class CameraView extends FrameLayout {
      * <p>While a renderer, filter or mask is drawing, a picture is drawn as the preview shows it
      * and written as a JPEG, so JPEG is the only format supported. Ultra HDR set beforehand
      * falls back to JPEG, and a picture taken in RAW or RAW_JPEG set beforehand fails. Every
-     * format the camera writes is supported again once nothing is drawing.</p>
+     * format the camera writes is supported again once nothing is drawing. The same holds while
+     * a {@link #setPhotoMode photo mode} is on, which writes a JPEG of its own.</p>
      */
     public boolean isPictureFormatSupported(PictureFormat format) {
         return mCameraModule.isPictureFormatSupported(format);
@@ -2151,19 +2239,124 @@ public class CameraView extends FrameLayout {
         return mCameraModule.isDynamicRangeSupported(dynamicRange);
     }
 
-    /** Sets the optional CameraX photo-processing extension. */
+    /**
+     * Selects one of the phone maker's own photo modes.
+     *
+     * @deprecated Use {@link #setPhotoMode}. This sets the extension's mode, on the same terms.
+     */
+    @Deprecated
     public void setExtension(Extension extension) {
-        mCameraModule.setExtension(extension);
+        if (extension == null) throw new NullPointerException("extension cannot be null");
+        setPhotoMode(extension.photoMode);
     }
 
-    /** Returns the requested CameraX photo-processing extension. */
+    /**
+     * Returns the photo mode asked for, as an extension.
+     *
+     * @deprecated Use {@link #getPhotoMode}.
+     */
+    @Deprecated
     public Extension getExtension() {
-        return mCameraModule.getExtension();
+        return Extension.fromPhotoMode(getPhotoMode());
     }
 
-    /** Returns whether the active backend and lens support the extension. */
+    /**
+     * Returns whether the active camera has the extension's photo mode.
+     *
+     * @deprecated Use {@link #isPhotoModeSupported}.
+     */
+    @Deprecated
     public boolean isExtensionSupported(Extension extension) {
-        return mCameraModule.isExtensionSupported(extension);
+        return extension != null && isPhotoModeSupported(extension.photoMode);
+    }
+
+    /**
+     * Takes pictures through one of the phone maker's own photo modes, such as their night mode,
+     * or through none for the camera's ordinary pictures.
+     *
+     * <p>Which modes there are depends on the phone and on the lens, and
+     * {@link #isPhotoModeSupported} says which the active camera has. Background blur is offered
+     * more widely: on a camera without its own, the library blurs the background itself, by
+     * segmenting the subject out of each frame. That needs the app to include ML Kit's
+     * {@code com.google.mlkit:segmentation-selfie}, and a camera that can draw its frames.</p>
+     *
+     * <p>The mode is kept across a lens switch and the camera closing and opening again, and
+     * applies on whichever camera has it. A camera without it takes ordinary pictures, and none
+     * of what follows applies there. Changing the mode reconfigures the camera, which can
+     * interrupt the preview for a moment.</p>
+     *
+     * <p>While a mode is on, the camera shows a preview and takes pictures, and does nothing
+     * else:</p>
+     * <ul>
+     *     <li>{@link #startRecording} fails, calling {@link OnVideoCapturedListener#onFailure()};
+     *     </li>
+     *     <li>{@link #startFrameAnalysis}, {@link #enterBarcodeScanner} and
+     *     {@link #enterBackgroundReplacement} return false;</li>
+     *     <li>{@link #stream} throws;</li>
+     *     <li>the flash never fires, and the torch, low-light boost and stabilization stay off,
+     *     each keeping its setting for when the mode is off again;</li>
+     *     <li>a {@link #setFrameRenderer renderer} and a
+     *     {@link #setCameraTextureProvider texture provider} are kept, but not called;</li>
+     *     <li>pictures are JPEGs, and {@link #isPictureFormatSupported} says so.</li>
+     * </ul>
+     *
+     * <p>Setting a mode is refused, and changes nothing, while one of those is already running:
+     * a recording, a stream, frame analysis, a barcode scan or a background replacement. Turning
+     * the mode off is never refused.</p>
+     *
+     * <p>A mode can take longer to capture than an ordinary picture: a night mode combines
+     * exposures over a second or more, so the phone should be held still until
+     * {@link OnImageCapturedListener} hears of the picture.</p>
+     *
+     * @param photoMode the mode, or {@link PhotoMode#NONE}
+     * @throws IllegalArgumentException for a number that is not a {@link PhotoMode}
+     */
+    public void setPhotoMode(@PhotoMode int photoMode) {
+        checkPhotoMode(photoMode);
+        if (photoMode != PhotoMode.NONE && photoMode != getPhotoMode()) {
+            String busy = whatAPhotoModeWaitsFor();
+            if (busy != null) {
+                Log.w(TAG, "A photo mode cannot be set while " + busy);
+                return;
+            }
+        }
+        mCameraModule.setPhotoMode(photoMode);
+    }
+
+    /**
+     * Returns the photo mode asked for, which on a camera without it does nothing. See
+     * {@link #setPhotoMode}.
+     */
+    @PhotoMode
+    public int getPhotoMode() {
+        return mCameraModule.getPhotoMode();
+    }
+
+    /**
+     * Returns whether the active camera can take pictures in a photo mode. Cameras on one device
+     * can differ, so read it once the camera has opened, and again after a lens switch.
+     * {@link PhotoMode#NONE} is always supported.
+     */
+    public boolean isPhotoModeSupported(@PhotoMode int photoMode) {
+        return photoMode >= PhotoMode.NONE && photoMode <= LAST_PHOTO_MODE
+                && mCameraModule.isPhotoModeSupported(photoMode);
+    }
+
+    /**
+     * What is running that a photo mode cannot start beside, for the log, or null for nothing.
+     */
+    @Nullable
+    private String whatAPhotoModeWaitsFor() {
+        if (isRecording()) {
+            return "recording";
+        }
+        if (mReplacingBackground) {
+            return "the background is replaced";
+        }
+        if (isReadingFrames() || mCameraModule.hasCallerStreams()) {
+            return "frames are analyzed or streamed";
+        }
+        return null;
     }
 
     /**

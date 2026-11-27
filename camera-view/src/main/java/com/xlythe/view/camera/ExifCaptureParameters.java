@@ -422,14 +422,17 @@ public final class ExifCaptureParameters {
         return this;
     }
 
-    /** The vendor extension the picture was taken through, which can be a scene mode. */
+    /**
+     * The photo mode the picture was taken in, as the scene it was taken for: a night scene, a
+     * portrait for background blur, and a standard scene for the rest, which Exif has no name for.
+     */
     @NonNull
-    public ExifCaptureParameters setExtension(@NonNull CameraView.Extension extension) {
-        switch (extension) {
-            case NIGHT:
+    public ExifCaptureParameters setPhotoMode(@CameraView.PhotoMode int photoMode) {
+        switch (photoMode) {
+            case CameraView.PhotoMode.NIGHT:
                 putScene(SCENE_NIGHT);
                 break;
-            case BOKEH:
+            case CameraView.PhotoMode.BACKGROUND_BLUR:
                 putScene(SCENE_PORTRAIT);
                 break;
             default:

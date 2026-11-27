@@ -117,6 +117,33 @@ public class CameraViewAttributesTest {
     }
 
     @Test
+    public void everyPhotoModeCanBeNamedInALayout() {
+        assertEquals(CameraView.PhotoMode.NONE, from(builder -> builder
+                .addAttribute(R.attr.photoMode, "none")).getPhotoMode());
+        assertEquals(CameraView.PhotoMode.BACKGROUND_BLUR, from(builder -> builder
+                .addAttribute(R.attr.photoMode, "backgroundBlur")).getPhotoMode());
+        assertEquals(CameraView.PhotoMode.HDR, from(builder -> builder
+                .addAttribute(R.attr.photoMode, "hdr")).getPhotoMode());
+        assertEquals(CameraView.PhotoMode.NIGHT, from(builder -> builder
+                .addAttribute(R.attr.photoMode, "night")).getPhotoMode());
+        assertEquals(CameraView.PhotoMode.FACE_RETOUCH, from(builder -> builder
+                .addAttribute(R.attr.photoMode, "faceRetouch")).getPhotoMode());
+        assertEquals(CameraView.PhotoMode.AUTO, from(builder -> builder
+                .addAttribute(R.attr.photoMode, "auto")).getPhotoMode());
+    }
+
+    /** A layout that names both attributes gets the newer one. */
+    @Test
+    public void thePhotoModeAttributeWinsOverTheOlderOne() {
+        CameraView view = from(builder -> builder
+                .addAttribute(R.attr.extension, "night")
+                .addAttribute(R.attr.photoMode, "backgroundBlur"));
+
+        assertEquals(CameraView.PhotoMode.BACKGROUND_BLUR, view.getPhotoMode());
+        assertEquals(CameraView.Extension.BOKEH, view.getExtension());
+    }
+
+    @Test
     public void theBackendCanBeNamedInALayout() {
         assertEquals(CameraView.Backend.LEGACY, from(builder -> builder
                 .addAttribute(R.attr.backend, "legacy")).getBackend());
@@ -197,6 +224,7 @@ public class CameraViewAttributesTest {
         assertFalse(view.isVideoConfirmationEnabled());
         assertEquals(CameraView.DynamicRange.SDR, view.getDynamicRange());
         assertEquals(CameraView.Extension.NONE, view.getExtension());
+        assertEquals(CameraView.PhotoMode.NONE, view.getPhotoMode());
         assertEquals(ICameraModule.DEFAULT_PICTURE_QUALITY, view.getPictureQuality());
         assertTrue(view.isShutterSoundEnabled());
     }

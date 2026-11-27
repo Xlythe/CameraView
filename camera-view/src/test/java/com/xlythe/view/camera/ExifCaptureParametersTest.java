@@ -255,16 +255,21 @@ public class ExifCaptureParametersTest {
                 .get(ExifInterface.TAG_FLASH));
     }
 
-    /** A night extension is a night scene, and a bokeh one a portrait. */
+    /**
+     * A night mode is a night scene, background blur a portrait, and every other mode, Exif having
+     * no name for it, a standard scene.
+     */
     @Test
-    public void anExtensionCanBeAScene() {
+    public void aPhotoModeCanBeAScene() {
         ExifCaptureParameters parameters = new ExifCaptureParameters();
 
-        assertEquals("3", parameters.setExtension(CameraView.Extension.NIGHT).values()
+        assertEquals("3", parameters.setPhotoMode(CameraView.PhotoMode.NIGHT).values()
                 .get(ExifInterface.TAG_SCENE_CAPTURE_TYPE));
-        assertEquals("2", parameters.setExtension(CameraView.Extension.BOKEH).values()
+        assertEquals("2", parameters.setPhotoMode(CameraView.PhotoMode.BACKGROUND_BLUR).values()
                 .get(ExifInterface.TAG_SCENE_CAPTURE_TYPE));
-        assertEquals("0", parameters.setExtension(CameraView.Extension.HDR).values()
+        assertEquals("0", parameters.setPhotoMode(CameraView.PhotoMode.HDR).values()
+                .get(ExifInterface.TAG_SCENE_CAPTURE_TYPE));
+        assertEquals("0", parameters.setPhotoMode(CameraView.PhotoMode.NONE).values()
                 .get(ExifInterface.TAG_SCENE_CAPTURE_TYPE));
     }
 

@@ -1,6 +1,7 @@
 package com.xlythe.view.camera;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Matrix;
 import android.graphics.Rect;
@@ -15,21 +16,27 @@ import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
 import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
 
+import com.xlythe.view.camera.gl.BackgroundBlur;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
 import java.text.SimpleDateFormat;
+import java.util.Collections;
 import java.util.Date;
+import java.util.HashSet;
 import java.util.Locale;
+import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -58,8 +65,26 @@ public abstract class ICameraModule {
     private CameraView.Flash mFlash = CameraView.Flash.AUTO;
     /** Requested capture dynamic range. */
     private CameraView.DynamicRange mDynamicRange = CameraView.DynamicRange.SDR;
-    /** Requested CameraX photo extension. */
-    private CameraView.Extension mExtension = CameraView.Extension.NONE;
+    /** The photo mode asked for. See {@link CameraView#setPhotoMode}. */
+    @CameraView.PhotoMode
+    private int mPhotoMode = CameraView.PhotoMode.NONE;
+    /**
+     * Blurs the background through the segmenter, in place of the caller's renderer, while
+     * background blur is on a camera without a blur of its own; null otherwise. Main thread.
+     */
+    @Nullable
+    private BackgroundBlur mBlurFallback;
+    /**
+     * Whether background blur goes through the segmenter even on a camera with a blur of its
+     * own, so a device test can compare the two on one phone.
+     */
+    private static volatile boolean sBlurFallbackForced;
+    /**
+     * The streams attached through {@link #getCanvas()} and not yet detached: frames for analysis
+     * or an encoder for a live stream. A photo mode refuses to start while any is.
+     */
+    private final Set<VideoRecorder.SurfaceProvider> mCallerStreams =
+            Collections.synchronizedSet(new HashSet<VideoRecorder.SurfaceProvider>());
     /** Whether a steadied picture is requested, of the preview and of a recording alike. */
     private boolean mStabilizationEnabled;
     /** Requested exposure compensation index. */
@@ -144,14 +169,45 @@ public abstract class ICameraModule {
     protected void stopSegmentation() {}
     @RequiresApi(18)
     public VideoRecorder.Canvas getCanvas() {
+        return canvas(true /* counted */);
+    }
+
+    /**
+     * {@link #getCanvas()} for the library's own frames, such as the segmenter's, which a photo
+     * mode does not wait on because the library stops them itself.
+     */
+    @RequiresApi(18)
+    protected final VideoRecorder.Canvas getLibraryCanvas() {
+        return canvas(false /* counted */);
+    }
+
+    /** Whether a caller has a stream attached, which a photo mode may not start beside. */
+    @AnyThread
+    final boolean hasCallerStreams() {
+        return !mCallerStreams.isEmpty();
+    }
+
+    /**
+     * @param counted whether the streams attached through it are the caller's, which
+     *     {@link #hasCallerStreams()} reports. Counted as they are attached rather than once the
+     *     main thread gets to them, so a mode set on the next line already sees the stream.
+     */
+    @RequiresApi(18)
+    private VideoRecorder.Canvas canvas(boolean counted) {
         return new VideoRecorder.Canvas() {
             @Override
             public void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+                if (counted) {
+                    mCallerStreams.add(surfaceProvider);
+                }
                 new Handler(Looper.getMainLooper()).post(() -> ICameraModule.this.attachSurface(surfaceProvider));
             }
 
             @Override
             public void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
+                if (counted) {
+                    mCallerStreams.remove(surfaceProvider);
+                }
                 if (Looper.myLooper() == Looper.getMainLooper()) {
                     ICameraModule.this.detachSurface(surfaceProvider);
                     return;
@@ -503,17 +559,203 @@ public abstract class ICameraModule {
         return dynamicRange == CameraView.DynamicRange.SDR;
     }
 
-    public synchronized void setExtension(CameraView.Extension extension) {
+    /**
+     * @deprecated Use {@link #setPhotoMode}, which this calls with the extension's mode.
+     */
+    @Deprecated
+    public void setExtension(CameraView.Extension extension) {
         if (extension == null) throw new NullPointerException("extension cannot be null");
-        mExtension = extension;
+        setPhotoMode(extension.photoMode);
     }
 
-    public synchronized CameraView.Extension getExtension() {
-        return mExtension;
+    /**
+     * @deprecated Use {@link #getPhotoMode}. This returns the extension named for it.
+     */
+    @Deprecated
+    public CameraView.Extension getExtension() {
+        return CameraView.Extension.fromPhotoMode(getPhotoMode());
     }
 
-    public synchronized boolean isExtensionSupported(CameraView.Extension extension) {
-        return extension == CameraView.Extension.NONE;
+    /**
+     * @deprecated Use {@link #isPhotoModeSupported}, which this asks for the extension's mode.
+     */
+    @Deprecated
+    public boolean isExtensionSupported(CameraView.Extension extension) {
+        return extension != null && isPhotoModeSupported(extension.photoMode);
+    }
+
+    /**
+     * Asks for a photo mode. See {@link CameraView#setPhotoMode}, which refuses one while
+     * something it cannot run beside is going; this keeps whatever it is given.
+     *
+     * @throws IllegalArgumentException for a number that is not a {@link CameraView.PhotoMode}
+     */
+    @AnyThread
+    public void setPhotoMode(@CameraView.PhotoMode int photoMode) {
+        CameraView.checkPhotoMode(photoMode);
+        synchronized (this) {
+            if (mPhotoMode == photoMode) {
+                return;
+            }
+            mPhotoMode = photoMode;
+        }
+        onMainThread(() -> {
+            onPhotoModeChanged();
+            applyBlurFallback();
+        });
+    }
+
+    /** The photo mode asked for, which the active camera may not have. */
+    @AnyThread
+    @CameraView.PhotoMode
+    public synchronized int getPhotoMode() {
+        return mPhotoMode;
+    }
+
+    /**
+     * Whether the active camera can take pictures in a photo mode: through its own processing,
+     * or for background blur, through the library's own where the camera has none. NONE always.
+     */
+    @AnyThread
+    public boolean isPhotoModeSupported(@CameraView.PhotoMode int photoMode) {
+        if (photoMode == CameraView.PhotoMode.NONE) {
+            return true;
+        }
+        if (photoMode == CameraView.PhotoMode.BACKGROUND_BLUR && canBlurBackground()) {
+            return true;
+        }
+        return usesOwnPhotoMode(photoMode);
+    }
+
+    /**
+     * Whether a photo mode the active camera supports is asked for, while which the camera takes
+     * pictures and nothing else. See {@link CameraView#setPhotoMode}.
+     */
+    @AnyThread
+    protected final boolean isPhotoModeOn() {
+        int photoMode = getPhotoMode();
+        return photoMode != CameraView.PhotoMode.NONE && isPhotoModeSupported(photoMode);
+    }
+
+    /**
+     * The mode the camera's own processing is to run, or NONE: with no mode asked for, on a
+     * camera without the one asked for, and while the library blurs the background in its place.
+     */
+    @AnyThread
+    @CameraView.PhotoMode
+    protected final int getOwnPhotoMode() {
+        int photoMode = getPhotoMode();
+        return photoMode != CameraView.PhotoMode.NONE && usesOwnPhotoMode(photoMode)
+                ? photoMode : CameraView.PhotoMode.NONE;
+    }
+
+    /**
+     * The mode a picture is taken in, for its Exif: the one asked for while it is on, and
+     * otherwise NONE.
+     */
+    @AnyThread
+    @CameraView.PhotoMode
+    protected final int getPhotoModeInUse() {
+        return isPhotoModeOn() ? getPhotoMode() : CameraView.PhotoMode.NONE;
+    }
+
+    /**
+     * Whether the active camera runs a photo mode through its own processing. A backend whose
+     * camera can override this; NONE never reaches it.
+     */
+    @AnyThread
+    protected boolean offersOwnPhotoMode(@CameraView.PhotoMode int photoMode) {
+        return false;
+    }
+
+    /** {@link #offersOwnPhotoMode}, unless a test has the library blur in the camera's place. */
+    @AnyThread
+    private boolean usesOwnPhotoMode(@CameraView.PhotoMode int photoMode) {
+        if (photoMode == CameraView.PhotoMode.BACKGROUND_BLUR && sBlurFallbackForced) {
+            return false;
+        }
+        return offersOwnPhotoMode(photoMode);
+    }
+
+    /**
+     * Whether the library can blur the background itself: it segments each frame and draws the
+     * blur through GL, so it needs frames to read, frames it can draw, and ML Kit's segmenter.
+     */
+    @AnyThread
+    private boolean canBlurBackground() {
+        return Build.VERSION.SDK_INT >= 21 && isFrameEffectSupported()
+                && isFrameAnalysisSupported() && SegmentationAnalyzer.isAvailable();
+    }
+
+    /**
+     * Has background blur go through the segmenter on every camera, the ones with a blur of their
+     * own included.
+     */
+    @VisibleForTesting
+    static void setBlurFallbackForced(boolean forced) {
+        sBlurFallbackForced = forced;
+    }
+
+    /**
+     * Called on the main thread once the photo mode asked for has changed, for a backend to
+     * reconfigure the camera around it.
+     */
+    @MainThread
+    protected void onPhotoModeChanged() {}
+
+    /**
+     * Starts the library's background blur, or stops it, to match the mode asked for and the
+     * active camera. Called as the mode changes, as the camera opens, and whenever a session is
+     * configured: a camera can turn out to have a blur of its own once it is up, and a lens
+     * switch trades one camera for another.
+     *
+     * <p>Suppressed because lint cannot follow the permission check this makes itself, which
+     * turns away only a permission revoked since the camera opened.</p>
+     */
+    @SuppressLint("MissingPermission")
+    @MainThread
+    protected final void applyBlurFallback() {
+        if (Build.VERSION.SDK_INT < 21) {
+            // Below it there is no segmenter to blur with, and no blur running to stop.
+            return;
+        }
+        boolean wanted = getPhotoMode() == CameraView.PhotoMode.BACKGROUND_BLUR
+                && !usesOwnPhotoMode(CameraView.PhotoMode.BACKGROUND_BLUR)
+                && canBlurBackground() && getView().isCameraActive()
+                && PermissionChecker.hasPermissions(getContext(), Manifest.permission.CAMERA);
+        if (wanted == (mBlurFallback != null)) {
+            return;
+        }
+        if (!wanted) {
+            stopBlurFallback();
+            return;
+        }
+        BackgroundBlur blur = new BackgroundBlur();
+        // Drawn in place of the caller's renderer from the first frame the segmenter sees.
+        mBlurFallback = blur;
+        onFrameDrawingChanged();
+        if (!startSegmentation(blur::setMask)) {
+            Log.w(TAG, "The background cannot be blurred on this device");
+            mBlurFallback = null;
+            onFrameDrawingChanged();
+        }
+    }
+
+    /** Stops the library's background blur, if it is running, and lets the segmenter go. */
+    @MainThread
+    final void stopBlurFallback() {
+        if (mBlurFallback == null) {
+            return;
+        }
+        mBlurFallback = null;
+        stopSegmentation();
+        onFrameDrawingChanged();
+    }
+
+    /** Whether the library is blurring the background itself. */
+    @MainThread
+    protected final boolean isBlurringBackground() {
+        return mBlurFallback != null;
     }
 
     /**
@@ -661,9 +903,13 @@ public abstract class ICameraModule {
         return true;
     }
 
-    /** Tells the view the camera can be used, which promotes it to open. */
+    /**
+     * Tells the view the camera can be used, which promotes it to open. Called whenever a session
+     * is configured, so the library's background blur is checked against the camera it now has.
+     */
     protected final void onCameraReady() {
         getView().onCameraReady();
+        onMainThread(this::applyBlurFallback);
     }
 
     /**
@@ -725,6 +971,33 @@ public abstract class ICameraModule {
     public final FrameRenderer getFrameRenderer() {
         return mFrameRenderer;
     }
+
+    /**
+     * What draws the frames now: the library's background blur while it runs, nothing while the
+     * camera's own photo mode is on, and otherwise the caller's renderer, which is kept either
+     * way.
+     */
+    @Nullable
+    protected final FrameRenderer getDrawingRenderer() {
+        BackgroundBlur blur = mBlurFallback;
+        if (blur != null) {
+            return blur;
+        }
+        return isPhotoModeOn() ? null : mFrameRenderer;
+    }
+
+    /** The caller's texture provider, except while a photo mode is on, which keeps it unused. */
+    @Nullable
+    protected final CameraTextureProvider getDrawingTextureProvider() {
+        return isPhotoModeOn() ? null : mCameraTextureProvider;
+    }
+
+    /**
+     * Called on the main thread when {@link #getDrawingRenderer} or
+     * {@link #getDrawingTextureProvider} may have changed without the caller setting either.
+     */
+    @MainThread
+    protected void onFrameDrawingChanged() {}
 
     /** Sets who creates the texture the camera renders into. See {@link CameraTextureProvider}. */
     public void setCameraTextureProvider(@Nullable CameraTextureProvider provider) {

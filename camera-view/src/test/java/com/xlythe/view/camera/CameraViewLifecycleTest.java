@@ -453,7 +453,7 @@ public class CameraViewLifecycleTest {
         assertFalse(cameraView.isLowLightBoostSupported());
         assertFalse(cameraView.isStabilizationSupported());
         assertTrue(cameraView.isDynamicRangeSupported(CameraView.DynamicRange.SDR));
-        assertFalse(cameraView.isExtensionSupported(CameraView.Extension.BOKEH));
+        assertFalse(cameraView.isPhotoModeSupported(CameraView.PhotoMode.NIGHT));
         assertNotNull(cameraView.getQuality());
     }
 

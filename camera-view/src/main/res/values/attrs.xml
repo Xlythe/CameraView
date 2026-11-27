@@ -32,9 +32,18 @@
             <enum name="sdr" value="0"/>
             <enum name="hdr" value="1"/>
         </attr>
+        <!-- Deprecated: use photoMode, which takes the same values under newer names. -->
         <attr name="extension" format="enum">
             <enum name="none" value="0"/>
             <enum name="bokeh" value="1"/>
+            <enum name="hdr" value="2"/>
+            <enum name="night" value="3"/>
+            <enum name="faceRetouch" value="4"/>
+            <enum name="auto" value="5"/>
+        </attr>
+        <attr name="photoMode" format="enum">
+            <enum name="none" value="0"/>
+            <enum name="backgroundBlur" value="1"/>
             <enum name="hdr" value="2"/>
             <enum name="night" value="3"/>
             <enum name="faceRetouch" value="4"/>
