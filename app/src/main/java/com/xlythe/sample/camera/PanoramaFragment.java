@@ -150,6 +150,9 @@ public class PanoramaFragment extends CameraFragment implements CameraView.Panor
         for (int i = 0; i < mModes.getChildCount(); i++) {
             mModes.getChildAt(i).setEnabled(!sweeping);
         }
+        // Aiming straight up lays the phone face down, which turns the screen off on a phone
+        // that watches for it, and with it the camera.
+        mCameraView.setKeepScreenOn(sweeping);
         if (getActivity() != null) {
             // A sweep turns the phone every way, and the screen rotating with it would close the
             // camera halfway round.

@@ -67,6 +67,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.xlythe.view.camera.Barcode
@@ -425,6 +426,13 @@ fun PanoramaDemoScreen() {
     LaunchedEffect(Unit) { permissionLauncher.launch(Permissions.REQUIRED_PERMISSIONS) }
 
     val sweeping = cameraState.value?.isCapturingPanorama == true
+    // Aiming straight up lays the phone face down, which turns the screen off on a phone that
+    // watches for it, and with it the camera.
+    val view = LocalView.current
+    DisposableEffect(sweeping) {
+        view.keepScreenOn = sweeping
+        onDispose { view.keepScreenOn = false }
+    }
     Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         Card(
             colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),

@@ -468,8 +468,9 @@ The picture is a JPEG with the same Exif as any other picture and photo sphere m
 galleries and panorama viewers show it as a panorama. Without a file it is filed in the gallery,
 under Pictures, and reported to onPanoramaSaved(Uri); given a file it is written there and
 reported to onPanoramaCaptured(File). startPanorama returns false on a device that cannot report
-which way it is pointing. Lock the screen's orientation while a sweep runs, or turning the phone
-will rotate it.
+which way it is pointing. While a sweep runs, lock the screen's orientation, or turning the phone
+will rotate it, and keep the screen on, or aiming straight up will lay the phone face down and
+turn the screen off.
 ```java
 mCameraView.startPanorama(CameraView.PanoramaMode.PHOTOSPHERE,
     new CameraView.PanoramaListener() {
