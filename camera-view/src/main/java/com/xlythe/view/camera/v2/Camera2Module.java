@@ -35,6 +35,7 @@ import android.util.SizeF;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.TransformMath;
@@ -1111,6 +1112,26 @@ public class Camera2Module extends ICameraModule {
             return 1f;
         }
         return cropZoomFor(maxDigitalZoom, mZoomLevel);
+    }
+
+    /**
+     * The Exif a picture taken now should carry about how it was taken: the active camera's
+     * optics, and the zoom and flash this session requests. The camera2 backend requests no
+     * exposure compensation, so the bias is always none.
+     */
+    @NonNull
+    ExifCaptureParameters exifCaptureParameters() {
+        ExifCaptureParameters parameters;
+        try {
+            String cameraId = getActiveCamera();
+            parameters = ExifCaptureParameters.forCamera(mCameraManager, cameraId)
+                    .setZoomRatio(effectiveZoomRatio(
+                            mCameraManager.getCameraCharacteristics(cameraId)));
+        } catch (CameraAccessException | RuntimeException error) {
+            Log.w(TAG, "Unable to describe the camera for a picture's Exif", error);
+            parameters = new ExifCaptureParameters();
+        }
+        return parameters.setExposureCompensation(0).setFlash(getFlash(), hasFlash());
     }
 
     /** Rebuilds the repeating request, for a setting the request itself carries. */
