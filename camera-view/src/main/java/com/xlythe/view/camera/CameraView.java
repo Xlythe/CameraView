@@ -2085,7 +2085,10 @@ public class CameraView extends FrameLayout {
         /** A video from {@link CameraView#startRecording(File)} has been written to that file. */
         default void onVideoCaptured(File file) {}
 
-        /** A video from {@link CameraView#startRecording()} has been filed in the gallery. */
+        /**
+         * A video from {@link CameraView#startRecording()} has been filed in the gallery.
+         * {@link VideoView#setUri(Uri)} plays it.
+         */
         default void onVideoSaved(@NonNull Uri uri) {}
 
         /** The video could not be recorded, or could not be filed. */

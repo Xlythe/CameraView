@@ -409,9 +409,10 @@ exif.removeLocation();
 
 VideoView
 -----------------
-VideoView is another simplified Android View. In this case, as the name implies, it plays Videos.
+VideoView is another simplified Android View. In this case, as the name implies, it plays Videos,
+from a file or from a uri such as the one onVideoSaved(Uri) reports.
 ```java
-mVideoView.setFile(file);
+mVideoView.setFile(file); // or setUri(uri)
 mVideoView.play();
 mVideoView.pause();
 ```
