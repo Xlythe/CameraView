@@ -92,13 +92,25 @@ isAnalyzingFrames.
 
 Camera's methods are rather straight forward.
 
-Takes a picture and saves it to the given file
+Takes a picture and files it in the gallery, under Pictures
 ```kotlin
-cameraController.takePicture(file)
+cameraController.takePicture()
 ```
-Starts recording until stopRecording is called, the max duration is reached, or the max file size is reached
+Starts recording until stopRecording is called, the max duration is reached, or the max file size
+is reached, then files the video in the gallery, under Movies
 ```kotlin
-cameraController.startRecording(file)
+cameraController.startRecording()
+```
+Only these calls without a file put anything in the gallery, and they report where it went.
+Given a file, takePicture(file) and startRecording(file) write there instead and report the file.
+```kotlin
+Camera(
+    controller = cameraController,
+    onImageSaved = { uri -> ... },
+    onVideoSaved = { uri -> ... },
+    onImageCaptured = { file -> ... },
+    onVideoCaptured = { file -> ... }
+)
 ```
 Stops recording
 ```kotlin
