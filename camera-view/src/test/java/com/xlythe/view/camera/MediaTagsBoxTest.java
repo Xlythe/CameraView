@@ -176,6 +176,18 @@ public class MediaTagsBoxTest {
                 MediaTags.read(heif(0, null, null, new byte[0])).getGainMap());
     }
 
+    /**
+     * iOS 18 keeps Apple's own gain map and adds an ISO 21496-1 tmap item beside it; the
+     * standard one is what is reported.
+     */
+    @Test
+    public void heifWithBothGainMapsReportsTheStandardOne() throws IOException {
+        byte[] apple = fullBox("auxC", 0, 0, ascii("urn:com:apple:photo:2020:aux:hdrgainmap"),
+                new byte[1]);
+        assertEquals(MediaTags.GAIN_MAP_ISO_21496_1,
+                MediaTags.read(heif(0, "tmap", apple, new byte[0])).getGainMap());
+    }
+
     @Test
     public void heifFindsAMotionPhotoAtItsEndAndKeepsItThere() throws IOException {
         byte[] video = MediaTagsFixtures.mp4Clip(400);
