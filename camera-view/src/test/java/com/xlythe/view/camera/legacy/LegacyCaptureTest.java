@@ -19,6 +19,7 @@ import android.media.MediaRecorder;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowGeotaggingMediaRecorder;
@@ -342,7 +343,8 @@ public class LegacyCaptureTest {
         ShadowPausedAsyncTask.overrideExecutor(Runnable::run);
         Camera camera = Camera.open(1);
         try {
-            new LegacyPictureListener(file, 0, false, module).onPictureTaken(EMPTY_JPEG, camera);
+            new LegacyPictureListener(file, 0, false, new ExifCaptureParameters(), module)
+                    .onPictureTaken(EMPTY_JPEG, camera);
             idle();
         } finally {
             camera.release();
