@@ -77,16 +77,31 @@ final class Stitcher {
         /** How many pairs of frames were matched. */
         final int pairs;
 
+        /** The small picture the seams were cut on. */
+        final Equirect small;
+
+        /** Which frame owns each pixel of the small picture, rows from {@link #labelTop} on. */
+        final int[] labels;
+
+        /** The small picture's first labelled row. */
+        final int labelTop;
+
         Result(Equirect grid, int[] region, @Nullable BundleAdjuster.Result alignment,
-                int pairs) {
+                int pairs, Equirect small, int[] labels, int labelTop) {
             this.grid = grid;
             this.region = region;
             this.alignment = alignment;
             this.pairs = pairs;
+            this.small = small;
+            this.labels = labels;
+            this.labelTop = labelTop;
         }
     }
 
-    /** Keeps the few frames read most recently, since the blender asks for each per tile. */
+    /**
+     * Keeps the few frames read most recently, since the blender asks for each per tile, from
+     * several threads.
+     */
     private static final class Cache implements Frames {
         /** How many frames are kept: a tile rarely draws on more. */
         private static final int SIZE = 6;
@@ -104,7 +119,7 @@ final class Stitcher {
 
         @Nullable
         @Override
-        public ArgbImage image(int frame) {
+        public synchronized ArgbImage image(int frame) {
             ArgbImage image = mKept.get(frame);
             if (image != null) {
                 return image;
@@ -228,7 +243,7 @@ final class Stitcher {
         }
         int[] region = scaleRegion(smallRegion, top, smallGrid.width, grid);
         MultiBandBlender.Sink sink = output.open(region[2], region[3]);
-        new MultiBandBlender().blend(mFrames, frame -> {
+        MultiBandBlender.blend(mFrames, frame -> {
             ArgbImage image = mSource.image(frame);
             return image != null ? image : small[frame];
         }, labels, top, rows, smallGrid, grid, region, sink);
@@ -246,7 +261,7 @@ final class Stitcher {
                         + "alignment %d, seams %d, blending %d",
                 blended - start, detected - start, matched - detected, aligned - matched,
                 seamed - aligned, blended - seamed));
-        return new Result(grid, region, alignment, pairs.size());
+        return new Result(grid, region, alignment, pairs.size(), smallGrid, labels, top);
     }
 
     /** Matches every pair of frames the sensor says overlap. */
