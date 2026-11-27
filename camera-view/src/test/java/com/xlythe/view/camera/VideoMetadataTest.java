@@ -20,6 +20,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.Arrays;
 
 /**
  * Writing user data into an MP4 without moving the media: mdat keeps its position, or every
@@ -162,6 +163,139 @@ public class VideoMetadataTest {
 
         assertNull(VideoMetadata.withUserData(moov,
                 new VideoMetadata.Builder().set(VideoMetadata.Tag.MAKE, "Acme").fields()));
+    }
+
+    /** A field set to nothing is left as it is, and a field the file lacks reads as null. */
+    @Test
+    public void anEmptyValueIsIgnored() throws IOException {
+        File file = fileOf(mp4(512, true));
+
+        assertFalse(VideoMetadata.write(file,
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.TITLE, "")));
+        assertEquals("Old title", VideoMetadata.read(file, VideoMetadata.Tag.TITLE));
+        assertNull(VideoMetadata.read(file, VideoMetadata.Tag.COPYRIGHT));
+    }
+
+    /** Free space used up exactly leaves no free box behind, and moov meets mdat. */
+    @Test
+    public void freeSpaceCanBeUsedUpExactly() throws IOException {
+        // A udta of its 8-byte header and one 13-byte field: 21 bytes, exactly the free box.
+        byte[] mp4 = mp4(21, false);
+        File file = fileOf(mp4);
+
+        assertTrue(VideoMetadata.write(file,
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.ARRANGER, "x")));
+
+        byte[] out = Files.readAllBytes(file.toPath());
+        assertEquals(mp4.length, out.length);
+        assertEquals(-1, indexOf(out, "free"));
+        assertEquals(indexOf(mp4, "mdat"), indexOf(out, "mdat"));
+        assertEquals("x", VideoMetadata.read(file, VideoMetadata.Tag.ARRANGER));
+    }
+
+    /** A skip box is padding as much as a free box is. */
+    @Test
+    public void aSkipBoxIsGrownIntoToo() throws IOException {
+        byte[] mp4 = mp4(512, false);
+        byte[] skip = mp4.clone();
+        int free = indexOf(skip, "free");
+        skip[free] = 's';
+        skip[free + 1] = 'k';
+        skip[free + 2] = 'i';
+        skip[free + 3] = 'p';
+        File file = fileOf(skip);
+
+        assertTrue(VideoMetadata.write(file,
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.ARRANGER, "Someone")));
+        assertEquals("Someone", VideoMetadata.read(file, VideoMetadata.Tag.ARRANGER));
+    }
+
+    /** A user-data-only field with no room has nothing else to try. */
+    @Test
+    public void aUserDataFieldWithoutRoomWritesNothing() throws IOException {
+        byte[] mp4 = mp4(0, false);
+        File file = fileOf(mp4);
+
+        assertFalse(VideoMetadata.write(file,
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.ARRANGER, "Someone")));
+        assertArrayEquals(mp4, Files.readAllBytes(file.toPath()));
+    }
+
+    /** Fewer bytes after moov than a box header is not padding. */
+    @Test
+    public void aTruncatedTailIsLeftAlone() throws IOException {
+        byte[] mp4 = mp4AtEnd();
+        byte[] truncated = Arrays.copyOf(mp4, mp4.length + 4);
+        File file = fileOf(truncated);
+
+        assertFalse(VideoMetadata.write(file,
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.ARRANGER, "Someone")));
+        assertArrayEquals(truncated, Files.readAllBytes(file.toPath()));
+    }
+
+    /** A file that is not an MP4, or cannot be opened for writing, takes nothing. */
+    @Test
+    public void aFileThatCannotTakeMetadataIsDeclined() throws IOException {
+        assertFalse(VideoMetadata.write(fileOf(new byte[] {0, 0, 0, 4, 'f', 't', 'y', 'p'}),
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.TITLE, "A title")));
+        assertFalse(VideoMetadata.write(fileOf(new byte[] {0, 0, 0, 99, 'f', 't', 'y', 'p'}),
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.TITLE, "A title")));
+
+        File readOnly = fileOf(mp4(512, false));
+        assertTrue(readOnly.setReadOnly());
+        assertFalse(VideoMetadata.write(readOnly,
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.TITLE, "A title")));
+    }
+
+    /** A moov whose children do not add up is not rewritten in a file either. */
+    @Test
+    public void aMalformedMoovInAFileIsLeftAlone() throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        box(out, "ftyp", new byte[] {'i', 's', 'o', 'm'});
+        box(out, "moov", new byte[] {0, 0, 0, 99, 'm', 'v', 'h', 'd'});
+        byte[] mp4 = out.toByteArray();
+        File file = fileOf(mp4);
+
+        assertFalse(VideoMetadata.write(file,
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.TITLE, "A title")));
+        assertArrayEquals(mp4, Files.readAllBytes(file.toPath()));
+    }
+
+    /** User data whose fields do not add up, or are cut short, reads as absent. */
+    @Test
+    public void malformedUserDataReadsAsAbsent() throws IOException {
+        assertNull("a udta that does not add up", VideoMetadata.withUserData(
+                moovWithUserData(new byte[] {0, 0, 0, 99, 0, 0, 0, 0}),
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.MAKE, "Acme").fields()));
+        assertNull("nor does a container with bytes left over", VideoMetadata.withUserData(
+                moovWithUserData(new byte[] {0, 0, 0, 4}),
+                new VideoMetadata.Builder().set(VideoMetadata.Tag.MAKE, "Acme").fields()));
+
+        byte[] tooShort = {0, 0, 0, 8, (byte) 0xA9, 'n', 'a', 'm'};
+        assertNull(VideoMetadata.read(fileOf(mp4WithUserData(tooShort)),
+                VideoMetadata.Tag.TITLE));
+        byte[] tooLong = {0, 0, 0, 12, (byte) 0xA9, 'n', 'a', 'm', 0, 99, 0x55, (byte) 0xC4};
+        assertNull(VideoMetadata.read(fileOf(mp4WithUserData(tooLong)),
+                VideoMetadata.Tag.TITLE));
+        assertNull(VideoMetadata.read(fileOf(mp4WithUserData(new byte[] {0, 0, 0, 99})),
+                VideoMetadata.Tag.TITLE));
+    }
+
+    private static byte[] moovWithUserData(byte[] udta) {
+        ByteArrayOutputStream moov = new ByteArrayOutputStream();
+        box(moov, "udta", udta);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        box(out, "moov", moov.toByteArray());
+        return out.toByteArray();
+    }
+
+    private static byte[] mp4WithUserData(byte[] udta) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        box(out, "ftyp", new byte[] {'i', 's', 'o', 'm'});
+        byte[] moov = moovWithUserData(udta);
+        out.write(moov, 0, moov.length);
+        box(out, "mdat", new byte[64]);
+        return out.toByteArray();
     }
 
     private File fileOf(byte[] contents) throws IOException {

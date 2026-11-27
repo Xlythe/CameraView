@@ -38,6 +38,9 @@ public abstract class ICameraModule {
     /** How old a fix may be and still say where a video that just finished was taken. */
     private static final long STALE_VIDEO_LOCATION_MILLIS = 60 * 1000;
 
+    /** The location role that says a video was recorded there, rather than that it shows it. */
+    private static final String LOCATION_ROLE_SHOOTING = "0";
+
     /** Owning CameraView used for view state and callbacks. */
     private final CameraView mView;
     /** Requested image and video quality. */
@@ -219,7 +222,8 @@ public abstract class ICameraModule {
 
     /**
      * Writes which device recorded the video, when, and where if the app may know, which
-     * MediaRecorder leaves out. Done before the caller is told, so it is handed a finished file.
+     * MediaRecorder leaves out, as both user data and keyed metadata. Done before the caller is
+     * told, so it is handed a finished file.
      */
     // The location is read only behind the ACCESS_FINE_LOCATION check below, which lint does not
     // accept as a guard.
@@ -228,17 +232,23 @@ public abstract class ICameraModule {
         if (file == null || !file.exists()) {
             return;
         }
+        long now = System.currentTimeMillis();
         VideoMetadata.Builder metadata = new VideoMetadata.Builder()
                 .set(VideoMetadata.Tag.MAKE, Build.MANUFACTURER)
                 .set(VideoMetadata.Tag.MODEL, Build.MODEL)
                 .set(VideoMetadata.Tag.SOFTWARE, Exif.softwareName(getContext()))
-                .set(VideoMetadata.Tag.CREATION_DATE, isoDate(System.currentTimeMillis()));
+                .set(VideoMetadata.Tag.CREATION_DATE, isoDate(now))
+                .set(VideoMetadata.Tag.YEAR, year(now));
         if (ContextCompat.checkSelfPermission(getContext(), permission.ACCESS_FINE_LOCATION)
                 == PackageManager.PERMISSION_GRANTED) {
             Location location = LocationProvider.getLastKnownGPSLocation(
                     getContext(), STALE_VIDEO_LOCATION_MILLIS);
             if (location != null) {
-                metadata.setLocation(location.getLatitude(), location.getLongitude());
+                metadata.setLocation(location.getLatitude(), location.getLongitude())
+                        .set(VideoMetadata.Tag.LOCATION_ROLE, LOCATION_ROLE_SHOOTING);
+                if (location.getTime() > 0) {
+                    metadata.set(VideoMetadata.Tag.LOCATION_DATE, isoDate(location.getTime()));
+                }
             }
         }
         VideoMetadata.write(file, metadata);
@@ -249,6 +259,11 @@ public abstract class ICameraModule {
         SimpleDateFormat format =
                 new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssZ", Locale.US);
         return format.format(new Date(timestamp));
+    }
+
+    /** The year, in the timezone the recording was made in. */
+    private static String year(long timestamp) {
+        return new SimpleDateFormat("yyyy", Locale.US).format(new Date(timestamp));
     }
 
     public void onVideoFailed() {
