@@ -1028,6 +1028,12 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getMaxVideoSize();
     }
 
+    /** Read by {@link ICameraModule#getLocation}, for whichever backend is tagging a capture. */
+    @NonNull
+    LocationTracker getLocationTracker() {
+        return mLocationTracker;
+    }
+
     protected void onOpen() {
         mCameraModule.open();
         // After the camera, so that one that throws on opening leaves nothing listening.
