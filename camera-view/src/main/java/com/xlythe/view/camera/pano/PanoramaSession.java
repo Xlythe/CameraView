@@ -424,7 +424,7 @@ public final class PanoramaSession implements GuideState.Source {
         mCoverage = null;
         mPainted.clear();
         mNextTarget = -1;
-        mFirstPhotoMillis = 0;
+        // The first photo's time stays: the kept frames are the photos from the first on.
         for (KeptFrame frame : kept) {
             CameraPose pose = new CameraPose(frame.rotation, frame.sensorRotation,
                     frame.frontFacing, frame.image.width, frame.image.height,

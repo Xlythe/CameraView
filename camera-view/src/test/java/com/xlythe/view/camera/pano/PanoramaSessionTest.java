@@ -205,16 +205,23 @@ public class PanoramaSessionTest {
     }
 
     @Test
-    public void aLensThatMisstatesItsFocalLength_isMeasured() throws IOException {
+    public void aLensThatMisstatesItsFocalLength_isMeasured()
+            throws IOException, InterruptedException {
         // Publishing far wider angles than the frames are taken with, as the emulator's virtual
         // scene does.
         PanoramaSession session = new PanoramaSession(context, false, file, 90, 104f, 88f,
                 recorder, mMainExecutor, sensor);
         assertTrue(session.start());
+        long firstPainted = 0;
         for (int yaw = 0; yaw <= 120; yaw += 4) {
             readings(yaw, 0f, 0f);
             session.onFrame(frame(time, yaw, 0f, 0f, false, TRUE_FOCAL));
             drain();
+            if (firstPainted == 0) {
+                firstPainted = System.currentTimeMillis();
+                // So that painting the frames again at the measured focal length comes later.
+                Thread.sleep(5);
+            }
         }
         assertEquals(TRUE_FOCAL, session.getGuideState().focal, TRUE_FOCAL * 0.05f);
         session.finish();
@@ -222,6 +229,8 @@ public class PanoramaSessionTest {
         GPanoMetadata metadata = GPanoMetadata.readFrom(file);
         assertNotNull(metadata);
         assertEquals(46.8f, metadata.initialHorizontalFovDegrees, 2.5f);
+        assertTrue("the first photo is dated when it was painted again",
+                metadata.firstPhotoDate <= firstPainted);
         float wide = 360f * metadata.croppedAreaImageWidthPixels / metadata.fullPanoWidthPixels;
         assertTrue("the panorama is " + wide + " degrees wide", wide > 140f && wide < 168f);
     }
