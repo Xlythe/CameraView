@@ -559,6 +559,35 @@ mVideoView.play();
 mVideoView.pause();
 ```
 
+Viewing pictures
+-----------------
+Three views show the pictures the camera takes, from a file or from a uri such as the one
+onImageSaved(Uri) reports. None of them ever decodes a picture whole: each holds a bounded amount
+of memory however large the picture is.
+
+LargeImageView shows any picture, a DNG included, and zooms in until its own pixels show: pinch or
+double-tap to zoom, drag or fling to pan. PanoramaView shows a panorama as a strip filling the
+view's height, and one that goes all the way round has no ends. PhotosphereView shows a photo
+sphere from the inside, to drag, fling and pinch around; a partial sphere is shown where it was
+taken and the rest left black.
+```java
+mLargeImageView.setUri(uri);     // or setFile(file)
+mPanoramaView.setUri(uri);
+mPhotosphereView.setUri(uri);
+mPhotosphereView.setGyroscopeEnabled(true); // where isGyroscopeAvailable()
+mPhotosphereView.setImageLoadListener(new ImageLoadListener() {
+  @Override public void onImageLoaded() { ... }
+  @Override public void onImageFailed() { ... }
+});
+```
+```kotlin
+LargeImage(uri = uri, onFailed = { ... })
+Panorama(uri = uri)
+Photosphere(uri = uri, gyroscope = true)
+```
+A DNG is shown on Android 7.0 and newer. The first time, it is decoded once and kept in the app's
+cache as a JPEG, so showing it again is as quick as any other picture.
+
 VideoEditor
 -----------------
 VideoEditor changes a video that has already been recorded - trimming it, cropping, scaling and
