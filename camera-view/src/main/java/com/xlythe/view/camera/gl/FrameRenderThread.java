@@ -12,6 +12,7 @@ import android.view.Surface;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 
 import com.xlythe.view.camera.ICameraModule;
@@ -42,6 +43,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>This is the driver. It is as thin as a thing that owns a thread can be, and every decision it
  * makes is in {@link GlMath}, because nothing here can run without a GPU.</p>
  */
+@RequiresApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class FrameRenderThread {
     private static final String TAG = ICameraModule.TAG;

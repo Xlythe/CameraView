@@ -226,6 +226,7 @@ public final class FrameStream implements Closeable {
      *
      * @hide
      */
+    @RequiresApi(19)
     @RestrictTo(RestrictTo.Scope.LIBRARY)
     @NonNull
     public static FrameStream forLibrary(@NonNull VideoRecorder.Canvas canvas,

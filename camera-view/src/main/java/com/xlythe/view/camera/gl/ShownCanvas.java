@@ -4,6 +4,7 @@ import android.opengl.GLES20;
 import android.util.Size;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 
 /**
  * An offscreen picture the right way up as it is shown, for an output that holds it some other
@@ -14,6 +15,7 @@ import androidx.annotation.NonNull;
  * either would draw sideways, so it draws here instead, and this is then turned onto the output.
  * Call every method on the thread that owns the context.</p>
  */
+@RequiresApi(21)
 final class ShownCanvas {
     /** The framebuffer drawn into, or 0 before the first {@link #bind}. */
     private int mFramebuffer;

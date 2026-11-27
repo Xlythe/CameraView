@@ -8,5 +8,7 @@
         <ignore path="src/main/java/com/xlythe/view/camera/edit/**" />
         <ignore path="src/main/java/com/xlythe/compose/**" />
         <ignore path="src/main/java/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java" />
+        <ignore path="src/main/java/com/xlythe/view/camera/CameraXFrameAnalyzer.java" />
+        <ignore path="src/main/java/com/xlythe/view/camera/CameraXSegmentationAnalyzer.java" />
     </issue>
 </lint>

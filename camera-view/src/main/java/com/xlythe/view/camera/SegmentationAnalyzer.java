@@ -3,6 +3,7 @@ package com.xlythe.view.camera;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 
 import com.google.mlkit.vision.common.InputImage;
@@ -36,6 +37,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * @hide
  */
+@RequiresApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeable {
     private static final String TAG = CameraView.class.getSimpleName();

@@ -10,6 +10,7 @@ import android.view.Surface;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 
 /**
@@ -21,6 +22,7 @@ import androidx.annotation.RestrictTo;
  * <p>Every method must be called on the thread that created the instance. An EGL context belongs
  * to a thread, and the only safe way to share camera frames between threads is not to.</p>
  */
+@RequiresApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class EglCore {
     /** The GLES version the external-texture shader needs, and nothing newer. */
