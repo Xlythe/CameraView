@@ -206,9 +206,7 @@ public abstract class ICameraModule {
      * flash or the shutter sound.</p>
      */
     @RestrictTo(RestrictTo.Scope.LIBRARY)
-    protected void startBurst(@NonNull Burst burst) {
-        burst.end();
-    }
+    protected abstract void startBurst(@NonNull Burst burst);
 
     /**
      * Records a video. Set a OnVideoCapturedListener to be notified of when
