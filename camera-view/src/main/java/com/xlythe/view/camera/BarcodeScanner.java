@@ -8,8 +8,6 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.WorkerThread;
 
-import com.google.android.gms.tasks.Task;
-import com.google.android.gms.tasks.Tasks;
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions;
 import com.google.mlkit.vision.barcode.BarcodeScanning;
 import com.google.mlkit.vision.common.InputImage;
@@ -20,8 +18,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -113,7 +109,8 @@ class BarcodeScanner {
             frame.getImage(), frame.getRotationDegrees());
     List<com.google.mlkit.vision.barcode.common.Barcode> barcodes;
     try {
-      barcodes = awaitScan(mScanner.process(image), SLOW_SCAN_MILLIS);
+      barcodes = MlKitTasks.awaitFrameRead(mScanner.process(image), SLOW_SCAN_MILLIS,
+              "A barcode scan");
     } catch (ExecutionException | CancellationException e) {
       Log.w(TAG, "Barcode processing failed", e);
       return;
@@ -126,38 +123,5 @@ class BarcodeScanner {
       list.add(new Barcode(barcode));
     }
     mListener.onBarcodeFound(list);
-  }
-
-  /**
-   * Waits for ML Kit to finish with a frame, however long it takes and whatever interrupts the
-   * wait.
-   *
-   * <p>The frame and its reader are closed as soon as the frame's analyzer returns, while ML Kit
-   * reads the frame's buffer from native code until its task completes. Returning on an interrupt
-   * or a timeout frees that buffer under it, and the read crashes the process. So an interrupt,
-   * which is how a stopping scanner asks the frame thread to finish, is held until the task is
-   * done and then restored, and a slow scan is logged and waited out.</p>
-   *
-   * @throws ExecutionException if the scan failed
-   * @throws CancellationException if the scan was cancelled
-   */
-  @WorkerThread
-  static <T> T awaitScan(Task<T> scan, long slowMillis) throws ExecutionException {
-    boolean interrupted = false;
-    try {
-      while (true) {
-        try {
-          return Tasks.await(scan, slowMillis, TimeUnit.MILLISECONDS);
-        } catch (InterruptedException e) {
-          interrupted = true;
-        } catch (TimeoutException e) {
-          Log.w(TAG, "A barcode scan has taken over " + slowMillis + " ms; still waiting for it");
-        }
-      }
-    } finally {
-      if (interrupted) {
-        Thread.currentThread().interrupt();
-      }
-    }
   }
 }

@@ -5,7 +5,10 @@ import android.util.Log;
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
+import androidx.annotation.WorkerThread;
 
+import com.google.android.gms.tasks.Task;
 import com.google.mlkit.vision.common.InputImage;
 import com.google.mlkit.vision.segmentation.Segmentation;
 import com.google.mlkit.vision.segmentation.Segmenter;
@@ -13,6 +16,8 @@ import com.google.mlkit.vision.segmentation.selfie.SelfieSegmenterOptions;
 import com.xlythe.view.camera.gl.SegmentationMask;
 
 import java.io.Closeable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -30,10 +35,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * segmenting each one from nothing. A mask that flickers at the edges between frames is the
  * usual sign of the wrong mode.</p>
  *
- * <p>Frames are dropped rather than queued. A frame stream keeps only the newest frame, so a
- * model slower than the frame rate simply sees fewer frames - which is the behaviour wanted,
- * because a backlog of masks describing moments that have passed is worse than a mask that is
- * merely recent.</p>
+ * <p>Frames are dropped rather than queued. A frame stream keeps only the newest frame, and each
+ * frame is held until the model has finished with it, so a model slower than the frame rate
+ * simply sees fewer frames - which is the behaviour wanted, because a backlog of masks describing
+ * moments that have passed is worse than a mask that is merely recent.</p>
  *
  * @hide
  */
@@ -42,6 +47,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeable {
     /** Log tag shared with CameraView. */
     private static final String TAG = CameraView.class.getSimpleName();
+
+    /** How long a frame may take before it is logged as slow. It is waited for regardless. */
+    private static final long SLOW_FRAME_MILLIS = 10_000;
 
     /** The ML Kit selfie segmenter, released by {@link #close}. */
     private final Segmenter mSegmenter;
@@ -60,40 +68,57 @@ public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeab
      */
     public SegmentationAnalyzer(@NonNull CameraView.SegmentationListener listener,
             @NonNull Executor callbackExecutor, boolean mirrored) {
+        this(listener, callbackExecutor, mirrored,
+                Segmentation.getClient(new SelfieSegmenterOptions.Builder()
+                        .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE)
+                        .build()));
+    }
+
+    /** Runs frames through the given segmenter, which a test supplies in ML Kit's place. */
+    @VisibleForTesting
+    SegmentationAnalyzer(@NonNull CameraView.SegmentationListener listener,
+            @NonNull Executor callbackExecutor, boolean mirrored, @NonNull Segmenter segmenter) {
         mListener = listener;
         mCallbackExecutor = callbackExecutor;
         mMirrored = mirrored;
-        mSegmenter = Segmentation.getClient(new SelfieSegmenterOptions.Builder()
-                .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE)
-                .build());
+        mSegmenter = segmenter;
     }
 
     /**
-     * Segments one frame.
+     * Segments one frame, returning once the model has finished reading it.
      *
-     * <p>The frame is not kept: the model is handed it inside this call, which is the only time
-     * it is valid, and what comes back is a mask rather than a reference to the frame. Waiting
-     * for the result here would hold the stream up for as long as the model takes.</p>
+     * <p>The frame is valid only inside this call: the stream closes it, and on stopping closes
+     * its reader, as soon as this returns. The model reads it on a thread of its own, so this
+     * waits for the result, which is a mask rather than a reference to the frame.</p>
      */
+    @WorkerThread
     @Override
     public void onFrame(@NonNull FrameStream.Frame frame) {
         if (mClosed.get()) {
             return;
         }
+        Task<com.google.mlkit.vision.segmentation.SegmentationMask> segmented;
         try {
-            InputImage image = InputImage.fromMediaImage(
-                    frame.getImage(), frame.getRotationDegrees());
-            mSegmenter.process(image)
-                    .addOnSuccessListener(mCallbackExecutor, mask -> {
-                        if (mClosed.get()) return;
-                        mListener.onSegmentation(new SegmentationMask(
-                                mask.getBuffer(), mask.getWidth(), mask.getHeight(), mMirrored));
-                    })
-                    .addOnFailureListener(mCallbackExecutor,
-                            error -> Log.w(TAG, "Segmentation failed", error));
+            segmented = mSegmenter.process(InputImage.fromMediaImage(
+                    frame.getImage(), frame.getRotationDegrees()));
         } catch (RuntimeException error) {
             Log.w(TAG, "Segmentation could not start on this frame", error);
+            return;
         }
+        com.google.mlkit.vision.segmentation.SegmentationMask mask;
+        try {
+            mask = MlKitTasks.awaitFrameRead(segmented, SLOW_FRAME_MILLIS, "Segmenting a frame");
+        } catch (ExecutionException | CancellationException error) {
+            Log.w(TAG, "Segmentation failed", error);
+            return;
+        }
+        SegmentationMask result = new SegmentationMask(
+                mask.getBuffer(), mask.getWidth(), mask.getHeight(), mMirrored);
+        mCallbackExecutor.execute(() -> {
+            if (!mClosed.get()) {
+                mListener.onSegmentation(result);
+            }
+        });
     }
 
     /** Releases the model. */
