@@ -12,6 +12,8 @@ import org.robolectric.annotation.Resetter;
 import org.robolectric.shadows.ShadowCameraCaptureSessionImpl;
 import org.robolectric.util.ReflectionHelpers;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -34,6 +36,18 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     private static boolean sDeliverCallbacks = true;
     private static final AtomicInteger sCompletedCaptures = new AtomicInteger();
     private static final AtomicInteger sFrameNumber = new AtomicInteger();
+    private static final List<Capture> sCaptures = new ArrayList<>();
+
+    /** A one-off request the session accepted, with the callback it was given. */
+    public static final class Capture {
+        public final CaptureRequest request;
+        public final CameraCaptureSession.CaptureCallback callback;
+
+        Capture(CaptureRequest request, CameraCaptureSession.CaptureCallback callback) {
+            this.request = request;
+            this.callback = callback;
+        }
+    }
 
     @RealObject private CameraCaptureSession realSession;
 
@@ -47,11 +61,21 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         return sCompletedCaptures.get();
     }
 
+    /** Every one-off request accepted since the last reset, in order. Repeating ones are not. */
+    public static List<Capture> getCaptures() {
+        synchronized (sCaptures) {
+            return new ArrayList<>(sCaptures);
+        }
+    }
+
     @Resetter
     public static void reset() {
         sDeliverCallbacks = true;
         sCompletedCaptures.set(0);
         sFrameNumber.set(0);
+        synchronized (sCaptures) {
+            sCaptures.clear();
+        }
     }
 
     @Implementation
@@ -68,6 +92,9 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
             CameraCaptureSession.CaptureCallback callback, Handler handler)
             throws android.hardware.camera2.CameraAccessException {
         int sequenceId = super.capture(request, callback, handler);
+        synchronized (sCaptures) {
+            sCaptures.add(new Capture(request, callback));
+        }
         deliver(request, callback, handler);
         return sequenceId;
     }

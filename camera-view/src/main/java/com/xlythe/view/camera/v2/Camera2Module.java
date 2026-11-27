@@ -33,6 +33,7 @@ import android.util.Size;
 import android.util.SizeF;
 import android.view.Surface;
 
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
@@ -1459,6 +1460,17 @@ public class Camera2Module extends ICameraModule {
         } else {
             onImageFailed();
         }
+    }
+
+    @Override
+    protected void startBurst(@NonNull Burst burst) {
+        if (mCaptureSession == null || mActiveSession == null || mCameraDevice == null
+                || mIsPaused || mIsRecording || !(mActiveSession instanceof PictureSession)) {
+            Log.w(TAG, "Cannot take a burst before Camera2 preview is ready");
+            burst.end();
+            return;
+        }
+        ((PictureSession) mActiveSession).startBurst(burst, mCameraDevice, mCaptureSession);
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
