@@ -17,12 +17,10 @@ import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
 
-import com.google.common.util.concurrent.SettableFuture;
+import com.xlythe.view.camera.stream.Handoff;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.Closeable;
-import java.util.Objects;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -48,7 +46,6 @@ import static android.os.Process.setThreadPriority;
  *
  * <p>Start one with {@link CameraView#startFrameAnalysis}.</p>
  */
-@RequiresApi(19)
 public final class FrameStream implements Closeable {
     private static final String TAG = CameraView.class.getSimpleName();
 
@@ -84,6 +81,7 @@ public final class FrameStream implements Closeable {
          * within this bound, so the frames are usually smaller than asked for and never larger.
          * </p>
          */
+        @RequiresApi(21)
         @NonNull
         public Params setMaxSize(@Nullable Size maxSize) {
             mMaxSize = maxSize;
@@ -114,6 +112,7 @@ public final class FrameStream implements Closeable {
     }
 
     /** One frame, valid for the duration of the {@link Analyzer#onFrame} call that received it. */
+    @RequiresApi(19)
     public final class Frame {
         private final Image mImage;
         private final int mRotationDegrees;
@@ -156,6 +155,7 @@ public final class FrameStream implements Closeable {
         }
 
         /** The frame's size once {@link #getRotationDegrees} has been applied. */
+        @RequiresApi(21)
         @NonNull
         public Size getUprightSize() {
             return TransformMath.rotateSize(
@@ -206,6 +206,7 @@ public final class FrameStream implements Closeable {
     /** The thread pulling frames, once started. */
     private final AtomicReference<Thread> mThread = new AtomicReference<>();
 
+    @RequiresApi(19)
     FrameStream(@NonNull VideoRecorder.Canvas canvas, @Nullable CameraView cameraView,
             @NonNull Params params, @NonNull Analyzer analyzer) {
         mCanvas = canvas;
@@ -220,16 +221,12 @@ public final class FrameStream implements Closeable {
     }
 
     /**
-     * A stream the library drives itself, rather than one an app asked for.
-     *
-     * <p>Here because a backend that has no analysis use case to borrow - Camera2 - gets frames
-     * the same way an app does, and its module lives in another package. Restricted rather than
-     * made public: an app starts a stream through
-     * {@link CameraView#startFrameAnalysis(Analyzer)}, which also keeps the one analysis slot
-     * accounted for.</p>
+     * A stream the library reads for itself. An app starts one with
+     * {@link CameraView#startFrameAnalysis(Analyzer)} instead.
      *
      * @hide
      */
+    @RequiresApi(19)
     @RestrictTo(RestrictTo.Scope.LIBRARY)
     @NonNull
     public static FrameStream forLibrary(@NonNull VideoRecorder.Canvas canvas,
@@ -238,6 +235,7 @@ public final class FrameStream implements Closeable {
     }
 
     /** Starts delivering frames. Does nothing if already started. */
+    @RequiresApi(19)
     @RequiresPermission(Manifest.permission.CAMERA)
     public void start() {
         if (!mIsAlive.compareAndSet(false, true)) {
@@ -266,6 +264,7 @@ public final class FrameStream implements Closeable {
         }
     }
 
+    @RequiresApi(19)
     private void pump() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             setThreadPriority(THREAD_PRIORITY_VIDEO);
@@ -274,17 +273,17 @@ public final class FrameStream implements Closeable {
         }
 
         // The backend decides the frame size, and only tells us when it hands over the surface it
-        // wants filled - which it cannot do until we have one to give. The two futures pass the
+        // wants filled - which it cannot do until we have one to give. The two handoffs pass the
         // size out and the surface back in across that handshake.
-        SettableFuture<Configuration> configuration = SettableFuture.create();
-        SettableFuture<Surface> surface = SettableFuture.create();
+        Handoff<Configuration> configuration = new Handoff<>();
+        Handoff<Surface> surface = new Handoff<>();
         VideoRecorder.SurfaceProvider provider = new VideoRecorder.SurfaceProvider() {
             @Override
             public Surface getSurface(int width, int height, int orientation, boolean flipped) {
                 configuration.set(new Configuration(width, height, orientation, flipped));
                 try {
                     return surface.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                } catch (ExecutionException | InterruptedException | TimeoutException error) {
+                } catch (InterruptedException | TimeoutException error) {
                     throw new RuntimeException(error);
                 }
             }
@@ -299,8 +298,7 @@ public final class FrameStream implements Closeable {
 
         ImageReader reader = null;
         try {
-            Configuration frames = Objects.requireNonNull(
-                    configuration.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            Configuration frames = configuration.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             reader = ImageReader.newInstance(frames.width, frames.height,
                     mParams.getImageFormat(), BUFFER_COUNT);
             surface.set(reader.getSurface());
@@ -324,8 +322,7 @@ public final class FrameStream implements Closeable {
                     image.close();
                 }
             }
-        } catch (ExecutionException | InterruptedException | TimeoutException
-                | RuntimeException error) {
+        } catch (InterruptedException | TimeoutException | RuntimeException error) {
             Log.e(TAG, "Exception with the frame analysis stream", error);
         } finally {
             mIsAlive.set(false);

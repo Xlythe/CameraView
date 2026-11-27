@@ -33,14 +33,10 @@
         android:layout_width="match_parent"
         android:layout_height="match_parent">
 
-        <!-- Named rather than left to the default, because CameraX is the backend that can put a
-             processor between the camera and its outputs. On the others the camera works and the
-             band is simply not there, which is what the fragment reports when it opens. -->
         <com.xlythe.view.camera.CameraView
             android:id="@id/camera"
             android:layout_width="match_parent"
             android:layout_height="match_parent"
-            camera:backend="cameraX"
             camera:quality="high" />
 
         <LinearLayout

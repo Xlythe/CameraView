@@ -41,7 +41,9 @@ import java.util.concurrent.Executor;
  * output. Recomputing any of it would be a second opinion that disagrees on some device.</p>
  */
 final class FrameEffect extends CameraEffect {
+    /** Log tag shared with the camera modules. */
     private static final String TAG = ICameraModule.TAG;
+    /** Whether to log what the effect is doing. */
     private static final boolean DEBUG = ICameraModule.DEBUG;
 
     /**
@@ -54,7 +56,9 @@ final class FrameEffect extends CameraEffect {
      */
     static final int ALL_TARGETS = PREVIEW | VIDEO_CAPTURE | IMAGE_CAPTURE;
 
+    /** What CameraX hands its surfaces to. */
     private final Processor mProcessor;
+    /** Who created the camera texture, or null for the render thread's own. */
     @Nullable private final CameraTextureProvider mTextureProvider;
 
     /**
@@ -155,12 +159,15 @@ final class FrameEffect extends CameraEffect {
      * its own thread-safe methods.
      */
     private static final class Processor implements SurfaceProcessor {
+        /** The thread that draws every output. */
         private final FrameRenderThread mRenderThread;
+        /** Where CameraX reports that a surface it was given or asked for is done with. */
         private final Executor mExecutor;
 
         /** The outputs CameraX has given us and not yet asked for back. Main thread only. */
         private final Set<SurfaceOutput> mOutputs = new LinkedHashSet<>();
 
+        /** Whether the effect has been released, after which new surfaces are refused. */
         private boolean mReleased;
 
         private Processor(@NonNull FrameRenderThread renderThread, @NonNull Executor executor) {

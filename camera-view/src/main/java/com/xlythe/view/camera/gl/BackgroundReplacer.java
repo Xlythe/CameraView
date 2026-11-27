@@ -16,32 +16,31 @@ import java.nio.FloatBuffer;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * Keeps the subject and puts something else behind them.
+ * Keeps the subject and draws a colour or an image behind them, in the preview, the recording and
+ * the pictures. {@link com.xlythe.view.camera.CameraView#enterBackgroundReplacement} segments each
+ * frame for it; to use a model of your own, set it as the frame renderer and hand it masks with
+ * {@link #setMask}.
  *
- * <p>Takes a {@link SegmentationMask} from wherever the caller gets one and composites with it,
- * so the replaced background reaches the preview, the recording and the photograph rather than
- * being drawn over one of them. The background is a colour, or an image if one is given.</p>
- *
- * <h2>Why the mask lags, and why that is allowed</h2>
- *
- * <p>Segmentation runs on analysis frames, which arrive slower than the frames being drawn and
- * later than the one they describe. Holding a frame until its mask is ready would make the
- * preview stutter at the speed of the model, so the newest mask is used against the newest
- * frame and the edge trails the subject slightly when they move quickly. That is the trade
- * every implementation of this makes; the alternative looks broken rather than soft.</p>
- *
- * <p>With no mask at all the camera frame is drawn untouched. A background that appeared only
- * once the model warmed up would be stranger than one that fades in.</p>
+ * <p>Masks arrive slower than frames, so the newest mask is drawn with the newest frame, and the
+ * edge trails a subject that moves quickly. Until the first mask arrives, frames are drawn
+ * unchanged.</p>
  */
 public final class BackgroundReplacer implements FrameRenderer {
+    /** The tag this logs under. */
     private static final String TAG = "BackgroundReplacer";
 
+    /** The bytes in one float of the vertex buffer. */
     private static final int BYTES_PER_FLOAT = 4;
+    /** The floats in each attribute: x and y, or s and t. */
     private static final int COORDINATES_PER_ATTRIBUTE = 2;
+    /** The floats in each vertex: a position and a texture coordinate. */
     private static final int FLOATS_PER_VERTEX = 4;
+    /** The vertices in the quad that covers the output. */
     private static final int VERTEX_COUNT = 4;
+    /** The largest value of an 8-bit colour channel. */
     private static final float BYTE_MAX = 255f;
 
+    /** Positions the quad and passes on both the camera and the mask coordinates. */
     private static final String VERTEX_SHADER =
             "uniform mat4 uTextureMatrix;\n"
             + "attribute vec4 aPosition;\n"
@@ -56,6 +55,7 @@ public final class BackgroundReplacer implements FrameRenderer {
             + "  vMaskCoordinate = aTextureCoordinate.xy;\n"
             + "}\n";
 
+    /** Mixes the camera frame over the background colour or image by the mask. */
     private static final String FRAGMENT_SHADER =
             "#extension GL_OES_EGL_image_external : require\n"
             + "precision mediump float;\n"
@@ -76,25 +76,44 @@ public final class BackgroundReplacer implements FrameRenderer {
             + "  gl_FragColor = mix(background, camera, subject);\n"
             + "}\n";
 
+    /** The newest mask, waiting to be uploaded at the next frame, or null. */
     private final AtomicReference<SegmentationMask> mPendingMask = new AtomicReference<>();
+    /** The newest background image, waiting to be uploaded at the next frame, or null. */
     private final AtomicReference<Bitmap> mPendingBackground = new AtomicReference<>();
+    /** The background colour as RGBA from 0 to 1, guarded by itself. */
     private final float[] mBackgroundColor = {0f, 0f, 0f, 1f};
 
+    /** The compiled program, or 0 before the renderer starts. */
     private int mProgram;
+    /** The location of the vertex position attribute. */
     private int mPositionHandle;
+    /** The location of the texture coordinate attribute. */
     private int mTextureCoordinateHandle;
+    /** The location of the camera texture's transform matrix. */
     private int mTextureMatrixHandle;
+    /** The location of the mask sampler. */
     private int mMaskHandle;
+    /** The location of the background image sampler. */
     private int mBackgroundHandle;
+    /** The location of the background colour. */
     private int mBackgroundColorHandle;
+    /** The location of the flag that says a background image is set. */
     private int mHasBackgroundImageHandle;
+    /** The location of the flag that says a mask has arrived. */
     private int mHasMaskHandle;
+    /** The 2D texture the mask is uploaded into. */
     private int mMaskTexture;
+    /** The 2D texture the background image is uploaded into. */
     private int mBackgroundTexture;
+    /** The width of the mask last uploaded, or 0 before any has been. */
     private int mMaskWidth;
+    /** The height of the mask last uploaded, or 0 before any has been. */
     private int mMaskHeight;
+    /** Whether the background texture holds an image, rather than the colour being drawn. */
     private boolean mHasBackgroundImage;
+    /** The quad's positions and texture coordinates, or null while the renderer is stopped. */
     @Nullable private FloatBuffer mVertices;
+    /** Whether the program failed to build, after which frames go through unchanged. */
     private boolean mFailed;
 
     /** The colour behind the subject until an image is given. */
@@ -108,10 +127,8 @@ public final class BackgroundReplacer implements FrameRenderer {
     }
 
     /**
-     * The image to put behind the subject, or null to go back to the colour.
-     *
-     * <p>Uploaded on the render thread at the next frame, so the bitmap has to stay valid until
-     * then. It is not recycled here: a caller may well be using it elsewhere.</p>
+     * The image to put behind the subject, or null to go back to the colour. It is read at the
+     * next frame, so keep it valid until then; it is never recycled for you.
      */
     public void setBackgroundImage(@Nullable Bitmap background) {
         mPendingBackground.set(background);
@@ -120,13 +137,7 @@ public final class BackgroundReplacer implements FrameRenderer {
         }
     }
 
-    /**
-     * The newest mask, from any thread.
-     *
-     * <p>Replaces rather than queues. A mask that arrived while a newer one was being made
-     * describes a frame already gone, and drawing with it would be a worse answer than drawing
-     * with the newest.</p>
-     */
+    /** The newest mask, from any thread. It replaces any mask not yet drawn. */
     public void setMask(@Nullable SegmentationMask mask) {
         mPendingMask.set(mask);
     }

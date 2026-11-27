@@ -12,6 +12,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 
@@ -63,5 +64,16 @@ public class LegacyModuleTest {
     public void testRecording() {
         assertFalse(module.isRecording());
         module.stopRecording();
+    }
+
+    /** The old camera API delivers a JPEG and nothing else, so it says so for every other. */
+    @Test
+    public void onlyJpegIsOffered() {
+        for (CameraView.PictureFormat format : CameraView.PictureFormat.values()) {
+            assertEquals(format.name(), format == CameraView.PictureFormat.JPEG,
+                    module.isPictureFormatSupported(format));
+        }
+        module.setPictureFormat(CameraView.PictureFormat.RAW);
+        assertEquals(CameraView.PictureFormat.JPEG, module.getPictureFormat());
     }
 }

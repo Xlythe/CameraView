@@ -38,12 +38,14 @@ import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 import java.io.File;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.Locale;
 import java.util.Set;
@@ -64,7 +66,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>Magenta is the colour because nothing in a room is that: a frame that arrives unaltered, or
  * half-drawn, or from the wrong texture, fails this rather than passing by luck.</p>
  */
-@RunWith(org.junit.runners.Parameterized.class)
+@RunWith(Parameterized.class)
 public final class FrameEffectDeviceTest {
     /**
      * Both backends that put frames through GL.
@@ -75,13 +77,13 @@ public final class FrameEffectDeviceTest {
      * reaches the preview and not the photograph is a bug, and only an end-to-end check on
      * each backend says which one it reached.</p>
      */
-    @org.junit.runners.Parameterized.Parameters(name = "{0}")
-    public static java.util.Collection<CameraView.Backend> backends() {
-        return java.util.Arrays.asList(
+    @Parameterized.Parameters(name = "{0}")
+    public static Collection<CameraView.Backend> backends() {
+        return Arrays.asList(
                 CameraView.Backend.CAMERA2, CameraView.Backend.CAMERA_X);
     }
 
-    @org.junit.runners.Parameterized.Parameter
+    @Parameterized.Parameter
     public CameraView.Backend backend;
 
     private static final long TIMEOUT_SECONDS = 30;

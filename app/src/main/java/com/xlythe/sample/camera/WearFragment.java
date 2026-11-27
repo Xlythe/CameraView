@@ -28,6 +28,8 @@ import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.VideoStream;
 
+import java.io.Closeable;
+import java.io.DataInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -51,6 +53,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * wait seconds for a picture to appear. Those are the numbers in {@link WearProtocol}, passed
  * through CameraView's own stream parameters rather than enforced afterwards - re-encoding on the
  * phone would cost more than the link saves.</p>
+ *
+ * <p>The pump reads from the stream only when the watch has acknowledged enough of what it was
+ * sent, and sends what it reads at once. A channel is lossless, so copying as fast as possible
+ * would move the delay into the Data Layer, where nothing drops a late frame; pacing leaves it in
+ * CameraView's lossy stream, which does.</p>
  */
 public class WearFragment extends CameraFragment {
     /** How much to copy at a time. Small enough that stopping is noticed quickly. */
@@ -59,7 +66,7 @@ public class WearFragment extends CameraFragment {
     private CameraView mCameraView;
     private TextView mStatus;
 
-    /** Does the copying, off the main thread, one stream at a time. */
+    /** Copies the preview and reads the watch's acknowledgements, off the main thread. */
     @Nullable private ExecutorService mPump;
 
     /** The channel the preview is going down, if one is open. */
@@ -140,21 +147,30 @@ public class WearFragment extends CameraFragment {
         channels.openChannel(watch, WearProtocol.PATH_PREVIEW)
                 .addOnSuccessListener(requireActivity(), channel -> {
                     mPreviewChannel = channel;
-                    channels.getOutputStream(channel)
-                            .addOnSuccessListener(requireActivity(), out -> pump(channel, out))
-                            .addOnFailureListener(requireActivity(), error -> {
-                                Log.w(TAG, "Could not write to the watch", error);
-                                setStatus(R.string.wear_status_failed);
-                            });
+                    channels.getOutputStream(channel).addOnSuccessListener(requireActivity(), out ->
+                            channels.getInputStream(channel)
+                                    .addOnSuccessListener(requireActivity(),
+                                            acks -> pump(channel, out, acks))
+                                    .addOnFailureListener(requireActivity(), error -> {
+                                        closeQuietly(out);
+                                        onChannelFailed(error);
+                                    }))
+                            .addOnFailureListener(requireActivity(), this::onChannelFailed);
                 })
-                .addOnFailureListener(requireActivity(), error -> {
-                    Log.w(TAG, "Could not open a channel to the watch", error);
-                    setStatus(R.string.wear_status_failed);
-                });
+                .addOnFailureListener(requireActivity(), this::onChannelFailed);
     }
 
+    private void onChannelFailed(@NonNull Exception error) {
+        Log.w(TAG, "Could not stream to the watch", error);
+        setStatus(R.string.wear_status_failed);
+    }
+
+    /**
+     * Starts the stream, and the two threads that move it: one copying the preview down the
+     * channel, and one reading the watch's acknowledgements back up it.
+     */
     @RequiresPermission(Manifest.permission.CAMERA)
-    private void pump(ChannelClient.Channel channel, OutputStream out) {
+    private void pump(ChannelClient.Channel channel, OutputStream out, InputStream acks) {
         // stream() declares the microphone because a stream usually carries audio, and an
         // annotation cannot say "only when the parameters ask for it". These parameters do not,
         // so the one line that calls it is the whole scope of the exception.
@@ -172,26 +188,53 @@ public class WearFragment extends CameraFragment {
         mStreaming.set(true);
         setStatus(R.string.wear_status_streaming);
 
-        ExecutorService pump = Executors.newSingleThreadExecutor();
+        InFlight inFlight = new InFlight(WearProtocol.PREVIEW_IN_FLIGHT_BYTES);
+        ExecutorService pump = Executors.newFixedThreadPool(2);
         mPump = pump;
+        pump.execute(() -> readAcknowledgements(acks, inFlight));
         pump.execute(() -> {
             InputStream in = stream.getVideoInputStream();
             byte[] chunk = new byte[CHUNK_BYTES];
             try {
-                int read;
-                while (mStreaming.get() && (read = in.read(chunk)) > 0) {
+                int room;
+                while (mStreaming.get() && (room = inFlight.awaitRoom()) > 0) {
+                    int read = in.read(chunk, 0, Math.min(room, chunk.length));
+                    if (read < 0) {
+                        break;
+                    }
                     out.write(chunk, 0, read);
+                    out.flush();
+                    inFlight.sent(read);
                 }
-                out.flush();
             } catch (IOException error) {
                 // The watch going away closes the channel, which reads as an ordinary end.
                 Log.d(TAG, "The preview stream ended", error);
+            } catch (InterruptedException error) {
+                // Stopping shuts the pump down, which interrupts a wait for the watch.
+                Thread.currentThread().interrupt();
             } finally {
+                inFlight.close();
                 closeQuietly(out);
+                closeQuietly(acks);
                 Wearable.getChannelClient(requireContext()).close(channel);
                 runOnMain(this::stopStreaming);
             }
         });
+    }
+
+    /** Hands the totals the watch reports to the copier, until the channel closes. */
+    @WorkerThread
+    private static void readAcknowledgements(InputStream acks, InFlight inFlight) {
+        try (DataInputStream in = new DataInputStream(acks)) {
+            while (true) {
+                inFlight.acknowledged(in.readLong());
+            }
+        } catch (IOException error) {
+            // The channel closing ends the stream, which is how this normally stops.
+            Log.d(TAG, "The watch stopped acknowledging the preview", error);
+        } finally {
+            inFlight.close();
+        }
     }
 
     private void stopStreaming() {
@@ -336,11 +379,61 @@ public class WearFragment extends CameraFragment {
         }
     }
 
-    private static void closeQuietly(java.io.Closeable closeable) {
+    private static void closeQuietly(Closeable closeable) {
         try {
             closeable.close();
         } catch (IOException | RuntimeException error) {
             Log.d(TAG, "Failed to close " + closeable, error);
+        }
+    }
+
+    /**
+     * The preview bytes sent that the watch has not yet said it read.
+     *
+     * <p>Shared by the copier, which waits on it, and the acknowledgement reader, which wakes it,
+     * so every field is read and written under its monitor.</p>
+     */
+    private static final class InFlight {
+        /** The most the phone sends before it waits for the watch. */
+        private final int mLimit;
+
+        /** Bytes written to the channel. */
+        private long mSent;
+
+        /** Bytes the watch has said it read. */
+        private long mAcknowledged;
+
+        /** Whether either end has stopped, so the copier should not wait for room again. */
+        private boolean mClosed;
+
+        InFlight(int limit) {
+            mLimit = limit;
+        }
+
+        /** Waits until the watch has room for more, and returns how much; 0 once closed. */
+        @WorkerThread
+        synchronized int awaitRoom() throws InterruptedException {
+            while (!mClosed && mSent - mAcknowledged >= mLimit) {
+                wait();
+            }
+            return mClosed ? 0 : (int) (mLimit - (mSent - mAcknowledged));
+        }
+
+        @WorkerThread
+        synchronized void sent(int bytes) {
+            mSent += bytes;
+        }
+
+        @WorkerThread
+        synchronized void acknowledged(long total) {
+            mAcknowledged = total;
+            notifyAll();
+        }
+
+        @WorkerThread
+        synchronized void close() {
+            mClosed = true;
+            notifyAll();
         }
     }
 }

@@ -3,20 +3,33 @@ package com.xlythe.view.camera.gl;
 import androidx.annotation.NonNull;
 
 /**
- * One camera frame, as the renderer has it, handed to a {@link FrameRenderer} about to draw.
+ * One camera frame, handed to {@link FrameRenderer#onDrawFrame}.
  *
- * <p>Valid only for the duration of the call it arrives in. The renderer reuses one instance for
- * every frame and every output rather than allocating thirty a second, so a reference kept past
- * the callback describes a different frame by the time it is read. The matrix is the renderer's
- * own array for the same reason: read it, do not keep it, and do not write to it.</p>
+ * <p>Valid only during that call: the same instance describes the next frame, and the matrix is
+ * the library's own array. Read them there, and neither keep nor write to them.</p>
  */
 public final class GlFrame {
+    // One instance describes every frame for every output, so these change between calls.
+
+    /** Draws the camera frame for {@link #drawCameraFrame}. */
     private final OesTextureProgram mProgram;
+
+    /** The external texture the camera wrote this frame into. */
     private int mTextureName;
+
+    /** Turns the frame's texture coordinates into the ones to sample. */
     private float[] mTextureMatrix = GlMath.identity();
+
+    /** The width of the picture being drawn, the right way up. */
     private int mWidth;
+
+    /** The height of the picture being drawn, the right way up. */
     private int mHeight;
+
+    /** When the camera captured the frame, in monotonic nanoseconds. */
     private long mTimestampNanos;
+
+    /** Where in the output the camera frame goes, as x, y, width and height. */
     private int[] mViewport = {0, 0, 0, 0};
 
     GlFrame(@NonNull OesTextureProgram program) {
@@ -34,10 +47,8 @@ public final class GlFrame {
     }
 
     /**
-     * The {@code GL_TEXTURE_EXTERNAL_OES} texture the camera wrote this frame into.
-     *
-     * <p>Bind it to that target, not to {@code GL_TEXTURE_2D}, and sample it with
-     * {@code samplerExternalOES}: the format underneath is the driver's own.</p>
+     * The {@code GL_TEXTURE_EXTERNAL_OES} texture the camera wrote this frame into. Bind it to that
+     * target, not to {@code GL_TEXTURE_2D}, and sample it with {@code samplerExternalOES}.
      */
     public int getTextureName() {
         return mTextureName;
@@ -56,10 +67,7 @@ public final class GlFrame {
         return mTextureMatrix;
     }
 
-    /**
-     * The width in pixels of the picture being drawn, the right way up as it is shown. An output
-     * held some other way round is drawn through a picture this shape and turned onto it.
-     */
+    /** The width in pixels of the picture being drawn, the right way up as it is shown. */
     public int getWidth() {
         return mWidth;
     }
@@ -70,22 +78,17 @@ public final class GlFrame {
     }
 
     /**
-     * When the camera captured this frame, on the same clock as
-     * {@link android.graphics.SurfaceTexture#getTimestamp}.
-     *
-     * <p>Monotonic nanoseconds, so it is the clock to line other sensor readings up against -
-     * which is what anything tracking the world through the camera needs.</p>
+     * When the camera captured this frame, in monotonic nanoseconds on the clock of
+     * {@link android.graphics.SurfaceTexture#getTimestamp}, for lining it up with other sensor
+     * readings.
      */
     public long getTimestampNanos() {
         return mTimestampNanos;
     }
 
     /**
-     * Draws the camera frame as the library would, filling the output.
-     *
-     * <p>Here so that drawing over the frame does not mean reimplementing the frame. A renderer
-     * that wants an overlay calls this first and then draws its own geometry; one that is replacing
-     * the frame does not call it at all. It leaves no program or texture bound.</p>
+     * Draws the camera frame the right way up, filling the output. An overlay calls this first and
+     * then draws on top. It leaves no program or texture bound.
      */
     public void drawCameraFrame() {
         mProgram.draw(mTextureName, mTextureMatrix, mViewport);

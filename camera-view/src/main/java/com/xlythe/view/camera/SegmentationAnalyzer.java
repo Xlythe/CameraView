@@ -3,6 +3,7 @@ package com.xlythe.view.camera;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 
 import com.google.mlkit.vision.common.InputImage;
@@ -36,14 +37,21 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *
  * @hide
  */
+@RequiresApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeable {
+    /** Log tag shared with CameraView. */
     private static final String TAG = CameraView.class.getSimpleName();
 
+    /** The ML Kit selfie segmenter, released by {@link #close}. */
     private final Segmenter mSegmenter;
+    /** Hears each mask, on {@link #mCallbackExecutor}. */
     private final CameraView.SegmentationListener mListener;
+    /** Where {@link #mListener} is called. */
     private final Executor mCallbackExecutor;
+    /** Whether {@link #close} has been called, after which no mask is reported. */
     private final AtomicBoolean mClosed = new AtomicBoolean();
+    /** Whether the frames are mirrored, as a front camera's are, so the mask is read flipped. */
     private final boolean mMirrored;
 
     /**

@@ -6,6 +6,7 @@ import android.graphics.RectF;
 import android.util.Size;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 
 /**
@@ -180,6 +181,7 @@ public final class TransformMath {
     }
 
     /** Swaps a size's dimensions for the quarter turns that transpose them. */
+    @RequiresApi(21)
     @NonNull
     public static Size rotateSize(@NonNull Size size, int rotationDegrees) {
         int rotation = within360(rotationDegrees);
@@ -239,17 +241,16 @@ public final class TransformMath {
      */
     @NonNull
     public static Matrix asTextureTransform(
-            @NonNull Matrix bufferToView, @NonNull Size bufferSize,
+            @NonNull Matrix bufferToView, int bufferWidth, int bufferHeight,
             int viewWidth, int viewHeight) {
         Matrix identity = new Matrix();
-        if (bufferSize.getWidth() <= 0 || bufferSize.getHeight() <= 0
-                || viewWidth <= 0 || viewHeight <= 0) {
+        if (bufferWidth <= 0 || bufferHeight <= 0 || viewWidth <= 0 || viewHeight <= 0) {
             return identity;
         }
 
         Matrix defaultBufferToView = new Matrix();
         defaultBufferToView.setRectToRect(
-                new RectF(0f, 0f, bufferSize.getWidth(), bufferSize.getHeight()),
+                new RectF(0f, 0f, bufferWidth, bufferHeight),
                 new RectF(0f, 0f, viewWidth, viewHeight),
                 Matrix.ScaleToFit.FILL);
         Matrix viewToBuffer = new Matrix();

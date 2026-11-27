@@ -4,6 +4,7 @@ import android.util.Size;
 
 import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 
 import java.lang.annotation.Retention;
@@ -228,6 +229,7 @@ public final class GlMath {
      * @param bufferSize the size the camera writes its frames at
      * @param rotationDegrees how far the camera's buffer is turned clockwise to be shown
      */
+    @RequiresApi(21)
     @NonNull
     public static Size shownSize(@NonNull float[] outputToBuffer, @NonNull Size bufferSize,
             @NonNull Size outputSize, @Rotation int rotationDegrees) {
@@ -313,6 +315,7 @@ public final class GlMath {
      * @return {@code {x, y, width, height}} in output pixels. Under FILL_CENTER x or y is negative
      *     and the viewport is larger than the output, which is the overhang.
      */
+    @RequiresApi(21)
     @NonNull
     public static int[] viewport(
             @NonNull ScaleType scaleType, @NonNull Size frameSize, @NonNull Size outputSize) {

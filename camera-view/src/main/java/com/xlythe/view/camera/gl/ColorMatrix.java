@@ -3,15 +3,8 @@ package com.xlythe.view.camera.gl;
 import androidx.annotation.NonNull;
 
 /**
- * The colour transforms a filter is made of, as 4x4 matrices a shader can apply.
- *
- * <p>A filter is a matrix multiply per pixel and nothing else, which is why this is the part
- * worth writing carefully: the shader that applies it is four lines and cannot really be wrong,
- * and the coefficients can be wrong in ways nobody notices until a face comes out green.</p>
- *
- * <p>Column-major, like everything else GL takes, and operating on straight RGB with alpha left
- * alone. The camera gives opaque frames, so there is no premultiplication to undo and no reason
- * for a filter to touch the fourth channel.</p>
+ * The colour transforms a {@link ColorFilter} applies, as 4x4 column-major matrices on straight
+ * RGB with alpha left alone. Combine them with {@link #concat}.
  */
 public final class ColorMatrix {
     /** A 4x4 matrix is sixteen floats, in the order GL wants them. */
@@ -25,7 +18,9 @@ public final class ColorMatrix {
      * difference between either and the naive average that is the usual mistake.</p>
      */
     private static final float LUMA_RED = 0.299f;
+    /** Green's share of perceived brightness, from Rec. 601. */
     private static final float LUMA_GREEN = 0.587f;
+    /** Blue's share of perceived brightness, from Rec. 601. */
     private static final float LUMA_BLUE = 0.114f;
 
     private ColorMatrix() {}
@@ -43,9 +38,6 @@ public final class ColorMatrix {
 
     /**
      * Pulls colour towards grey.
-     *
-     * <p>Each channel becomes a mix of itself and the luminance of the whole pixel, so the
-     * weights are what decide whether a red jumper and a green one come out the same shade.</p>
      *
      * @param amount 1 leaves colour alone, 0 removes it, above 1 exaggerates it
      */
@@ -71,9 +63,6 @@ public final class ColorMatrix {
 
     /**
      * Scales every channel about mid-grey.
-     *
-     * <p>About mid-grey rather than about black, because scaling about black darkens as it
-     * flattens and the result reads as underexposed rather than as low contrast.</p>
      *
      * @param amount 1 leaves it alone, 0 flattens to grey, above 1 increases contrast
      */
@@ -103,7 +92,7 @@ public final class ColorMatrix {
         };
     }
 
-    /** The warm brown of a photograph that has been in a drawer. */
+    /** A warm brown tone, like an old photograph. */
     @NonNull
     public static float[] sepia() {
         return new float[] {
@@ -140,13 +129,7 @@ public final class ColorMatrix {
         };
     }
 
-    /**
-     * One matrix doing what the second does to the result of the first.
-     *
-     * <p>Order matters and is easy to get backwards: {@code concat(a, b)} applies {@code a}
-     * first. Column-major multiplication reads the other way round from that, which is the
-     * trap, so the arguments here are named for the order a person thinks in.</p>
-     */
+    /** One matrix doing what {@code first} does, then what {@code second} does to the result. */
     @NonNull
     public static float[] concat(@NonNull float[] first, @NonNull float[] second) {
         if (first.length != SIZE || second.length != SIZE) {
@@ -156,7 +139,7 @@ public final class ColorMatrix {
     }
 
     /**
-     * Applies a matrix to one colour, for testing and for a caller previewing a filter.
+     * Applies a matrix to one colour, as the filter does to each pixel.
      *
      * @param rgba four channels in 0..1
      * @return four channels in 0..1, clamped the way the shader's output is

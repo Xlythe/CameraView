@@ -27,12 +27,16 @@ public final class OesTextureProgram {
     /** Floats per vertex in {@link GlMath#fullFrameQuad}: x, y, s, t. */
     private static final int FLOATS_PER_VERTEX = 4;
 
+    /** The bytes in one float of the vertex buffer. */
     private static final int BYTES_PER_FLOAT = 4;
 
+    /** The vertices in the quad that covers the output. */
     private static final int VERTEX_COUNT = 4;
 
+    /** The floats in each attribute: x and y, or s and t. */
     private static final int COORDINATES_PER_ATTRIBUTE = 2;
 
+    /** Positions the quad and transforms the texture coordinate by the frame's matrix. */
     static final String VERTEX_SHADER =
             "uniform mat4 uTextureMatrix;\n"
             + "attribute vec4 aPosition;\n"
@@ -43,8 +47,11 @@ public final class OesTextureProgram {
             + "  vTextureCoordinate = (uTextureMatrix * aTextureCoordinate).xy;\n"
             + "}\n";
 
-    // The extension directive has to be the first line of the shader, before the precision
-    // qualifier, or the compiler rejects the samplerExternalOES type that follows it.
+    /**
+     * Samples the external texture as it is. The extension directive has to be the first line,
+     * before the precision qualifier, or the compiler rejects the samplerExternalOES type that
+     * follows it.
+     */
     static final String FRAGMENT_SHADER =
             "#extension GL_OES_EGL_image_external : require\n"
             + "precision mediump float;\n"
@@ -54,10 +61,15 @@ public final class OesTextureProgram {
             + "  gl_FragColor = texture2D(uTexture, vTextureCoordinate);\n"
             + "}\n";
 
+    /** The linked program. */
     private final int mProgram;
+    /** The location of the vertex position attribute. */
     private final int mPositionHandle;
+    /** The location of the texture coordinate attribute. */
     private final int mTextureCoordinateHandle;
+    /** The location of the texture's transform matrix. */
     private final int mTextureMatrixHandle;
+    /** The quad's positions and texture coordinates, in native memory where GL can read it. */
     private final FloatBuffer mVertices;
 
     /**

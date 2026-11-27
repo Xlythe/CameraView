@@ -3,17 +3,26 @@ package com.xlythe.view.camera.v2;
 import android.content.Context;
 import android.graphics.ImageFormat;
 import android.graphics.Rect;
+import android.util.Range;
 import android.util.SizeF;
 import android.graphics.SurfaceTexture;
+import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 import android.media.CamcorderProfile;
 import android.media.MediaRecorder;
+import android.os.Build;
+import android.util.Range;
+import android.util.Rational;
 import android.util.Size;
 import android.view.TextureView;
 
 import com.xlythe.view.camera.CameraView;
+
+import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.List;
 
 import org.robolectric.Shadows;
 import org.robolectric.shadow.api.Shadow;
@@ -32,12 +41,46 @@ import org.robolectric.shadows.StreamConfigurationMapBuilder;
  * empty, and a SurfaceTexture, which a TextureView never produces without a hardware layer.</p>
  */
 public final class FakeCamera2 {
-    static final String BACK_ID = "0";
-    static final String FRONT_ID = "1";
+    public static final String BACK_ID = "0";
+    public static final String FRONT_ID = "1";
 
     static final Size SIZE_1080P = new Size(1920, 1080);
     static final Size SIZE_720P = new Size(1280, 720);
     static final Size SIZE_480P = new Size(640, 480);
+
+    /** What {@link #addUltraHighResolutionCamera} offers with its sensor read out unbinned. */
+    static final Size SIZE_UNBINNED = new Size(8000, 6000);
+
+    /** The unbinned sensor's active array, twice the binned one in each direction. */
+    static final Rect UNBINNED_ACTIVE_ARRAY = new Rect(0, 0, 8000, 6000);
+
+    /** The sensor's pixel array and pre-correction active array: the size a DNG is written at. */
+    public static final Size SIZE_RAW = new Size(4000, 3000);
+
+    /**
+     * A RAW output larger than the sensor's arrays, as a camera with a remosaicing mode lists.
+     * DngCreator refuses a frame this size, so taking the largest RAW output would be wrong.
+     */
+    static final Size SIZE_RAW_REMOSAIC = new Size(8000, 6000);
+
+    /**
+     * What a camera says about RAW.
+     *
+     * <p>Two separate claims, and a camera can make either without the other: the RAW
+     * capability, which promises the metadata needed to interpret the sensor's readings, and
+     * RAW_SENSOR outputs in the configuration map. Both are needed.</p>
+     */
+    public enum RawSupport {
+        NONE, CAPABILITY_ONLY, FORMAT_ONLY, FULL;
+
+        boolean hasCapability() {
+            return this == CAPABILITY_ONLY || this == FULL;
+        }
+
+        boolean hasFormat() {
+            return this == FORMAT_ONLY || this == FULL;
+        }
+    }
 
     /**
      * JPEG's internal HAL format.
@@ -47,6 +90,20 @@ public final class FakeCamera2 {
      * way out, so getOutputSizes(ImageFormat.JPEG) finds what was added here.</p>
      */
     private static final int HAL_PIXEL_FORMAT_BLOB = 0x21;
+
+    /** Exposure compensation the fake cameras accept, in steps of {@link #EXPOSURE_STEP}. */
+    static final Range<Integer> EXPOSURE_RANGE = new Range<>(-12, 12);
+
+    /** A sixth of a stop per step, so the range above is two stops either way. */
+    static final Rational EXPOSURE_STEP = new Rational(1, 6);
+
+    /**
+     * Auto-exposure modes outside the platform's enumeration, as Samsung's cameras list them.
+     *
+     * <p>Kept in the fake so that anything reading the modes has to look for the one it wants
+     * rather than assume every value is one it knows.</p>
+     */
+    static final int[] VENDOR_AE_MODES = {101, 102, 104};
 
     private FakeCamera2() {}
 
@@ -100,10 +157,23 @@ public final class FakeCamera2 {
      */
     public static void addBackAndFrontCameras(
             Context context, boolean faceDetection, Integer hardwareLevel) {
+        addBackAndFrontCameras(context, faceDetection, hardwareLevel, RawSupport.NONE);
+    }
+
+    /** Registers a back and a front camera that make this claim about RAW. */
+    public static void addBackAndFrontCameras(Context context, RawSupport rawSupport) {
+        addBackAndFrontCameras(context, true /* faceDetection */,
+                CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL, rawSupport);
+    }
+
+    static void addBackAndFrontCameras(Context context, boolean faceDetection,
+            Integer hardwareLevel, RawSupport rawSupport) {
         addCamera(context, BACK_ID, CameraMetadata.LENS_FACING_BACK, 90,
-                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel);
+                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel,
+                rawSupport);
         addCamera(context, FRONT_ID, CameraMetadata.LENS_FACING_FRONT, 270,
-                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel);
+                CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, faceDetection, hardwareLevel,
+                rawSupport);
         addCamcorderProfiles();
     }
 
@@ -172,8 +242,71 @@ public final class FakeCamera2 {
                 CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL);
     }
 
+    /**
+     * Registers a back camera whose sensor can also be read out unbinned, at {@link
+     * #SIZE_UNBINNED}, and a front camera that cannot. API 31 and up only.
+     *
+     * @param capability whether the back camera reports the ultra high resolution capability. A
+     *     camera can publish the unbinned map without it, as a placeholder.
+     */
+    static void addUltraHighResolutionCamera(Context context, boolean capability) {
+        addUltraHighResolutionCamera(context, capability, RawSupport.NONE);
+    }
+
+    /** As {@link #addUltraHighResolutionCamera(Context, boolean)}, with RAW as described. */
+    static void addUltraHighResolutionCamera(
+            Context context, boolean capability, RawSupport rawSupport) {
+        CameraCharacteristics characteristics = characteristics(CameraMetadata.LENS_FACING_BACK,
+                90, CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN, true /* faceDetection */,
+                CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL, rawSupport);
+        ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
+        List<Integer> capabilities = new ArrayList<>();
+        capabilities.add(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE);
+        if (capability) {
+            capabilities.add(
+                    CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR);
+        }
+        if (rawSupport.hasCapability()) {
+            capabilities.add(CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW);
+        }
+        int[] published = new int[capabilities.size()];
+        for (int i = 0; i < published.length; i++) {
+            published[i] = capabilities.get(i);
+        }
+        shadow.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, published);
+        StreamConfigurationMapBuilder unbinned = StreamConfigurationMapBuilder.newBuilder();
+        unbinned.addOutputSize(SIZE_UNBINNED);
+        unbinned.addOutputSize(HAL_PIXEL_FORMAT_BLOB, SIZE_UNBINNED);
+        shadow.set(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION,
+                unbinned.build());
+        shadow.set(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE_MAXIMUM_RESOLUTION,
+                UNBINNED_ACTIVE_ARRAY);
+        ShadowCameraManager shadowManager =
+                Shadow.extract(context.getSystemService(CameraManager.class));
+        shadowManager.addCamera(BACK_ID, characteristics);
+        addCamera(context, FRONT_ID, CameraMetadata.LENS_FACING_FRONT, 270);
+        addCamcorderProfiles();
+    }
+
     static void addCamera(Context context, String id, int lensFacing, int sensorOrientation,
             int deviceType, boolean faceDetection, Integer hardwareLevel) {
+        addCamera(context, id, lensFacing, sensorOrientation, deviceType, faceDetection,
+                hardwareLevel, RawSupport.NONE);
+    }
+
+    static void addCamera(Context context, String id, int lensFacing, int sensorOrientation,
+            int deviceType, boolean faceDetection, Integer hardwareLevel,
+            RawSupport rawSupport) {
+        ShadowCameraManager shadowManager =
+                Shadow.extract(context.getSystemService(CameraManager.class));
+        shadowManager.addCamera(id, characteristics(lensFacing, sensorOrientation, deviceType,
+                faceDetection, hardwareLevel, rawSupport));
+    }
+
+    /** The characteristics {@link #addCamera} registers, for a test that needs them directly. */
+    public static CameraCharacteristics characteristics(int lensFacing, int sensorOrientation,
+            int deviceType, boolean faceDetection, Integer hardwareLevel,
+            RawSupport rawSupport) {
         CameraCharacteristics characteristics = ShadowCameraCharacteristics.newCameraCharacteristics();
         ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
 
@@ -184,6 +317,21 @@ public final class FakeCamera2 {
         shadow.set(CameraCharacteristics.CONTROL_MAX_REGIONS_AE, 1);
         shadow.set(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM, 4f);
         shadow.set(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE, new Rect(0, 0, 4000, 3000));
+        if (rawSupport != RawSupport.NONE) {
+            // The geometry a DNG is written against. Every real camera publishes it, but only a
+            // RAW camera here does: a pixel array twice as wide as the largest JPEG is also a
+            // sensor the zoom offers a 2x crop of, which a test of the zoom does not expect.
+            shadow.set(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
+                    new Rect(0, 0, SIZE_RAW.getWidth(), SIZE_RAW.getHeight()));
+            shadow.set(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE, SIZE_RAW);
+        }
+        // Published by every camera, and read by DngCreator to date the file it writes.
+        shadow.set(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE,
+                CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN);
+        shadow.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, rawSupport.hasCapability()
+                ? new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
+                        CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW}
+                : new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
         // A plausible phone sensor and lens: 5.76mm x 4.29mm behind a 4.3mm lens, which is about
         // 67 degrees across. Published so that anything working out an angle of view has
         // something to work from - a camera that publishes neither can only decline.
@@ -204,16 +352,85 @@ public final class FakeCamera2 {
         if (hardwareLevel != null) {
             shadow.set(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL, hardwareLevel);
         }
-        shadow.set(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP, streamConfigurationMap());
+        shadow.set(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP,
+                streamConfigurationMap(rawSupport));
         if (android.os.Build.VERSION.SDK_INT >= 37) {
             // Only exists from API 37, and a test configured for an older platform must not see
             // a characteristic that platform could not report.
             shadow.set(CameraCharacteristics.INFO_DEVICE_TYPE, deviceType);
         }
+        return characteristics;
+    }
 
-        ShadowCameraManager shadowManager =
-                Shadow.extract(context.getSystemService(CameraManager.class));
-        shadowManager.addCamera(id, characteristics);
+    /**
+     * Gives a registered camera the controls a phone camera usually offers beyond the basics:
+     * exposure compensation, digital and optical stabilization, and the auto-exposure modes.
+     *
+     * <p>Separate from {@link #addCamera} rather than part of every fake, because the CameraX
+     * harness drives these same cameras and is written around one that offers none of them.</p>
+     */
+    public static void addExposureAndStabilization(Context context, String id) {
+        setCharacteristic(context, id, CameraCharacteristics.CONTROL_AE_AVAILABLE_MODES, aeModes());
+        setCharacteristic(context, id,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE, EXPOSURE_RANGE);
+        setCharacteristic(context, id,
+                CameraCharacteristics.CONTROL_AE_COMPENSATION_STEP, EXPOSURE_STEP);
+        setCharacteristic(context, id,
+                CameraCharacteristics.CONTROL_AVAILABLE_VIDEO_STABILIZATION_MODES,
+                videoStabilizationModes());
+        setCharacteristic(context, id,
+                CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION,
+                new int[] {CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF,
+                        CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_ON});
+    }
+
+    /**
+     * Changes one thing a registered camera reports, for a test about a camera that differs.
+     *
+     * <p>The camera manager hands out the instance it was given, so the change is seen by every
+     * later query, including those of a module that is already open.</p>
+     */
+    public static <T> void setCharacteristic(Context context, String id,
+            CameraCharacteristics.Key<T> key, T value) {
+        try {
+            CameraCharacteristics characteristics =
+                    context.getSystemService(CameraManager.class).getCameraCharacteristics(id);
+            ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
+            shadow.set(key, value);
+        } catch (CameraAccessException error) {
+            throw new AssertionError(error);
+        }
+    }
+
+    /**
+     * Every standard auto-exposure mode a phone with a flash has, the vendor ones beside them,
+     * and low-light boost where the platform has it. Low-light boost comes last, after values
+     * nothing in the platform knows, so a reader that stops at an unknown one never finds it.
+     */
+    private static int[] aeModes() {
+        int[] standard = {CameraMetadata.CONTROL_AE_MODE_OFF, CameraMetadata.CONTROL_AE_MODE_ON,
+                CameraMetadata.CONTROL_AE_MODE_ON_AUTO_FLASH,
+                CameraMetadata.CONTROL_AE_MODE_ON_ALWAYS_FLASH};
+        int extra = Build.VERSION.SDK_INT >= 35 ? 1 : 0;
+        int[] modes = new int[standard.length + VENDOR_AE_MODES.length + extra];
+        System.arraycopy(standard, 0, modes, 0, standard.length);
+        System.arraycopy(VENDOR_AE_MODES, 0, modes, standard.length, VENDOR_AE_MODES.length);
+        if (extra > 0) {
+            modes[modes.length - 1] =
+                    CameraMetadata.CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY;
+        }
+        return modes;
+    }
+
+    /** Digital stabilization for recordings, and for the preview too where the platform has it. */
+    private static int[] videoStabilizationModes() {
+        if (Build.VERSION.SDK_INT >= 33) {
+            return new int[] {CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
+                    CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON,
+                    CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION};
+        }
+        return new int[] {CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
+                CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_ON};
     }
 
     /**
@@ -221,14 +438,105 @@ public final class FakeCamera2 {
      * implementation-defined sizes that back SurfaceTexture, MediaRecorder and MediaCodec, and
      * the picture surface reads the JPEG sizes.
      */
-    private static android.hardware.camera2.params.StreamConfigurationMap streamConfigurationMap() {
+    private static android.hardware.camera2.params.StreamConfigurationMap streamConfigurationMap(
+            RawSupport rawSupport) {
         StreamConfigurationMapBuilder builder = StreamConfigurationMapBuilder.newBuilder();
         for (Size size : new Size[] {SIZE_1080P, SIZE_720P, SIZE_480P}) {
             builder.addOutputSize(size);
             builder.addOutputSize(HAL_PIXEL_FORMAT_BLOB, size);
             builder.addOutputSize(ImageFormat.YUV_420_888, size);
         }
+        if (rawSupport.hasFormat()) {
+            // The remosaic size first and largest, so a choice of "the largest" or "the first"
+            // would both pick the size DngCreator refuses.
+            builder.addOutputSize(ImageFormat.RAW_SENSOR, SIZE_RAW_REMOSAIC);
+            builder.addOutputSize(ImageFormat.RAW_SENSOR, SIZE_RAW);
+        }
         return builder.build();
+    }
+
+    /** The physical cameras {@link #addLogicalBackCamera} puts behind the logical one. */
+    static final String[] PHYSICAL_IDS = {"2", "5", "6", "7"};
+
+    /**
+     * Registers a back camera standing for several lenses, from what a Galaxy S25 Ultra publishes.
+     *
+     * <p>A logical camera with a 0.6x to 10x zoom ratio range (on API 30 and up, where the control
+     * exists) in front of a 6.3mm main lens on a 9.792mm-wide sensor, with the lenses of
+     * {@link #s25Lenses} behind it as physical cameras. Those report no lens facing, so none of
+     * them is chosen in place of the logical camera. Its front camera is the ordinary one
+     * {@link #addBackAndFrontCameras} registers, which zooms 1x to 4x by cropping.</p>
+     */
+    public static void addLogicalBackCamera(Context context) throws Exception {
+        addCamera(context, BACK_ID, CameraMetadata.LENS_FACING_BACK, 90);
+        addCamera(context, FRONT_ID, CameraMetadata.LENS_FACING_FRONT, 270);
+        addCamcorderProfiles();
+        CameraManager cameraManager = context.getSystemService(CameraManager.class);
+        ShadowCameraCharacteristics logical =
+                Shadow.extract(cameraManager.getCameraCharacteristics(BACK_ID));
+        logical.set(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS, new float[] {6.3f});
+        logical.set(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE, new SizeF(9.792f, 7.344f));
+        logical.set(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM, 8f);
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            logical.set(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE, new Range<>(0.6f, 10f));
+        }
+        logical.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, new int[] {
+                CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
+                CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA});
+        logical.set(physicalIdsKey(), physicalIds(PHYSICAL_IDS));
+
+        ShadowCameraManager shadowManager = Shadow.extract(cameraManager);
+        List<CameraCharacteristics> lenses = s25Lenses();
+        for (int i = 0; i < PHYSICAL_IDS.length; i++) {
+            shadowManager.addCamera(PHYSICAL_IDS[i], lenses.get(i));
+        }
+    }
+
+    /**
+     * The S25 Ultra's four back lenses as physical cameras: the 2.2mm ultra-wide on a 5.712mm-wide
+     * sensor, the 6.3mm main lens on 9.792mm, and telephotos of 7.9mm on 4.48mm and 18.6mm on
+     * 5.712mm.
+     */
+    static List<CameraCharacteristics> s25Lenses() {
+        List<CameraCharacteristics> lenses = new ArrayList<>();
+        lenses.add(lens(2.2f, 5.712f));
+        lenses.add(lens(6.3f, 9.792f));
+        lenses.add(lens(7.9f, 4.48f));
+        lenses.add(lens(18.6f, 5.712f));
+        return lenses;
+    }
+
+    /** A physical camera that publishes only its optics. */
+    static CameraCharacteristics lens(float focalLength, float sensorWidth) {
+        CameraCharacteristics characteristics =
+                ShadowCameraCharacteristics.newCameraCharacteristics();
+        ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
+        shadow.set(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS,
+                new float[] {focalLength});
+        shadow.set(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE,
+                new SizeF(sensorWidth, sensorWidth * 3 / 4));
+        return characteristics;
+    }
+
+    /**
+     * The key a logical camera lists its physical cameras under.
+     *
+     * <p>Hidden from apps, which read it through getPhysicalCameraIds, so it is looked up by
+     * name.</p>
+     */
+    @SuppressWarnings("unchecked")
+    private static CameraCharacteristics.Key<byte[]> physicalIdsKey() throws Exception {
+        return (CameraCharacteristics.Key<byte[]>) CameraCharacteristics.class
+                .getField("LOGICAL_MULTI_CAMERA_PHYSICAL_IDS").get(null);
+    }
+
+    /** Camera ids as the key holds them, each ended by a NUL. */
+    private static byte[] physicalIds(String... ids) {
+        StringBuilder joined = new StringBuilder();
+        for (String id : ids) {
+            joined.append(id).append('\0');
+        }
+        return joined.toString().getBytes(StandardCharsets.UTF_8);
     }
 
     /** Runs everything the backend posted to the main looper. */

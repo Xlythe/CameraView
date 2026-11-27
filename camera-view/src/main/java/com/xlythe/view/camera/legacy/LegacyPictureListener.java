@@ -1,11 +1,16 @@
 package com.xlythe.view.camera.legacy;
 
+import android.content.Context;
 import android.hardware.Camera;
 import android.location.Location;
 import android.os.AsyncTask;
 import android.util.Log;
 
+import androidx.annotation.WorkerThread;
+
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifNoRoomException;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -24,13 +29,18 @@ class LegacyPictureListener implements Camera.PictureCallback {
     // True if the picture is mirrored
     private final boolean mIsReversed;
 
+    // How the picture was taken, for the tags the camera's JPEG leaves out
+    private final ExifCaptureParameters mExifParameters;
+
     // The listener to notify when we're done.
     private final LegacyCameraModule mModule;
 
-    LegacyPictureListener(File file, int orientation, boolean mirrored, LegacyCameraModule module) {
+    LegacyPictureListener(File file, int orientation, boolean mirrored,
+            ExifCaptureParameters exifParameters, LegacyCameraModule module) {
         mFile = file;
         mIsReversed = mirrored;
         mOrientation = orientation;
+        mExifParameters = exifParameters;
         mModule = module;
     }
 
@@ -46,6 +56,9 @@ class LegacyPictureListener implements Camera.PictureCallback {
 
                     Exif exif = new Exif(mFile);
                     exif.attachTimestamp();
+                    exif.attachCaptureDevice(mModule.getContext());
+                    exif.attachThumbnail();
+                    mExifParameters.applyTo(exif);
                     exif.rotate(mOrientation);
                     if (mIsReversed) {
                         exif.flipHorizontally();
@@ -54,7 +67,11 @@ class LegacyPictureListener implements Camera.PictureCallback {
                     if (location != null) {
                         exif.attachLocation(location);
                     }
+                    ensureWritableTempDir(mModule.getContext());
                     exif.save();
+                } catch (ExifNoRoomException e) {
+                    // The picture keeps everything else, and is never failed over its metadata.
+                    Log.w(TAG, "Saved the picture without some of its Exif tags", e);
                 } catch (IOException e) {
                     Log.e(TAG, "Failed to write the file", e);
                     mModule.onImageFailed();
@@ -78,5 +95,20 @@ class LegacyPictureListener implements Camera.PictureCallback {
             }
         }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
         camera.startPreview();
+    }
+
+    /**
+     * Gives ExifInterface somewhere to write.
+     *
+     * <p>It saves through a copy of the file made in java.io.tmpdir. Newer releases point that at
+     * the app's cache when the process starts; older ones leave it at /sdcard, which an app
+     * without storage permission cannot write.</p>
+     */
+    @WorkerThread
+    private static void ensureWritableTempDir(Context context) {
+        File tempDir = new File(System.getProperty("java.io.tmpdir", ""));
+        if (!tempDir.canWrite()) {
+            System.setProperty("java.io.tmpdir", context.getCacheDir().getAbsolutePath());
+        }
     }
 }

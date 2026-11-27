@@ -12,30 +12,27 @@ import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
 
 /**
- * A {@link FrameRenderer} that puts every pixel through a colour matrix.
+ * A {@link FrameRenderer} that puts every pixel through a {@link ColorMatrix}, in the preview, the
+ * recording and the pictures alike: black and white, sepia, a warm or cool cast, more or less
+ * contrast. It looks at one pixel at a time, so a blur, sharpening or edge detection needs a
+ * renderer of your own.
  *
- * <p>Enough for the filters people actually mean by the word - black and white, sepia, a warm or
- * cool cast, more or less punch - at the cost of one multiply per pixel and no extra passes. It
- * draws straight from the camera's external texture, so the filter lands in the preview, the
- * recording and the photograph alike rather than being painted over the top of one of them.</p>
- *
- * <p>What it is not: anything that needs to look at more than one pixel at a time. Blurs,
- * sharpening, edge detection and the rest need neighbours and a second pass, and a caller who
- * wants those should write their own renderer - the seam exists for that, and this is one use
- * of it rather than the only one.</p>
- *
- * <p>The matrix can be changed between frames. Nothing is recompiled for it: the program is
- * built once when the renderer starts and the matrix is a uniform, so a filter wheel costs a
- * copy of sixteen floats.</p>
+ * <p>The matrix can be changed between frames without restarting anything.</p>
  */
 public final class ColorFilter implements FrameRenderer {
+    /** The tag this logs under. */
     private static final String TAG = "ColorFilter";
 
+    /** The bytes in one float of the vertex buffer. */
     private static final int BYTES_PER_FLOAT = 4;
+    /** The floats in each attribute: x and y, or s and t. */
     private static final int COORDINATES_PER_ATTRIBUTE = 2;
+    /** The floats in each vertex: a position and a texture coordinate. */
     private static final int FLOATS_PER_VERTEX = 4;
+    /** The vertices in the quad that covers the output. */
     private static final int VERTEX_COUNT = 4;
 
+    /** Positions the quad and transforms the camera texture coordinate. */
     private static final String VERTEX_SHADER =
             "uniform mat4 uTextureMatrix;\n"
             + "attribute vec4 aPosition;\n"
@@ -46,8 +43,11 @@ public final class ColorFilter implements FrameRenderer {
             + "  vTextureCoordinate = (uTextureMatrix * aTextureCoordinate).xy;\n"
             + "}\n";
 
-    // The extension directive has to be the first line, before the precision qualifier, or the
-    // compiler rejects the samplerExternalOES that follows it.
+    /**
+     * Puts each camera pixel through the colour matrix. The extension directive has to be the
+     * first line, before the precision qualifier, or the compiler rejects the samplerExternalOES
+     * that follows it.
+     */
     private static final String FRAGMENT_SHADER =
             "#extension GL_OES_EGL_image_external : require\n"
             + "precision mediump float;\n"
@@ -61,14 +61,22 @@ public final class ColorFilter implements FrameRenderer {
             + "  gl_FragColor = clamp(uColorMatrix * vec4(colour.rgb, 1.0), 0.0, 1.0);\n"
             + "}\n";
 
+    /** The colour matrix the next frame is drawn with, guarded by itself. */
     private final float[] mMatrix = ColorMatrix.identity();
 
+    /** The compiled program, or 0 before the renderer starts. */
     private int mProgram;
+    /** The location of the vertex position attribute. */
     private int mPositionHandle;
+    /** The location of the texture coordinate attribute. */
     private int mTextureCoordinateHandle;
+    /** The location of the camera texture's transform matrix. */
     private int mTextureMatrixHandle;
+    /** The location of the colour matrix. */
     private int mColorMatrixHandle;
+    /** The quad's positions and texture coordinates, or null while the renderer is stopped. */
     @Nullable private FloatBuffer mVertices;
+    /** Whether the program failed to build, after which frames go through unchanged. */
     private boolean mFailed;
 
     /** A filter that changes nothing until it is given a matrix. */
@@ -80,10 +88,8 @@ public final class ColorFilter implements FrameRenderer {
     }
 
     /**
-     * Changes what the filter does, from any thread.
-     *
-     * <p>Copied rather than kept, so a caller animating a filter cannot have the array change
-     * under the render thread half way through a frame.</p>
+     * Changes what the filter does, from any thread. The array is copied, so changing it afterwards
+     * changes nothing.
      */
     public void setMatrix(@NonNull float[] matrix) {
         if (matrix.length != ColorMatrix.SIZE) {

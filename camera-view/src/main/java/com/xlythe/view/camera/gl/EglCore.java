@@ -10,6 +10,7 @@ import android.view.Surface;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 
 /**
@@ -21,6 +22,7 @@ import androidx.annotation.RestrictTo;
  * <p>Every method must be called on the thread that created the instance. An EGL context belongs
  * to a thread, and the only safe way to share camera frames between threads is not to.</p>
  */
+@RequiresApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class EglCore {
     /** The GLES version the external-texture shader needs, and nothing newer. */
@@ -29,8 +31,11 @@ public final class EglCore {
     /** The side of the pbuffer that exists only to have a surface to make current against. */
     private static final int OFFSCREEN_SIZE = 1;
 
+    /** The default display the context belongs to. */
     private final EGLDisplay mDisplay;
+    /** The RGBA, recordable configuration every surface here is made with. */
     private final EGLConfig mConfig;
+    /** The GLES 2 context everything is drawn in. */
     private final EGLContext mContext;
 
     /**

@@ -20,12 +20,16 @@ final class Texture2dProgram {
     /** Floats per vertex in {@link GlMath#fullFrameQuad}: x, y, s, t. */
     private static final int FLOATS_PER_VERTEX = 4;
 
+    /** The bytes in one float of the vertex buffer. */
     private static final int BYTES_PER_FLOAT = 4;
 
+    /** The vertices in the quad that covers the output. */
     private static final int VERTEX_COUNT = 4;
 
+    /** The floats in each attribute: x and y, or s and t. */
     private static final int COORDINATES_PER_ATTRIBUTE = 2;
 
+    /** Samples the 2D texture as it is. */
     private static final String FRAGMENT_SHADER =
             "precision mediump float;\n"
             + "uniform sampler2D uTexture;\n"

@@ -36,10 +36,15 @@ public final class CameraXSegmentationAnalyzer implements CameraXFrameAnalyzer {
     /** Log tag shared with CameraView. */
     private static final String TAG = CameraView.class.getSimpleName();
 
+    /** The ML Kit selfie segmenter, released by {@link #close}. */
     private final Segmenter mSegmenter;
+    /** Hears each mask, on {@link #mCallbackExecutor}. */
     private final CameraView.SegmentationListener mListener;
+    /** Where {@link #mListener} is called. */
     private final Executor mCallbackExecutor;
+    /** Whether {@link #close} has been called, after which no mask is reported. */
     private final AtomicBoolean mClosed = new AtomicBoolean();
+    /** Whether the frames are mirrored, as a front camera's are, so the mask is read flipped. */
     private final boolean mMirrored;
 
     /**

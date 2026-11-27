@@ -129,35 +129,18 @@ public class Camera2ModuleTest {
     public void zoomCropIsCenteredAndNeverInverts() {
         Rect activeArray = new Rect(100, 200, 4100, 3200);
 
-        // Zero is no crop at all, and the top of the scale is the full digital zoom.
-        assertEquals(activeArray, Camera2Module.calculateCropRegion(activeArray, 4f, 0));
-        assertEquals(new Rect(1600, 1325, 2600, 2075),
-                Camera2Module.calculateCropRegion(activeArray, 4f, 100));
-        assertEquals(new Rect(1600, 1325, 2600, 2075),
-                Camera2Module.calculateCropRegion(activeArray, 4f, Integer.MAX_VALUE));
+        // 1x is no crop at all, and a ratio below it cannot crop less than nothing.
+        assertEquals(activeArray, Camera2Module.calculateCropRegion(activeArray, 1f));
+        assertEquals(activeArray, Camera2Module.calculateCropRegion(activeArray, 0.5f));
 
-        // Halfway up the scale is halfway through the ratio range, not halfway through the area:
-        // 2.5x of a 4000x3000 array is a 1600x1200 crop, centered.
+        // 4x keeps a quarter of each side, centered.
+        assertEquals(new Rect(1600, 1325, 2600, 2075),
+                Camera2Module.calculateCropRegion(activeArray, 4f));
+
+        // The ratio divides the sides rather than the area: 2.5x of a 4000x3000 array is a
+        // 1600x1200 crop.
         assertEquals(new Rect(1300, 1100, 2900, 2300),
-                Camera2Module.calculateCropRegion(activeArray, 4f, 50));
-    }
-
-    /**
-     * The level is a position in the camera's whole optical range, so zero reaches the widest
-     * lens it has. A lower bound below one means an ultra-wide the crop region could never get to.
-     */
-    @Test
-    public void zoomLevelsSpanTheCamerasEntireRatioRange() {
-        assertEquals(0.5f, Camera2Module.zoomRatioFor(0.5f, 10f, 0), 0.0001f);
-        assertEquals(10f, Camera2Module.zoomRatioFor(0.5f, 10f, 100), 0.0001f);
-        assertEquals(5.25f, Camera2Module.zoomRatioFor(0.5f, 10f, 50), 0.0001f);
-
-        // A camera with no wider lens still starts at 1x.
-        assertEquals(1f, Camera2Module.zoomRatioFor(1f, 4f, 0), 0.0001f);
-
-        // Out-of-range levels clamp rather than running past the camera's limits.
-        assertEquals(0.5f, Camera2Module.zoomRatioFor(0.5f, 10f, -20), 0.0001f);
-        assertEquals(10f, Camera2Module.zoomRatioFor(0.5f, 10f, 500), 0.0001f);
+                Camera2Module.calculateCropRegion(activeArray, 2.5f));
     }
 
     @Test

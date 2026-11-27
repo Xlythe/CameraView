@@ -12,6 +12,7 @@ import android.view.Surface;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
 
 import com.xlythe.view.camera.ICameraModule;
@@ -42,8 +43,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>This is the driver. It is as thin as a thing that owns a thread can be, and every decision it
  * makes is in {@link GlMath}, because nothing here can run without a GPU.</p>
  */
+@RequiresApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public final class FrameRenderThread {
+    /** Log tag shared with the camera modules. */
     private static final String TAG = ICameraModule.TAG;
 
     /**
@@ -90,10 +93,15 @@ public final class FrameRenderThread {
 
     /** One surface being drawn into, and everything known about how to draw into it. */
     private static final class Output {
+        /** The surface drawn into. */
         private final Surface mSurface;
+        /** The surface's size in pixels. */
         private final Size mSize;
+        /** The size of the frame once this output's transform is applied. */
         private final Size mFrameSize;
+        /** How the frame is fitted to the surface. */
         private final GlMath.ScaleType mScaleType;
+        /** Turns the camera texture's matrix into the one this output samples with. */
         private final TextureTransform mTransform;
         /**
          * Whether this surface feeds an encoder, which takes its presentation times on the
@@ -111,6 +119,7 @@ public final class FrameRenderThread {
          * a recording is tagged once - or null to follow {@link #setShownOrientation}.
          */
         @Nullable private final Shown mShown;
+        /** The EGL surface wrapping {@link #mSurface}, made on the first frame, or null. */
         @Nullable private EGLSurface mEglSurface;
         /** Set once this output has failed, so a broken surface is not retried every frame. */
         private boolean mFailed;
@@ -140,10 +149,15 @@ public final class FrameRenderThread {
 
     /** One still waiting for its frame, and where to draw it when it arrives. */
     private static final class Still {
+        /** The surface the still is drawn into. */
         private final Surface mSurface;
+        /** The surface's size in pixels. */
         private final Size mSize;
+        /** How the frame is fitted to the surface. */
         private final GlMath.ScaleType mScaleType;
+        /** Turns the still texture's matrix into the one the still is sampled with. */
         private final TextureTransform mTransform;
+        /** Runs on the render thread once the still has been drawn. */
         private final Runnable mOnDrawn;
 
         private Still(@NonNull Surface surface, @NonNull Size size,
@@ -157,6 +171,7 @@ public final class FrameRenderThread {
         }
     }
 
+    /** The render thread's name, which a stack trace shows. */
     private final String mName;
 
     /**
@@ -167,7 +182,9 @@ public final class FrameRenderThread {
      */
     private final Map<Object, Output> mOutputs = new LinkedHashMap<>();
 
+    /** The transform the camera's SurfaceTexture reported for the frame being drawn. */
     private final float[] mSurfaceTextureMatrix = GlMath.identity();
+    /** The transform the current output samples the frame with, handed to the renderer. */
     private final float[] mTextureMatrix = GlMath.identity();
 
     /**
@@ -182,11 +199,17 @@ public final class FrameRenderThread {
     /** What turns a {@link ShownCanvas} onto its output. Made with the context. */
     @Nullable private Texture2dProgram mCanvasProgram;
 
+    /** The render thread, or null while stopped. */
     @Nullable private HandlerThread mThread;
+    /** Posts to the render thread, or null while stopped. */
     @Nullable private Handler mHandler;
+    /** The EGL context, or null while stopped. */
     @Nullable private EglCore mEgl;
+    /** Draws the camera's external texture, or null while stopped. */
     @Nullable private OesTextureProgram mProgram;
+    /** What the camera writes preview frames into, or null while stopped. */
     @Nullable private SurfaceTexture mSurfaceTexture;
+    /** The frame handed to the renderer, reused for every frame and output. */
     @Nullable private GlFrame mFrame;
 
     /**
@@ -203,14 +226,20 @@ public final class FrameRenderThread {
      * otherwise.</p>
      */
     @Nullable private SurfaceTexture mStillTexture;
+    /** The surface the camera writes a still into, wrapping {@link #mStillTexture}, or null. */
     @Nullable private Surface mStillSurface;
+    /** The external texture behind {@link #mStillTexture}, or 0. */
     private int mStillTextureName;
 
     /** What to do with the next frame to land on the still input, or null for nothing. */
     @Nullable private Still mPendingStill;
+    /** What draws each frame, or null to draw the camera frame unchanged. */
     @Nullable private volatile FrameRenderer mRenderer;
+    /** Who creates the camera texture, or null for one of this thread's own. */
     @Nullable private CameraTextureProvider mTextureProvider;
+    /** The external texture the camera writes preview frames into, or 0. */
     private int mTextureName;
+    /** Whether the thread is running, with its context up. */
     private volatile boolean mRunning;
 
     public FrameRenderThread(@NonNull String name) {
