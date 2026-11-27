@@ -126,6 +126,15 @@ public class PanoramaGuideView extends View {
     /** The device's rotation, as drawn. */
     private final float[] mRotation = new float[9];
 
+    /** Where the camera looks as drawn, set again for every frame drawn. */
+    private final CameraPose mPose = new CameraPose(new float[9], 0, false, 1, 1, 1f);
+
+    /** How the frames map onto this view, or null until worked out. */
+    @Nullable private Matrix mFrameToView;
+
+    /** What {@link #mFrameToView} was worked out for, so it is redone only when that changes. */
+    private final int[] mFrameToViewKey = new int[6];
+
     /** A world direction. */
     private final float[] mDirection = new float[3];
 
@@ -198,12 +207,10 @@ public class PanoramaGuideView extends View {
         CameraPose pose = null;
         Matrix frameToView = null;
         if (source.getDisplayRotation(mRotation)) {
-            pose = new CameraPose(mRotation, state.sensorRotation, state.frontFacing,
+            pose = mPose;
+            pose.set(mRotation, state.sensorRotation, state.frontFacing,
                     state.frameWidth, state.frameHeight, state.focal);
-            frameToView = TransformMath.centerCrop(
-                    new RectF(0f, 0f, state.frameWidth, state.frameHeight),
-                    TransformMath.within360(state.sensorRotation - displayRotation()),
-                    state.frontFacing, getWidth(), getHeight());
+            frameToView = frameToView(state);
         }
         // The map first, so a target above the middle of the view is drawn over it rather than
         // hidden under it.
@@ -218,6 +225,35 @@ public class PanoramaGuideView extends View {
             aligned = drawTargets(canvas, pose, frameToView, state, now);
         }
         drawReticle(canvas, state, aligned, now);
+    }
+
+    /**
+     * How the frames map onto this view, which is how the preview maps them: turned upright for
+     * the display, mirrored for a front lens, and scaled to cover. Worked out again only when
+     * one of those changes.
+     */
+    @NonNull
+    private Matrix frameToView(@NonNull GuideState state) {
+        int rotation = TransformMath.within360(state.sensorRotation - displayRotation());
+        int[] key = mFrameToViewKey;
+        // Not short-circuited, so every entry of the key is brought up to date.
+        boolean changed = mFrameToView == null
+                | update(key, 0, state.frameWidth) | update(key, 1, state.frameHeight)
+                | update(key, 2, rotation) | update(key, 3, state.frontFacing ? 1 : 0)
+                | update(key, 4, getWidth()) | update(key, 5, getHeight());
+        if (changed) {
+            mFrameToView = TransformMath.centerCrop(
+                    new RectF(0f, 0f, state.frameWidth, state.frameHeight), rotation,
+                    state.frontFacing, getWidth(), getHeight());
+        }
+        return mFrameToView;
+    }
+
+    /** Sets one entry of a key, saying whether that changed it. */
+    private static boolean update(@NonNull int[] key, int index, int value) {
+        boolean changed = key[index] != value;
+        key[index] = value;
+        return changed;
     }
 
     /** The panorama's line, pinned to the world, to keep the sweep level. */

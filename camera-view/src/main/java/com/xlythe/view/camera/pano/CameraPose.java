@@ -17,19 +17,19 @@ import androidx.annotation.NonNull;
  */
 final class CameraPose {
     /** The frame's width, as the sensor wrote it. */
-    final int width;
+    int width;
 
     /** The frame's height, as the sensor wrote it. */
-    final int height;
+    int height;
 
     /** The focal length in pixels of this frame, the same across and down. */
-    final float focal;
+    float focal;
 
     /** The clockwise turn that stands the frame upright, one of 0, 90, 180 and 270. */
-    final int sensorRotation;
+    int sensorRotation;
 
     /** Whether the frame came from a lens facing the user. */
-    final boolean frontFacing;
+    boolean frontFacing;
 
     /** The world direction the frame's +x runs in. Row 0 of the world-to-camera matrix. */
     final float[] right = new float[3];
@@ -45,6 +45,15 @@ final class CameraPose {
      * @param sensorRotation the clockwise turn that stands the frame upright
      */
     CameraPose(@NonNull float[] rotation, int sensorRotation, boolean frontFacing,
+            int width, int height, float focal) {
+        set(rotation, sensorRotation, frontFacing, width, height, focal);
+    }
+
+    /**
+     * Makes this the pose of another frame, for a caller that places one every time it draws
+     * and should not allocate to do it.
+     */
+    void set(@NonNull float[] rotation, int sensorRotation, boolean frontFacing,
             int width, int height, float focal) {
         this.width = width;
         this.height = height;
