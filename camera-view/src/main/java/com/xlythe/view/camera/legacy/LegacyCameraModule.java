@@ -1,5 +1,8 @@
 package com.xlythe.view.camera.legacy;
 
+import android.Manifest;
+import android.app.admin.DevicePolicyManager;
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -19,10 +22,12 @@ import android.os.Looper;
 import android.util.Log;
 
 import com.xlythe.view.camera.Burst;
+import com.xlythe.view.camera.BusyCameraRetry;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.ZoomMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
@@ -81,7 +86,10 @@ public class LegacyCameraModule extends ICameraModule {
     /** The surfaces handed out for streaming, each with the holder that feeds it. */
     private final Map<VideoRecorder.SurfaceProvider, LegacySurfaceHolder> mSurfaceProviders = new ArrayMap<>();
 
-    /** Asks for each picture of a burst after the callback for the one before has returned. */
+    /**
+     * Runs work on the main thread: each picture of a burst, after the callback for the one before
+     * has returned, and each retry of a busy camera.
+     */
     private final Handler mHandler = new Handler(Looper.getMainLooper());
 
     /** The burst being taken, or null when none is. */
@@ -93,6 +101,9 @@ public class LegacyCameraModule extends ICameraModule {
      */
     @Nullable private File mBurstFile;
 
+    /** Tries the open again while the camera is busy, on the main thread the open runs on. */
+    private final BusyCameraRetry mBusyRetry = new BusyCameraRetry(mHandler);
+
     public LegacyCameraModule(CameraView view) {
         super(view);
     }
@@ -100,13 +111,30 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     public void open() {
         Log.d(TAG, "onOpen() activeCamera="+getActiveCamera());
+        mBusyRetry.cancel();
+        openCamera();
+    }
+
+    /**
+     * Opens the active camera and starts its preview, or tries again shortly if another client
+     * still has it.
+     */
+    @MainThread
+    private void openCamera() {
+        int cameraId = getActiveCamera();
         try {
-            mCamera = Camera.open(getActiveCamera());
+            mCamera = Camera.open(cameraId);
         } catch (RuntimeException e) {
+            if (mightBeBusy(cameraId) && mBusyRetry.retry(this::openCamera)) {
+                Log.w(TAG, "Camera " + cameraId + " is unavailable; trying again", e);
+                return;
+            }
             Log.e(TAG, "Failed to open camera", e);
+            mBusyRetry.cancel();
             onCameraError(e);
             return;
         }
+        mBusyRetry.cancel();
 
         try {
             mCamera.setPreviewTexture(getSurfaceTexture());
@@ -131,6 +159,9 @@ public class LegacyCameraModule extends ICameraModule {
 
             mCamera.startPreview();
             onZoomRatioApplied(zoomRatio);
+            // The view only waits on the first try, so a camera that opens on a later one, or in
+            // place of one swapped out while it was being tried again, is announced from here.
+            onCameraReady();
         } catch (IOException | RuntimeException e) {
             // A camera opened but never started is worse than no camera: close() would release
             // it, but takePicture() and startRecording() would both act on one configured by
@@ -148,6 +179,26 @@ public class LegacyCameraModule extends ICameraModule {
             mDefaultPictureSize = null;
             onCameraError(e);
         }
+    }
+
+    /**
+     * Whether a failed open may be a camera another client has for now, rather than one this app
+     * will not be given.
+     *
+     * <p>The old API reports every refusal the same way, as a failure to connect to the camera
+     * service, so the causes that will not pass are ruled out instead: a camera that does not
+     * exist, a permission not granted, and cameras turned off by device policy.</p>
+     */
+    private boolean mightBeBusy(int cameraId) {
+        if (cameraId < 0 || cameraId >= Camera.getNumberOfCameras()) {
+            return false;
+        }
+        if (!PermissionChecker.hasPermissions(getContext(), Manifest.permission.CAMERA)) {
+            return false;
+        }
+        DevicePolicyManager policy =
+                (DevicePolicyManager) getContext().getSystemService(Context.DEVICE_POLICY_SERVICE);
+        return policy == null || !policy.getCameraDisabled(null);
     }
 
     /**
@@ -196,6 +247,7 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     public void close() {
         Log.d(TAG, "onClose() activeCamera="+getActiveCamera());
+        mBusyRetry.cancel();
         if (mBurst != null) {
             Burst burst = mBurst;
             File outstanding = mBurstFile;
@@ -957,7 +1009,7 @@ public class LegacyCameraModule extends ICameraModule {
 
     @Override
     public void toggleCamera() {
-        boolean shouldOpen = getView().isOpen();
+        boolean shouldOpen = isOpenOrOpening();
         close();
         mActiveCamera = (mActiveCamera + 1) % Camera.getNumberOfCameras();
         if (shouldOpen) {
@@ -967,7 +1019,7 @@ public class LegacyCameraModule extends ICameraModule {
 
     @Override
     public void setLensFacing(CameraView.LensFacing lensFacing) {
-        boolean shouldOpen = getView().isOpen();
+        boolean shouldOpen = isOpenOrOpening();
         close();
 
         // Search for the properly facing camera
@@ -985,6 +1037,14 @@ public class LegacyCameraModule extends ICameraModule {
         if (shouldOpen) {
             open();
         }
+    }
+
+    /**
+     * Whether the camera is open, or is waiting to be tried again: either way the camera that
+     * replaces it opens in its place, and a busy one is not tried again once it is replaced.
+     */
+    private boolean isOpenOrOpening() {
+        return getView().isOpen() || mBusyRetry.isPending();
     }
 
     @Override
