@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Panorama
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Transform
 import androidx.compose.material.icons.filled.Videocam
@@ -73,6 +74,8 @@ import androidx.compose.ui.unit.dp
 import com.xlythe.view.camera.Barcode
 import com.xlythe.compose.camera.Camera
 import com.xlythe.compose.camera.CameraController
+import com.xlythe.compose.camera.CameraState
+import com.xlythe.compose.camera.PanoramaMode
 import com.xlythe.compose.camera.Permissions
 import com.xlythe.compose.camera.Video
 import com.xlythe.compose.camera.VideoController
@@ -88,6 +91,7 @@ enum class DemoScreen(val title: String) {
     SIMPLE("Simple Demo"),
     STREAM("Stream Demo"),
     RESIZING("Resizing Demo"),
+    PANORAMA("Panorama Demo"),
     QR_CODE("QR Code Demo")
 }
 
@@ -135,6 +139,7 @@ class MainActivity : ComponentActivity() {
                                             DemoScreen.SIMPLE -> Icon(Icons.Default.CameraAlt, contentDescription = null)
                                             DemoScreen.STREAM -> Icon(Icons.Default.Videocam, contentDescription = null)
                                             DemoScreen.RESIZING -> Icon(Icons.Default.Transform, contentDescription = null)
+                                            DemoScreen.PANORAMA -> Icon(Icons.Default.Panorama, contentDescription = null)
                                             DemoScreen.QR_CODE -> Icon(Icons.Default.QrCode, contentDescription = null)
                                         }
                                     },
@@ -182,6 +187,7 @@ class MainActivity : ComponentActivity() {
                                 DemoScreen.SIMPLE -> SimpleDemoScreen()
                                 DemoScreen.STREAM -> StreamDemoScreen()
                                 DemoScreen.RESIZING -> ResizingDemoScreen()
+                                DemoScreen.PANORAMA -> PanoramaDemoScreen()
                                 DemoScreen.QR_CODE -> QrCodeDemoScreen()
                             }
                         }
@@ -415,6 +421,103 @@ fun ResizingDemoScreen() {
                 onClick = { permissionLauncher.launch(allPermissions) },
                 modifier = Modifier.align(Alignment.Center)
             ) {
+                Text("Request Permission")
+            }
+        }
+    }
+}
+
+/**
+ * Sweeps a panorama or a photosphere. The camera draws the guide over its own preview, so this is
+ * only the controls and the result.
+ */
+@RequiresPermission(Manifest.permission.CAMERA)
+@Composable
+fun PanoramaDemoScreen() {
+    val context = LocalContext.current
+    val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    val cameraState = remember { mutableStateOf<CameraState?>(null) }
+    var hasRequiredPermissions by remember { mutableStateOf(false) }
+    var mode by remember { mutableStateOf(PanoramaMode.PANORAMA) }
+    var status by remember { mutableStateOf("Turn on the spot, keeping the dot in the circle") }
+
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
+        hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }
+    }
+
+    LaunchedEffect(Unit) { permissionLauncher.launch(Permissions.REQUIRED_PERMISSIONS) }
+
+    val sweeping = cameraState.value?.isCapturingPanorama == true
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = status,
+                modifier = Modifier.padding(16.dp).align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = Color.White)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (hasRequiredPermissions) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp))) {
+                Camera(
+                    modifier = Modifier.fillMaxSize(),
+                    controller = cameraController,
+                    state = cameraState
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Button(
+                    onClick = {
+                        mode = if (mode == PanoramaMode.PANORAMA) PanoramaMode.PHOTOSPHERE else PanoramaMode.PANORAMA
+                    },
+                    enabled = !sweeping,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                ) {
+                    Text(if (mode == PanoramaMode.PANORAMA) "Panorama" else "Photosphere", fontWeight = FontWeight.SemiBold)
+                }
+
+                Button(
+                    onClick = {
+                        val controller = cameraController.value ?: return@Button
+                        if (sweeping) {
+                            controller.stopPanorama()
+                            return@Button
+                        }
+                        val file = File(context.cacheDir, "panorama_${System.currentTimeMillis()}.jpg")
+                        val started = controller.startPanorama(
+                            file,
+                            mode,
+                            onProgress = { status = "${Math.round(it * 100)}% covered" },
+                            onCaptured = { saved -> status = "Saved ${saved.name}" },
+                            onFailed = { status = "Nothing was captured" })
+                        if (!started) {
+                            status = "This device cannot report which way it is pointing"
+                        }
+                    },
+                    enabled = cameraState.value != null,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Icon(Icons.Default.Panorama, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (sweeping) "Done" else "Start", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        } else {
+            Button(onClick = { permissionLauncher.launch(Permissions.REQUIRED_PERMISSIONS) }) {
                 Text("Request Permission")
             }
         }
