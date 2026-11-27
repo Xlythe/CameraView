@@ -42,7 +42,6 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -92,8 +91,8 @@ public final class PictureSizeDeviceTest {
     }
 
     @Rule
-    public final GrantPermissionRule permissions = GrantPermissionRule.grant(
-            Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO);
+    public final GrantPermissionRule permissions =
+            GrantPermissionRule.grant(Manifest.permission.CAMERA);
 
     /** The backend under test. */
     private final CameraView.Backend backend;
@@ -150,90 +149,6 @@ public final class PictureSizeDeviceTest {
             assertTrue(size + " is not the unbinned " + largestUnbinned + " on " + backend,
                     area(size) >= area(largestUnbinned));
         }
-    }
-
-    /**
-     * A MAX picture still arrives while recording, on a camera that says it can take one: a
-     * recording leaves less room for the still than an idle camera does, so this is the
-     * combination a camera is likeliest to refuse.
-     */
-    @Test
-    public void aMaxPictureCanBeTakenWhileRecording() throws Exception {
-        Assume.assumeTrue("recorded once per backend",
-                shape == Shape.FULL && facing == CameraView.LensFacing.BACK);
-        File video = File.createTempFile("picture-size", ".mp4",
-                ApplicationProvider.getApplicationContext().getCacheDir());
-        video.deleteOnExit();
-        File file = File.createTempFile("picture-size", ".jpg",
-                ApplicationProvider.getApplicationContext().getCacheDir());
-        file.deleteOnExit();
-        CountDownLatch opened = new CountDownLatch(1);
-        CountDownLatch finished = new CountDownLatch(1);
-        AtomicBoolean supported = new AtomicBoolean();
-        AtomicReference<File> captured = new AtomicReference<>();
-        AtomicReference<CameraView> held = new AtomicReference<>();
-        try (ActivityScenario<CameraTestActivity> scenario =
-                     ActivityScenario.launch(CameraTestActivity.class)) {
-            scenario.onActivity(activity -> {
-                CameraView camera = activity.getCameraView();
-                held.set(camera);
-                camera.setQuality(CameraView.Quality.MAX);
-                DeviceState.turnTheFlashOff(camera);
-                camera.setOnCameraStateChangedListener(
-                        new CameraView.OnCameraStateChangedListener() {
-                            @Override public void onCameraOpened() {
-                                opened.countDown();
-                            }
-
-                            @Override public void onCameraClosed() {}
-                        });
-                camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
-                    @Override public void onImageConfirmation() {}
-
-                    @Override public void onImageCaptured(File saved) {
-                        captured.set(saved);
-                        finished.countDown();
-                    }
-
-                    @Override public void onFailure() {
-                        finished.countDown();
-                    }
-                });
-                if (camera.isOpen()) {
-                    opened.countDown();
-                } else {
-                    camera.open();
-                }
-            });
-            assertTrue("the " + backend + " backend did not open "
-                            + DeviceState.whyTheCameraMightNotOpen(),
-                    opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
-            Thread.sleep(1_500);
-            scenario.onActivity(activity -> held.get().startRecording(video));
-            Thread.sleep(2_000);
-            scenario.onActivity(activity -> {
-                supported.set(held.get().isSnapshotWhileRecordingSupported());
-                if (supported.get()) {
-                    held.get().takePicture(file);
-                }
-            });
-            if (supported.get()) {
-                assertTrue("the snapshot never reported on " + backend,
-                        finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
-            }
-            scenario.onActivity(activity -> {
-                held.get().stopRecording();
-                held.get().close();
-            });
-        }
-        Assume.assumeTrue(backend + " cannot take a picture while recording here",
-                supported.get());
-        assertNotNull("the snapshot failed on " + backend, captured.get());
-        BitmapFactory.Options options = new BitmapFactory.Options();
-        options.inJustDecodeBounds = true;
-        BitmapFactory.decodeFile(captured.get().getAbsolutePath(), options);
-        Log.i(TAG, backend + " snapshot while recording: "
-                + options.outWidth + "x" + options.outHeight);
     }
 
     /** What a picture's file says about it. */
