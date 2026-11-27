@@ -3,6 +3,8 @@ package com.xlythe.view.camera.viewer;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
 import android.graphics.Bitmap;
+import android.graphics.SurfaceTexture;
+import android.opengl.GLES11Ext;
 import android.opengl.GLES20;
 import android.opengl.GLSurfaceView;
 import android.opengl.GLUtils;
@@ -51,6 +53,15 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
         void upload(int texture, @NonNull Bitmap bitmap);
     }
 
+    /** Hears that a video surface is ready to decode into, on the GL thread. */
+    interface VideoListener {
+        /**
+         * A surface for the video's frames. A new context makes a new one, and calls again.
+         */
+        @AnyThread
+        void onVideoTexture(@NonNull SurfaceTexture texture);
+    }
+
     /** Sees each patch with a texture, for tests that draw them without a GPU. */
     @VisibleForTesting
     interface PatchVisitor {
@@ -74,6 +85,27 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
             + "precision mediump float;\n"
             + "#endif\n"
             + "uniform sampler2D uTexture;\n"
+            + "varying vec2 vTexCoord;\n"
+            + "void main() {\n"
+            + "  gl_FragColor = texture2D(uTexture, vTexCoord);\n"
+            + "}\n";
+
+    private static final String VIDEO_VERTEX_SHADER =
+            "uniform mat4 uMvp;\n"
+            + "uniform mat4 uTexMatrix;\n"
+            + "attribute vec4 aPosition;\n"
+            + "attribute vec2 aTexCoord;\n"
+            + "varying vec2 vTexCoord;\n"
+            + "void main() {\n"
+            + "  gl_Position = uMvp * aPosition;\n"
+            // A video frame's coordinates count up from its bottom, a bitmap's from its top.
+            + "  vTexCoord = (uTexMatrix * vec4(aTexCoord.x, 1.0 - aTexCoord.y, 0.0, 1.0)).xy;\n"
+            + "}\n";
+
+    private static final String VIDEO_FRAGMENT_SHADER =
+            "#extension GL_OES_EGL_image_external : require\n"
+            + "precision mediump float;\n"
+            + "uniform samplerExternalOES uTexture;\n"
             + "varying vec2 vTexCoord;\n"
             + "void main() {\n"
             + "  gl_FragColor = texture2D(uTexture, vTexCoord);\n"
@@ -112,6 +144,41 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
     /** The context textures are going into, counted from 1. */
     @GuardedBy("mLock")
     private int mContext;
+
+    /** The patch a video is drawn on, or null when there is no video. */
+    @GuardedBy("mLock")
+    @Nullable
+    private SphereMesh mVideoMesh;
+
+    /** Hears about the video's surface. */
+    @GuardedBy("mLock")
+    @Nullable
+    private VideoListener mVideoListener;
+
+    /** The video's texture, or 0. Only the GL thread uses this and those after it. */
+    private int mVideoTexture;
+
+    /** Where the video's frames arrive, or null. */
+    @Nullable
+    private SurfaceTexture mVideoSurface;
+
+    /** The video program, or 0 if it did not build. */
+    private int mVideoProgram;
+
+    /** Where the video's matrix goes. */
+    private int mVideoMvpHandle;
+
+    /** Where the video frame's own transform goes. */
+    private int mVideoTexMatrixHandle;
+
+    /** Where each video vertex's position goes. */
+    private int mVideoPositionHandle;
+
+    /** Where each video vertex's texture coordinate goes. */
+    private int mVideoTexCoordHandle;
+
+    /** The video frame's own transform, read each frame. */
+    private final float[] mVideoTexMatrix = new float[16];
 
     /** The matrix, copied out under the lock for each frame. Only the GL thread uses it. */
     private final float[] mFrameMvp = new float[16];
@@ -238,6 +305,35 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
         }
     }
 
+    /**
+     * Draws a video on a patch instead of textures: a surface for it is made at the next frame
+     * and handed to the listener.
+     */
+    @AnyThread
+    void showVideo(@NonNull SphereMesh mesh, @NonNull VideoListener listener) {
+        synchronized (mLock) {
+            mVideoMesh = mesh;
+            mVideoListener = listener;
+        }
+    }
+
+    /** Stops drawing a video; its surface is let go at the next frame. */
+    @AnyThread
+    void clearVideo() {
+        synchronized (mLock) {
+            mVideoMesh = null;
+            mVideoListener = null;
+        }
+    }
+
+    /** Whether a video is being drawn, for tests. */
+    @VisibleForTesting
+    boolean hasVideo() {
+        synchronized (mLock) {
+            return mVideoMesh != null;
+        }
+    }
+
     /** Lets go of the low-resolution copy, once the tiles cover everything it showed. */
     @AnyThread
     void dropBase() {
@@ -298,6 +394,15 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
             mTexCoordHandle = GLES20.glGetAttribLocation(mProgram, "aTexCoord");
             mMvpHandle = GLES20.glGetUniformLocation(mProgram, "uMvp");
             mTextureHandle = GLES20.glGetUniformLocation(mProgram, "uTexture");
+        }
+        // The old video surface went with the old context; a new one is made when drawn.
+        releaseVideo();
+        mVideoProgram = link(VIDEO_VERTEX_SHADER, VIDEO_FRAGMENT_SHADER);
+        if (mVideoProgram != 0) {
+            mVideoMvpHandle = GLES20.glGetUniformLocation(mVideoProgram, "uMvp");
+            mVideoTexMatrixHandle = GLES20.glGetUniformLocation(mVideoProgram, "uTexMatrix");
+            mVideoPositionHandle = GLES20.glGetAttribLocation(mVideoProgram, "aPosition");
+            mVideoTexCoordHandle = GLES20.glGetAttribLocation(mVideoProgram, "aTexCoord");
         }
         int[] maxTextureSize = new int[1];
         GLES20.glGetIntegerv(GLES20.GL_MAX_TEXTURE_SIZE, maxTextureSize, 0);
@@ -366,6 +471,17 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
 
         GLES20.glClearColor(0f, 0f, 0f, 1f);
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
+        SphereMesh videoMesh;
+        VideoListener videoListener;
+        synchronized (mLock) {
+            videoMesh = mVideoMesh;
+            videoListener = mVideoListener;
+        }
+        if (videoMesh != null && videoListener != null) {
+            drawVideo(videoMesh, videoListener);
+            return;
+        }
+        releaseVideo();
         if (mProgram == 0 || mPatches.isEmpty()) {
             return;
         }
@@ -391,6 +507,67 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
         GLES20.glDisableVertexAttribArray(mTexCoordHandle);
     }
 
+    /** Draws the latest video frame on its patch, making its surface first if need be. */
+    private void drawVideo(@NonNull SphereMesh mesh, @NonNull VideoListener listener) {
+        if (mVideoProgram == 0) {
+            return;
+        }
+        if (mVideoSurface == null) {
+            int[] names = new int[1];
+            GLES20.glGenTextures(1, names, 0);
+            mVideoTexture = names[0];
+            GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, mVideoTexture);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                    GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                    GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                    GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE);
+            GLES20.glTexParameteri(GLES11Ext.GL_TEXTURE_EXTERNAL_OES,
+                    GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE);
+            mVideoSurface = new SurfaceTexture(mVideoTexture);
+            listener.onVideoTexture(mVideoSurface);
+            return;
+        }
+        try {
+            mVideoSurface.updateTexImage();
+        } catch (RuntimeException abandoned) {
+            Log.w(TAG, "The video's surface was abandoned", abandoned);
+            return;
+        }
+        mVideoSurface.getTransformMatrix(mVideoTexMatrix);
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST);
+        GLES20.glDisable(GLES20.GL_CULL_FACE);
+        GLES20.glUseProgram(mVideoProgram);
+        GLES20.glUniformMatrix4fv(mVideoMvpHandle, 1, false, mFrameMvp, 0);
+        GLES20.glUniformMatrix4fv(mVideoTexMatrixHandle, 1, false, mVideoTexMatrix, 0);
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0);
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, mVideoTexture);
+        GLES20.glEnableVertexAttribArray(mVideoPositionHandle);
+        GLES20.glEnableVertexAttribArray(mVideoTexCoordHandle);
+        mesh.vertices.position(0);
+        GLES20.glVertexAttribPointer(mVideoPositionHandle, 3, GLES20.GL_FLOAT, false,
+                SphereMesh.FLOATS_PER_VERTEX * BYTES_PER_FLOAT, mesh.vertices);
+        mesh.vertices.position(3);
+        GLES20.glVertexAttribPointer(mVideoTexCoordHandle, 2, GLES20.GL_FLOAT, false,
+                SphereMesh.FLOATS_PER_VERTEX * BYTES_PER_FLOAT, mesh.vertices);
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mesh.vertexCount);
+        GLES20.glDisableVertexAttribArray(mVideoPositionHandle);
+        GLES20.glDisableVertexAttribArray(mVideoTexCoordHandle);
+    }
+
+    /** Lets go of the video's surface and texture, if there are any. */
+    private void releaseVideo() {
+        if (mVideoSurface != null) {
+            mVideoSurface.release();
+            mVideoSurface = null;
+        }
+        if (mVideoTexture != 0) {
+            delete(mVideoTexture);
+            mVideoTexture = 0;
+        }
+    }
+
     /** Puts a bitmap in a new texture and returns its name. */
     private int upload(@NonNull Bitmap bitmap) {
         int[] names = new int[1];
@@ -413,10 +590,15 @@ final class SphereRenderer implements GLSurfaceView.Renderer {
         GLES20.glDeleteTextures(1, new int[] {texture}, 0);
     }
 
-    /** Builds the program, or returns 0 and says why. */
+    /** Builds the picture program, or returns 0 and says why. */
     private static int link() {
-        int vertex = compile(GLES20.GL_VERTEX_SHADER, VERTEX_SHADER);
-        int fragment = compile(GLES20.GL_FRAGMENT_SHADER, FRAGMENT_SHADER);
+        return link(VERTEX_SHADER, FRAGMENT_SHADER);
+    }
+
+    /** Builds a program, or returns 0 and says why. */
+    private static int link(@NonNull String vertexShader, @NonNull String fragmentShader) {
+        int vertex = compile(GLES20.GL_VERTEX_SHADER, vertexShader);
+        int fragment = compile(GLES20.GL_FRAGMENT_SHADER, fragmentShader);
         if (vertex == 0 || fragment == 0) {
             return 0;
         }
