@@ -3,6 +3,7 @@ package com.xlythe.view.camera.pano;
 import static com.xlythe.view.camera.pano.FootprintTest.rolled;
 import static com.xlythe.view.camera.pano.RotationSensorTest.addSensor;
 import static com.xlythe.view.camera.pano.RotationSensorTest.vector;
+import static com.xlythe.view.camera.pano.SphereMathTest.matrixOf;
 import static com.xlythe.view.camera.pano.SphereMathTest.uprightFacing;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -54,6 +55,10 @@ public class PanoramaSessionTest {
 
     private static final int FRAME_WIDTH = 320;
     private static final int FRAME_HEIGHT = 240;
+
+    /** The focal length the frames are really taken with, which is the one published. */
+    private static final float TRUE_FOCAL =
+            CameraPose.focalLength(FRAME_WIDTH, FRAME_HEIGHT, HORIZONTAL_FOV, VERTICAL_FOV);
 
     /** Frames a tenth of a second apart, which is a slow, steady sweep. */
     private static final long FRAME_NANOS = 100_000_000L;
@@ -189,6 +194,28 @@ public class PanoramaSessionTest {
         // Placed in the middle of the full panorama, so it never runs off the edge.
         assertEquals((metadata.fullPanoWidthPixels - metadata.croppedAreaImageWidthPixels) / 2,
                 metadata.croppedAreaLeftPixels);
+    }
+
+    @Test
+    public void aLensThatMisstatesItsFocalLength_isMeasured() throws IOException {
+        // Publishing far wider angles than the frames are taken with, as the emulator's virtual
+        // scene does.
+        PanoramaSession session = new PanoramaSession(context, false, file, 90, 104f, 88f,
+                recorder, mMainExecutor, sensor);
+        assertTrue(session.start());
+        for (int yaw = 0; yaw <= 120; yaw += 4) {
+            readings(yaw, 0f, 0f);
+            session.onFrame(frame(time, yaw, 0f, 0f, false, TRUE_FOCAL));
+            drain();
+        }
+        assertEquals(TRUE_FOCAL, session.getGuideState().focal, TRUE_FOCAL * 0.05f);
+        session.finish();
+        awaitResult();
+        GPanoMetadata metadata = GPanoMetadata.readFrom(file);
+        assertNotNull(metadata);
+        assertEquals(46.8f, metadata.initialHorizontalFovDegrees, 2.5f);
+        float wide = 360f * metadata.croppedAreaImageWidthPixels / metadata.fullPanoWidthPixels;
+        assertTrue("the panorama is " + wide + " degrees wide", wide > 140f && wide < 168f);
     }
 
     @Test
@@ -359,7 +386,7 @@ public class PanoramaSessionTest {
     private void feed(PanoramaSession session, float yaw, float pitch, float roll,
             boolean front) {
         readings(yaw, pitch, roll);
-        session.onFrame(frame(time, front));
+        session.onFrame(frame(time, yaw, pitch, roll, front, TRUE_FOCAL));
         drain();
     }
 
@@ -372,19 +399,19 @@ public class PanoramaSessionTest {
         sensor.onReading(false, time, values);
     }
 
-    /** A textured frame, so the saved picture is not a flat colour. */
+    /** What the camera sees of the test scene from a pose, through a lens of this focal length. */
+    private static PanoramaFrame frame(long timestamp, float yaw, float pitch, float roll,
+            boolean front, float focal) {
+        int rotation = front ? 270 : 90;
+        CameraPose pose = new CameraPose(matrixOf(rolled(uprightFacing(yaw, pitch), roll)),
+                rotation, front, FRAME_WIDTH, FRAME_HEIGHT, focal);
+        return PanoramaFrame.fromNv21(TestScene.renderNv21(pose), FRAME_WIDTH, FRAME_HEIGHT,
+                rotation, front, timestamp);
+    }
+
+    /** A frame with nothing in it, for the tests that never get as far as painting. */
     private static PanoramaFrame frame(long timestamp, boolean front) {
-        byte[] nv21 = new byte[FRAME_WIDTH * FRAME_HEIGHT * 3 / 2];
-        for (int y = 0; y < FRAME_HEIGHT; y++) {
-            for (int x = 0; x < FRAME_WIDTH; x++) {
-                nv21[y * FRAME_WIDTH + x] = (byte) ((x * 7 + y * 3) & 0xFF);
-            }
-        }
-        for (int i = FRAME_WIDTH * FRAME_HEIGHT; i < nv21.length; i++) {
-            nv21[i] = (byte) 128;
-        }
-        return PanoramaFrame.fromNv21(nv21, FRAME_WIDTH, FRAME_HEIGHT, front ? 270 : 90, front,
-                timestamp);
+        return frame(timestamp, 0f, 0f, 0f, front, TRUE_FOCAL);
     }
 
     private void drain() {

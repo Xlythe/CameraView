@@ -102,6 +102,9 @@ public final class PanoramaSession implements GuideState.Source {
     /** A panorama started within this of level is swept along the horizon itself. */
     static final float LEVEL_DEGREES = 10f;
 
+    /** A measured focal length this close to the published one is the published one. */
+    static final float RECALIBRATION_THRESHOLD = 0.03f;
+
     /** A frame taking longer than this to arrive is not a measure of the preview's delay. */
     private static final long MAX_LATENCY_NANOS = 500_000_000L;
 
@@ -170,6 +173,18 @@ public final class PanoramaSession implements GuideState.Source {
 
     /** Where every painted frame was aimed, as unit vectors. */
     private final List<float[]> mPainted = new ArrayList<>();
+
+    /** Measures the lens's own focal length from the first frames painted. */
+    private final LensCalibration mCalibration = new LensCalibration();
+
+    /**
+     * The frames painted before the calibration settled, kept to be painted again if it finds
+     * the published focal length was wrong.
+     */
+    private final List<KeptFrame> mUncalibrated = new ArrayList<>();
+
+    /** What the published focal length is multiplied by: 1 until the calibration says otherwise. */
+    private float mFocalScale = 1f;
 
     /** The guide's small copy of the sphere, updated as frames are painted. */
     @Nullable private int[] mThumbnail;
@@ -322,7 +337,7 @@ public final class PanoramaSession implements GuideState.Source {
         int step = frame.shrinkFactor(MAX_FRAME_SIDE);
         int width = frame.width / step;
         int height = frame.height / step;
-        float focal = CameraPose.focalLength(
+        float focal = mFocalScale * CameraPose.focalLength(
                 width, height, mSensorHorizontalFov, mSensorVerticalFov);
         if (focal <= 0f) {
             return;
@@ -332,26 +347,24 @@ public final class PanoramaSession implements GuideState.Source {
         if (mCanvas == null) {
             begin(pose);
         }
-        SphereCanvas canvas = mCanvas;
         SweepCoverage coverage = mCoverage;
 
         boolean tooFast =
                 mSensor.history.speed(frame.timestampNanos) > MAX_TURN_DEGREES_PER_SECOND;
         boolean painted = false;
         if (!tooFast && isWorthPainting(pose, coverage)) {
-            canvas.paint(frame.toArgb(MAX_FRAME_SIDE, mScratch), pose);
-            coverage.cover(pose);
-            mPainted.add(pose.forward.clone());
-            canvas.updateThumbnail(mThumbnail, THUMBNAIL_WIDTH, THUMBNAIL_WIDTH / 2);
-            mPublishedThumbnail = mThumbnail.clone();
-            mThumbnailVersion++;
-            long now = System.currentTimeMillis();
-            if (mFirstPhotoMillis == 0) {
-                mFirstPhotoMillis = now;
+            ArgbImage image = frame.toArgb(MAX_FRAME_SIDE, mScratch);
+            paint(image, pose);
+            if (!mCalibration.isDone()) {
+                mUncalibrated.add(new KeptFrame(image, rotation, pose));
+                mCalibration.offer(image, rotation, pose);
+                if (mCalibration.isDone()) {
+                    pose = recalibrate(pose, rotation);
+                }
             }
-            mLastPhotoMillis = now;
             painted = true;
         }
+        coverage = mCoverage;
         mNextTarget = coverage.nextTarget(pose.forward, mNextTarget);
         boolean complete = coverage.isComplete();
         mGuideState = guideState(pose,
@@ -363,6 +376,57 @@ public final class PanoramaSession implements GuideState.Source {
         if (complete && mCompletionPosted.compareAndSet(false, true)) {
             mMainExecutor.execute(this::finish);
         }
+    }
+
+    /** Paints a frame and marks what it covered. */
+    private void paint(@NonNull ArgbImage image, @NonNull CameraPose pose) {
+        mCanvas.paint(image, pose);
+        mCoverage.cover(pose);
+        mPainted.add(pose.forward.clone());
+        mCanvas.updateThumbnail(mThumbnail, THUMBNAIL_WIDTH, THUMBNAIL_WIDTH / 2);
+        mPublishedThumbnail = mThumbnail.clone();
+        mThumbnailVersion++;
+        long now = System.currentTimeMillis();
+        if (mFirstPhotoMillis == 0) {
+            mFirstPhotoMillis = now;
+        }
+        mLastPhotoMillis = now;
+    }
+
+    /**
+     * Applies what the calibration measured. If the lens differs from what it published, the
+     * frames painted so far were each stretched about their own centres, so the sweep starts
+     * again from them at the measured focal length.
+     *
+     * @return the newest frame's pose at the focal length now in use
+     */
+    @NonNull
+    private CameraPose recalibrate(@NonNull CameraPose newest, @NonNull float[] rotation) {
+        float scale = mCalibration.getScale();
+        List<KeptFrame> kept = new ArrayList<>(mUncalibrated);
+        mUncalibrated.clear();
+        if (Math.abs(scale - 1f) <= RECALIBRATION_THRESHOLD) {
+            return newest;
+        }
+        Log.i(TAG, "The lens's focal length is " + scale + " times what it publishes");
+        mFocalScale = scale;
+        mCanvas.release();
+        mCanvas = null;
+        mCoverage = null;
+        mPainted.clear();
+        mNextTarget = -1;
+        mFirstPhotoMillis = 0;
+        for (KeptFrame frame : kept) {
+            CameraPose pose = new CameraPose(frame.rotation, frame.sensorRotation,
+                    frame.frontFacing, frame.image.width, frame.image.height,
+                    frame.focal * scale);
+            if (mCanvas == null) {
+                begin(pose);
+            }
+            paint(frame.image, pose);
+        }
+        return new CameraPose(rotation, newest.sensorRotation, newest.frontFacing,
+                newest.width, newest.height, newest.focal * scale);
     }
 
     /** Sets the sweep up around the first frame: it is the middle of the picture. */
@@ -635,6 +699,32 @@ public final class PanoramaSession implements GuideState.Source {
     private String applicationName() {
         CharSequence label = mContext.getApplicationInfo().loadLabel(mContext.getPackageManager());
         return label == null ? null : label.toString();
+    }
+
+    /** A painted frame, kept until the lens is calibrated. */
+    private static final class KeptFrame {
+        /** The frame as it was painted. */
+        final ArgbImage image;
+
+        /** The device's rotation when it was taken. */
+        final float[] rotation;
+
+        /** The clockwise turn that stands it upright. */
+        final int sensorRotation;
+
+        /** Whether it came from a lens facing the user. */
+        final boolean frontFacing;
+
+        /** The focal length it was painted with, which is the published one. */
+        final float focal;
+
+        KeptFrame(@NonNull ArgbImage image, @NonNull float[] rotation, @NonNull CameraPose pose) {
+            this.image = image;
+            this.rotation = rotation.clone();
+            sensorRotation = pose.sensorRotation;
+            frontFacing = pose.frontFacing;
+            focal = pose.focal;
+        }
     }
 
     private static float degrees360(float degrees) {
