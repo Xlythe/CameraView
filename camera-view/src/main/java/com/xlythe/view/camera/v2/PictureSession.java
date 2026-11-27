@@ -74,6 +74,17 @@ class PictureSession extends PreviewSession {
     @Nullable
     private Surface mEffectStillInput;
 
+    /**
+     * The reader a drawn picture is on its way to, held until the picture has been read back.
+     *
+     * <p>Held here because nothing else holds it. The renderer keeps only the reader's surface,
+     * and an ImageReader that nothing references is collected and its surface released - after
+     * which the picture has nowhere to be drawn, and the capture never reports. Volatile because
+     * a picture can be asked for from any thread and is read back on the camera's handler.</p>
+     */
+    @Nullable
+    private volatile ImageReader mDrawnStillReader;
+
     PictureSession(Camera2Module camera2Module) {
         super(camera2Module);
         mPictureSurface = new PictureSurface(camera2Module, getPreviewSurface());
@@ -168,6 +179,12 @@ class PictureSession extends PreviewSession {
     public void close() {
         super.close();
         mPictureSurface.close();
+        ImageReader drawnStillReader = mDrawnStillReader;
+        mDrawnStillReader = null;
+        if (drawnStillReader != null) {
+            drawnStillReader.setOnImageAvailableListener(null, null);
+            drawnStillReader.close();
+        }
     }
 
     void takePicture(@NonNull File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
@@ -225,6 +242,7 @@ class PictureSession extends PreviewSession {
         int width = mPictureSurface.getWidth();
         int height = mPictureSurface.getHeight();
         ImageReader reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 2);
+        mDrawnStillReader = reader;
         Size size = new Size(width, height);
         // Drawn as the camera would have written it, in the sensor's orientation and unmirrored,
         // so the Exif turn and mirror below finish it as they finish the camera's own JPEG.
@@ -235,6 +253,7 @@ class PictureSession extends PreviewSession {
                         0, into, 0, into.length),
                 () -> {});
         if (!armed) {
+            mDrawnStillReader = null;
             reader.close();
             onImageFailed();
             return;
@@ -259,6 +278,9 @@ class PictureSession extends PreviewSession {
                 // One frame is all that was asked for, and the reader holds native buffers.
                 ready.setOnImageAvailableListener(null, null);
                 ready.close();
+                if (mDrawnStillReader == ready) {
+                    mDrawnStillReader = null;
+                }
             }
         }, getHandler());
 
@@ -280,6 +302,7 @@ class PictureSession extends PreviewSession {
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException error) {
             Log.e(TAG, "Failed to request a drawn picture", error);
             effect.cancelStill();
+            mDrawnStillReader = null;
             reader.setOnImageAvailableListener(null, null);
             reader.close();
             onImageFailed();
