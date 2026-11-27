@@ -15,7 +15,6 @@ import android.location.Location;
 import android.os.Build;
 import android.os.Handler;
 import android.util.Log;
-import android.util.Range;
 import android.util.Size;
 import android.view.Surface;
 
@@ -236,13 +235,10 @@ abstract class SessionImpl implements Camera2Module.Session {
      * as the preview was.
      */
     void applyExposureCompensation(@NonNull CaptureRequest.Builder builder) {
-        Range<Integer> range = Camera2Module.exposureCompensationRange(
-                mCamera2Module.getActiveCharacteristics());
-        if (range == null) {
-            return;
+        Integer index = mCamera2Module.getRequestedExposureCompensation();
+        if (index != null) {
+            builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, index);
         }
-        builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION,
-                range.clamp(mCamera2Module.getExposureCompensation()));
     }
 
     /**

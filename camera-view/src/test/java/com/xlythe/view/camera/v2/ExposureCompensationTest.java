@@ -11,18 +11,23 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CaptureRequest;
 import android.util.Range;
 
+import androidx.exifinterface.media.ExifInterface;
+
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
 import java.io.File;
+import java.io.InputStream;
 import java.lang.reflect.Field;
 import java.util.List;
 
@@ -180,6 +185,31 @@ public class ExposureCompensationTest {
                 repeating().get(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION));
     }
 
+    /** A picture's Exif reports the bias its requests carried: the index times the step, in EV. */
+    @Test
+    public void aPictureRecordsTheBiasInEv() throws Exception {
+        givenControls();
+        open();
+        module.setExposureCompensation(4);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(4 / 6.0, exifExposureBias(), 0.001);
+
+        module.setExposureCompensation(-40);
+        FakeCamera2.idleMainLooper();
+        assertEquals("the clamped index, as the requests carry it", -2.0, exifExposureBias(), 0.001);
+    }
+
+    /** A camera that cannot compensate takes pictures with none, whatever index is kept. */
+    @Test
+    public void aCameraWithoutARangeRecordsNoBias() throws Exception {
+        module.setExposureCompensation(3);
+        open();
+        assertEquals("kept for a camera that can", 3, module.getExposureCompensation());
+
+        assertEquals(0.0, exifExposureBias(), 0.0);
+    }
+
     @Test
     public void anUnchangedIndexIsNotReissued() {
         givenControls();
@@ -203,6 +233,14 @@ public class ExposureCompensationTest {
         module.open();
         FakeCamera2.idleMainLooper();
         assertNotNull("expected a session", activeSession());
+    }
+
+    /** The ExposureBiasValue a picture taken now would be tagged with, in EV. */
+    private double exifExposureBias() throws Exception {
+        Exif exif = new Exif(Mockito.mock(InputStream.class));
+        module.exifCaptureParameters().applyTo(exif);
+        String[] rational = exif.getAttribute(ExifInterface.TAG_EXPOSURE_BIAS_VALUE).split("/");
+        return Double.parseDouble(rational[0]) / Double.parseDouble(rational[1]);
     }
 
     private static CaptureRequest repeating() {

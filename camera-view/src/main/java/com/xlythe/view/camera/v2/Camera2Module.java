@@ -1302,6 +1302,16 @@ public class Camera2Module extends ICameraModule {
         return exposureCompensationRange(getActiveCharacteristics()) != null;
     }
 
+    /**
+     * The exposure index every request carries, and so every picture's Exif: the one asked for,
+     * held to the active camera's range, or null for a camera that cannot compensate.
+     */
+    @Nullable
+    Integer getRequestedExposureCompensation() {
+        Range<Integer> range = exposureCompensationRange(getActiveCharacteristics());
+        return range == null ? null : range.clamp(getExposureCompensation());
+    }
+
     /** Holds the index to the range of the camera now configured, for one set before it was. */
     private void clampExposureCompensation() {
         Range<Integer> range = exposureCompensationRange(getActiveCharacteristics());
@@ -1470,8 +1480,7 @@ public class Camera2Module extends ICameraModule {
 
     /**
      * The Exif a picture taken now should carry about how it was taken: the active camera's
-     * optics, and the zoom and flash this session requests. The camera2 backend requests no
-     * exposure compensation, so the bias is always none.
+     * optics, and the zoom, exposure compensation and flash this session requests.
      */
     @NonNull
     ExifCaptureParameters exifCaptureParameters() {
@@ -1483,7 +1492,10 @@ public class Camera2Module extends ICameraModule {
             Log.w(TAG, "Unable to describe the camera for a picture's Exif", error);
             parameters = new ExifCaptureParameters();
         }
-        return parameters.setExposureCompensation(0).setFlash(getFlash(), hasFlash());
+        Integer exposureCompensation = getRequestedExposureCompensation();
+        return parameters
+                .setExposureCompensation(exposureCompensation == null ? 0 : exposureCompensation)
+                .setFlash(getFlash(), hasFlash());
     }
 
     /** Rebuilds the repeating request, for a setting the request itself carries. */
