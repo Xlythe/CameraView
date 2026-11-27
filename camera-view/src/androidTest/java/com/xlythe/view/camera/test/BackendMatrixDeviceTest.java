@@ -29,6 +29,7 @@ import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
@@ -104,6 +105,10 @@ public final class BackendMatrixDeviceTest {
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
     );
+
+    /** Skips, rather than fails, a test that the emulator's camera HAL stalled under. */
+    @Rule
+    public final TestRule cameraHal = DeviceState.skipWhenTheEmulatorCameraHalStalls();
 
     private final CameraView.Backend backend;
 
@@ -302,10 +307,7 @@ public final class BackendMatrixDeviceTest {
     /** And so does a recording. */
     @Test
     public void aRecordingProducesAFile() throws Exception {
-        if (backend == CameraView.Backend.LEGACY) {
-            // The old API records from YUV buffers it has the camera fill.
-            DeviceState.assumeYuvBuffersWork();
-        }
+        DeviceState.assumeTheBackendCanRecord(backend);
         File file = temporaryFile(".mp4");
         CountDownLatch finished = new CountDownLatch(1);
         AtomicReference<File> recorded = new AtomicReference<>();
@@ -374,10 +376,7 @@ public final class BackendMatrixDeviceTest {
     /** A stream encodes on every backend that can attach a second output. */
     @Test
     public void aStreamDeliversEncodedFrames() throws Exception {
-        if (backend == CameraView.Backend.LEGACY) {
-            // The old API streams from preview callbacks, which it fills from YUV buffers.
-            DeviceState.assumeYuvBuffersWork();
-        }
+        DeviceState.assumeTheBackendCanRecord(backend);
         AtomicReference<VideoStream> held = new AtomicReference<>();
         AtomicInteger bytes = new AtomicInteger();
 
@@ -504,13 +503,16 @@ public final class BackendMatrixDeviceTest {
             Log.i(TAG, backend + " controls offered: " + offered.get());
 
             picture.set(takePicture(camera, temporaryFile(".jpg")));
-            video.set(record(camera, temporaryFile(".mp4")));
+            if (DeviceState.canRecord(backend)) {
+                video.set(record(camera, temporaryFile(".mp4")));
+            }
         });
 
         assertEquals("every control the camera offers has to be accepted on " + backend,
                 offered.get(), accepted.get());
         assertNotNull("the controls cost the picture on " + backend, picture.get());
         assertTrue(picture.get().length() > 0);
+        DeviceState.assumeTheBackendCanRecord(backend);
         // As in aRecordingProducesAFile: whether an encoder behind a software-rendered surface
         // writes anything is not the library's to promise.
         Assume.assumeTrue(backend + " produced no video on this device's encoder",

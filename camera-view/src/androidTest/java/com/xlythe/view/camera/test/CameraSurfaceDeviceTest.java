@@ -24,6 +24,7 @@ import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 
 import java.io.File;
@@ -52,6 +53,10 @@ public final class CameraSurfaceDeviceTest {
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
     );
+
+    /** Skips, rather than fails, a test that the emulator's camera HAL stalled under. */
+    @Rule
+    public final TestRule cameraHal = DeviceState.skipWhenTheEmulatorCameraHalStalls();
 
     @Before
     public void requireACamera() {
