@@ -44,6 +44,10 @@ def allProductionClasses = classTrees(javaClassDirectories + kotlinClassDirector
 def coreCoverageIncludes = [
         'com/xlythe/view/camera/Exif.class',
         'com/xlythe/view/camera/Exif$*.class',
+        'com/xlythe/view/camera/ExifCaptureParameters.class',
+        'com/xlythe/view/camera/ExifCaptureParameters$*.class',
+        'com/xlythe/view/camera/VideoMetadata.class',
+        'com/xlythe/view/camera/VideoMetadata$*.class',
         'com/xlythe/view/camera/PermissionChecker.class',
         'com/xlythe/view/camera/TransformMath.class',
         'com/xlythe/view/camera/ZoomMath.class',
