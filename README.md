@@ -26,7 +26,8 @@ your app's floor whatever this library declares. In that build, barcode scanning
 `com.google.mlkit:segmentation-selfie`, frame analysis and frame renderers API 21, streaming API 18
 and recording API 16. Without them, `enterBarcodeScanner`, `enterBackgroundReplacement`,
 `startFrameAnalysis` and `isFrameEffectSupported` return false and `startRecording` reports
-`onFailure`.
+`onFailure`. The phone's own photo modes need API 31; background blur also works without them,
+with API 21 and `com.google.mlkit:segmentation-selfie`.
 
 Permissions
 -----------------
@@ -70,8 +71,9 @@ pinchToZoom], animateZoom [boolean], shutterSoundEnabled [boolean], shutterSound
 pictureQuality [1 to 100], colorSpace [srgb, displayP3],
 pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [minExposureCompensation to
 maxExposureCompensation, in steps of exposureCompensationStep EV], torchEnabled [boolean],
-dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
-stabilizationEnabled [boolean], lowLightBoostEnabled [boolean], frameRenderer [FrameRenderer, see
+dynamicRange [sdr, hdr], photoMode [NONE, BACKGROUND_BLUR, HDR, NIGHT, FACE_RETOUCH, AUTO, see
+Photo modes below], stabilizationEnabled [boolean], lowLightBoostEnabled [boolean],
+frameRenderer [FrameRenderer, see
 Filters and masks below] and cameraTextureProvider [CameraTextureProvider]. Not every camera can
 do all of these, so CameraState below says which this one supports.
 
@@ -96,7 +98,7 @@ if (camera != null && camera.hasFlash) {
 CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, isZoomSupported,
 minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
 minExposureCompensation, maxExposureCompensation, exposureCompensationStep, supportedColorSpaces,
-supportedPictureFormats, supportedDynamicRanges, supportedExtensions, isStabilizationSupported,
+supportedPictureFormats, supportedDynamicRanges, supportedPhotoModes, isStabilizationSupported,
 isLowLightBoostSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
 horizontalFieldOfView, verticalFieldOfView, isRecording, isAnalyzingFrames, isFrameEffectSupported
 and isReplacingBackground.
@@ -270,9 +272,9 @@ CameraView includes the optional attributes quality [max, high, medium, low],
 flash [auto, on, off], lensFacing [back, front], maxVideoDuration [milliseconds],
 maxVideoSize [bytes], confirmImages [boolean], confirmVideos [boolean],
 pinchToZoomEnabled [boolean], matchPreviewAspectRatio [boolean], shutterSoundEnabled [boolean],
-shutterSound [raw resource], dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
-stabilizationEnabled [boolean], exposureCompensation [integer], torchEnabled [boolean] and
-lowLightBoostEnabled [boolean].
+shutterSound [raw resource], dynamicRange [sdr, hdr],
+photoMode [none, backgroundBlur, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean],
+exposureCompensation [integer], torchEnabled [boolean] and lowLightBoostEnabled [boolean].
 ```xml
 <com.xlythe.view.camera.CameraView
     xmlns:camera="http://schemas.android.com/apk/res-auto"
@@ -481,6 +483,30 @@ it each SegmentationMask with setMask.
 
 setCameraTextureProvider has the camera write its frames into a texture you create, for a library
 whose API takes the name of a texture it made. Changing it briefly restarts the camera.
+
+Photo modes
+-----------------
+setPhotoMode takes pictures through the phone maker's own processing: their background blur, HDR,
+night mode, face retouching, or an automatic choice among them. Which a phone has depends on the
+phone and the lens, so ask isPhotoModeSupported once the camera opens, and again after a lens
+switch. Background blur works on more phones than the rest: where the camera has none of its own,
+CameraView blurs the background itself, which takes `com.google.mlkit:segmentation-selfie` and
+isFrameEffectSupported.
+```java
+if (mCameraView.isPhotoModeSupported(CameraView.PhotoMode.NIGHT)) {
+    mCameraView.setPhotoMode(CameraView.PhotoMode.NIGHT);
+}
+mCameraView.setPhotoMode(CameraView.PhotoMode.NONE); // back to ordinary pictures
+```
+While a mode is on, the camera shows a preview and takes pictures, and nothing else: startRecording
+reports onFailure, startFrameAnalysis, enterBarcodeScanner and enterBackgroundReplacement return
+false, and stream throws. The flash never fires, the torch, low-light boost and stabilization stay
+off until the mode is, a frame renderer is kept but not called, and pictures are JPEGs. A mode set
+while any of those is running is refused. A night mode can take a second or more to capture, so
+keep the phone still until the picture is reported.
+
+The mode is kept across a lens switch, and does nothing on a lens without it. In Compose, pass
+photoMode to Camera and read supportedPhotoModes from CameraState.
 
 A picture taken while something is drawing is drawn as the preview shows it and written as a
 JPEG. isPictureFormatSupported reports every other format unsupported until nothing is drawing:
