@@ -25,10 +25,12 @@ import java.util.Locale;
 import java.util.TimeZone;
 import java.util.UUID;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
+import androidx.annotation.WorkerThread;
 import androidx.exifinterface.media.ExifInterface;
 
 /**
@@ -159,6 +161,12 @@ public class Exif {
     /** The file this came from, if any, for measuring an image no tag gives the size of. */
     @Nullable private final String mFilePath;
 
+    /** Whether {@link #attachThumbnail()} asked {@link #save()} to write a thumbnail. */
+    private boolean mThumbnailRequested;
+
+    /** Whether the file holds a thumbnail, as of the last save. */
+    private boolean mHasThumbnail;
+
     // When true, avoid saving any time. This is a privacy issue.
     private boolean mRemoveTimestamp = false;
 
@@ -194,8 +202,9 @@ public class Exif {
     }
 
     /**
-     * Persists changes to disc.
+     * Persists changes to disc, along with the thumbnail {@link #attachThumbnail()} asks for.
      */
+    @WorkerThread
     public void save() throws IOException {
         if (!mRemoveTimestamp) {
             attachLastModifiedTimestamp();
@@ -203,6 +212,7 @@ public class Exif {
         attachMandatoryTags();
         mExifInterface.saveAttributes();
         restoreUndefinedTypes();
+        saveThumbnail();
     }
 
     /**
@@ -581,38 +591,52 @@ public class Exif {
     }
 
     /**
-     * Writes a thumbnail into the file, if it has none and there is room for one. Call it after
-     * {@link #save()}, which rewrites the Exif block and would drop it.
-     *
-     * @return true if a thumbnail was written
+     * Has {@link #save()} write a thumbnail, if the file has none and there is room for one.
+     * Saving writes it after the rest of the block, so this may be called at any point before.
      */
+    @AnyThread
     @RestrictTo(RestrictTo.Scope.LIBRARY)
-    public boolean attachThumbnail() {
-        if (mFilePath == null) {
-            return false;
+    public void attachThumbnail() {
+        mThumbnailRequested = true;
+    }
+
+    /** Whether the file holds a thumbnail, as of the last save. */
+    @VisibleForTesting
+    boolean hasThumbnail() {
+        return mHasThumbnail;
+    }
+
+    /**
+     * Writes the thumbnail {@link #attachThumbnail()} asked for into the block saveAttributes has
+     * just rewritten, or declares again one already there. The bytes go straight into the file,
+     * since ExifInterface cannot add a thumbnail, and so they go last: saveAttributes rewrites the
+     * block from what it read, which drops them.
+     */
+    @WorkerThread
+    private void saveThumbnail() {
+        if (!mThumbnailRequested) {
+            return;
         }
+        // Only ever after a save, which a stream cannot have, so there is always a file.
         File file = new File(mFilePath);
         try {
             byte[] original = read(file);
             if (original == null) {
-                return false;
+                return;
             }
             byte[] updated = repairOrEncode(file, original);
             if (updated == null) {
-                return false;
+                mHasThumbnail = ExifThumbnail.hasThumbnail(original);
+                return;
             }
-            FileOutputStream out = new FileOutputStream(file);
-            try {
+            try (FileOutputStream out = new FileOutputStream(file)) {
                 out.write(updated);
-            } finally {
-                out.close();
             }
-            return true;
+            mHasThumbnail = true;
         } catch (IOException | RuntimeException | OutOfMemoryError error) {
             // A photograph without a thumbnail is a photograph. Losing one is never worth
-            // failing a capture that has already succeeded.
-            Log.w(TAG, "Unable to attach a thumbnail", error);
-            return false;
+            // failing a save that has otherwise succeeded.
+            Log.w(TAG, "Unable to save a thumbnail", error);
         }
     }
 

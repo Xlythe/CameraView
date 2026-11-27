@@ -429,6 +429,7 @@ class PictureSession extends PreviewSession {
                 Exif exif = new Exif(mFile);
                 exif.attachTimestamp();
                 exif.attachCaptureDevice(mContext);
+                exif.attachThumbnail();
                 mExifParameters.applyTo(exif);
                 exif.rotate(mOrientation);
                 if (mIsReversed) {
@@ -438,9 +439,6 @@ class PictureSession extends PreviewSession {
                     exif.attachLocation(mLocation);
                 }
                 exif.save();
-                // After saving, not before: saveAttributes rewrites the Exif block and
-                // would drop a directory appended to it.
-                exif.attachThumbnail();
             } catch (IOException e) {
                 Log.e(TAG, "Failed to update EXIF", e);
             }

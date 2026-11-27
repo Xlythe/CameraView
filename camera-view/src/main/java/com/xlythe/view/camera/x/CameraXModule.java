@@ -1220,13 +1220,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 Exif exif = new Exif(file);
                 exif.attachTimestamp();
                 exif.attachCaptureDevice(getContext());
+                exif.attachThumbnail();
                 exifParameters.applyTo(exif);
                 if (location != null) {
                     exif.attachLocation(location);
                 }
                 exif.save();
-                // After save, because saveAttributes rewrites the block this appends to.
-                exif.attachThumbnail();
             } catch (IOException | RuntimeException error) {
                 Log.w(TAG, "Unable to finish the Exif on a CameraX capture", error);
             }

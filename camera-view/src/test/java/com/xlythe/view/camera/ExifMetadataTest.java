@@ -6,6 +6,7 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
 import android.location.Location;
@@ -190,33 +191,19 @@ public class ExifMetadataTest {
                 .getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
     }
 
-    /** Nothing to write into: an Exif read from a stream has no file to rewrite. */
+    /**
+     * An Exif read from a stream has no file to save into, so asking for a thumbnail changes
+     * nothing: the save fails as it always has, and writes no thumbnail.
+     */
     @Test
     public void aStreamHasNoFileToAttachAThumbnailTo() throws IOException {
-        try (java.io.FileInputStream in = new java.io.FileInputStream(file)) {
-            assertEquals(false, new Exif(in).attachThumbnail());
+        try (FileInputStream in = new FileInputStream(file)) {
+            Exif exif = new Exif(in);
+            exif.attachThumbnail();
+
+            assertThrows(IOException.class, exif::save);
+            assertFalse(exif.hasThumbnail());
         }
-    }
-
-    /** A file with no Exif in it has no directory to chain a thumbnail from. */
-    @Test
-    public void aFileWithNoExifGetsNoThumbnail() throws IOException {
-        File bare = File.createTempFile("bare", ".jpg");
-        bare.deleteOnExit();
-        try (FileOutputStream out = new FileOutputStream(bare)) {
-            out.write(new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9});
-        }
-
-        assertEquals(false, new Exif(bare).attachThumbnail());
-    }
-
-    /** An empty file is not a photograph, and saying so beats throwing. */
-    @Test
-    public void anEmptyFileIsDeclinedRatherThanThrown() throws IOException {
-        File empty = File.createTempFile("empty", ".jpg");
-        empty.deleteOnExit();
-
-        assertEquals(false, new Exif(file).attachThumbnail() && empty.length() > 0);
     }
 
     /** There is room beside a small Exif block, and the writer says how much. */

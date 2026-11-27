@@ -137,6 +137,12 @@ final class ExifThumbnail {
         return new Existing(offset, length, declared);
     }
 
+    /** Whether IFD1 names a thumbnail in this file, declared or not. */
+    static boolean hasThumbnail(@NonNull byte[] jpeg) {
+        ExifSegment.Segment segment = ExifSegment.find(jpeg);
+        return segment != null && findExistingThumbnail(jpeg, segment) != null;
+    }
+
     /**
      * Declares a thumbnail that is already in the file but says nothing about itself: a fresh
      * IFD1 names the same bytes with the Compression the old one lacked, and the old directory is

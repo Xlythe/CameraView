@@ -53,6 +53,7 @@ class LegacyPictureListener implements Camera.PictureCallback {
                     Exif exif = new Exif(mFile);
                     exif.attachTimestamp();
                     exif.attachCaptureDevice(mModule.getContext());
+                    exif.attachThumbnail();
                     mExifParameters.applyTo(exif);
                     exif.rotate(mOrientation);
                     if (mIsReversed) {
@@ -63,9 +64,6 @@ class LegacyPictureListener implements Camera.PictureCallback {
                         exif.attachLocation(location);
                     }
                     exif.save();
-                    // After saving, not before: saveAttributes rewrites the Exif block and
-                    // would drop a directory appended to it.
-                    exif.attachThumbnail();
                 } catch (IOException e) {
                     Log.e(TAG, "Failed to write the file", e);
                     mModule.onImageFailed();
