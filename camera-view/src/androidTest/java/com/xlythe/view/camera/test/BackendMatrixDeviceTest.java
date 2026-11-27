@@ -6,8 +6,13 @@ import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.SystemClock;
+import android.util.Log;
 import android.util.Size;
 import android.view.ViewGroup;
+
+import androidx.annotation.NonNull;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
@@ -28,8 +33,11 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -51,6 +59,12 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(Parameterized.class)
 public final class BackendMatrixDeviceTest {
     private static final long TIMEOUT_SECONDS = 30;
+
+    /** Logs each backend's burst rate, for {@code adb logcat -s BurstRate}. */
+    private static final String BURST_TAG = "BurstRate";
+
+    /** How many pictures the burst test takes: enough for a steady rate to show. */
+    private static final int BURST_COUNT = 20;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<CameraView.Backend> backends() {
@@ -308,6 +322,62 @@ public final class BackendMatrixDeviceTest {
                 CameraView.Flash.ON, flash.get());
         assertEquals("and it has to change back on " + backend,
                 CameraView.Flash.OFF, flashAfterOff.get());
+    }
+
+    /**
+     * A burst takes every picture it asked for, on every backend, and says so once.
+     *
+     * <p>Also where each backend's burst rate is measured, between the first picture landing and
+     * the last, so the time to the first picture does not count against the rate. Logged rather
+     * than asserted: the rate is the camera's as much as the library's.</p>
+     */
+    @Test
+    public void aBurstTakesEveryPicture() throws Exception {
+        File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                "burst-" + backend);
+        File[] stale = directory.listFiles();
+        if (stale != null) {
+            for (File file : stale) {
+                assertTrue(file.delete());
+            }
+        }
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicInteger count = new AtomicInteger(-1);
+        List<Long> landed = new ArrayList<>();
+        long[] started = {0};
+
+        withOpenCamera(camera -> {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                started[0] = SystemClock.elapsedRealtime();
+                camera.startBurst(directory, BURST_COUNT, new CameraView.OnBurstListener() {
+                    @Override public void onBurstImageCaptured(@NonNull File file) {
+                        landed.add(SystemClock.elapsedRealtime());
+                    }
+
+                    @Override public void onBurstFinished(int pictures) {
+                        count.set(pictures);
+                        finished.countDown();
+                    }
+                });
+            });
+            assertTrue("the burst never finished on " + backend,
+                    finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        });
+
+        assertEquals("the burst lost pictures on " + backend, BURST_COUNT, count.get());
+        assertEquals(BURST_COUNT, landed.size());
+        File[] pictures = directory.listFiles();
+        assertNotNull(pictures);
+        assertEquals(BURST_COUNT, pictures.length);
+        for (File picture : pictures) {
+            assertTrue(picture.getName() + " is empty", picture.length() > 0);
+        }
+        long first = landed.get(0) - started[0];
+        double seconds = (landed.get(landed.size() - 1) - landed.get(0)) / 1000.0;
+        Log.i(BURST_TAG, String.format(Locale.US,
+                "%s API %d %s: %d pictures, first after %d ms, then %.1f per second",
+                Build.MODEL, Build.VERSION.SDK_INT, backend, BURST_COUNT, first,
+                (BURST_COUNT - 1) / seconds));
     }
 
     /** What a test does with an open camera. */
