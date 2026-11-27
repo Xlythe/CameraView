@@ -724,6 +724,87 @@ public final class FrameEffectDeviceTest {
     }
 
     /**
+     * A drawn burst picture is the drawn picture a single press takes, from either lens: the same
+     * size, the same way up and mirrored the same way. {@link Quarters} marks each quarter of the
+     * camera's buffer, so a picture turned or mirrored differently shows them elsewhere.
+     */
+    @Test
+    public void aDrawnBurstPictureIsTheSingleDrawnPicture() throws Exception {
+        for (CameraView.LensFacing lensFacing : CameraView.LensFacing.values()) {
+            File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                    "drawn-burst-quarters-" + backend + "-" + lensFacing);
+            File[] stale = directory.listFiles();
+            if (stale != null) {
+                for (File file : stale) {
+                    assertTrue(file.delete());
+                }
+            }
+            CountDownLatch burstFinished = new CountDownLatch(1);
+            AtomicInteger count = new AtomicInteger(-1);
+            CountDownLatch singleFinished = new CountDownLatch(1);
+            AtomicReference<File> single = new AtomicReference<>();
+
+            boolean opened = withOpenCamera(new Quarters(), lensFacing, camera -> {
+                camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+                    @Override public void onImageConfirmation() {}
+
+                    @Override public void onImageCaptured(File saved) {
+                        single.set(saved);
+                        singleFinished.countDown();
+                    }
+
+                    @Override public void onFailure() {
+                        singleFinished.countDown();
+                    }
+                });
+                Thread.sleep(1_000);
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() ->
+                        camera.startBurst(directory, DRAWN_BURST_COUNT,
+                                new CameraView.OnBurstListener() {
+                                    @Override public void onBurstFinished(int pictures) {
+                                        count.set(pictures);
+                                        burstFinished.countDown();
+                                    }
+                                }));
+                assertTrue("the drawn burst never finished",
+                        burstFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                camera.takePicture(temporaryFile(".jpg"));
+                assertTrue("the single picture never reported",
+                        singleFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            });
+            if (!opened) {
+                continue;
+            }
+
+            assertEquals("the " + lensFacing + " drawn burst lost pictures",
+                    DRAWN_BURST_COUNT, count.get());
+            assertNotNull("the " + lensFacing + " single picture failed", single.get());
+            File[] pictures = directory.listFiles();
+            assertNotNull(pictures);
+            assertEquals(DRAWN_BURST_COUNT, pictures.length);
+            Bitmap expected = ShownFrames.ofPicture(single.get());
+            try {
+                for (File picture : pictures) {
+                    Bitmap shown = ShownFrames.ofPicture(picture);
+                    try {
+                        String what = lensFacing + " burst picture " + picture.getName();
+                        assertEquals("the " + what + " is the single picture's size",
+                                new Size(expected.getWidth(), expected.getHeight()),
+                                new Size(shown.getWidth(), shown.getHeight()));
+                        assertSameQuarters(what, expected, shown);
+                    } finally {
+                        shown.recycle();
+                    }
+                }
+            } finally {
+                expected.recycle();
+            }
+            Log.i(FILTER_TAG, backend + " " + lensFacing + " drawn burst pictures are "
+                    + "the single drawn picture");
+        }
+    }
+
+    /**
      * A mask decides what is kept and what is replaced, in the saved photograph.
      *
      * <p>Asserted at the two ends, where the answer does not depend on what the camera is

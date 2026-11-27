@@ -143,6 +143,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /**
      * How many burst pictures are handed to CameraX at once. It takes them one after another, and
      * with a few queued the next is always waiting when one is captured, while it is still saved.
+     * A drawn burst asks for one at a time, since each drawing is a full-size bitmap until it is
+     * written.
      */
     static final int BURST_PICTURES_IN_FLIGHT = 3;
     /**
@@ -1537,9 +1539,9 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     /**
      * Hands CameraX a few pictures at a time, and another as each is saved. Its own queue takes
-     * them back to back, each written and tagged as a single picture is, and drawn as one is
-     * while frames are drawn. The flash is off for the burst, and comes back once the last is
-     * saved.
+     * them back to back, each written and tagged as a single picture is. While frames are drawn,
+     * each picture is drawn and written as a single one is before the next is asked for. The
+     * flash is off for the burst, and comes back once the last is saved.
      */
     private void startBurstOnMainThread(@NonNull Burst burst) {
         ImageCapture imageCapture = mImageCapture;
@@ -1557,7 +1559,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // Posted, because the burst finishes from inside a CameraX callback.
             mMainHandler.post(this::rebindForSettledSize);
         });
-        for (int i = 0; i < BURST_PICTURES_IN_FLIGHT; i++) {
+        int inFlight = mFrameEffect == null ? BURST_PICTURES_IN_FLIGHT : 1;
+        for (int i = 0; i < inFlight; i++) {
             requestBurstPicture(burst, imageCapture);
         }
     }
@@ -1569,9 +1572,14 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private void requestBurstPicture(@NonNull Burst burst, @NonNull ImageCapture imageCapture) {
         File file = burst.nextFile();
         if (file == null) return;
-        Location location = getLocation();
         ExifCaptureParameters exifParameters =
                 exifCaptureParameters().setFlash(CameraView.Flash.OFF, hasFlash());
+        FrameEffect effect = mFrameEffect;
+        if (effect != null) {
+            requestDrawnBurstPicture(burst, imageCapture, effect, file, exifParameters);
+            return;
+        }
+        Location location = getLocation();
         imageCapture.takePicture(outputOptions(file, location), mMainExecutor,
                 new ImageCapture.OnImageSavedCallback() {
             @Override public void onCaptureStarted() {
@@ -1587,6 +1595,61 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 burst.onPictureFailed(file);
             }
         });
+    }
+
+    /**
+     * Asks for a burst picture drawn as {@link #takeDrawnPicture} draws a single one, and for the
+     * next once it is written. Waiting for the write rather than the capture keeps one full-size
+     * drawing in memory, not a queue of them, and the pictures in order.
+     */
+    @MainThread
+    private void requestDrawnBurstPicture(@NonNull Burst burst,
+            @NonNull ImageCapture imageCapture, @NonNull FrameEffect effect, @NonNull File file,
+            @NonNull ExifCaptureParameters exifParameters) {
+        boolean mirrored = mFrontFacing;
+        int quality = getPictureQuality();
+        imageCapture.takePicture(mMainExecutor, new ImageCapture.OnImageCapturedCallback() {
+            @Override public void onCaptureStarted() {
+                onBurstShutter();
+            }
+
+            @Override public void onCaptureSuccess(@NonNull ImageProxy image) {
+                DrawnStill still;
+                try {
+                    still = new DrawnStill(getContext(), image, mirrored, effect, file, quality,
+                            exifParameters, getLocation(),
+                            written -> mMainHandler.post(() -> onDrawnBurstPictureWritten(
+                                    burst, file, written,
+                                    () -> requestBurstPicture(burst, imageCapture))));
+                } catch (RuntimeException | OutOfMemoryError error) {
+                    Log.e(TAG, "Failed to copy the burst picture to draw", error);
+                    burst.onPictureFailed(file);
+                    return;
+                }
+                burst.getExecutor().execute(still);
+            }
+
+            @Override public void onError(@NonNull ImageCaptureException error) {
+                Log.w(TAG, "Burst capture failed", error);
+                burst.onPictureFailed(file);
+            }
+        });
+    }
+
+    /**
+     * Reports a drawn burst picture, and asks for the next only once it is on disk. A picture that
+     * could not be drawn or written ends the burst, as a failed capture does.
+     */
+    @MainThread
+    @VisibleForTesting
+    static void onDrawnBurstPictureWritten(@NonNull Burst burst, @NonNull File file,
+            boolean written, @NonNull Runnable requestNext) {
+        if (!written) {
+            burst.onPictureFailed(file);
+            return;
+        }
+        burst.onPictureTaken(file);
+        requestNext.run();
     }
 
     /**
