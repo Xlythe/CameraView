@@ -183,10 +183,18 @@ interface CameraController {
     /**
      * Takes up to [count] pictures in quick succession and files each where the gallery looks, as
      * takePicture() does, until [count] is reached or [stopBurst] is called. [onImageSaved] hears
-     * each picture as it lands, and [onFinished] then how many there were.
+     * each picture as it is filed, and [onFinished] then how many there were.
      *
-     * The flash and the shutter sound stay off, except where the device insists on the sound, and
-     * image confirmation does not apply. A burst that cannot start finishes at once with 0.
+     * Each picture is the one takePicture() would take with the same settings, drawn through
+     * [Camera]'s frameRenderer when one is set, except that the flash never fires and the shutter
+     * sound plays only on a device that requires it. Image confirmation does not apply. While
+     * frames are drawn, each picture is drawn and written before the next is taken, so the burst
+     * is slower.
+     *
+     * A burst does not start, and finishes at once with 0, while the camera is closed or
+     * recording, while a picture is being taken or awaits confirmation, while another burst runs,
+     * or while the format is [PictureFormat.RAW] or [PictureFormat.RAW_JPEG]. Below API 29,
+     * filing needs WRITE_EXTERNAL_STORAGE, as it does for takePicture().
      */
     fun startBurst(
         count: Int,

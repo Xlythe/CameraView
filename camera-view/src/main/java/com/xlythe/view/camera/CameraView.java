@@ -1361,15 +1361,24 @@ public class CameraView extends FrameLayout {
     /**
      * Takes up to {@code count} pictures in quick succession and files each where the gallery
      * looks, as {@link #takePicture()} does, calling
-     * {@link OnBurstListener#onBurstImageSaved(Uri)} as each one lands. The burst ends at
+     * {@link OnBurstListener#onBurstImageSaved(Uri)} as each one is filed. The burst ends at
      * {@code count} pictures or at {@link #stopBurst()}, whichever comes first, and
      * {@link OnBurstListener#onBurstFinished(int)} then says how many there were.
      *
-     * <p>Each picture is tagged like any other. The flash and the shutter sound stay off, except
-     * where the device insists on the sound, and image confirmation does not apply. A burst that
-     * cannot start, because the camera is not open or is recording, a picture is awaiting
-     * confirmation, or another burst is running, finishes at once with a count of 0. A picture
-     * that cannot be taken or filed ends the burst with the pictures it already had.</p>
+     * <p>Each picture is the one {@link #takePicture()} would take with the same settings: the
+     * same size, quality and format, mirrored as the preview is, with the same Exif, including
+     * where it was taken when the location is known, and drawn through the renderer, filter or
+     * mask when one is drawing. Two things differ: the flash never fires, and the shutter sound
+     * does not play, except on a device that requires it, where every picture clicks. Image
+     * confirmation does not apply. While something is drawing, each picture is drawn and written
+     * before the next is taken, so the burst is slower.</p>
+     *
+     * <p>A burst does not start, and finishes at once with a count of 0, while the camera is
+     * closed or recording, while a picture is being taken or awaits confirmation, while another
+     * burst runs, or while the format is {@link PictureFormat#RAW} or
+     * {@link PictureFormat#RAW_JPEG}. A picture that cannot be taken or filed ends the burst with
+     * the pictures it already had. Below API 29, filing needs
+     * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}, as it does for {@link #takePicture()}.</p>
      *
      * @throws IllegalArgumentException if count is less than 1
      */

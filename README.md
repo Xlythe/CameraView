@@ -34,7 +34,7 @@ The following permissions are required in your AndroidManfiest.xml
 ```xml
 <uses-permission android:name="android.permission.CAMERA" />
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
-<!-- Below API 29, takePicture() and startRecording() need this to file captures in the gallery -->
+<!-- Below API 29, takePicture(), startBurst() and startRecording() need this to file captures in the gallery -->
 <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
 <!-- Optional camera permissions -->
@@ -146,6 +146,12 @@ Camera(
 Stops recording
 ```kotlin
 cameraController.stopRecording()
+```
+Takes up to 50 pictures in quick succession, until stopBurst is called, filing each in the gallery.
+Given a directory first, startBurst writes the pictures there and reports each file instead.
+```kotlin
+cameraController.startBurst(50, onImageSaved = { uri -> ... }, onFinished = { count -> ... })
+cameraController.stopBurst()
 ```
 Returns a stream of bytes for both audio and video channels. These bytes can then be played with Video.
 ```kotlin
@@ -355,6 +361,22 @@ mCameraView.enterBarcodeScanner(listener, Barcode.Format.QR_CODE);
 mCameraView.exitBarcodeScanner();
 ```
 
+
+Burst
+-----------------
+startBurst takes pictures in quick succession, as fast as the camera allows, until the count is
+reached or stopBurst is called. Like takePicture, it files each picture in the gallery, or writes
+it into a directory you pass first. The listener hears each one as it lands, then how many there
+were. Each picture is the one takePicture would take, except that the flash stays off and the
+shutter sound plays only where the device requires it. Confirmation does not apply, and a burst
+does not start while the picture format is RAW or RAW_JPEG.
+```java
+mCameraView.startBurst(50, new CameraView.OnBurstListener() {
+  @Override public void onBurstImageSaved(Uri uri) { ... }
+  @Override public void onBurstFinished(int count) { ... }
+});
+mCameraView.stopBurst();
+```
 
 Video snapshot
 -----------------
