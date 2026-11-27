@@ -367,15 +367,67 @@ public class PanoramaSessionTest {
             session.onFrame(frame(time, false));
             drain();
         }
-        assertNull("a frame was placed while the rotation settled", session.getGuideState());
+        // The guide says to hold still, and nothing has been placed.
+        GuideState settling = session.getGuideState();
+        assertNotNull(settling);
+        assertEquals(GuideState.SETTLING, settling.status);
+        assertNull("a frame was placed while the rotation settled", settling.thumbnail);
         assertTrue(recorder.progress.isEmpty());
 
         readings(0f, 0f, 0f);
         gyroscopeStill();
         session.onFrame(frame(time, false));
         drain();
-        assertNotNull(session.getGuideState());
+        assertEquals(GuideState.SWEEPING, session.getGuideState().status);
+        assertNotNull(session.getGuideState().thumbnail);
         assertEquals(1, recorder.progress.size());
+        session.cancel();
+    }
+
+    /**
+     * A photosphere takes a frame only once the reticle has been held on its target for the
+     * hold's length; looking away starts the hold again.
+     */
+    @Test
+    public void photosphere_takesAFrame_onlyOnceTheReticleIsHeldOnItsTarget() {
+        PanoramaSession session = session(true);
+        assertTrue(session.start());
+        // The first target is where the sweep starts, and is shown from the first frame on.
+        feed(session, 0f, 0f, 0f, false);
+        for (int i = 0; i < 4; i++) {
+            feed(session, 1f, 0f, 0f, false);
+        }
+        GuideState holding = session.getGuideState();
+        assertNull("taken before the hold was up", holding.thumbnail);
+        assertTrue(holding.holdProgress > 0.3f && holding.holdProgress < 0.7f);
+
+        // Looking away lets go; coming back starts over.
+        feed(session, 25f, 0f, 0f, false);
+        assertEquals(0f, session.getGuideState().holdProgress, 0f);
+        feed(session, 0f, 0f, 0f, false);
+        for (int i = 0; i < 4; i++) {
+            feed(session, 0f, 0f, 0f, false);
+        }
+        assertNull(session.getGuideState().thumbnail);
+        for (int i = 0; i < 4; i++) {
+            feed(session, 0f, 0f, 0f, false);
+        }
+        assertNotNull("never taken", session.getGuideState().thumbnail);
+        assertEquals(1, recorder.progress.size());
+        session.cancel();
+    }
+
+    @Test
+    public void panorama_saysHowFarItsFramesReachEitherWay() {
+        PanoramaSession session = session(false);
+        assertTrue(session.start());
+        for (int yaw = 0; yaw >= -60; yaw -= 10) {
+            feed(session, yaw, 0f, 0f, false);
+        }
+        GuideState state = session.getGuideState();
+        float half = 46.8f / 2;
+        assertEquals(-60f - half, state.sweptLeft, 1f);
+        assertEquals(half, state.sweptRight, 1f);
         session.cancel();
     }
 

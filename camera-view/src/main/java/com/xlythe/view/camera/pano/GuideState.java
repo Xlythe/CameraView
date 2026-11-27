@@ -27,8 +27,11 @@ final class GuideState {
     /** The sweep is over and its picture is being written. */
     static final int SAVING = 3;
 
+    /** Nothing is taken yet: the rotation is still settling, so the phone should be held still. */
+    static final int SETTLING = 4;
+
     /** What the sweep is doing. */
-    @IntDef({SWEEPING, TOO_FAST, COMPLETE, SAVING})
+    @IntDef({SWEEPING, TOO_FAST, COMPLETE, SAVING, SETTLING})
     @Retention(RetentionPolicy.SOURCE)
     @interface Status {}
 
@@ -87,11 +90,30 @@ final class GuideState {
     /** Changes whenever the thumbnail does, so a reader knows when to copy it again. */
     final int thumbnailVersion;
 
+    /**
+     * How long the reticle has been held on a photosphere's target, as a share of the hold that
+     * takes it, from 0 to 1.
+     */
+    final float holdProgress;
+
+    /** How fast the phone was turning at the newest frame, in degrees a second. */
+    final float turnSpeed;
+
+    /**
+     * How far a panorama's frames reach to the left of {@link #startYaw}, in degrees: 0 or less,
+     * and unwrapped, so a whole turn reaches 360 one way or the other.
+     */
+    final float sweptLeft;
+
+    /** How far they reach to the right: 0 or more. */
+    final float sweptRight;
+
     GuideState(boolean photosphere, @Status int status, float progress, int frameWidth,
             int frameHeight, int sensorRotation, boolean frontFacing, float focal, float startYaw,
             float bandPitch, @NonNull float[] targetYaws, @NonNull float[] targetPitches,
             @NonNull boolean[] targetsDone, int nextTarget, @Nullable int[] thumbnail,
-            int thumbnailWidth, int thumbnailVersion) {
+            int thumbnailWidth, int thumbnailVersion, float holdProgress, float turnSpeed,
+            float sweptLeft, float sweptRight) {
         this.photosphere = photosphere;
         this.status = status;
         this.progress = progress;
@@ -109,6 +131,10 @@ final class GuideState {
         this.thumbnail = thumbnail;
         this.thumbnailWidth = thumbnailWidth;
         this.thumbnailVersion = thumbnailVersion;
+        this.holdProgress = holdProgress;
+        this.turnSpeed = turnSpeed;
+        this.sweptLeft = sweptLeft;
+        this.sweptRight = sweptRight;
     }
 
     /** The same state, doing something else. */
@@ -117,7 +143,8 @@ final class GuideState {
         return new GuideState(photosphere, status, status == COMPLETE ? 1f : progress,
                 frameWidth, frameHeight, sensorRotation, frontFacing, focal, startYaw, bandPitch,
                 targetYaws, targetPitches, targetsDone, status == SWEEPING ? nextTarget : -1,
-                thumbnail, thumbnailWidth, thumbnailVersion);
+                thumbnail, thumbnailWidth, thumbnailVersion, 0f, turnSpeed, sweptLeft,
+                sweptRight);
     }
 
     /** Where the guide gets what it draws. */

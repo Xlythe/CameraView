@@ -92,6 +92,9 @@ public final class PanoramaSession implements GuideState.Source {
     /** The guide's picture of the sphere: two pixels to a degree. */
     static final int THUMBNAIL_WIDTH = 720;
 
+    /** A panorama's thumbnail: four pixels to a degree, for the strip that shows it close up. */
+    static final int PANORAMA_THUMBNAIL_WIDTH = 1440;
+
     /** A frame aimed this fraction of the frame's narrower side from every painted one is new. */
     static final float PAINT_SPACING = 0.25f;
 
@@ -103,6 +106,15 @@ public final class PanoramaSession implements GuideState.Source {
 
     /** Aimed within this of the target the guide points at, a frame finishes it off. */
     static final float ALIGNED_DEGREES = 6f;
+
+    /**
+     * How long a photosphere's reticle is held on its target before the frame is taken: long
+     * enough to be a choice and for the phone to steady, short enough not to feel like a wait.
+     */
+    static final long HOLD_NANOS = 700_000_000L;
+
+    /** Turning slower than this, in degrees a second, the phone counts as held on a target. */
+    static final float STILL_DEGREES_PER_SECOND = 8f;
 
     /** A panorama started within this of level is swept along the horizon itself. */
     static final float LEVEL_DEGREES = 10f;
@@ -199,6 +211,24 @@ public final class PanoramaSession implements GuideState.Source {
 
     /** The guide's small copy of the sphere, updated as frames are painted. */
     @Nullable private int[] mThumbnail;
+
+    /** The thumbnail's width: wider for a panorama, whose strip shows a part of it close up. */
+    private int mThumbnailWidth;
+
+    /** The photosphere target the reticle is being held on, or -1. */
+    private int mHoldTarget = -1;
+
+    /** When the hold on {@link #mHoldTarget} began, on the frames' clock. */
+    private long mHoldStartNanos;
+
+    /** How far a panorama's frames reach to the left of where it started, unwrapped. */
+    private float mSweptLeft;
+
+    /** How far they reach to the right. */
+    private float mSweptRight;
+
+    /** Where the last painted frame was aimed, relative to the start, unwrapped. */
+    private float mLastOffset;
 
     /** The target the guide is pointing at, or -1. */
     private int mNextTarget = -1;
@@ -354,10 +384,6 @@ public final class PanoramaSession implements GuideState.Source {
         if (!mSensor.history.sample(frame.timestampNanos, quaternion)) {
             return;
         }
-        if (!mSensor.isSettled(frame.timestampNanos)) {
-            // The rotation is still settling, so it says nothing yet of where the frame points.
-            return;
-        }
         float[] rotation = new float[9];
         SphereMath.rotationMatrix(quaternion, rotation);
         int step = frame.shrinkFactor(MAX_FRAME_SIDE);
@@ -370,15 +396,25 @@ public final class PanoramaSession implements GuideState.Source {
         }
         CameraPose pose = new CameraPose(
                 rotation, frame.rotationDegrees, frame.frontFacing, width, height, focal);
+        if (!mSensor.isSettled(frame.timestampNanos)) {
+            // The rotation is still settling, so it says nothing yet of where the frame points.
+            if (mCanvas == null) {
+                mGuideState = settlingState(pose);
+            }
+            return;
+        }
         if (mCanvas == null) {
             begin(pose);
         }
         SweepCoverage coverage = mCoverage;
 
-        boolean tooFast =
-                mSensor.history.speed(frame.timestampNanos) > MAX_TURN_DEGREES_PER_SECOND;
+        float speed = mSensor.history.speed(frame.timestampNanos);
+        boolean tooFast = speed > MAX_TURN_DEGREES_PER_SECOND;
         boolean painted = false;
-        if (!tooFast && isWorthPainting(pose, coverage)) {
+        boolean worthPainting = mPhotosphere
+                ? !tooFast && isHeldOnTarget(pose, speed, frame.timestampNanos)
+                : !tooFast && isWorthPainting(pose, coverage);
+        if (worthPainting) {
             ArgbImage image = frame.toArgb(MAX_FRAME_SIDE, mScratch);
             paint(image, pose);
             keep(image, rotation, pose);
@@ -392,11 +428,17 @@ public final class PanoramaSession implements GuideState.Source {
             painted = true;
         }
         coverage = mCoverage;
+        int previous = mNextTarget;
         mNextTarget = coverage.nextTarget(pose.forward, mNextTarget);
+        if (mNextTarget != previous || painted) {
+            mHoldTarget = -1;
+        }
         boolean complete = coverage.isComplete();
+        float hold = mHoldTarget < 0 ? 0f
+                : Math.min(1f, (frame.timestampNanos - mHoldStartNanos) / (float) HOLD_NANOS);
         mGuideState = guideState(pose,
                 complete ? GuideState.COMPLETE : tooFast ? GuideState.TOO_FAST
-                        : GuideState.SWEEPING);
+                        : GuideState.SWEEPING, hold, speed);
         if (painted) {
             reportProgress(coverage.getProgress());
         }
@@ -405,12 +447,51 @@ public final class PanoramaSession implements GuideState.Source {
         }
     }
 
+    /**
+     * Whether a photosphere's reticle has been held on its target long enough to take the frame,
+     * starting or keeping up the hold as it goes. The hold is broken by aiming away or turning.
+     */
+    private boolean isHeldOnTarget(@NonNull CameraPose pose, float speed, long timeNanos) {
+        int target = mNextTarget;
+        if (target < 0 || speed > STILL_DEGREES_PER_SECOND) {
+            mHoldTarget = -1;
+            return false;
+        }
+        float[] direction = new float[3];
+        SphereMath.direction(mCoverage.getTargetYaw(target), mCoverage.getTargetPitch(target),
+                direction);
+        if (SphereMath.angleBetween(direction, pose.forward) > ALIGNED_DEGREES) {
+            mHoldTarget = -1;
+            return false;
+        }
+        if (mHoldTarget != target) {
+            mHoldTarget = target;
+            mHoldStartNanos = timeNanos;
+        }
+        return timeNanos - mHoldStartNanos >= HOLD_NANOS;
+    }
+
+    /** What the guide shows before anything can be taken. */
+    @NonNull
+    private GuideState settlingState(@NonNull CameraPose pose) {
+        return new GuideState(mPhotosphere, GuideState.SETTLING, 0f, pose.width, pose.height,
+                pose.sensorRotation, pose.frontFacing, pose.focal, pose.yaw(), 0f, new float[0],
+                new float[0], new boolean[0], -1, null, 0, 0, 0f, 0f, 0f, 0f);
+    }
+
     /** Paints a frame and marks what it covered. */
     private void paint(@NonNull ArgbImage image, @NonNull CameraPose pose) {
         mCanvas.paint(image, pose);
         mCoverage.cover(pose);
         mPainted.add(pose.forward.clone());
-        mCanvas.updateThumbnail(mThumbnail, THUMBNAIL_WIDTH, THUMBNAIL_WIDTH / 2);
+        mCanvas.updateThumbnail(mThumbnail, mThumbnailWidth, mThumbnailWidth / 2);
+        // How far the frames reach either side of the start, followed round past half a turn.
+        float raw = SphereMath.wrap(pose.yaw() - mStartYaw);
+        float offset = raw + 360f * Math.round((mLastOffset - raw) / 360f);
+        mLastOffset = offset;
+        float half = pose.uprightHorizontalFov() / 2f;
+        mSweptLeft = Math.min(mSweptLeft, offset - half);
+        mSweptRight = Math.max(mSweptRight, offset + half);
         mPublishedThumbnail = mThumbnail.clone();
         mThumbnailVersion++;
         long now = System.currentTimeMillis();
@@ -484,7 +565,8 @@ public final class PanoramaSession implements GuideState.Source {
         mCoverage = mPhotosphere
                 ? SweepCoverage.forPhotosphere(mStartYaw, pose.narrowestFov())
                 : SweepCoverage.forPanorama(mStartYaw, mBandPitch, mUprightHorizontalFov);
-        mThumbnail = new int[THUMBNAIL_WIDTH * THUMBNAIL_WIDTH / 2];
+        mThumbnailWidth = mPhotosphere ? THUMBNAIL_WIDTH : PANORAMA_THUMBNAIL_WIDTH;
+        mThumbnail = new int[mThumbnailWidth * mThumbnailWidth / 2];
     }
 
     private boolean isWorthPainting(@NonNull CameraPose pose, @NonNull SweepCoverage coverage) {
@@ -516,7 +598,8 @@ public final class PanoramaSession implements GuideState.Source {
     }
 
     @NonNull
-    private GuideState guideState(@NonNull CameraPose pose, @GuideState.Status int status) {
+    private GuideState guideState(@NonNull CameraPose pose, @GuideState.Status int status,
+            float hold, float speed) {
         SweepCoverage coverage = mCoverage;
         int targets = coverage.getTargetCount();
         float[] yaws = new float[targets];
@@ -532,7 +615,8 @@ public final class PanoramaSession implements GuideState.Source {
                 mBandPitch, yaws, pitches, done,
                 status == GuideState.SWEEPING || status == GuideState.TOO_FAST
                         ? mNextTarget : -1,
-                mPublishedThumbnail, THUMBNAIL_WIDTH, mThumbnailVersion);
+                mPublishedThumbnail, mThumbnailWidth, mThumbnailVersion, hold, speed,
+                mSweptLeft, mSweptRight);
     }
 
     private void reportProgress(float progress) {
