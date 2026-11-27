@@ -298,7 +298,7 @@ class CameraComposableTest {
                 exposureCompensation = 2,
                 torchEnabled = true,
                 dynamicRange = DynamicRange.HDR,
-                extension = Extension.BOKEH,
+                photoMode = PhotoMode.HDR,
                 pictureQuality = 60,
                 stabilizationEnabled = true,
                 controller = controller,
@@ -311,9 +311,35 @@ class CameraComposableTest {
         assertEquals(2, camera.exposureCompensation)
         assertTrue(camera.isTorchEnabled)
         assertEquals(CameraView.DynamicRange.HDR, camera.dynamicRange)
-        assertEquals(CameraView.Extension.BOKEH, camera.extension)
+        assertEquals(CameraView.PhotoMode.HDR, camera.photoMode)
         assertEquals(60, camera.pictureQuality)
         assertTrue(camera.isStabilizationEnabled)
+    }
+
+    /** The overload that names a photo mode as an extension still reaches the camera. */
+    @Suppress("DEPRECATION")
+    @Test
+    fun theDeprecatedExtensionReachesTheCameraAsAPhotoMode() {
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent { Camera(extension = Extension.BOKEH, controller = controller) }
+        compose.waitForIdle()
+
+        assertEquals(CameraView.PhotoMode.BACKGROUND_BLUR, requireCameraView().photoMode)
+    }
+
+    /** And the one that zooms by level, which keeps its extension. */
+    @Suppress("DEPRECATION")
+    @Test
+    fun theZoomLevelOverloadsExtensionReachesTheCameraAsAPhotoMode() {
+        val controller = mutableStateOf<CameraController?>(null)
+
+        compose.setContent {
+            Camera(zoomLevel = 10, extension = Extension.NIGHT, controller = controller)
+        }
+        compose.waitForIdle()
+
+        assertEquals(CameraView.PhotoMode.NIGHT, requireCameraView().photoMode)
     }
 
     /** Low-light boost on its own, since it and the torch turn each other off. */
@@ -405,7 +431,7 @@ class CameraComposableTest {
         val camera = requireCameraView()
         assertEquals(CameraView.ColorSpace.SRGB, camera.colorSpace)
         assertEquals(CameraView.DynamicRange.SDR, camera.dynamicRange)
-        assertEquals(CameraView.Extension.NONE, camera.extension)
+        assertEquals(CameraView.PhotoMode.NONE, camera.photoMode)
         assertEquals(95, camera.pictureQuality)
         assertFalse(camera.isTorchEnabled)
     }
@@ -452,7 +478,10 @@ class CameraComposableTest {
         assertTrue("a FULL camera2 device can hold a still alongside a recording",
                 published.isSnapshotWhileRecordingSupported)
         assertEquals(setOf(DynamicRange.SDR), published.supportedDynamicRanges)
-        assertEquals(setOf(Extension.NONE), published.supportedExtensions)
+        assertEquals("background blur is the library's own where the camera has none",
+                setOf(PhotoMode.NONE, PhotoMode.BACKGROUND_BLUR), published.supportedPhotoModes)
+        @Suppress("DEPRECATION")
+        assertEquals(setOf(Extension.NONE, Extension.BOKEH), published.supportedExtensions)
         assertEquals(setOf(PictureFormat.JPEG), published.supportedPictureFormats)
         assertFalse(published.isRecording)
         assertFalse(published.isAnalyzingFrames)

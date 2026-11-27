@@ -82,7 +82,31 @@ enum class DynamicRange {
     HDR
 }
 
-/** An optional vendor photo-processing extension. See [CameraState.supportedExtensions]. */
+/**
+ * The phone maker's own processing for a picture. See [Camera]'s photoMode and
+ * [CameraState.supportedPhotoModes].
+ */
+enum class PhotoMode {
+    /** The camera's ordinary pictures. */
+    NONE,
+    /**
+     * Keeps the subject sharp and blurs what is behind them. Offered on a camera without a blur
+     * of its own too, where the library blurs the background itself.
+     */
+    BACKGROUND_BLUR,
+    /** Combines several exposures, so a scene's bright and dark parts both keep detail. */
+    HDR,
+    /** Combines several exposures of a dark scene into one brighter, less noisy picture. */
+    NIGHT,
+    /** Smooths skin and evens out the faces in the picture. */
+    FACE_RETOUCH,
+    /** Lets the camera choose among its other modes, scene by scene. */
+    AUTO
+}
+
+/** One of the phone maker's own photo modes. */
+@Deprecated("Use PhotoMode, where BOKEH is BACKGROUND_BLUR and each other value keeps its name.",
+    ReplaceWith("PhotoMode"))
 enum class Extension {
     NONE,
     BOKEH,
@@ -146,7 +170,13 @@ data class CameraState(
     /** Always holds at least [PictureFormat.JPEG], which every camera can write. */
     val supportedPictureFormats: Set<PictureFormat> = emptySet(),
     val supportedDynamicRanges: Set<DynamicRange> = emptySet(),
-    val supportedExtensions: Set<Extension> = emptySet(),
+    @Deprecated("Read supportedPhotoModes.", ReplaceWith("supportedPhotoModes"))
+    val supportedExtensions: Set<@Suppress("DEPRECATION") Extension> = emptySet(),
+    /**
+     * The photo modes [Camera]'s photoMode can take on this camera. Always holds [PhotoMode.NONE].
+     * A mode the camera lacks is kept and does nothing until a camera that has it opens.
+     */
+    val supportedPhotoModes: Set<PhotoMode> = emptySet(),
     val isStabilizationSupported: Boolean = false,
     val isLowLightBoostSupported: Boolean = false,
     /** Whether [CameraController.takePicture] works while a recording is running. */
@@ -469,6 +499,7 @@ private fun <T : Enum<T>> supported(values: List<T>, isSupported: (T) -> Boolean
 }
 
 /** Reads everything [CameraState] reports off an open camera. */
+@Suppress("DEPRECATION")
 private fun CameraView.readCameraState(): CameraState {
     return CameraState(
         hasFlash = hasFlash(),
@@ -493,7 +524,10 @@ private fun CameraView.readCameraState(): CameraState {
             isDynamicRangeSupported(it.toCameraView())
         },
         supportedExtensions = supported(Extension.entries) {
-            isExtensionSupported(it.toCameraView())
+            isPhotoModeSupported(it.toPhotoMode().toCameraView())
+        },
+        supportedPhotoModes = supported(PhotoMode.entries) {
+            isPhotoModeSupported(it.toCameraView())
         },
         isStabilizationSupported = isStabilizationSupported,
         isLowLightBoostSupported = isLowLightBoostSupported,
@@ -543,13 +577,24 @@ private fun DynamicRange.toCameraView() = when (this) {
     DynamicRange.HDR -> CameraView.DynamicRange.HDR
 }
 
-private fun Extension.toCameraView() = when (this) {
-    Extension.NONE -> CameraView.Extension.NONE
-    Extension.BOKEH -> CameraView.Extension.BOKEH
-    Extension.HDR -> CameraView.Extension.HDR
-    Extension.NIGHT -> CameraView.Extension.NIGHT
-    Extension.FACE_RETOUCH -> CameraView.Extension.FACE_RETOUCH
-    Extension.AUTO -> CameraView.Extension.AUTO
+@CameraView.PhotoMode
+private fun PhotoMode.toCameraView(): Int = when (this) {
+    PhotoMode.NONE -> CameraView.PhotoMode.NONE
+    PhotoMode.BACKGROUND_BLUR -> CameraView.PhotoMode.BACKGROUND_BLUR
+    PhotoMode.HDR -> CameraView.PhotoMode.HDR
+    PhotoMode.NIGHT -> CameraView.PhotoMode.NIGHT
+    PhotoMode.FACE_RETOUCH -> CameraView.PhotoMode.FACE_RETOUCH
+    PhotoMode.AUTO -> CameraView.PhotoMode.AUTO
+}
+
+@Suppress("DEPRECATION")
+private fun Extension.toPhotoMode() = when (this) {
+    Extension.NONE -> PhotoMode.NONE
+    Extension.BOKEH -> PhotoMode.BACKGROUND_BLUR
+    Extension.HDR -> PhotoMode.HDR
+    Extension.NIGHT -> PhotoMode.NIGHT
+    Extension.FACE_RETOUCH -> PhotoMode.FACE_RETOUCH
+    Extension.AUTO -> PhotoMode.AUTO
 }
 
 /**
@@ -598,7 +643,13 @@ private fun Extension.toCameraView() = when (this) {
  * @param colorSpace The range of colours pictures are recorded in.
  * @param pictureFormat The file a picture is written as.
  * @param dynamicRange The dynamic range videos are recorded in.
- * @param extension An optional vendor photo-processing extension.
+ * @param photoMode One of the phone maker's own photo modes, such as their night mode, on a
+ *  camera that lists it in [CameraState.supportedPhotoModes]. While one is on, the camera shows a
+ *  preview and takes pictures and does nothing else: a recording fails, frame analysis, barcode
+ *  scanning and background replacement are refused, a stream throws, the flash never fires,
+ *  the torch, low-light boost and stabilization stay off, [frameRenderer] and
+ *  [cameraTextureProvider] are kept but not called, and pictures are JPEGs. A mode set while
+ *  one of those is running is refused. A mode can take a second or more to capture.
  * @param pictureQuality How hard a still capture is compressed, from 1 to 100.
  * @param stabilizationEnabled Steadies the preview and recorded video against hand shake, on a
  *  camera with [CameraState.isStabilizationSupported]. A change reconfigures the camera, and one
@@ -648,7 +699,7 @@ fun Camera(
     colorSpace: ColorSpace = ColorSpace.SRGB,
     pictureFormat: PictureFormat = PictureFormat.JPEG,
     dynamicRange: DynamicRange = DynamicRange.SDR,
-    extension: Extension = Extension.NONE,
+    photoMode: PhotoMode = PhotoMode.NONE,
     pictureQuality: Int = ICameraModule.DEFAULT_PICTURE_QUALITY,
     stabilizationEnabled: Boolean = false,
     lowLightBoostEnabled: Boolean = false,
@@ -691,7 +742,7 @@ fun Camera(
         colorSpace = colorSpace,
         pictureFormat = pictureFormat,
         dynamicRange = dynamicRange,
-        extension = extension,
+        photoMode = photoMode,
         pictureQuality = pictureQuality,
         stabilizationEnabled = stabilizationEnabled,
         lowLightBoostEnabled = lowLightBoostEnabled,
@@ -718,6 +769,102 @@ fun Camera(
 }
 
 /**
+ * The camera, with a photo mode named as an extension. Everything else is as for the overload
+ * that takes photoMode.
+ *
+ * @param extension The photo mode, under its older name.
+ */
+@Deprecated("Pass photoMode, where Extension.BOKEH is PhotoMode.BACKGROUND_BLUR and each other " +
+    "value keeps its name.")
+@Suppress("DEPRECATION")
+@RequiresPermission(Manifest.permission.CAMERA)
+@Composable
+fun Camera(
+    modifier: Modifier = Modifier,
+    quality: Quality = Quality.HIGH,
+    flash: Flash = Flash.AUTO,
+    lensFacing: LensFacing = LensFacing.BACK,
+    pinchToZoom: Boolean = true,
+    maxVideoDuration: Long? = null,
+    maxVideoSize: Long? = null,
+    imageConfirmationEnabled: Boolean = false,
+    videoConfirmationEnabled: Boolean = false,
+    matchPreviewAspectRatioEnabled: Boolean = true,
+    zoomRatio: Float? = null,
+    animateZoom: Boolean = false,
+    exposureCompensation: Int = 0,
+    torchEnabled: Boolean = false,
+    colorSpace: ColorSpace = ColorSpace.SRGB,
+    pictureFormat: PictureFormat = PictureFormat.JPEG,
+    dynamicRange: DynamicRange = DynamicRange.SDR,
+    // No default, so that a call leaving it out resolves to the overload above.
+    extension: Extension,
+    pictureQuality: Int = ICameraModule.DEFAULT_PICTURE_QUALITY,
+    stabilizationEnabled: Boolean = false,
+    lowLightBoostEnabled: Boolean = false,
+    shutterSoundEnabled: Boolean = true,
+    @RawRes shutterSound: Int = 0,
+    frameRenderer: FrameRenderer? = null,
+    cameraTextureProvider: CameraTextureProvider? = null,
+    controller: MutableState<CameraController?>,
+    state: MutableState<CameraState?> = remember { mutableStateOf(null) },
+    onShutter: () -> Unit = {},
+    onImageConfirmation: () -> Unit = {},
+    onImageCaptured: (file: File) -> Unit = {},
+    onImageSaved: (uri: Uri) -> Unit = {},
+    onImageCaptureFailed: () -> Unit = {},
+    onVideoConfirmation: () -> Unit = {},
+    onVideoCaptured: (file: File) -> Unit = {},
+    onVideoSaved: (uri: Uri) -> Unit = {},
+    onVideoCaptureFailed: () -> Unit = {},
+    onCameraOpened: () -> Unit = {},
+    onCameraClosed: () -> Unit = {},
+    onZoomChanged: (ratio: Float) -> Unit = {},
+) {
+    Camera(
+        modifier = modifier,
+        quality = quality,
+        flash = flash,
+        lensFacing = lensFacing,
+        pinchToZoom = pinchToZoom,
+        maxVideoDuration = maxVideoDuration,
+        maxVideoSize = maxVideoSize,
+        imageConfirmationEnabled = imageConfirmationEnabled,
+        videoConfirmationEnabled = videoConfirmationEnabled,
+        matchPreviewAspectRatioEnabled = matchPreviewAspectRatioEnabled,
+        zoomRatio = zoomRatio,
+        animateZoom = animateZoom,
+        exposureCompensation = exposureCompensation,
+        torchEnabled = torchEnabled,
+        colorSpace = colorSpace,
+        pictureFormat = pictureFormat,
+        dynamicRange = dynamicRange,
+        photoMode = extension.toPhotoMode(),
+        pictureQuality = pictureQuality,
+        stabilizationEnabled = stabilizationEnabled,
+        lowLightBoostEnabled = lowLightBoostEnabled,
+        shutterSoundEnabled = shutterSoundEnabled,
+        shutterSound = shutterSound,
+        frameRenderer = frameRenderer,
+        cameraTextureProvider = cameraTextureProvider,
+        controller = controller,
+        state = state,
+        onShutter = onShutter,
+        onImageConfirmation = onImageConfirmation,
+        onImageCaptured = onImageCaptured,
+        onImageSaved = onImageSaved,
+        onImageCaptureFailed = onImageCaptureFailed,
+        onVideoConfirmation = onVideoConfirmation,
+        onVideoCaptured = onVideoCaptured,
+        onVideoSaved = onVideoSaved,
+        onVideoCaptureFailed = onVideoCaptureFailed,
+        onCameraOpened = onCameraOpened,
+        onCameraClosed = onCameraClosed,
+        onZoomChanged = onZoomChanged,
+    )
+}
+
+/**
  * The camera, zoomed by level rather than by ratio. Everything else is as for the overload that
  * takes zoomRatio.
  *
@@ -726,6 +873,7 @@ fun Camera(
  */
 @Deprecated("A level cannot land exactly on a lens. Pass zoomRatio, from " +
     "CameraState.minZoomRatio to maxZoomRatio, where each of CameraState.zoomPresets is exact.")
+@Suppress("DEPRECATION")
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
 fun Camera(
@@ -785,7 +933,7 @@ fun Camera(
         colorSpace = colorSpace,
         pictureFormat = pictureFormat,
         dynamicRange = dynamicRange,
-        extension = extension,
+        photoMode = extension.toPhotoMode(),
         pictureQuality = pictureQuality,
         stabilizationEnabled = stabilizationEnabled,
         lowLightBoostEnabled = lowLightBoostEnabled,
@@ -902,7 +1050,7 @@ private fun CameraImpl(
     colorSpace: ColorSpace,
     pictureFormat: PictureFormat,
     dynamicRange: DynamicRange,
-    extension: Extension,
+    photoMode: PhotoMode,
     pictureQuality: Int,
     stabilizationEnabled: Boolean,
     lowLightBoostEnabled: Boolean,
@@ -1135,15 +1283,16 @@ private fun CameraImpl(
         view.colorSpace = colorSpace.toCameraView()
         view.pictureFormat = pictureFormat.toCameraView()
         view.dynamicRange = dynamicRange.toCameraView()
-        view.extension = extension.toCameraView()
+        view.photoMode = photoMode.toCameraView()
         view.pictureQuality = pictureQuality
         view.isStabilizationEnabled = stabilizationEnabled
         view.isLowLightBoostEnabled = lowLightBoostEnabled
         view.isShutterSoundEnabled = shutterSoundEnabled
         view.shutterSound = shutterSound
         frameEffects.update(view, frameRenderer, cameraTextureProvider)
-        // What the camera can do depends on what it has just been asked for - a lens, an extension
-        // and a zoom each change the answers - so the snapshot is taken after the settings land.
+        // What the camera can do depends on what it has just been asked for - a lens, a photo
+        // mode and a zoom each change the answers - so the snapshot is taken after the settings
+        // land.
         publishState(view)
     }, modifier = modifier)
 }
