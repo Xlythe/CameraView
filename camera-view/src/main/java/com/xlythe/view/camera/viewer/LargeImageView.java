@@ -27,6 +27,7 @@ import androidx.annotation.IntDef;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 import androidx.core.view.ViewCompat;
@@ -294,6 +295,26 @@ public class LargeImageView extends View {
     @VisibleForTesting
     int getTileCount() {
         return mTiles.size();
+    }
+
+    /** Whether the low-resolution copy carries a gain map, for tests. */
+    @VisibleForTesting
+    @RequiresApi(34)
+    boolean baseHasGainmap() {
+        return mBase != null && mBase.hasGainmap();
+    }
+
+    /** How many decoded tiles carry a gain map, for tests. */
+    @VisibleForTesting
+    @RequiresApi(34)
+    int getGainmapTileCount() {
+        int count = 0;
+        for (Tile tile : mTiles.values()) {
+            if (tile.bitmap.hasGainmap()) {
+                count++;
+            }
+        }
+        return count;
     }
 
     /** How many tiles are decoded at a sample size, for tests. */
