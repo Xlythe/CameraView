@@ -179,6 +179,7 @@ public final class PictureSizeDeviceTest {
                 held.set(camera);
                 camera.setQuality(CameraView.Quality.MAX);
                 DeviceState.turnTheFlashOff(camera);
+                camera.setShutterSoundEnabled(false);
                 camera.setOnCameraStateChangedListener(
                         new CameraView.OnCameraStateChangedListener() {
                             @Override public void onCameraOpened() {
@@ -272,6 +273,7 @@ public final class PictureSizeDeviceTest {
                 camera.setQuality(quality);
                 camera.setLensFacing(facing);
                 DeviceState.turnTheFlashOff(camera);
+                camera.setShutterSoundEnabled(false);
                 camera.setOnCameraStateChangedListener(
                         new CameraView.OnCameraStateChangedListener() {
                             @Override public void onCameraOpened() {
