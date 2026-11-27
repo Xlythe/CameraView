@@ -4,6 +4,7 @@ import android.content.Context;
 import android.graphics.Rect;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
@@ -179,16 +180,111 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.exifCaptureParameters();
     }
 
+    /** Whether the torch should be lit, which takes a camera with a flash to light. */
+    boolean isTorchLit() {
+        return mCamera2Module.isTorchEnabled() && hasFlash();
+    }
+
+    /** Whether low-light boost should be asked for, which takes a camera that has it. */
+    boolean isLowLightBoostOn() {
+        return mCamera2Module.isLowLightBoostEnabled() && mCamera2Module.isLowLightBoostSupported();
+    }
+
     /**
-     * Applies the requested flash strategy to a capture request.
+     * Chooses the auto-exposure mode, which the torch, low-light boost and the flash strategy
+     * share.
      *
      * <p>Camera2 drives the flash through CONTROL_AE_MODE; FLASH_MODE is ignored unless the
      * auto-exposure routine has been told not to manage the flash itself. The mode also has to be
      * on the repeating preview request, because that is the only stream auto-exposure can converge
      * over before a still capture. AOSP's Camera2Basic applies it to both builders for the same
      * reason.</p>
+     *
+     * <p>The torch is FLASH_MODE_TORCH under plain ON, and it goes on a still as well, so that a
+     * picture neither puts it out nor has the flash strategy fire over it. Low-light boost is an
+     * auto-exposure mode of its own, so the flash strategy waits while it is on; the module never
+     * leaves the torch and low-light boost on together.</p>
+     *
+     * @param withFlashStrategy whether the flash strategy belongs on this request. A recording
+     *     leaves it off, since there is no still for the flash to fire for.
      */
-    void applyFlash(@NonNull CaptureRequest.Builder builder) {
+    void applyAeMode(@NonNull CaptureRequest.Builder builder, boolean withFlashStrategy) {
+        if (isTorchLit()) {
+            builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+            builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_TORCH);
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 35 && isLowLightBoostOn()) {
+            builder.set(CaptureRequest.CONTROL_AE_MODE,
+                    CaptureRequest.CONTROL_AE_MODE_ON_LOW_LIGHT_BOOST_BRIGHTNESS_PRIORITY);
+            return;
+        }
+        if (withFlashStrategy) {
+            applyFlash(builder);
+        }
+    }
+
+    /**
+     * Chooses the auto-exposure mode for a still: the preview's, except that a picture the flash
+     * was asked to fire for gets it. Low-light boost steps aside for that one capture, as CameraX
+     * suspends it for a flash capture.
+     */
+    void applyStillAeMode(@NonNull CaptureRequest.Builder builder) {
+        if (!isTorchLit() && isLowLightBoostOn() && hasFlash()
+                && getFlash() == CameraView.Flash.ON) {
+            applyFlash(builder);
+            return;
+        }
+        applyAeMode(builder, true /* withFlashStrategy */);
+    }
+
+    /**
+     * Applies exposure compensation, on every request so that a still and a recording are exposed
+     * as the preview was.
+     */
+    void applyExposureCompensation(@NonNull CaptureRequest.Builder builder) {
+        Integer index = mCamera2Module.getRequestedExposureCompensation();
+        if (index != null) {
+            builder.set(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION, index);
+        }
+    }
+
+    /**
+     * Steadies the picture, when stabilization is on.
+     *
+     * <p>Preview stabilization is preferred wherever the camera has it: it steadies every stream
+     * alike, a recording included, so what is recorded is what was shown. Video stabilization only
+     * steadies what goes to an encoder, so it is only asked for by a session that feeds one. OIS is
+     * the fallback where neither applies rather than an addition, since the platform recommends
+     * against running optical and digital stabilization together.</p>
+     *
+     * <p>A still carries the same mode as the repeating request, because the mode is a session
+     * parameter on many cameras and changing it for one capture would reconfigure the stream.</p>
+     */
+    void applyStabilization(@NonNull CaptureRequest.Builder builder) {
+        if (!mCamera2Module.isStabilizationEnabled()) {
+            return;
+        }
+        CameraCharacteristics characteristics = mCamera2Module.getCameraCharacteristics();
+        if (Build.VERSION.SDK_INT >= 33
+                && Camera2Module.offersPreviewStabilization(characteristics)) {
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_PREVIEW_STABILIZATION);
+        } else if (feedsAnEncoder() && Camera2Module.offersVideoStabilization(characteristics)) {
+            builder.set(CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+                    CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE_ON);
+        } else if (Camera2Module.offersOpticalStabilization(characteristics)) {
+            builder.set(CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON);
+        }
+    }
+
+    /** Whether this session sends frames to an encoder, which video stabilization steadies. */
+    boolean feedsAnEncoder() {
+        return false;
+    }
+
+    private void applyFlash(@NonNull CaptureRequest.Builder builder) {
         if (!hasFlash()) {
             return;
         }

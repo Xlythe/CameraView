@@ -11,17 +11,23 @@ import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 
+import androidx.exifinterface.media.ExifInterface;
+
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
 
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowCamera;
 
+import java.io.InputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -218,6 +224,120 @@ public class LegacyCameraModuleTest {
         module.setZoomLevel(50);
     }
 
+    /** The range is the open camera's; a closed one has none to give. */
+    @Test
+    public void exposureCompensationReportsTheCamerasRange() {
+        assertFalse(module.isExposureCompensationSupported());
+        assertEquals(0, module.getMinExposureCompensation());
+        assertEquals(0, module.getMaxExposureCompensation());
+        assertEquals(0f, module.getExposureCompensationStep(), 0f);
+
+        module.open();
+
+        // The shadowed camera's defaults: -6 to 6, in steps of 1/2.
+        assertTrue(module.isExposureCompensationSupported());
+        assertEquals(-6, module.getMinExposureCompensation());
+        assertEquals(6, module.getMaxExposureCompensation());
+        assertEquals(0.5f, module.getExposureCompensationStep(), 0f);
+    }
+
+    /** An index lands on the camera's parameters, held to its range. */
+    @Test
+    public void anExposureIndexReachesTheCameraClamped() throws Exception {
+        module.open();
+
+        module.setExposureCompensation(3);
+        assertEquals(3, module.getExposureCompensation());
+        assertEquals(3, openCamera().getParameters().getExposureCompensation());
+
+        module.setExposureCompensation(40);
+        assertEquals(6, module.getExposureCompensation());
+        assertEquals(6, openCamera().getParameters().getExposureCompensation());
+
+        module.setExposureCompensation(-40);
+        assertEquals(-6, module.getExposureCompensation());
+        assertEquals(-6, openCamera().getParameters().getExposureCompensation());
+    }
+
+    /** With no camera to ask, the index is kept as given, and clamped once there is one. */
+    @Test
+    public void anExposureIndexSetWhileClosedWaitsForTheCamera() throws Exception {
+        module.setExposureCompensation(40);
+        assertEquals(40, module.getExposureCompensation());
+
+        module.open();
+
+        assertEquals(6, module.getExposureCompensation());
+        assertEquals(6, openCamera().getParameters().getExposureCompensation());
+    }
+
+    /**
+     * A camera that cannot compensate refuses a request while it is open, and leaves one made
+     * before it opened for the next camera that can.
+     */
+    @Test
+    public void aCameraWithoutExposureCompensationDeclines() throws Exception {
+        module.open();
+        takeAwayExposureCompensation();
+        assertFalse(module.isExposureCompensationSupported());
+        assertEquals(0, module.getMinExposureCompensation());
+        assertEquals(0, module.getMaxExposureCompensation());
+        assertEquals("the step it publishes is not one it can use",
+                0f, module.getExposureCompensationStep(), 0f);
+
+        module.setExposureCompensation(3);
+        assertEquals(0, module.getExposureCompensation());
+        assertEquals(0, openCamera().getParameters().getExposureCompensation());
+
+        module.close();
+        module.setExposureCompensation(2);
+        // The same camera, whose parameters the shadow keeps between openings.
+        module.open();
+        assertEquals("kept for a camera that can", 2, module.getExposureCompensation());
+        assertEquals(0, openCamera().getParameters().getExposureCompensation());
+    }
+
+    /**
+     * The torch, stabilization and low-light boost are refused while a camera that cannot do them
+     * is open, as on the other backends, rather than reported on and never acted on. A request
+     * made while closed is kept for the camera that opens.
+     */
+    @Test
+    public void controlsTheCameraCannotDoAreRefusedWhileItIsOpen() {
+        module.setTorchEnabled(true);
+        assertTrue("kept until a camera opens", module.isTorchEnabled());
+        module.setTorchEnabled(false);
+
+        module.open();
+        assertFalse(module.hasFlash());
+        module.setTorchEnabled(true);
+        assertFalse(module.isTorchEnabled());
+
+        assertFalse(module.isStabilizationSupported());
+        module.setStabilizationEnabled(true);
+        assertFalse(module.isStabilizationEnabled());
+
+        assertFalse(module.isLowLightBoostSupported());
+        module.setLowLightBoostEnabled(true);
+        assertFalse(module.isLowLightBoostEnabled());
+    }
+
+    /** A picture's Exif reports the index the camera took, times its step. */
+    @Test
+    public void aPictureRecordsTheExposureBias() throws Exception {
+        module.open();
+        module.setExposureCompensation(-3);
+
+        ExifCaptureParameters parameters =
+                ExifCaptureParameters.forLegacyCamera(openCamera().getParameters());
+        Exif exif = new Exif(Mockito.mock(InputStream.class));
+        parameters.applyTo(exif);
+
+        String[] bias = exif.getAttribute(ExifInterface.TAG_EXPOSURE_BIAS_VALUE).split("/");
+        assertEquals("-3 steps of 1/2 EV", -1.5,
+                Double.parseDouble(bias[0]) / Double.parseDouble(bias[1]), 0.001);
+    }
+
     /**
      * A focus the camera took is reported on the view, where an app can draw it.
      *
@@ -290,6 +410,13 @@ public class LegacyCameraModuleTest {
         parameters.set("max-zoom", 4);
         parameters.set("zoom-ratios", "100,150,200,300,400");
         parameters.set("zoom", 0);
+    }
+
+    /** Gives the open camera the 0-to-0 range this API reports for one that cannot compensate. */
+    private void takeAwayExposureCompensation() throws Exception {
+        Camera.Parameters parameters = openCamera().getParameters();
+        parameters.set("min-exposure-compensation", 0);
+        parameters.set("max-exposure-compensation", 0);
     }
 
     private Camera openCamera() throws Exception {

@@ -62,7 +62,7 @@ public abstract class ICameraModule {
     private int mExposureCompensation;
     /** Whether continuous torch illumination is requested. */
     private boolean mTorchEnabled;
-    /** Whether CameraX low-light boost is requested. */
+    /** Whether low-light boost is requested. */
     private boolean mLowLightBoostEnabled;
     /** Whether the camera's sounds are wanted. Set from any thread, read on the camera's. */
     private volatile boolean mShutterSoundEnabled = true;
@@ -536,20 +536,36 @@ public abstract class ICameraModule {
         return 0;
     }
 
+    /** How many EV one exposure compensation index is worth, or 0 where there is none. */
+    public synchronized float getExposureCompensationStep() {
+        return 0f;
+    }
+
     public synchronized boolean isExposureCompensationSupported() {
         return false;
     }
 
+    /**
+     * Turns low-light boost off when the torch goes on, on every backend: each needs the
+     * auto-exposure mode to itself.
+     */
     public synchronized void setTorchEnabled(boolean enabled) {
         mTorchEnabled = enabled;
+        if (enabled) {
+            mLowLightBoostEnabled = false;
+        }
     }
 
     public synchronized boolean isTorchEnabled() {
         return mTorchEnabled;
     }
 
+    /** Turns the torch off when low-light boost goes on, for the same reason. */
     public synchronized void setLowLightBoostEnabled(boolean enabled) {
         mLowLightBoostEnabled = enabled;
+        if (enabled) {
+            mTorchEnabled = false;
+        }
     }
 
     public synchronized boolean isLowLightBoostEnabled() {
