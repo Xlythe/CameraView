@@ -6,8 +6,8 @@ import java.io.IOException;
 import java.util.Collection;
 
 /**
- * Thrown by {@link Exif#save()} when the file has no room for some of its tags. Everything else
- * is saved; {@link #getTags()} names the tags that were left out.
+ * Thrown by {@link Exif#save()} when a JPEG's metadata has no room left for some of its tags.
+ * Everything else is saved; {@link #getTags()} names the tags that were left out.
  */
 public final class ExifNoRoomException extends IOException {
     /** The numbers of the tags left out, in ascending order. */

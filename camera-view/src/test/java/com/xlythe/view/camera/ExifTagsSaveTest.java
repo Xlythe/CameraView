@@ -539,8 +539,11 @@ public class ExifTagsSaveTest {
             assertEquals(5, streamed.getAmbientConditions().getTemperature(), 0);
             assertNotNull("and ExifInterface still reads the rest",
                     streamed.getAttribute(ExifInterface.TAG_EXIF_VERSION));
+            assertFalse("there is nowhere to write it",
+                    streamed.setTag(TAG_UNDEFINED_BY_ANY_STANDARD, Exif.TYPE_SHORT, "4"));
             streamed.setTitle("Nowhere to go");
-            assertThrows(IOException.class, streamed::save);
+            assertEquals("and nothing changes", "Through a stream", streamed.getTitle());
+            assertEquals("3", streamed.getTag(TAG_UNDEFINED_BY_ANY_STANDARD));
         }
         try (InputStream in = new ByteArrayInputStream(readAll(file))) {
             Exif marked = new Exif(in);
@@ -573,11 +576,11 @@ public class ExifTagsSaveTest {
     }
 
     /**
-     * A PNG keeps none of these tags, and its save says so after saving everything else, rather
-     * than leaving the caller to find them missing.
+     * A PNG can't take tags by number, and says so when they are set, changing nothing. The
+     * methods built on them change nothing either, and the rest of the metadata still saves.
      */
     @Test
-    public void aPngSaysItKeptNoTags() throws IOException {
+    public void aPngTakesNoTagsByNumber() throws IOException {
         File png = File.createTempFile("tags", ".png");
         png.deleteOnExit();
         try (FileOutputStream out = new FileOutputStream(png)) {
@@ -585,14 +588,23 @@ public class ExifTagsSaveTest {
         }
 
         Exif exif = new Exif(png);
-        assertTrue(exif.setTag(TAG_UNDEFINED_BY_ANY_STANDARD, Exif.TYPE_ASCII, "nowhere"));
+        assertFalse(exif.setTag(TAG_UNDEFINED_BY_ANY_STANDARD, Exif.TYPE_ASCII, "nowhere"));
+        assertFalse(exif.setTag(TAG_SOURCE_EXPOSURE_TIMES, new byte[] {1, 2}));
+        assertFalse(exif.setTag(TAG_UNDEFINED_BY_ANY_STANDARD, Exif.TYPE_ASCII, null));
         exif.setTitle("nowhere either");
+        exif.setAttribute("ImageTitle", "nor here");
+        exif.attachAmbientConditions(new AmbientConditions.Builder().setTemperature(5).build());
+        assertNull(exif.getTag(TAG_UNDEFINED_BY_ANY_STANDARD));
+        assertNull(exif.getTitle());
+        assertNull(exif.getAmbientConditions());
+        exif.setPhotographer("Still the artist");
         exif.setDescription("Kept");
-        ExifNoRoomException error = assertThrows(ExifNoRoomException.class, exif::save);
+        exif.save();
 
-        assertArrayEquals(new int[] {TAG_IMAGE_TITLE, TAG_UNDEFINED_BY_ANY_STANDARD},
-                error.getTags());
-        assertEquals("Kept", new Exif(png).getDescription());
+        Exif saved = new Exif(png);
+        assertNull(saved.getTitle());
+        assertEquals("Kept", saved.getDescription());
+        assertEquals("Still the artist", saved.getPhotographer());
     }
 
     /**

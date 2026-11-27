@@ -353,15 +353,8 @@ public class Exif {
     @WorkerThread
     private void finishBlock() throws IOException {
         boolean thumbnail = mHasThumbnail || mThumbnailRequested;
-        if (mFilePath == null || (mTags.isEmpty() && mRemovedTags.isEmpty() && !thumbnail)) {
-            // A stream has no file to add any of this to.
-            return;
-        }
-        if (!mCanWriteTags) {
-            // Only a JPEG's private directory can be written here.
-            if (!mTags.isEmpty()) {
-                throw new ExifNoRoomException(mTags.keySet());
-            }
+        if (!mCanWriteTags || (mTags.isEmpty() && mRemovedTags.isEmpty() && !thumbnail)) {
+            // Only a JPEG read from a file has a block to add any of this to.
             return;
         }
         File file = new File(mFilePath);
@@ -751,7 +744,8 @@ public class Exif {
 
     /**
      * Sets a tag by its standard Exif name, such as "FNumber", to be written by {@link #save()}.
-     * Null removes it.
+     * Null removes it. Some tags, such as "ImageTitle", can be written only into a JPEG read from
+     * a file, and are left unchanged anywhere else.
      */
     public void setAttribute(@NonNull String tag, @Nullable String value) {
         int[] standard = ExifTags.standardTag(tag);
@@ -997,11 +991,12 @@ public class Exif {
      * @param value the value as text, in the shape {@link TagType} describes for the type, or
      *     null to remove the tag
      * @return false, with nothing changed, when the value doesn't suit the type, such as a word
-     *     for a number, or the tag locates other data rather than holding a value
+     *     for a number, the tag locates other data rather than holding a value, or this can't
+     *     write tags by number because it was read from a stream or the file isn't a JPEG
      */
     @AnyThread
     public boolean setTag(int tag, @TagType int type, @Nullable String value) {
-        if (!holdsValue(tag)) {
+        if (!mCanWriteTags || !holdsValue(tag)) {
             return false;
         }
         if (value == null) {
@@ -1022,12 +1017,13 @@ public class Exif {
      * {@link #setTag(int, int, String)}.
      *
      * @param value the bytes, or null to remove the tag
-     * @return false, with nothing changed, when there are no bytes, or the tag locates other data
-     *     rather than holding a value
+     * @return false, with nothing changed, when there are no bytes, the tag locates other data
+     *     rather than holding a value, or this can't write tags by number because it was read
+     *     from a stream or the file isn't a JPEG
      */
     @AnyThread
     public boolean setTag(int tag, @Nullable byte[] value) {
-        if (!holdsValue(tag) || (value != null && value.length == 0)) {
+        if (!mCanWriteTags || !holdsValue(tag) || (value != null && value.length == 0)) {
             return false;
         }
         putTag(tag, value == null ? null : ExifTags.undefined(value));
@@ -1048,8 +1044,14 @@ public class Exif {
         return mRemovedTags.contains(tag) ? null : mDirectory.get(tag);
     }
 
-    /** Sets a private directory entry for every save to write, or to remove when null. */
+    /**
+     * Sets a private directory entry for every save to write, or to remove when null. Nothing
+     * changes where the entry can't be written, which is anywhere but a JPEG read from a file.
+     */
     private void putTag(int tag, @Nullable ExifTags.Value value) {
+        if (!mCanWriteTags) {
+            return;
+        }
         if (value == null) {
             mTags.remove(tag);
             mRemovedTags.add(tag);
@@ -1082,7 +1084,10 @@ public class Exif {
         return getTag(ExifTags.TAG_IMAGE_TITLE);
     }
 
-    /** Sets the image's title, or removes it when null. */
+    /**
+     * Sets the image's title, or removes it when null. Only a JPEG read from a file takes a
+     * title; anywhere else nothing changes.
+     */
     @AnyThread
     public void setTitle(@Nullable String title) {
         putText(ExifTags.TAG_IMAGE_TITLE, title);
@@ -1136,7 +1141,8 @@ public class Exif {
     /**
      * Records the conditions the picture was taken in, in place of any recorded before. A
      * reading the conditions leave out is removed, as is one outside what the file can hold,
-     * such as a negative humidity.
+     * such as a negative humidity. Only a JPEG read from a file takes conditions; anywhere else
+     * nothing changes.
      */
     @AnyThread
     public void attachAmbientConditions(@NonNull AmbientConditions conditions) {
@@ -1149,7 +1155,7 @@ public class Exif {
                 true);
     }
 
-    /** Removes the conditions the picture was taken in. */
+    /** Removes the conditions the picture was taken in, from a JPEG read from a file. */
     @AnyThread
     public void removeAmbientConditions() {
         putTag(ExifTags.TAG_TEMPERATURE, null);
