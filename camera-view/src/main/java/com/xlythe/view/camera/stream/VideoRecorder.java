@@ -56,7 +56,7 @@ public class VideoRecorder {
   private static final int DEFAULT_IFRAME_INTERVAL = 10;  // 10 seconds between I-frames
 
   /** How far behind the reader may fall, as a duration of video, before frames are dropped. */
-  private static final long TARGET_BACKLOG_MILLIS = 250;
+  static final long TARGET_BACKLOG_MILLIS = 250;
   /** Floor for the backlog budget, so a very low bit rate still leaves room for a frame. */
   private static final int MIN_BACKLOG_BYTES = 8 * 1024;
   /** Ceiling for the backlog budget, so a very high bit rate does not buffer without limit. */
@@ -412,13 +412,13 @@ public class VideoRecorder {
   }
 
   /**
-   * Whether a frame can be discarded without harming the frames after it.
+   * Whether the stream survives losing a frame.
    *
-   * <p>H.264 sends a key frame and then deltas against it, so every frame until the next key
-   * frame is decoded relative to that one. Dropping a key frame therefore breaks the picture for
-   * up to a whole I-frame interval rather than for a single frame, and dropping the
-   * codec-configuration frame that carries the SPS/PPS leaves the decoder unable to start at
-   * all. Only the deltas are safe to lose.</p>
+   * <p>H.264 sends a key frame and then deltas, each predicted from the frame before it, so every
+   * frame until the next key frame depends on that one. Dropping a key frame therefore breaks the
+   * picture for up to a whole I-frame interval, and dropping the codec-configuration frame that
+   * carries the SPS/PPS leaves the decoder unable to start at all. Losing a delta costs the rest
+   * of its group, which the lossy stream drops along with it.</p>
    */
   static boolean isDroppable(int flags) {
     return (flags & MediaCodec.BUFFER_FLAG_KEY_FRAME) == 0
@@ -458,13 +458,14 @@ public class VideoRecorder {
   }
 
   /**
-   * Mints a new key frame once the lossy stream has had to discard the ones it had.
+   * Mints a new key frame once the lossy stream has had to discard a frame the reader needed.
    *
-   * <p>Only the newest key frame matters to a reader resuming playback, so the stream throws
-   * reference frames away rather than queueing them when it is hopelessly behind. That would
-   * otherwise leave the reader with nothing decodable until the next scheduled one, up to a whole
-   * I-frame interval away and ten seconds by default. Asking the encoder for one closes that gap,
-   * and means a long I-frame interval stays affordable for the bandwidth it saves.</p>
+   * <p>Once the stream drops a delta it drops the rest of that group of pictures too, and when it
+   * is hopelessly behind it throws reference frames away rather than queueing them, since only the
+   * newest matters to a reader resuming playback. Either way the reader has nothing decodable
+   * until the next key frame, up to a whole I-frame interval away and ten seconds by default.
+   * Asking the encoder for one closes that gap, and means a long I-frame interval stays affordable
+   * for the bandwidth it saves.</p>
    */
   private void requestSyncFrameIfNeeded(MediaCodec encoder) {
     if (!(mOutputStream instanceof LossyPipedOutputStream)) {
