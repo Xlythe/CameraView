@@ -15,6 +15,7 @@ import androidx.annotation.AnyThread;
 import androidx.annotation.GuardedBy;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 
 /**
  * An {@link ImageReader} that stays open until every frame it handed out has been closed.
@@ -25,6 +26,7 @@ import androidx.annotation.Nullable;
  * process down rather than throwing. So {@link #close} only stops new frames, and the reader is
  * released by whichever comes last: the close, or the last frame being closed.</p>
  */
+@RequiresApi(21)
 final class SafeCloseImageReader {
     /** Told when a frame is ready to acquire. */
     interface OnImageAvailableListener {
