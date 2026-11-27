@@ -140,6 +140,7 @@ interface CameraController {
      * Takes a picture and files it where the gallery looks, reporting it to [Camera]'s
      * onImageSaved. Only this overload files into MediaStore. Below API 29 that needs
      * WRITE_EXTERNAL_STORAGE, and without it onImageCaptureFailed is called instead.
+     * [PictureFormat.RAW] is filed as a DNG, and [PictureFormat.RAW_JPEG] as both its files.
      */
     fun takePicture()
     fun takePicture(file: File)
@@ -514,7 +515,8 @@ private fun Extension.toCameraView() = when (this) {
  *  animation, or for a sound of the app's own with [shutterSoundEnabled] off.
  * @param onImageCaptured Receives a picture from [CameraController.takePicture] given a file.
  * @param onImageSaved Receives where a picture from [CameraController.takePicture] without a file
- *  was filed.
+ *  was filed. [PictureFormat.RAW_JPEG] files a JPEG and a DNG, and this receives each, the JPEG
+ *  first, once both are filed.
  * @param onVideoCaptured Receives a video from [CameraController.startRecording] given a file.
  * @param onVideoSaved Receives where a video from [CameraController.startRecording] without a
  *  file was filed.

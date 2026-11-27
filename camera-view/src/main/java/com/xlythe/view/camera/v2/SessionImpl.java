@@ -276,6 +276,11 @@ abstract class SessionImpl implements Camera2Module.Session {
         mCamera2Module.showImageConfirmation(file);
     }
 
+    /** Shows a picture that wrote every one of {@code files}, reported as {@code file}. */
+    void showImageConfirmation(@NonNull File file, @NonNull List<File> files) {
+        mCamera2Module.showImageConfirmation(file, files);
+    }
+
     void onImageFailed() {
         mCamera2Module.onImageFailed();
     }

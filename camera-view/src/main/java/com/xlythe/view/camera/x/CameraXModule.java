@@ -1289,7 +1289,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         files.add(dng);
         PendingPicture picture = new PendingPicture(file, files, new PendingPicture.Callback() {
             @Override public void onSaved(@NonNull File saved) {
-                showImageConfirmation(saved);
+                showImageConfirmation(saved, files);
             }
 
             @Override public void onFailed() {

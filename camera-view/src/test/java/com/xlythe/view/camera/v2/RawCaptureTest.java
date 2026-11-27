@@ -1,18 +1,25 @@
 package com.xlythe.view.camera.v2;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import android.content.ContentValues;
 import android.content.Context;
 import android.graphics.ImageFormat;
 import android.hardware.camera2.CameraMetadata;
 import android.media.FakeImage;
 import android.media.ImageReader;
+import android.net.Uri;
+import android.provider.MediaStore;
+
+import androidx.annotation.NonNull;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.CaptureDelivery;
 import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader;
 
@@ -22,12 +29,19 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowContentResolver;
+import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowPausedAsyncTask;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -57,6 +71,9 @@ public class RawCaptureTest {
     private final AtomicInteger reports = new AtomicInteger();
     private final AtomicInteger failures = new AtomicInteger();
 
+    /** Where each picture taken without a file was filed, in the order the listener heard. */
+    private final List<Uri> saved = new ArrayList<>();
+
     /** Writes handed to AsyncTask, held until a test runs them. */
     private final List<Runnable> writes = new ArrayList<>();
 
@@ -71,6 +88,7 @@ public class RawCaptureTest {
         readersBefore = ShadowInjectableImageReader.openReaderCount();
         ShadowPausedAsyncTask.overrideExecutor(writes::add);
         context = RuntimeEnvironment.getApplication();
+        CaptureDelivery.allowDngInMediaStore();
     }
 
     @After
@@ -95,6 +113,10 @@ public class RawCaptureTest {
             @Override public void onImageCaptured(File file) {
                 reports.incrementAndGet();
                 captured.set(file);
+            }
+
+            @Override public void onImageSaved(@NonNull Uri uri) {
+                saved.add(uri);
             }
 
             @Override public void onFailure() {
@@ -382,6 +404,135 @@ public class RawCaptureTest {
 
         assertEquals("leaked: " + ShadowInjectableImageReader.describeOpenReaders(),
                 readersBefore, ShadowInjectableImageReader.openReaderCount());
+    }
+
+    /** A RAW picture taken without a file is filed in the gallery as the DNG it is. */
+    @Test
+    public void aRawPictureWithoutAFileIsFiledAsADng() throws Exception {
+        Camera2Module module = givenACamera(FakeCamera2.RawSupport.FULL);
+        module.setPictureFormat(CameraView.PictureFormat.RAW);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        File output = CaptureDelivery.ownPictureFile(cameraView, CameraView.PictureFormat.RAW);
+        assertTrue("a RAW capture is never cached as a JPEG", output.getName().endsWith(".dng"));
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        deliverRawFrame();
+        runWrites();
+        awaitFiling();
+
+        assertEquals(0, failures.get());
+        assertEquals(1, saved.size());
+        List<ShadowContentResolver.InsertStatement> inserts = resolver().getInsertStatements();
+        assertEquals(1, inserts.size());
+        ContentValues row = inserts.get(0).getContentValues();
+        assertEquals(output.getName(), row.getAsString(MediaStore.MediaColumns.DISPLAY_NAME));
+        assertEquals("image/x-adobe-dng", row.getAsString(MediaStore.MediaColumns.MIME_TYPE));
+        assertNoCacheFiles();
+    }
+
+    /**
+     * RAW_JPEG taken without a file files both under one name and is heard twice, the JPEG
+     * first, however the two writes finish.
+     */
+    @Test
+    public void aRawJpegPictureWithoutAFileFilesBothTheJpegFirst() throws Exception {
+        Camera2Module module = givenACamera(FakeCamera2.RawSupport.FULL);
+        module.setPictureFormat(CameraView.PictureFormat.RAW_JPEG);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        File output =
+                CaptureDelivery.ownPictureFile(cameraView, CameraView.PictureFormat.RAW_JPEG);
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        // The DNG is written before the JPEG, the reverse of the order they are heard in.
+        deliverRawFrame();
+        runWrites();
+        ImageReader jpeg = ShadowInjectableImageReader.latestReader(ImageFormat.JPEG);
+        assertNotNull(jpeg);
+        ShadowInjectableImageReader.offerImage(jpeg, FakeImage.jpeg(1920, 1080, JPEG_BYTES));
+        FakeCamera2.idleMainLooper();
+        runWrites();
+        awaitFiling();
+
+        assertEquals(0, failures.get());
+        assertEquals(2, saved.size());
+        List<ShadowContentResolver.InsertStatement> inserts = resolver().getInsertStatements();
+        assertEquals(2, inserts.size());
+        ContentValues first = inserts.get(0).getContentValues();
+        ContentValues second = inserts.get(1).getContentValues();
+        assertEquals(output.getName(), first.getAsString(MediaStore.MediaColumns.DISPLAY_NAME));
+        assertEquals("image/jpeg", first.getAsString(MediaStore.MediaColumns.MIME_TYPE));
+        String base = output.getName().substring(0, output.getName().lastIndexOf('.'));
+        assertEquals(base + ".dng", second.getAsString(MediaStore.MediaColumns.DISPLAY_NAME));
+        assertEquals("image/x-adobe-dng", second.getAsString(MediaStore.MediaColumns.MIME_TYPE));
+        assertArrayEquals("the JPEG is heard first", JPEG_BYTES, read(saved.get(0)));
+        assertNoCacheFiles();
+    }
+
+    /** A RAW_JPEG picture that loses its DNG is a failure, and files neither half. */
+    @Test
+    public void aRawJpegPictureWithoutAFileThatLosesItsDngFilesNeither() throws Exception {
+        Camera2Module module = givenACamera(FakeCamera2.RawSupport.FULL);
+        module.setPictureFormat(CameraView.PictureFormat.RAW_JPEG);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        File output =
+                CaptureDelivery.ownPictureFile(cameraView, CameraView.PictureFormat.RAW_JPEG);
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        ImageReader jpeg = ShadowInjectableImageReader.latestReader(ImageFormat.JPEG);
+        assertNotNull(jpeg);
+        ShadowInjectableImageReader.offerImage(jpeg, FakeImage.jpeg(1920, 1080, JPEG_BYTES));
+        FakeCamera2.idleMainLooper();
+        runWrites();
+        assertTrue("the JPEG is on disc", output.isFile());
+        // The camera closes before the RAW frame arrives, so the DNG is never written.
+        module.close();
+        FakeCamera2.idleMainLooper();
+        runWrites();
+
+        assertEquals(1, failures.get());
+        assertEquals(0, saved.size());
+        assertTrue("nothing reaches MediaStore", resolver().getInsertStatements().isEmpty());
+        assertNoCacheFiles();
+    }
+
+    private ShadowContentResolver resolver() {
+        return Shadows.shadowOf(context.getContentResolver());
+    }
+
+    private byte[] read(Uri uri) throws IOException {
+        try (InputStream input = context.getContentResolver().openInputStream(uri)) {
+            assertNotNull("nothing at " + uri, input);
+            ByteArrayOutputStream output = new ByteArrayOutputStream();
+            byte[] buffer = new byte[64];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            return output.toByteArray();
+        }
+    }
+
+    /** Asserts takePicture()'s cache directory holds nothing once a capture is filed or lost. */
+    private void assertNoCacheFiles() {
+        File[] left = CaptureDelivery.captureDirectory(cameraView).listFiles();
+        assertTrue("left in the cache: " + Arrays.toString(left),
+                left == null || left.length == 0);
+    }
+
+    /** Runs the main looper until filing, which has a thread of its own, has been heard. */
+    private void awaitFiling() throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5_000;
+        while (saved.isEmpty() && failures.get() == 0 && System.currentTimeMillis() < deadline) {
+            ShadowLooper.idleMainLooper();
+            Thread.sleep(10);
+        }
+        assertTrue("the picture was never filed", !saved.isEmpty() || failures.get() > 0);
     }
 
     /** Hands the RAW reader the frame for the last capture, with that capture's timestamp. */

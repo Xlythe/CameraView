@@ -246,6 +246,9 @@ public final class FakeCamera2 {
         shadow.set(CameraCharacteristics.SENSOR_INFO_PRE_CORRECTION_ACTIVE_ARRAY_SIZE,
                 new Rect(0, 0, SIZE_RAW.getWidth(), SIZE_RAW.getHeight()));
         shadow.set(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE, SIZE_RAW);
+        // Published by every camera, and read by DngCreator to date the file it writes.
+        shadow.set(CameraCharacteristics.SENSOR_INFO_TIMESTAMP_SOURCE,
+                CameraMetadata.SENSOR_INFO_TIMESTAMP_SOURCE_UNKNOWN);
         shadow.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, rawSupport.hasCapability()
                 ? new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
                         CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_RAW}
