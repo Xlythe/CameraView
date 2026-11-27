@@ -1,7 +1,5 @@
 package com.xlythe.view.camera.legacy;
 
-import android.Manifest;
-import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
@@ -23,8 +21,6 @@ import android.util.Log;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
-import com.xlythe.view.camera.LocationProvider;
-import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
@@ -50,24 +46,6 @@ public class LegacyCameraModule extends ICameraModule {
 
     /** The zoom scale CameraView publishes, matching the Camera2 and CameraX backends. */
     private static final int MAX_ZOOM_LEVEL = 100;
-
-    /**
-     * How old a location may be and still describe where a picture was taken.
-     *
-     * <p>Two hours, because what is wanted is the place rather than the moment, and a fix from
-     * earlier in the same outing names the place correctly. Starting a live scan when the camera
-     * opens would be more accurate and would cost a radio running for as long as the camera is
-     * on, for a field most viewers read to the nearest town.</p>
-     */
-    private static final long STALE_LOCATION_MILLIS = 2 * 60 * 60 * 1000;
-
-    /**
-     * How long to wait for the GPS to answer, which is deliberately almost no time at all.
-     *
-     * <p>The point is to take whatever fix is already there, not to hold a capture while the
-     * radio warms up. A picture is never delayed for its metadata.</p>
-     */
-    private static final long GPS_TIMEOUT_MILLIS = 10;
 
     /** Which of the device's cameras is selected, as an index into Camera.getNumberOfCameras. */
     private int mActiveCamera = INVALID_CAMERA_ID;
@@ -329,7 +307,7 @@ public class LegacyCameraModule extends ICameraModule {
             }
         });
 
-        Location location = getLocation(getContext());
+        Location location = getLocation();
         if (location != null) {
             mVideoRecorder.setLocation((float) location.getLatitude(), (float) location.getLongitude());
         }
@@ -777,16 +755,5 @@ public class LegacyCameraModule extends ICameraModule {
             return Long.signum((long) lhs.width * lhs.height -
                     (long) rhs.width * rhs.height);
         }
-    }
-
-    @SuppressWarnings({"MissingPermission"})
-    @Nullable
-    static Location getLocation(Context context) {
-        if (PermissionChecker.hasPermissions(context, Manifest.permission.ACCESS_FINE_LOCATION)) {
-            // Our GPS timeout is purposefully low. We're not intending to wait until GPS is acquired
-            // but we want a last known location for the next time a picture is taken.
-            return LocationProvider.getGPSLocation(context, STALE_LOCATION_MILLIS, GPS_TIMEOUT_MILLIS);
-        }
-        return null;
     }
 }

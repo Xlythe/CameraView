@@ -1,16 +1,23 @@
 package com.xlythe.view.camera.v2;
 
+import static com.xlythe.view.camera.FakeLocation.LATITUDE;
+import static com.xlythe.view.camera.FakeLocation.LONGITUDE;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.location.LocationManager;
 import android.media.MediaActionSound;
 
 import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.FakeLocation;
+import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
+import com.xlythe.view.camera.shadow.ShadowGeotaggingMediaRecorder;
 
 import org.junit.After;
 import org.junit.Before;
@@ -29,7 +36,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * VideoSession arms the recorder and waits for the first completed capture before starting it.
  */
 @RunWith(RobolectricTestRunner.class)
-@Config(sdk = {29, 37}, shadows = {ShadowCallbackCameraCaptureSession.class},
+@Config(sdk = {29, 37}, shadows = {
+        ShadowAvailableTextureView.class,
+        ShadowCallbackCameraCaptureSession.class,
+        ShadowGeotaggingMediaRecorder.class},
         qualifiers = "w360dp-h800dp-xxxhdpi")
 public class VideoRecordingTest {
     private Context context;
@@ -47,16 +57,56 @@ public class VideoRecordingTest {
         CameraSoundsTest.resetSounds();
         // Robolectric runs no resetter for a shadow a test declares itself.
         ShadowCallbackCameraCaptureSession.reset();
+        ShadowGeotaggingMediaRecorder.forgetLocation();
     }
 
     @After
     public void tearDown() {
         module.close();
+        cameraView.close();
         FakeCamera2.idleMainLooper();
         cameraView.release();
         if (output.exists() && !output.delete()) {
             output.deleteOnExit();
         }
+    }
+
+    /** A recording is tagged with the fix the camera has followed since it opened. */
+    @Test
+    public void aRecordingIsTaggedWithWhereTheDeviceIs() {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+        cameraView.open();
+        FakeCamera2.idleMainLooper();
+        FakeLocation.deliver(context,
+                FakeLocation.fix(LocationManager.GPS_PROVIDER, LATITUDE, LONGITUDE, 5));
+        FakeLocation.setLastKnown(context, LocationManager.GPS_PROVIDER, null);
+
+        cameraView.startRecording(output);
+        FakeCamera2.idleMainLooper();
+
+        float[] tagged = ShadowGeotaggingMediaRecorder.getLocation();
+        assertNotNull("expected the recording to carry a location", tagged);
+        assertEquals(LATITUDE, tagged[0], 1e-4);
+        assertEquals(LONGITUDE, tagged[1], 1e-4);
+        assertEquals("the recording asks for nothing of its own",
+                2, FakeLocation.listeners(context));
+    }
+
+    /** With no fix to be had, a recording starts untagged rather than waiting for one. */
+    @Test
+    public void aRecordingNeverWaitsForAFix() {
+        FakeLocation.addProviders(context);
+        FakeLocation.grantFine(context);
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.startRecording(output);
+        FakeCamera2.idleMainLooper();
+
+        assertTrue(module.isRecording());
+        assertEquals("nothing may be asked of the radio", 0, FakeLocation.listeners(context));
+        assertNull(ShadowGeotaggingMediaRecorder.getLocation());
     }
 
     @Test
