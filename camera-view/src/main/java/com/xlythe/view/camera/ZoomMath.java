@@ -70,6 +70,28 @@ public final class ZoomMath {
         return (int) Math.round(fraction * MAX_ZOOM_LEVEL);
     }
 
+    /**
+     * The ratio a fraction of the way from one ratio to another, on a log scale.
+     *
+     * <p>Equal steps then multiply the zoom by the same amount, so easing from 0.6x to 1x looks
+     * like easing from 1x to 3x. Interpolated linearly, an animation from 0.6x to 10x would be
+     * past 1x within its first 5%.</p>
+     *
+     * @param fromRatio where the zoom starts, above 0
+     * @param toRatio where it ends, above 0
+     * @param fraction how far along, from 0 at fromRatio to 1 at toRatio
+     */
+    public static float interpolate(float fromRatio, float toRatio, float fraction) {
+        if (fraction <= 0f) {
+            return fromRatio;
+        }
+        if (fraction >= 1f) {
+            // Exactly the target, which the power below can miss by a rounding error.
+            return toRatio;
+        }
+        return (float) (fromRatio * Math.pow(toRatio / fromRatio, fraction));
+    }
+
     /** Holds a ratio inside a camera's range. */
     public static float clamp(float ratio, float minRatio, float maxRatio) {
         return Math.max(minRatio, Math.min(ratio, maxRatio));

@@ -1,6 +1,9 @@
 package com.xlythe.view.camera;
 
 import android.Manifest;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.annotation.TargetApi;
 import android.content.Context;
 import android.content.res.TypedArray;
@@ -25,6 +28,7 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.ViewGroup;
 import android.view.WindowManager;
+import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
@@ -145,6 +149,13 @@ public class CameraView extends FrameLayout {
      * is never coming.</p>
      */
     private static final long FOCUS_TIMEOUT_MILLIS = 3000;
+
+    /**
+     * How long an animated {@link #setZoomRatio(float, boolean)} takes. About what a phone's own
+     * camera app takes on a tap of a zoom button: long enough to see the lenses change, short
+     * enough that nobody waits for it.
+     */
+    private static final long ZOOM_ANIMATION_MILLIS = 300;
 
     /**
      * The cache directory {@link #takePicture()} and {@link #startRecording()} write to. A capture
@@ -440,6 +451,14 @@ public class CameraView extends FrameLayout {
      * passed on once. Kept with no listener too, so one set later hears only real changes.
      */
     private float mLastReportedZoomRatio = Float.NaN;
+    /** Eases the zoom over to {@link #mZoomAnimationTarget}, or null while no animation runs. */
+    @Nullable
+    private ValueAnimator mZoomAnimator;
+    /**
+     * Where the running zoom animation lands. Saved in place of the zoom it has reached, so a
+     * restore lands there too.
+     */
+    private float mZoomAnimationTarget;
 
     private ICameraModule mCameraModule;
 
@@ -634,7 +653,8 @@ public class CameraView extends FrameLayout {
         state.putParcelable(EXTRA_SUPER, super.onSaveInstanceState());
         state.putParcelable(EXTRA_MODULE, mCameraModule.onSaveInstanceState());
         state.putInt(EXTRA_QUALITY, getQuality().id);
-        state.putFloat(EXTRA_ZOOM_RATIO, getZoomRatio());
+        state.putFloat(EXTRA_ZOOM_RATIO,
+                mZoomAnimator != null ? mZoomAnimationTarget : getZoomRatio());
         state.putBoolean(EXTRA_PINCH_TO_ZOOM_ENABLED, isPinchToZoomEnabled());
         state.putInt(EXTRA_FLASH, getFlash().id);
         state.putInt(EXTRA_LENS_FACING, getLensFacing().id);
@@ -1177,6 +1197,7 @@ public class CameraView extends FrameLayout {
             stopFrameAnalysis();
         }
         mLocationTracker.stop();
+        finishZoomAnimation();
         mCameraModule.close();
         mCameraModule.releaseSounds();
 
@@ -1648,6 +1669,7 @@ public class CameraView extends FrameLayout {
      * the front and back facing cameras.
      */
     public void toggleCamera() {
+        cancelZoomAnimation();
         mCameraModule.toggleCamera();
     }
 
@@ -1659,6 +1681,7 @@ public class CameraView extends FrameLayout {
             return;
         }
 
+        cancelZoomAnimation();
         mCameraModule.setLensFacing(lensFacing);
     }
 
@@ -2064,11 +2087,82 @@ public class CameraView extends FrameLayout {
      * so the whole range is one smooth zoom.</p>
      */
     public void setZoomRatio(float zoomRatio) {
+        setZoomRatio(zoomRatio, false /* animate */);
+    }
+
+    /**
+     * Zooms to a ratio, easing over to it when animate is true rather than jumping, as a phone's
+     * camera app does on a tap of a zoom button.
+     *
+     * <p>The animation passes through every ratio in between, on a log scale so that 0.6x to 1x
+     * moves like 1x to 3x. A phone with several lenses switches between them along the way, and
+     * {@link #setOnZoomChangedListener} hears each step. A pinch, a zoom that is not animated or
+     * a lens switch stops it where it is; closing the camera lands it on the ratio it was heading
+     * for. Before the camera is open there is nothing to watch, so the zoom is set at once.</p>
+     */
+    @UiThread
+    public void setZoomRatio(float zoomRatio, boolean animate) {
         if (!(zoomRatio > 0f) || Float.isInfinite(zoomRatio)) {
             Log.w(TAG, "Ignoring a zoom ratio of " + zoomRatio);
             return;
         }
-        mCameraModule.setZoomRatio(zoomRatio);
+        if (!animate || !isOpen() || !isZoomSupported()) {
+            cancelZoomAnimation();
+            mCameraModule.setZoomRatio(zoomRatio);
+            return;
+        }
+
+        // Held to the range first, so the animation spends its whole length moving rather than
+        // reaching the end of the range early and sitting there.
+        float target = ZoomMath.clamp(zoomRatio, getMinZoomRatio(), getMaxZoomRatio());
+        if (mZoomAnimator != null && target == mZoomAnimationTarget) {
+            // Already on its way there. Starting again would only slow it down.
+            return;
+        }
+        cancelZoomAnimation();
+        float from = getZoomRatio();
+        if (from == target) {
+            return;
+        }
+
+        ValueAnimator animator = ValueAnimator.ofFloat(0f, 1f);
+        animator.setDuration(ZOOM_ANIMATION_MILLIS);
+        animator.setInterpolator(new AccelerateDecelerateInterpolator());
+        // Each step goes to the module rather than to setZoomRatio, which would cancel this
+        // animation.
+        animator.addUpdateListener(animation -> mCameraModule.setZoomRatio(
+                ZoomMath.interpolate(from, target, (Float) animation.getAnimatedValue())));
+        animator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                if (mZoomAnimator == animation) {
+                    mZoomAnimator = null;
+                }
+            }
+        });
+        mZoomAnimator = animator;
+        mZoomAnimationTarget = target;
+        animator.start();
+    }
+
+    /** Stops a running zoom animation wherever it has got to. */
+    private void cancelZoomAnimation() {
+        ValueAnimator animator = mZoomAnimator;
+        if (animator == null) {
+            return;
+        }
+        mZoomAnimator = null;
+        animator.cancel();
+    }
+
+    /** Stops a running zoom animation at the ratio it was heading for. */
+    private void finishZoomAnimation() {
+        if (mZoomAnimator == null) {
+            return;
+        }
+        float target = mZoomAnimationTarget;
+        cancelZoomAnimation();
+        mCameraModule.setZoomRatio(target);
     }
 
     /** The current zoom. See {@link #setZoomRatio}. */
@@ -2108,6 +2202,7 @@ public class CameraView extends FrameLayout {
      * amount.</p>
      */
     public void setZoomLevel(int zoomLevel) {
+        cancelZoomAnimation();
         mCameraModule.setZoomLevel(zoomLevel);
     }
 
@@ -2129,9 +2224,9 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Reports every change of zoom, however it came about: {@link #setZoomRatio},
-     * {@link #setZoomLevel}, a pinch, or a lens switch to a camera that cannot reach the old zoom.
-     * This is what keeps preset buttons in step with a pinch.
+     * Reports every change of zoom, however it came about: {@link #setZoomRatio}, each step of an
+     * animated one, {@link #setZoomLevel}, a pinch, or a lens switch to a camera that cannot reach
+     * the old zoom. This is what keeps preset buttons in step with a pinch.
      */
     public void setOnZoomChangedListener(@Nullable OnZoomChangedListener listener) {
         mOnZoomChangedListener = listener;
@@ -2273,6 +2368,9 @@ public class CameraView extends FrameLayout {
             if (!isPinchToZoomEnabled() || !isZoomSupported()) {
                 return false;
             }
+            // The fingers take over from wherever an animation has got to, and its next frame
+            // would otherwise move the zoom out from under them.
+            cancelZoomAnimation();
             mZoomRatio = getZoomRatio();
             mMinZoomRatio = getMinZoomRatio();
             mMaxZoomRatio = getMaxZoomRatio();

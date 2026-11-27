@@ -81,6 +81,47 @@ public class ZoomMathTest {
         assertEquals(0, ZoomMath.levelForRatio(Float.NaN, 1f, 4f));
     }
 
+    /** An animation starts and ends exactly where it was asked to, either way round. */
+    @Test
+    public void interpolationEndsExactlyAtEitherRatio() {
+        assertEquals(0.6f, ZoomMath.interpolate(0.6f, 10f, 0f), 0f);
+        assertEquals(10f, ZoomMath.interpolate(0.6f, 10f, 1f), 0f);
+        assertEquals(10f, ZoomMath.interpolate(10f, 0.6f, 0f), 0f);
+        assertEquals(0.6f, ZoomMath.interpolate(10f, 0.6f, 1f), 0f);
+
+        // An interpolator that overshoots holds at the ends rather than leaving the range.
+        assertEquals(0.6f, ZoomMath.interpolate(0.6f, 10f, -0.2f), 0f);
+        assertEquals(10f, ZoomMath.interpolate(0.6f, 10f, 1.2f), 0f);
+    }
+
+    /**
+     * Halfway is the geometric middle, so equal time multiplies the zoom by the same amount:
+     * 0.6x to 1x takes as long to feel as 1x to 3x does.
+     */
+    @Test
+    public void interpolationIsLogarithmic() {
+        assertEquals("1x to 4x passes 2x halfway, not 2.5x",
+                2f, ZoomMath.interpolate(1f, 4f, 0.5f), TOLERANCE);
+        assertEquals("and 4x to 1x passes it on the way back",
+                2f, ZoomMath.interpolate(4f, 1f, 0.5f), TOLERANCE);
+        assertEquals("a quarter of the way is the square root of the middle",
+                (float) Math.sqrt(2), ZoomMath.interpolate(1f, 4f, 0.25f), TOLERANCE);
+
+        // Each tenth of the way multiplies the zoom by the same factor, wherever it falls.
+        float step = ZoomMath.interpolate(0.6f, 10f, 0.1f) / 0.6f;
+        for (int i = 1; i < 10; i++) {
+            float before = ZoomMath.interpolate(0.6f, 10f, i / 10f);
+            float after = ZoomMath.interpolate(0.6f, 10f, (i + 1) / 10f);
+            assertEquals("tenth " + i, step, after / before, TOLERANCE);
+        }
+    }
+
+    /** Easing to where the zoom already is goes nowhere. */
+    @Test
+    public void interpolatingToTheSameRatioStaysThere() {
+        assertEquals(2.74f, ZoomMath.interpolate(2.74f, 2.74f, 0.5f), 0f);
+    }
+
     @Test
     public void clampingHoldsARatioInsideTheRange() {
         assertEquals(0.6f, ZoomMath.clamp(0.1f, 0.6f, 10f), 0f);
