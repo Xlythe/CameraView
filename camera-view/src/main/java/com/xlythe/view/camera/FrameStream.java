@@ -219,8 +219,6 @@ public final class FrameStream implements Closeable {
         return mIsAlive.get();
     }
 
-    /** Starts delivering frames. Does nothing if already started. */
-    @RequiresPermission(Manifest.permission.CAMERA)
     /**
      * A stream the library drives itself, rather than one an app asked for.
      *
@@ -239,6 +237,8 @@ public final class FrameStream implements Closeable {
         return new FrameStream(canvas, null /* view */, params, analyzer);
     }
 
+    /** Starts delivering frames. Does nothing if already started. */
+    @RequiresPermission(Manifest.permission.CAMERA)
     public void start() {
         if (!mIsAlive.compareAndSet(false, true)) {
             Log.w(TAG, "FrameStream is already running");
