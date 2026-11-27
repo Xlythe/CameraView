@@ -5,6 +5,7 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -16,9 +17,11 @@ import androidx.exifinterface.media.ExifInterface;
 import com.xlythe.view.camera.MediaTags;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.channels.FileChannel;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -33,6 +36,9 @@ import java.util.Comparator;
  * that can be; after that it is viewed the same way, and opening it again finds the copy. The
  * whole decode is the most memory a viewer ever uses, and it is held only while the copy is
  * written.</p>
+ *
+ * <p>A camera's raw file that this release cannot decode at all shows the largest JPEG the
+ * camera embedded in it instead, copied out to the cache the same way.</p>
  */
 final class ImageSources {
     /** Where the copies go, under the app's cache. */
@@ -102,7 +108,11 @@ final class ImageSources {
             BitmapFactory.decodeStream(input, null, bounds);
         }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            throw new IOException(location + " is not a picture this device can decode");
+            File preview = rawPreview(context, location);
+            if (preview == null) {
+                throw new IOException(location + " is not a picture this device can decode");
+            }
+            return openPreview(context, location, preview);
         }
         int orientation = ExifInterface.ORIENTATION_NORMAL;
         GPano gpano = null;
@@ -121,6 +131,72 @@ final class ImageSources {
             source = copy(context, location, bounds.outWidth, bounds.outHeight, MAX_COPY_PIXELS);
         }
         return new Opened(source, orientation, gpano);
+    }
+
+    /**
+     * Opens the JPEG a raw file embeds, turned as the raw file says, or as the JPEG itself says
+     * when the raw file does not.
+     */
+    @WorkerThread
+    @NonNull
+    private static Opened openPreview(@NonNull Context context, @NonNull ImageLocation location,
+            @NonNull File preview) throws IOException {
+        int orientation = ExifInterface.ORIENTATION_NORMAL;
+        try {
+            MediaTags tags = location.openTags(context);
+            if (tags.getRotation() == 0 && !tags.isMirrored()) {
+                tags = MediaTags.open(preview);
+            }
+            orientation = Orientation.exifOrientation(tags.getRotation(), tags.isMirrored());
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "Unable to read the metadata of " + location, e);
+        }
+        return new Opened(DecoderRegionSource.open(ImageLocation.of(preview)
+                .openDescriptor(context)), orientation, null);
+    }
+
+    /**
+     * The largest JPEG a raw file embeds, copied to the cache, or null if it embeds none or is
+     * not a raw file.
+     */
+    @VisibleForTesting
+    @WorkerThread
+    @Nullable
+    static File rawPreview(@NonNull Context context, @NonNull ImageLocation location)
+            throws IOException {
+        File directory = new File(context.getCacheDir(), CACHE_DIRECTORY);
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            throw new IOException("Unable to make " + directory);
+        }
+        File copy = new File(directory, digest(location.fingerprint(context)) + ".raw.jpg");
+        if (copy.isFile()) {
+            return copy;
+        }
+        try (ParcelFileDescriptor descriptor = location.openDescriptor(context);
+                FileInputStream input = new FileInputStream(descriptor.getFileDescriptor())) {
+            FileChannel channel = input.getChannel();
+            RawPreview.Found found = RawPreview.find(channel);
+            if (found == null) {
+                return null;
+            }
+            File partial = new File(directory, copy.getName() + ".partial");
+            try (FileOutputStream output = new FileOutputStream(partial)) {
+                FileChannel out = output.getChannel();
+                long done = 0;
+                while (done < found.length) {
+                    long moved = channel.transferTo(found.offset + done, found.length - done, out);
+                    if (moved <= 0) {
+                        throw new IOException("The preview in " + location + " ends early");
+                    }
+                    done += moved;
+                }
+            }
+            if (!partial.renameTo(copy)) {
+                throw new IOException("Unable to keep the preview of " + location);
+            }
+        }
+        trim(directory);
+        return copy;
     }
 
     /**
