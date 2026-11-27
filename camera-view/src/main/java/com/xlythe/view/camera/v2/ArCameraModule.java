@@ -56,7 +56,7 @@ public class ArCameraModule extends Camera2Module {
 
     /**
      * Where the camera's capture results arrive while AR runs, or null while closed. Off the main
-     * thread, so that a hit test waiting there for the next frame does not hold that frame up.
+     * thread, so that asking the renderer for a frame never waits behind the main thread.
      */
     @Nullable
     private HandlerThread mFrameRequestThread;

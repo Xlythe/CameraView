@@ -9,6 +9,7 @@ import android.hardware.camera2.CameraManager;
 import android.media.Image;
 import android.opengl.GLES20;
 import android.os.Handler;
+import android.os.Looper;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -87,7 +88,7 @@ public final class ArCoreSession implements ArTracker {
     /** Log tag shared with the camera modules. */
     private static final String TAG = ICameraModule.TAG;
 
-    /** How long a hit test waits for the next frame, which is when it can be answered. */
+    /** How long a hit test waits for the render thread to answer it. */
     private static final long HIT_TEST_TIMEOUT_MILLIS = 500;
 
     /** The texture's origin and the far end of each of its axes, in its own coordinates. */
@@ -138,8 +139,16 @@ public final class ArCoreSession implements ArTracker {
     @Nullable
     private volatile Listener mListener;
 
-    /** Work waiting for the next frame. */
+    /** Work waiting for a frame. */
     private final ConcurrentLinkedQueue<FrameTask> mFrameTasks = new ConcurrentLinkedQueue<>();
+
+    /** The render thread, which runs work against the frame it holds, or null before it starts. */
+    @Nullable
+    private volatile Handler mRenderHandler;
+
+    /** The frame the render thread holds, valid until its next update, or null for none. */
+    @Nullable
+    private volatile Frame mFrame;
 
     /** ARCore's surfaces for the camera that is open, asked for once per open. Main thread. */
     @Nullable
@@ -382,6 +391,7 @@ public final class ArCoreSession implements ArTracker {
             return;
         }
         mResumed = false;
+        mFrame = null;
         try {
             mSession.pause();
         } catch (RuntimeException error) {
@@ -405,11 +415,12 @@ public final class ArCoreSession implements ArTracker {
     }
 
     /**
-     * Places an anchor on the first surface ARCore finds through a point of the buffer, on the
-     * next frame.
+     * Places an anchor on the first surface ARCore finds through a point of the buffer, in the
+     * frame the render thread holds, or in the next one if it holds none yet.
      *
-     * <p>Waits for that frame, because a frame is only valid on the render thread until the next
-     * one, and a hit test needs one.</p>
+     * <p>Waits for the render thread, because a frame is only valid there, until the next update,
+     * and a hit test needs one. It does not wait for a new frame: the camera's capture results
+     * reach ARCore through the main thread, so none arrives while the main thread waits.</p>
      *
      * @param s across the buffer from its left, from 0 to 1
      * @param t up the buffer from its bottom, from 0 to 1
@@ -434,6 +445,10 @@ public final class ArCoreSession implements ArTracker {
                 done.countDown();
             }
         });
+        Handler renderer = mRenderHandler;
+        if (renderer != null) {
+            renderer.post(this::runFrameTasksOnHeldFrame);
+        }
         try {
             if (!done.await(HIT_TEST_TIMEOUT_MILLIS, TimeUnit.MILLISECONDS)) {
                 abandoned.set(true);
@@ -479,6 +494,8 @@ public final class ArCoreSession implements ArTracker {
     public int onCreateCameraTexture() {
         int textureName = OesTextureProgram.newExternalTexture();
         mSession.setCameraTextureName(textureName);
+        Looper looper = Looper.myLooper();
+        mRenderHandler = looper == null ? null : new Handler(looper);
         return textureName;
     }
 
@@ -495,10 +512,12 @@ public final class ArCoreSession implements ArTracker {
         try {
             frame = mSession.update();
         } catch (CameraNotAvailableException | RuntimeException error) {
+            mFrame = null;
             // Paused, which an update racing a pause on the main thread meets.
             if (ICameraModule.DEBUG) Log.d(TAG, "ARCore has no frame to give", error);
             return false;
         }
+        mFrame = frame;
         try {
             long timestampNanos = frame.getTimestamp();
             if (timestampNanos == 0 || timestampNanos == mTimestampNanos) {
@@ -518,6 +537,15 @@ public final class ArCoreSession implements ArTracker {
             report(trackingOf(camera));
             return true;
         } finally {
+            runFrameTasks(frame);
+        }
+    }
+
+    /** Runs the work waiting for a frame against the one the render thread holds, if any. */
+    @WorkerThread
+    private void runFrameTasksOnHeldFrame() {
+        Frame frame = mFrame;
+        if (frame != null) {
             runFrameTasks(frame);
         }
     }
@@ -764,6 +792,8 @@ public final class ArCoreSession implements ArTracker {
     @WorkerThread
     @Override
     public void onReleaseCameraTexture(int textureName) {
+        mRenderHandler = null;
+        mFrame = null;
         int[] names = mDepthTextureName == 0
                 ? new int[] {textureName} : new int[] {textureName, mDepthTextureName};
         GLES20.glDeleteTextures(names.length, names, 0);
