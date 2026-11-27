@@ -73,6 +73,15 @@ enum class DynamicRange {
     HDR
 }
 
+/** What a sweep covers. See [CameraController.startPanorama]. */
+enum class PanoramaMode {
+    /** All the way round, at the height the sweep starts at. */
+    PANORAMA,
+
+    /** Everything, from straight up to straight down. */
+    PHOTOSPHERE
+}
+
 /** An optional vendor photo-processing extension. See [CameraState.supportedExtensions]. */
 enum class Extension {
     NONE,
@@ -128,7 +137,9 @@ data class CameraState(
     val horizontalFieldOfView: Float = 0f,
     val verticalFieldOfView: Float = 0f,
     val isRecording: Boolean = false,
-    val isAnalyzingFrames: Boolean = false
+    val isAnalyzingFrames: Boolean = false,
+    /** Whether a panorama or photosphere is being swept or saved. */
+    val isCapturingPanorama: Boolean = false
 )
 
 interface CameraController {
@@ -195,6 +206,32 @@ interface CameraController {
     fun setFaceDetectionListener(
         listener: ((faces: List<Face>, faceToView: Matrix) -> Unit)?
     ): Boolean
+
+    /**
+     * Sweeps a panorama or a photosphere into [file], with the guide drawn over the preview.
+     *
+     * The sweep finishes on its own once everything is covered, or with what it has when
+     * [stopPanorama] is called, and [onCaptured] or [onFailed] says what came of it. [onProgress]
+     * runs from 0 to 1 along the way. All three are called on the main thread.
+     *
+     * @return whether the sweep started. False on a device that cannot report its rotation.
+     * @throws IllegalStateException if the camera is not open, a sweep is already running, or
+     *     the camera's frames are already going to a barcode scanner, an analyzer or a recording
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    fun startPanorama(
+        file: File,
+        mode: PanoramaMode = PanoramaMode.PANORAMA,
+        onProgress: (progress: Float) -> Unit = {},
+        onCaptured: (file: File) -> Unit = {},
+        onFailed: () -> Unit = {}
+    ): Boolean
+
+    /** Ends a sweep and saves what it covered. */
+    fun stopPanorama()
+
+    /** Ends a sweep and saves nothing. */
+    fun cancelPanorama()
 }
 
 private class CameraControllerImpl(
@@ -342,6 +379,54 @@ private class CameraControllerImpl(
         }
         return view.setFaceDetectionListener { faces, faceToView -> listener(faces, faceToView) }
     }
+
+    @RequiresPermission(Manifest.permission.CAMERA)
+    override fun startPanorama(
+        file: File,
+        mode: PanoramaMode,
+        onProgress: (progress: Float) -> Unit,
+        onCaptured: (file: File) -> Unit,
+        onFailed: () -> Unit
+    ): Boolean {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for startPanorama")
+            return false
+        }
+        val started = view.startPanorama(file, mode.toCameraView(),
+            object : CameraView.PanoramaListener {
+                override fun onPanoramaProgress(progress: Float) {
+                    onProgress(progress)
+                }
+
+                override fun onPanoramaCaptured(file: File) {
+                    onCameraStateChanged()
+                    onCaptured(file)
+                }
+
+                override fun onPanoramaFailed() {
+                    onCameraStateChanged()
+                    onFailed()
+                }
+            })
+        onCameraStateChanged()
+        return started
+    }
+
+    override fun stopPanorama() {
+        getView()?.stopPanorama()
+            ?: Log.e(TAG, "View not available for stopPanorama")
+    }
+
+    override fun cancelPanorama() {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for cancelPanorama")
+            return
+        }
+        view.cancelPanorama()
+        onCameraStateChanged()
+    }
 }
 
 /**
@@ -382,7 +467,8 @@ private fun CameraView.readCameraState(): CameraState {
         horizontalFieldOfView = horizontalFieldOfView,
         verticalFieldOfView = verticalFieldOfView,
         isRecording = isRecording,
-        isAnalyzingFrames = isAnalyzingFrames
+        isAnalyzingFrames = isAnalyzingFrames,
+        isCapturingPanorama = isCapturingPanorama
     )
 }
 
@@ -417,6 +503,11 @@ private fun PictureFormat.toCameraView() = when (this) {
 private fun DynamicRange.toCameraView() = when (this) {
     DynamicRange.SDR -> CameraView.DynamicRange.SDR
     DynamicRange.HDR -> CameraView.DynamicRange.HDR
+}
+
+private fun PanoramaMode.toCameraView() = when (this) {
+    PanoramaMode.PANORAMA -> CameraView.PanoramaMode.PANORAMA
+    PanoramaMode.PHOTOSPHERE -> CameraView.PanoramaMode.PHOTOSPHERE
 }
 
 private fun Extension.toCameraView() = when (this) {

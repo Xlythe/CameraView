@@ -113,6 +113,18 @@ class ComposeControllersTest {
             override fun setFaceDetectionListener(
                 listener: ((faces: List<Face>, faceToView: Matrix) -> Unit)?
             ): Boolean = false
+
+            override fun startPanorama(
+                file: File,
+                mode: PanoramaMode,
+                onProgress: (progress: Float) -> Unit,
+                onCaptured: (file: File) -> Unit,
+                onFailed: () -> Unit
+            ): Boolean = false
+
+            override fun stopPanorama() {}
+
+            override fun cancelPanorama() {}
         }
 
         controllerState.value = controller
