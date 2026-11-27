@@ -12,6 +12,7 @@ import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.media.MediaMetadataRetriever;
 import android.opengl.GLES20;
+import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
@@ -21,6 +22,7 @@ import androidx.annotation.Nullable;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.exifinterface.media.ExifInterface;
 import androidx.test.rule.GrantPermissionRule;
 
@@ -96,6 +98,10 @@ public final class FrameEffectDeviceTest {
     /** How near to 255 a clamped channel has to land, allowing for JPEG. */
     private static final int WHITE_FLOOR = 243;
     private static final String FILTER_TAG = "FrameEffect";
+    /** Where burst rates are logged, for {@code adb logcat -s BurstRate}. */
+    private static final String BURST_TAG = "BurstRate";
+    /** How many pictures the drawn burst takes: enough to see each one drawn, and a rate. */
+    private static final int DRAWN_BURST_COUNT = 5;
     /** How long the preview is given to show what the renderer drew, once the camera is open. */
     private static final long PREVIEW_WAIT_MILLIS = 10_000;
     /** How often the screen is looked at while waiting for it. */
@@ -622,6 +628,71 @@ public final class FrameEffectDeviceTest {
             unfiltered.recycle();
             grey.recycle();
         }
+    }
+
+    /**
+     * Every picture of a burst is drawn as a single picture is: a filter that clamps every channel
+     * to white leaves each file white. The rate is logged under the BurstRate tag beside the
+     * undrawn one from BackendMatrixDeviceTest.
+     */
+    @Test
+    public void aColourFilterReachesEveryPictureOfABurst() throws Exception {
+        File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                "drawn-burst-" + backend);
+        File[] stale = directory.listFiles();
+        if (stale != null) {
+            for (File file : stale) {
+                assertTrue(file.delete());
+            }
+        }
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicInteger count = new AtomicInteger(-1);
+        long[] times = new long[3];
+        withOpenCamera(new ColorFilter(ColorMatrix.brightness(1f)), camera -> {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                camera.setShutterSoundEnabled(false);
+                times[0] = SystemClock.elapsedRealtime();
+                camera.startBurst(directory, DRAWN_BURST_COUNT, new CameraView.OnBurstListener() {
+                    @Override public void onBurstImageCaptured(@NonNull File file) {
+                        if (times[1] == 0) {
+                            times[1] = SystemClock.elapsedRealtime();
+                        }
+                        times[2] = SystemClock.elapsedRealtime();
+                    }
+
+                    @Override public void onBurstFinished(int pictures) {
+                        count.set(pictures);
+                        finished.countDown();
+                    }
+                });
+            });
+            assertTrue("the drawn burst never finished",
+                    finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        });
+
+        assertEquals("the drawn burst lost pictures", DRAWN_BURST_COUNT, count.get());
+        File[] pictures = directory.listFiles();
+        assertNotNull(pictures);
+        assertEquals(DRAWN_BURST_COUNT, pictures.length);
+        for (File picture : pictures) {
+            Bitmap decoded = BitmapFactory.decodeFile(picture.getAbsolutePath());
+            assertNotNull(picture.getName() + " is not an image", decoded);
+            try {
+                for (int[] point : samplePoints(decoded)) {
+                    int pixel = decoded.getPixel(point[0], point[1]);
+                    assertTrue(picture.getName() + " was not drawn through the filter, and left "
+                                    + String.format("#%06X", pixel & 0xFFFFFF),
+                            Color.red(pixel) >= WHITE_FLOOR && Color.green(pixel) >= WHITE_FLOOR
+                                    && Color.blue(pixel) >= WHITE_FLOOR);
+                }
+            } finally {
+                decoded.recycle();
+            }
+        }
+        Log.i(BURST_TAG, String.format(Locale.US,
+                "%s %s drawn: %d pictures, first after %d ms, then %.1f per second",
+                Build.MODEL, backend, DRAWN_BURST_COUNT, times[1] - times[0],
+                (DRAWN_BURST_COUNT - 1) / ((times[2] - times[1]) / 1000.0)));
     }
 
     /**
