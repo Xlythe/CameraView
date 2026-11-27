@@ -544,7 +544,12 @@ public class Exif {
         return value == null || value.trim().isEmpty();
     }
 
-    /** Copies another picture's metadata onto this one, to be written by {@link #save()}. */
+    /**
+     * Copies another picture's metadata onto this one, to be written by {@link #save()}.
+     *
+     * @deprecated Use {@link MediaTags#copyTo}, which also copies between formats.
+     */
+    @Deprecated
     public void copyFrom(Exif exif) {
         for (Map.Entry<Integer, ExifTags.Value> tag : exif.mTags.entrySet()) {
             putTag(tag.getKey(), tag.getValue());
@@ -1077,9 +1082,14 @@ public class Exif {
         putTag(tag, Double.isNaN(reading) ? null : ExifTags.rational(reading, signed));
     }
 
-    /** Returns the image's title, or null. */
+    /**
+     * Returns the image's title, or null.
+     *
+     * @deprecated Use {@link MediaTags#getTitle}.
+     */
     @AnyThread
     @Nullable
+    @Deprecated
     public String getTitle() {
         return getTag(ExifTags.TAG_IMAGE_TITLE);
     }
@@ -1087,45 +1097,73 @@ public class Exif {
     /**
      * Sets the image's title, or removes it when null. Only a JPEG read from a file takes a
      * title; anywhere else nothing changes.
+     * @deprecated Use {@link MediaTags#setTitle}, which works on every format and says
+     *     whether the title was kept.
      */
     @AnyThread
+    @Deprecated
     public void setTitle(@Nullable String title) {
         putText(ExifTags.TAG_IMAGE_TITLE, title);
     }
 
-    /** Returns who took the picture, or null. */
+    /**
+     * Returns who took the picture, or null.
+     *
+     * @deprecated Use {@link MediaTags#getAuthor}.
+     */
     @AnyThread
     @Nullable
+    @Deprecated
     public String getPhotographer() {
         String photographer = getTag(ExifTags.TAG_PHOTOGRAPHER);
         return !isBlank(photographer)
                 ? photographer : mExifInterface.getAttribute(ExifInterface.TAG_ARTIST);
     }
 
-    /** Sets who took the picture, or removes it when null. */
+    /**
+     * Sets who took the picture, or removes it when null.
+     *
+     * @deprecated Use {@link MediaTags#setAuthor}.
+     */
     @AnyThread
+    @Deprecated
     public void setPhotographer(@Nullable String photographer) {
         // Artist too, the older tag, which every reader knows.
         putText(ExifTags.TAG_PHOTOGRAPHER, photographer);
         putAttribute(ExifInterface.TAG_ARTIST, photographer);
     }
 
-    /** Returns the image's copyright notice, or null. */
+    /**
+     * Returns the image's copyright notice, or null.
+     *
+     * @deprecated Use {@link MediaTags#getCopyright}.
+     */
     @AnyThread
     @Nullable
+    @Deprecated
     public String getCopyright() {
         return mExifInterface.getAttribute(ExifInterface.TAG_COPYRIGHT);
     }
 
-    /** Sets the image's copyright notice, or removes it when null. */
+    /**
+     * Sets the image's copyright notice, or removes it when null.
+     *
+     * @deprecated Use {@link MediaTags#setCopyright}.
+     */
     @AnyThread
+    @Deprecated
     public void setCopyright(@Nullable String copyright) {
         putAttribute(ExifInterface.TAG_COPYRIGHT, copyright);
     }
 
-    /** Returns the conditions the picture was taken in, or null if none were recorded. */
+    /**
+     * Returns the conditions the picture was taken in, or null if none were recorded.
+     *
+     * @deprecated Use {@link MediaTags#getAmbientConditions}.
+     */
     @AnyThread
     @Nullable
+    @Deprecated
     public AmbientConditions getAmbientConditions() {
         AmbientConditions conditions = new AmbientConditions.Builder()
                 .setTemperature(reading(ExifTags.TAG_TEMPERATURE))
@@ -1143,8 +1181,10 @@ public class Exif {
      * reading the conditions leave out is removed, as is one outside what the file can hold,
      * such as a negative humidity. Only a JPEG read from a file takes conditions; anywhere else
      * nothing changes.
+     * @deprecated Use {@link MediaTags#setAmbientConditions}.
      */
     @AnyThread
+    @Deprecated
     public void attachAmbientConditions(@NonNull AmbientConditions conditions) {
         putReading(ExifTags.TAG_TEMPERATURE, conditions.getTemperature(), true);
         putReading(ExifTags.TAG_HUMIDITY, conditions.getHumidity(), false);
@@ -1155,8 +1195,13 @@ public class Exif {
                 true);
     }
 
-    /** Removes the conditions the picture was taken in, from a JPEG read from a file. */
+    /**
+     * Removes the conditions the picture was taken in, from a JPEG read from a file.
+     *
+     * @deprecated Use {@link MediaTags#setAmbientConditions} with null.
+     */
     @AnyThread
+    @Deprecated
     public void removeAmbientConditions() {
         putTag(ExifTags.TAG_TEMPERATURE, null);
         putTag(ExifTags.TAG_HUMIDITY, null);
@@ -1252,20 +1297,32 @@ public class Exif {
         return mExifInterface.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0);
     }
 
-    /** Returns the image's description, or null. */
+    /**
+     * Returns the image's description, or null.
+     *
+     * @deprecated Use {@link MediaTags#getDescription}.
+     */
     @Nullable
+    @Deprecated
     public String getDescription() {
         return mExifInterface.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION);
     }
 
-    /** Sets the image's description, or removes it when null. */
+    /**
+     * Sets the image's description, or removes it when null.
+     *
+     * @deprecated Use {@link MediaTags#setDescription}.
+     */
+    @Deprecated
     public void setDescription(@Nullable String description) {
         mExifInterface.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description);
     }
 
     /**
      * @return The degree of rotation (eg. 0, 90, 180, 270).
+     * @deprecated Use {@link MediaTags#getRotation} and {@link MediaTags#isMirrored}.
      */
+    @Deprecated
     public int getRotation() {
         switch (getOrientation()) {
             case ExifInterface.ORIENTATION_FLIP_HORIZONTAL:
@@ -1293,7 +1350,9 @@ public class Exif {
 
     /**
      * @return True if the image is flipped vertically after rotation.
+     * @deprecated Use {@link MediaTags#getRotation} and {@link MediaTags#isMirrored}.
      */
+    @Deprecated
     public boolean isFlippedVertically() {
         switch (getOrientation()) {
             case ExifInterface.ORIENTATION_FLIP_HORIZONTAL:
@@ -1321,7 +1380,9 @@ public class Exif {
 
     /**
      * @return True if the image is flipped horizontally after rotation.
+     * @deprecated Use {@link MediaTags#getRotation} and {@link MediaTags#isMirrored}.
      */
+    @Deprecated
     public boolean isFlippedHorizontally() {
         switch (getOrientation()) {
             case ExifInterface.ORIENTATION_FLIP_HORIZONTAL:
@@ -1418,7 +1479,9 @@ public class Exif {
 
     /**
      * @return The timestamp (in millis) that this picture was taken, or -1 if no time is available.
+     * @deprecated Use {@link MediaTags#getCaptureTime}, which also honours the time zone the picture records.
      */
+    @Deprecated
     public long getTimestamp() {
         long timestamp = parseTimestamp(mExifInterface.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
         if (timestamp == -1) {
@@ -1431,8 +1494,10 @@ public class Exif {
 
     /**
      * @return The location this picture was taken, or null if no location is available.
+     * @deprecated Use {@link MediaTags#getLocation}.
      */
     @Nullable
+    @Deprecated
     public Location getLocation() {
         String provider = mExifInterface.getAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD);
         double[] latlng = mExifInterface.getLatLong();
@@ -1481,7 +1546,9 @@ public class Exif {
     /**
      * Rotates the image by the given degrees. Can only rotate by right angles (eg. 90, 180, -90).
      * Other increments will set the orientation to undefined.
+     * @deprecated Use {@link MediaTags#setOrientation}.
      */
+    @Deprecated
     public void rotate(int degrees) {
         if (degrees % 90 != 0) {
             Log.w(TAG, String.format("Can only rotate in right angles (eg. 0, 90, 180, 270). %d is unsupported.", degrees));
@@ -1565,7 +1632,9 @@ public class Exif {
 
     /**
      * Flips the image over the horizon so that the top and bottom are reversed.
+     * @deprecated Use {@link MediaTags#setOrientation}.
      */
+    @Deprecated
     public void flipVertically() {
         int orientation;
         switch (getOrientation()) {
@@ -1603,7 +1672,9 @@ public class Exif {
 
     /**
      * Flips the image over the vertical so that the left and right are reversed.
+     * @deprecated Use {@link MediaTags#setOrientation}.
      */
+    @Deprecated
     public void flipHorizontally() {
         int orientation;
         switch (getOrientation()) {
@@ -1641,7 +1712,9 @@ public class Exif {
 
     /**
      * Attaches the current timestamp to the file.
+     * @deprecated Use {@link MediaTags#setCaptureTime}.
      */
+    @Deprecated
     public void attachTimestamp() {
         long now = System.currentTimeMillis();
         String datetime = convertToExifDateTime(now);
@@ -1670,7 +1743,9 @@ public class Exif {
 
     /**
      * Removes the timestamp from the file.
+     * @deprecated Use {@link MediaTags#setCaptureTime} with -1.
      */
+    @Deprecated
     public void removeTimestamp() {
         putAttribute(ExifInterface.TAG_DATETIME, null);
         putAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, null);
@@ -1686,7 +1761,9 @@ public class Exif {
 
     /**
      * Attaches the given location to the file.
+     * @deprecated Use {@link MediaTags#setLocation}.
      */
+    @Deprecated
     public void attachLocation(Location location) {
         mExifInterface.setAttribute(ExifInterface.TAG_GPS_PROCESSING_METHOD, location.getProvider());
         mExifInterface.setLatLong(location.getLatitude(), location.getLongitude());
@@ -1759,7 +1836,9 @@ public class Exif {
     /**
      * Removes the location from the file, with everything else recorded about the fix, such as
      * its heading, accuracy and time.
+     * @deprecated Use {@link MediaTags#setLocation} with null.
      */
+    @Deprecated
     public void removeLocation() {
         for (String tag : GPS_TAGS) {
             mExifInterface.setAttribute(tag, null);
