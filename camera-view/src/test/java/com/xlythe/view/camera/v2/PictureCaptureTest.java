@@ -13,7 +13,9 @@ import android.location.Location;
 import android.location.LocationManager;
 import android.media.FakeImage;
 import android.media.ImageReader;
+import android.media.MediaActionSound;
 
+import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.FakeLocation;
@@ -28,6 +30,8 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowCamera;
+import org.robolectric.shadows.ShadowMediaActionSound;
 import org.robolectric.shadows.ShadowPausedAsyncTask;
 
 import java.io.File;
@@ -35,6 +39,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -65,13 +70,16 @@ public class PictureCaptureTest {
     private File output;
     private final AtomicReference<File> captured = new AtomicReference<>();
     private final AtomicReference<Boolean> failed = new AtomicReference<>(false);
+    private final AtomicInteger shutters = new AtomicInteger();
 
     @Before
     public void setUp() {
         context = RuntimeEnvironment.getApplication();
         FakeCamera2.addBackAndFrontCameras(context);
         cameraView = FakeCamera2.laidOutCameraView(context, 1080, 1920);
+        CameraSoundsTest.resetSounds();
         cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onShutter() { shutters.incrementAndGet(); }
             @Override public void onImageConfirmation() {}
             @Override public void onImageCaptured(File file) { captured.set(file); }
             @Override public void onFailure() { failed.set(true); }
@@ -89,6 +97,7 @@ public class PictureCaptureTest {
         cameraView.close();
         FakeCamera2.idleMainLooper();
         cameraView.release();
+        ShadowCamera.clearCameraInfo();
         if (output.exists() && !output.delete()) {
             output.deleteOnExit();
         }
@@ -193,6 +202,47 @@ public class PictureCaptureTest {
         FakeCamera2.idleMainLooper();
 
         assertTrue("expected onFailure for a frame nobody asked for", failed.get());
+    }
+
+    /** The click plays as the frame is exposed, and the listener hears of it before the save. */
+    @Test
+    public void theShutterClicksAsTheFrameIsExposed() {
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(1, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+        assertEquals(1, shutters.get());
+        assertEquals("nothing has been saved yet", null, captured.get());
+    }
+
+    /** Silencing the click leaves the moment itself reported, for a sound of the app's own. */
+    @Test
+    public void aSilencedShutterStillReportsTheMoment() {
+        module.setShutterSoundEnabled(false);
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+        assertEquals(1, shutters.get());
+    }
+
+    @Test
+    public void aRequiredShutterClicksWhenSilenced() {
+        CameraSoundsTest.requireSounds();
+        module.setShutterSoundEnabled(false);
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(1, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
     }
 
     /**

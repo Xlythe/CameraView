@@ -60,9 +60,9 @@ Camera(
 ```
 
 Camera also accepts zoomLevel [0 to maxZoomLevel, or null to leave the zoom to pinchToZoom],
-pictureQuality [1 to 100], colorSpace [srgb, displayP3],
-pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [integer],
-torchEnabled [boolean], dynamicRange [sdr, hdr],
+shutterSoundEnabled [boolean], shutterSound [raw resource], pictureQuality [1 to 100],
+colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr, raw, rawJpeg],
+exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
 extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
 lowLightBoostEnabled [boolean]. Not every camera can do all of these, so CameraState below says
 which this one supports.
@@ -234,8 +234,8 @@ CameraFragment, then this will happen for free.
 CameraView includes the optional attributes quality [max, high, medium, low],
 flash [auto, on, off], lensFacing [back, front], maxVideoDuration [milliseconds],
 maxVideoSize [bytes], confirmImages [boolean], confirmVideos [boolean],
-pinchToZoomEnabled [boolean], matchPreviewAspectRatio [boolean],
-dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
+pinchToZoomEnabled [boolean], matchPreviewAspectRatio [boolean], shutterSoundEnabled [boolean],
+shutterSound [raw resource], dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
 stabilizationEnabled [boolean], exposureCompensation [integer], torchEnabled [boolean] and
 lowLightBoostEnabled [boolean].
 ```xml
@@ -262,6 +262,10 @@ Takes a picture and files it in the gallery, under Pictures
 ```java
 mCameraView.takePicture();
 ```
+The platform's shutter click plays as the picture is exposed, and a tone as a recording starts and
+stops. Turn them off with setShutterSoundEnabled(false); where the law requires them they play
+anyway. setShutterSound(R.raw.click) plays a sound of your own in place of the click. OnImageCapturedListener.onShutter() fires at the same moment, for a shutter animation or a
+sound of your own.
 Starts recording until stopRecording is called, the max duration is reached, or the max file size
 is reached, then files the video in the gallery, under Movies
 ```java

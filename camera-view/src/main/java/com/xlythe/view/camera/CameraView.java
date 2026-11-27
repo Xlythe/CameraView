@@ -31,6 +31,7 @@ import android.widget.ImageView;
 import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.UiThread;
@@ -186,6 +187,10 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_TORCH = "torch";
     /** Saved-state key for low-light boost state. */
     private static final String EXTRA_LOW_LIGHT_BOOST = "low_light_boost";
+    /** Saved-state key for whether the camera's sounds play. */
+    private static final String EXTRA_SHUTTER_SOUND = "shutter_sound";
+    /** Saved-state key for the app's own shutter sound. */
+    private static final String EXTRA_SHUTTER_SOUND_RES = "shutter_sound_res";
 
     /**
      * The lifecycle state of the camera and its preview surface.
@@ -570,6 +575,8 @@ public class CameraView extends FrameLayout {
             setImageConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmImages, isImageConfirmationEnabled()));
             setVideoConfirmationEnabled(a.getBoolean(R.styleable.CameraView_confirmVideos, isVideoConfirmationEnabled()));
             setMatchPreviewAspectRatio(a.getBoolean(R.styleable.CameraView_matchPreviewAspectRatio, isMatchPreviewAspectRatioEnabled()));
+            setShutterSoundEnabled(a.getBoolean(R.styleable.CameraView_shutterSoundEnabled, isShutterSoundEnabled()));
+            setShutterSound(a.getResourceId(R.styleable.CameraView_shutterSound, getShutterSound()));
             setDynamicRange(DynamicRange.fromId(a.getInteger(R.styleable.CameraView_dynamicRange, getDynamicRange().id)));
             setExtension(Extension.fromId(a.getInteger(R.styleable.CameraView_extension, getExtension().id)));
             setStabilizationEnabled(a.getBoolean(R.styleable.CameraView_stabilizationEnabled, isStabilizationEnabled()));
@@ -640,6 +647,8 @@ public class CameraView extends FrameLayout {
         state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
         state.putBoolean(EXTRA_TORCH, isTorchEnabled());
         state.putBoolean(EXTRA_LOW_LIGHT_BOOST, isLowLightBoostEnabled());
+        state.putBoolean(EXTRA_SHUTTER_SOUND, isShutterSoundEnabled());
+        state.putInt(EXTRA_SHUTTER_SOUND_RES, getShutterSound());
         if (mImagePendingConfirmation != null) {
             state.putString(EXTRA_PENDING_IMAGE_FILE_PATH, mImagePendingConfirmation.getAbsolutePath());
         }
@@ -673,6 +682,8 @@ public class CameraView extends FrameLayout {
             setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
             setTorchEnabled(state.getBoolean(EXTRA_TORCH));
             setLowLightBoostEnabled(state.getBoolean(EXTRA_LOW_LIGHT_BOOST));
+            setShutterSoundEnabled(state.getBoolean(EXTRA_SHUTTER_SOUND, true));
+            setShutterSound(state.getInt(EXTRA_SHUTTER_SOUND_RES));
 
             if (state.containsKey(EXTRA_PENDING_IMAGE_FILE_PATH)) {
                 File file = new File(state.getString(EXTRA_PENDING_IMAGE_FILE_PATH));
@@ -935,6 +946,14 @@ public class CameraView extends FrameLayout {
         }
     }
 
+    void onShutter() {
+        runOnMainThread(() -> {
+            if (getOnImageCapturedListener() != null) {
+                getOnImageCapturedListener().onShutter();
+            }
+        });
+    }
+
     void onImageFailed() {
         Log.d(TAG, "Failed to take a picture");
         if (isImageConfirmationEnabled()) {
@@ -1073,9 +1092,6 @@ public class CameraView extends FrameLayout {
     }
 
     /**
-     * Gets the current quality for image and video outputs.
-     */
-    /**
      * How hard a still capture is compressed, from 1 to 100, 95 by default.
      *
      * <p>Without this every device picks its own number, which is not the same on any two phones.
@@ -1089,6 +1105,9 @@ public class CameraView extends FrameLayout {
         return mCameraModule.getPictureQuality();
     }
 
+    /**
+     * Gets the current quality for image and video outputs.
+     */
     public Quality getQuality() {
         return mCameraModule.getQuality();
     }
@@ -1133,6 +1152,7 @@ public class CameraView extends FrameLayout {
     }
 
     protected void onOpen() {
+        mCameraModule.loadSounds();
         mCameraModule.open();
         // After the camera, so that one that throws on opening leaves nothing listening.
         mLocationTracker.start();
@@ -1157,6 +1177,7 @@ public class CameraView extends FrameLayout {
         }
         mLocationTracker.stop();
         mCameraModule.close();
+        mCameraModule.releaseSounds();
 
         if (!mHasSavedState) {
             // Destroy the TextureView we used for the previous round of camera activity. This is
@@ -1757,6 +1778,38 @@ public class CameraView extends FrameLayout {
     }
 
     /**
+     * Plays the platform's camera sounds: a click as a picture is taken, and a tone as a
+     * recording starts and stops. On by default, as in the platform's own camera app.
+     *
+     * <p>Some countries require these sounds, and there they play whatever this is set to.</p>
+     */
+    public void setShutterSoundEnabled(boolean enabled) {
+        mCameraModule.setShutterSoundEnabled(enabled);
+    }
+
+    /** Returns whether the camera's sounds are wanted. */
+    public boolean isShutterSoundEnabled() {
+        return mCameraModule.isShutterSoundEnabled();
+    }
+
+    /**
+     * Plays a sound of the app's own in place of the platform's shutter click, or the click
+     * again for 0. Recordings keep the platform's tones.
+     *
+     * <p>Where a shutter sound is required this one counts, and plays just as the click would.
+     * </p>
+     */
+    public void setShutterSound(@RawRes int soundRes) {
+        mCameraModule.setShutterSound(soundRes);
+    }
+
+    /** Returns the app's own shutter sound, or 0 for the platform's click. */
+    @RawRes
+    public int getShutterSound() {
+        return mCameraModule.getShutterSound();
+    }
+
+    /**
      * Sets the active flash strategy.
      */
     public void setFlash(Flash flashMode) {
@@ -2092,6 +2145,12 @@ public class CameraView extends FrameLayout {
      * overrides whichever its pictures use.
      */
     public interface OnImageCapturedListener {
+        /**
+         * Called as the picture is exposed, before it is saved. This is the moment for a shutter
+         * animation, or for a sound of the app's own with {@link #setShutterSoundEnabled} off.
+         */
+        default void onShutter() {}
+
         /** A picture is showing in the preview, waiting for confirmPicture or rejectPicture. */
         void onImageConfirmation();
 
