@@ -4,6 +4,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotEquals;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
@@ -94,7 +95,10 @@ public class TorchTest {
                 (int) repeating().get(CaptureRequest.CONTROL_AE_MODE));
     }
 
-    /** A picture taken under the torch keeps it lit, rather than firing the flash over it. */
+    /**
+     * A picture taken under the torch keeps it lit, rather than firing the flash over it, and so
+     * has no flash to meter for first.
+     */
     @Test
     public void aStillKeepsTheTorchLit() {
         module.setFlash(CameraView.Flash.ON);
@@ -105,8 +109,9 @@ public class TorchTest {
         module.takePicture(new File(context.getCacheDir(), "torch-still.jpg"));
         FakeCamera2.idleMainLooper();
 
-        List<CaptureRequest> stills = ShadowCallbackCameraCaptureSession.getCaptureRequests();
-        assertEquals("one still was asked for", 1, stills.size());
+        List<CaptureRequest> stills = ShadowCallbackCameraCaptureSession.getCaptures();
+        assertEquals("one still was asked for, and no metering", 1, stills.size());
+        assertNull(stills.get(0).get(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER));
         assertTorchLit(stills.get(0));
     }
 

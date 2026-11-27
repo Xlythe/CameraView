@@ -7,6 +7,7 @@ import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
@@ -19,6 +20,7 @@ import android.util.Size;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.ExifCaptureParameters;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -54,6 +56,13 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Nullable
     Float mZoomRatio;
 
+    /**
+     * The auto-exposure state the preview last reported, which says whether auto flash will
+     * fire. Written on the camera's thread, read on whichever takes the picture.
+     */
+    @Nullable
+    private volatile Integer mAeState;
+
     SessionImpl(Camera2Module camera2Module) {
         mCamera2Module = camera2Module;
     }
@@ -75,12 +84,15 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.getFlash();
     }
 
-    /**
-     * Asks the camera for the faces it is tracking, when something wants them.
-     *
-     * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
-     * the repeating preview request; the results then arrive with each completed frame.</p>
-     */
+    boolean isZeroShutterLagSupported() {
+        return mCamera2Module.isZeroShutterLagSupported();
+    }
+
+    @Nullable
+    Integer getAeState() {
+        return mAeState;
+    }
+
     /**
      * The sizes that fit inside a bound, or all of them when none do.
      *
@@ -101,6 +113,12 @@ abstract class SessionImpl implements Camera2Module.Session {
         return fitting.isEmpty() ? sizes : fitting;
     }
 
+    /**
+     * Asks the camera for the faces it is tracking, when something wants them.
+     *
+     * <p>Face detection is a mode on the request rather than a one-off query, so it has to be on
+     * the repeating preview request; the results then arrive with each completed frame.</p>
+     */
     void applyFaceDetection(@NonNull CaptureRequest.Builder builder) {
         Integer mode = mCamera2Module.getFaceDetectMode();
         if (mode != null) {
@@ -116,7 +134,8 @@ abstract class SessionImpl implements Camera2Module.Session {
      */
     @Nullable
     CameraCaptureSession.CaptureCallback repeatingCallback() {
-        if (mCamera2Module.getFaceDetectMode() == null && !mCamera2Module.isFocusPending()) {
+        if (mCamera2Module.getFaceDetectMode() == null && !mCamera2Module.isFocusPending()
+                && !tracksExposure()) {
             return null;
         }
         return new CameraCaptureSession.CaptureCallback() {
@@ -127,12 +146,31 @@ abstract class SessionImpl implements Camera2Module.Session {
                     mCamera2Module.onFacesCaptured(result);
                 }
                 mCamera2Module.onFocusCaptured(result);
+                onPreviewCaptured(result);
             }
         };
     }
 
+    /**
+     * Whether the preview's exposure has to be watched: to know whether auto flash will fire,
+     * and to follow the metering a flash picture waits on.
+     */
+    private boolean tracksExposure() {
+        return hasFlash() && getFlash() != CameraView.Flash.OFF;
+    }
+
+    /** Hears each preview frame's result, while anything is listening for them. */
+    void onPreviewCaptured(@NonNull CaptureResult result) {
+        mAeState = result.get(CaptureResult.CONTROL_AE_STATE);
+    }
+
     int getPictureQuality() {
         return mCamera2Module.getPictureQuality();
+    }
+
+    @NonNull
+    ExifCaptureParameters exifCaptureParameters() {
+        return mCamera2Module.exifCaptureParameters();
     }
 
     /** Whether the torch should be lit, which takes a camera with a flash to light. */
@@ -334,6 +372,10 @@ abstract class SessionImpl implements Camera2Module.Session {
 
     void onImageFailed() {
         mCamera2Module.onImageFailed();
+    }
+
+    void onShutter() {
+        mCamera2Module.onShutter();
     }
 
     void onVideoFailed() {

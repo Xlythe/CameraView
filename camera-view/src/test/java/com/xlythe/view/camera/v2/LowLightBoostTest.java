@@ -24,6 +24,7 @@ import org.robolectric.annotation.Config;
 
 import java.io.File;
 import java.lang.reflect.Field;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -135,7 +136,7 @@ public class LowLightBoostTest {
 
         module.takePicture(new File(context.getCacheDir(), "low-light-still.jpg"));
         FakeCamera2.idleMainLooper();
-        List<CaptureRequest> stills = ShadowCallbackCameraCaptureSession.getCaptureRequests();
+        List<CaptureRequest> stills = ShadowCallbackCameraCaptureSession.getCaptures();
         assertEquals(1, stills.size());
         assertBoosted(stills.get(0));
 
@@ -162,7 +163,10 @@ public class LowLightBoostTest {
                 repeating().get(CaptureRequest.CONTROL_AE_MODE));
     }
 
-    /** A picture the flash was asked to fire for still gets it, and the preview stays boosted. */
+    /**
+     * A picture the flash was asked to fire for still gets it, and the preview stays boosted. The
+     * metering before it is in the flash's mode too, or there would be no pre-flash to meter by.
+     */
     @Test
     public void aStillTheFlashWasAskedForGetsIt() {
         givenControls();
@@ -175,7 +179,19 @@ public class LowLightBoostTest {
         FakeCamera2.idleMainLooper();
 
         assertBoosted(repeating());
-        List<CaptureRequest> stills = ShadowCallbackCameraCaptureSession.getCaptureRequests();
+        List<CaptureRequest> triggers = new ArrayList<>();
+        List<CaptureRequest> stills = new ArrayList<>();
+        for (CaptureRequest request : ShadowCallbackCameraCaptureSession.getCaptures()) {
+            Integer trigger = request.get(CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER);
+            if (trigger != null && trigger == CaptureRequest.CONTROL_AE_PRECAPTURE_TRIGGER_START) {
+                triggers.add(request);
+            } else if (request.get(CaptureRequest.JPEG_QUALITY) != null) {
+                stills.add(request);
+            }
+        }
+        assertEquals(1, triggers.size());
+        assertEquals(Integer.valueOf(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH),
+                triggers.get(0).get(CaptureRequest.CONTROL_AE_MODE));
         assertEquals(1, stills.size());
         assertEquals(Integer.valueOf(CaptureRequest.CONTROL_AE_MODE_ON_ALWAYS_FLASH),
                 stills.get(0).get(CaptureRequest.CONTROL_AE_MODE));

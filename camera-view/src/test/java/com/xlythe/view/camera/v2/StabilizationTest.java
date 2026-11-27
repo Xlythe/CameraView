@@ -122,7 +122,7 @@ public class StabilizationTest {
 
         module.takePicture(new File(context.getCacheDir(), "stabilization-still.jpg"));
         FakeCamera2.idleMainLooper();
-        List<CaptureRequest> stills = ShadowCallbackCameraCaptureSession.getCaptureRequests();
+        List<CaptureRequest> stills = ShadowCallbackCameraCaptureSession.getCaptures();
         assertEquals(1, stills.size());
         assertPreviewSteadied(stills.get(0));
     }

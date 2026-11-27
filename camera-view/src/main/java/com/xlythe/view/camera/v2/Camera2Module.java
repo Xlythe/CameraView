@@ -15,6 +15,7 @@ import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
+import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.OutputConfiguration;
@@ -34,16 +35,20 @@ import android.util.SizeF;
 import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.TransformMath;
+import com.xlythe.view.camera.ZoomMath;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Set;
 
 import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
@@ -63,8 +68,6 @@ import static java.lang.String.format;
 @TargetApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class Camera2Module extends ICameraModule {
-    /** The zoom scale CameraView publishes, matching the CameraX backend so the two agree. */
-    private static final int MAX_ZOOM_LEVEL = 100;
     /** Maximum automatic reopen attempts before reporting a terminal Camera2 failure. */
     private static final int MAX_REOPEN_ATTEMPTS = 1;
 
@@ -277,9 +280,11 @@ public class Camera2Module extends ICameraModule {
     private boolean mIsFocusPending;
 
     /**
-     * The current zoom level, from 0 to {@link #getMaxZoomLevel()}.
+     * The zoom, as a ratio in the camera's own terms. Held to the active camera's range, and
+     * written into every session's requests, so it survives a session change, a lens switch and a
+     * reopen.
      */
-    private int mZoomLevel;
+    private float mZoomRatio = 1f;
 
     /**
      * If true, the camera is currently open.
@@ -488,15 +493,16 @@ public class Camera2Module extends ICameraModule {
                         }
                         mReopenAttempts = 0;
                         clampExposureCompensation();
+                        // Before the first request goes out, so the preview starts at the zoom it
+                        // was asked for rather than showing a frame at 1x first.
+                        clampZoomToActiveCamera();
+                        applyZoom(session);
                         if (!mIsPaused) {
                             session.onAvailable(mCameraDevice, mCaptureSession);
                         }
                         // The session is configured and targeted, which is the first moment a
                         // capture can succeed.
                         onCameraReady();
-                        if (mZoomLevel != 0) {
-                            setZoomLevel(mZoomLevel);
-                        }
                     } catch (CameraAccessException | RuntimeException e) {
                         failSession(session, cameraCaptureSession,
                                 "Failed to start " + session.getClass().getSimpleName(), e);
@@ -728,6 +734,7 @@ public class Camera2Module extends ICameraModule {
         mGeneration++;
         closeCameraResources();
         mActiveCamera = cameraId;
+        clampZoomToActiveCamera();
         if (shouldReopen) {
             mIsOpen = true;
             int nextGeneration = ++mGeneration;
@@ -812,8 +819,16 @@ public class Camera2Module extends ICameraModule {
     }
 
     @Override
-    public void setZoomLevel(int zoomLevel) {
-        mZoomLevel = rangeLimit(zoomLevel);
+    public void setZoomRatio(float zoomRatio) {
+        Range<Float> range = zoomRange();
+        float clamped = ZoomMath.clamp(zoomRatio, range.getLower(), range.getUpper());
+        if (clamped == mZoomRatio) {
+            // Every session already carries it, which spares a pinch held at either end of the
+            // range from reissuing the same request on every frame.
+            return;
+        }
+        mZoomRatio = clamped;
+        onZoomChanged(clamped);
 
         if (mCameraDevice == null || mCaptureSession == null || mActiveSession == null) {
             if (DEBUG) Log.w(TAG, "No active session available");
@@ -821,34 +836,226 @@ public class Camera2Module extends ICameraModule {
         }
 
         try {
-            CameraCharacteristics characteristics = mCameraManager.getCameraCharacteristics(getActiveCamera());
-            Range<Float> ratioRange = zoomRatioRange(characteristics);
-            if (ratioRange != null) {
-                // The whole optical range, so the low end can reach an ultra-wide lens and the
-                // high end a telephoto, with the camera switching between them as it crosses the
-                // thresholds. A crop region could only ever zoom within one lens.
-                mActiveSession.setZoomRatio(
-                        zoomRatioFor(ratioRange.getLower(), ratioRange.getUpper(), mZoomLevel));
-                mActiveSession.setCropRegion(null);
-            } else {
-                Rect activeArray = characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
-                Float maxDigitalZoom = characteristics.get(
-                        CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
-                if (activeArray == null || maxDigitalZoom == null || maxDigitalZoom <= 1f) {
-                    mZoomLevel = 0;
-                    Log.w(TAG, "Zoom not supported");
-                    return;
-                }
-                mActiveSession.setZoomRatio(null);
-                mActiveSession.setCropRegion(
-                        calculateCropRegion(activeArray, maxDigitalZoom, mZoomLevel));
-            }
+            applyZoom(mActiveSession);
             if (!mIsPaused) {
                 mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
             }
         } catch (CameraAccessException | RuntimeException e) {
             Log.e(TAG, "Failed to zoom", e);
         }
+    }
+
+    @Override
+    public float getZoomRatio() {
+        return mZoomRatio;
+    }
+
+    @Override
+    public float getMinZoomRatio() {
+        return zoomRange().getLower();
+    }
+
+    @Override
+    public float getMaxZoomRatio() {
+        return zoomRange().getUpper();
+    }
+
+    @NonNull
+    @Override
+    public float[] getZoomPresets() {
+        Range<Float> range = zoomRange();
+        try {
+            return zoomPresets(mCameraManager, getActiveCamera(),
+                    range.getLower(), range.getUpper());
+        } catch (CameraAccessException | RuntimeException e) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its lenses", e);
+            return ZoomMath.presets(range.getLower(), range.getUpper(), new float[0], false);
+        }
+    }
+
+    /**
+     * The zoom stops a camera's lenses suggest. See {@link ZoomMath#presets}.
+     *
+     * <p>Public for the CameraX backend, which reaches the same characteristics through the camera
+     * id underneath it.</p>
+     *
+     * @param cameraId the camera a zoom ratio of 1 belongs to, which on a phone with several lenses
+     *     is the logical camera standing for all of them
+     */
+    @NonNull
+    public static float[] zoomPresets(@NonNull CameraManager cameraManager,
+            @NonNull String cameraId, float minRatio, float maxRatio)
+            throws CameraAccessException {
+        CameraCharacteristics characteristics = cameraManager.getCameraCharacteristics(cameraId);
+        List<CameraCharacteristics> lenses = new ArrayList<>();
+        for (String physicalId : physicalCameraIds(characteristics)) {
+            try {
+                lenses.add(cameraManager.getCameraCharacteristics(physicalId));
+            } catch (CameraAccessException | IllegalArgumentException e) {
+                // One lens that cannot be read costs its own stop, not the others'.
+                Log.w(TAG, "Unable to inspect physical camera " + physicalId, e);
+            }
+        }
+        return zoomPresets(characteristics, lenses, minRatio, maxRatio);
+    }
+
+    /**
+     * The zoom stops a camera and the physical lenses behind it suggest.
+     *
+     * @param lenses the physical cameras behind a logical one, or none for a single lens
+     */
+    @NonNull
+    static float[] zoomPresets(@NonNull CameraCharacteristics characteristics,
+            @NonNull List<CameraCharacteristics> lenses, float minRatio, float maxRatio) {
+        float focalLength = defaultFocalLength(characteristics);
+        float sensorWidth = sensorWidth(characteristics);
+        List<Float> lensStops = new ArrayList<>();
+        for (CameraCharacteristics lens : lenses) {
+            float[] focalLengths =
+                    lens.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+            if (focalLengths == null) {
+                continue;
+            }
+            for (float lensFocalLength : focalLengths) {
+                lensStops.add(ZoomMath.lensStop(
+                        lensFocalLength, sensorWidth(lens), focalLength, sensorWidth));
+            }
+        }
+
+        float[] stops = new float[lensStops.size()];
+        for (int i = 0; i < stops.length; i++) {
+            stops[i] = lensStops.get(i);
+        }
+        return ZoomMath.presets(minRatio, maxRatio, stops, ZoomMath.canCropTo2x(
+                largestSensorWidth(characteristics), largestPictureWidth(characteristics)));
+    }
+
+    /**
+     * The physical cameras behind a logical one, which is how a phone with several lenses on one
+     * side publishes them.
+     */
+    @NonNull
+    private static Set<String> physicalCameraIds(@NonNull CameraCharacteristics characteristics) {
+        if (Build.VERSION.SDK_INT < 28) {
+            return Collections.emptySet();
+        }
+        int[] capabilities =
+                characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+        if (capabilities == null) {
+            return Collections.emptySet();
+        }
+        for (int capability : capabilities) {
+            if (capability
+                    == CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA) {
+                return characteristics.getPhysicalCameraIds();
+            }
+        }
+        return Collections.emptySet();
+    }
+
+    /** The lens a zoom ratio of 1 means, which is the first a camera lists. See fieldOfView. */
+    private static float defaultFocalLength(@NonNull CameraCharacteristics characteristics) {
+        float[] focalLengths =
+                characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
+        return focalLengths == null || focalLengths.length == 0 ? 0f : focalLengths[0];
+    }
+
+    /** The width of a camera's sensor in millimetres, or 0 when it does not say. */
+    private static float sensorWidth(@NonNull CameraCharacteristics characteristics) {
+        SizeF sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
+        return sensor == null ? 0f : sensor.getWidth();
+    }
+
+    /**
+     * The width of a camera's sensor in pixels, at the highest resolution it can read out.
+     *
+     * <p>A sensor that bins its pixels for ordinary use publishes the binned size as its pixel
+     * array, and from API 31 the full size separately.</p>
+     */
+    private static int largestSensorWidth(@NonNull CameraCharacteristics characteristics) {
+        Size pixels = null;
+        if (Build.VERSION.SDK_INT >= 31) {
+            pixels = characteristics.get(
+                    CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE_MAXIMUM_RESOLUTION);
+        }
+        if (pixels == null) {
+            pixels = characteristics.get(CameraCharacteristics.SENSOR_INFO_PIXEL_ARRAY_SIZE);
+        }
+        return pixels == null ? 0 : pixels.getWidth();
+    }
+
+    /** The width of the largest JPEG a camera offers, or 0 when it offers none. */
+    private static int largestPictureWidth(@NonNull CameraCharacteristics characteristics) {
+        StreamConfigurationMap map =
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+        Size[] sizes = map == null ? null : map.getOutputSizes(ImageFormat.JPEG);
+        Size largest = sizes == null ? null : largestWithin(Arrays.asList(sizes), null);
+        return largest == null ? 0 : largest.getWidth();
+    }
+
+    /** The active camera's zoom range; 1 to 1 when it cannot zoom or cannot be read. */
+    @NonNull
+    private Range<Float> zoomRange() {
+        try {
+            return zoomRange(mCameraManager.getCameraCharacteristics(getActiveCamera()));
+        } catch (CameraAccessException | RuntimeException e) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its zoom range", e);
+            return new Range<>(1f, 1f);
+        }
+    }
+
+    /**
+     * A camera's zoom range, whichever way it zooms.
+     *
+     * <p>The zoom ratio control where the camera has it, which spans every lens a logical camera
+     * can switch between. Otherwise a crop of the active array, where the ratio is how much of the
+     * array is cropped away, up to the camera's maximum digital zoom.</p>
+     */
+    @NonNull
+    static Range<Float> zoomRange(@NonNull CameraCharacteristics characteristics) {
+        Range<Float> ratioRange = zoomRatioRange(characteristics);
+        if (ratioRange != null) {
+            return ratioRange;
+        }
+        Rect activeArray =
+                characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+        Float maxDigitalZoom =
+                characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
+        if (activeArray == null || maxDigitalZoom == null || maxDigitalZoom <= 1f) {
+            return new Range<>(1f, 1f);
+        }
+        return new Range<>(1f, maxDigitalZoom);
+    }
+
+    /** Pulls the zoom into the active camera's range, which a lens switch can move. */
+    private void clampZoomToActiveCamera() {
+        Range<Float> range = zoomRange();
+        float clamped = ZoomMath.clamp(mZoomRatio, range.getLower(), range.getUpper());
+        if (clamped != mZoomRatio) {
+            mZoomRatio = clamped;
+            onZoomChanged(clamped);
+        }
+    }
+
+    /**
+     * Writes the zoom into a session's requests, without issuing them.
+     *
+     * <p>Prefers the zoom ratio control, which lets the camera switch physical lenses as it crosses
+     * from one to the next. A crop region could only ever zoom within one lens.</p>
+     */
+    private void applyZoom(@NonNull Session session) throws CameraAccessException {
+        CameraCharacteristics characteristics =
+                mCameraManager.getCameraCharacteristics(getActiveCamera());
+        if (zoomRatioRange(characteristics) != null) {
+            session.setZoomRatio(mZoomRatio);
+            session.setCropRegion(null);
+            return;
+        }
+        Rect activeArray =
+                characteristics.get(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE);
+        session.setZoomRatio(null);
+        session.setCropRegion(
+                activeArray == null ? null : calculateCropRegion(activeArray, mZoomRatio));
     }
 
     /**
@@ -869,20 +1076,9 @@ public class Camera2Module extends ICameraModule {
         return range;
     }
 
-    /** Maps a zoom level onto a ratio range, linearly from the widest lens to the longest. */
-    static float zoomRatioFor(float minRatio, float maxRatio, int zoomLevel) {
-        float fraction = (float) rangeLimit(zoomLevel) / MAX_ZOOM_LEVEL;
-        return minRatio + (maxRatio - minRatio) * fraction;
-    }
-
-    /** The zoom a level maps onto when the camera zooms by cropping rather than by ratio. */
-    static float cropZoomFor(float maxDigitalZoom, int zoomLevel) {
-        float fraction = (float) rangeLimit(zoomLevel) / MAX_ZOOM_LEVEL;
-        return 1f + (Math.max(1f, maxDigitalZoom) - 1f) * fraction;
-    }
-
-    static Rect calculateCropRegion(Rect activeArray, float maxDigitalZoom, int zoomLevel) {
-        float zoom = cropZoomFor(maxDigitalZoom, zoomLevel);
+    /** The centred crop of the active array that zooms it by a ratio. */
+    static Rect calculateCropRegion(Rect activeArray, float zoomRatio) {
+        float zoom = Math.max(1f, zoomRatio);
         int cropWidth = Math.max(1, (int) (activeArray.width() / zoom));
         int cropHeight = Math.max(1, (int) (activeArray.height() / zoom));
         int cropLeft = (activeArray.width() - cropWidth) / 2;
@@ -892,29 +1088,6 @@ public class Camera2Module extends ICameraModule {
                 activeArray.top + cropTop,
                 activeArray.left + cropLeft + cropWidth,
                 activeArray.top + cropTop + cropHeight);
-    }
-
-    /** Clamps a caller's zoom level into the range this backend publishes. */
-    private static int rangeLimit(int zoomLevel) {
-        return Math.max(0, Math.min(zoomLevel, MAX_ZOOM_LEVEL));
-    }
-
-    @Override
-    public int getZoomLevel() {
-        return mZoomLevel;
-    }
-
-    /**
-     * The zoom scale, which is fixed rather than derived from the camera.
-     *
-     * <p>A device-dependent maximum made the scale mean something different on every phone, and
-     * something different again from the CameraX backend, so a caller could not drive one zoom
-     * control across both. The level is a position in the camera's range instead: 0 is the widest
-     * lens it has and {@link #MAX_ZOOM_LEVEL} the longest.</p>
-     */
-    @Override
-    public int getMaxZoomLevel() {
-        return MAX_ZOOM_LEVEL;
     }
 
     @Override
@@ -933,21 +1106,21 @@ public class Camera2Module extends ICameraModule {
         return false;
     }
 
-    @Override
-    public boolean isZoomSupported() {
-        try {
-            CameraCharacteristics characteristics =
-                    mCameraManager.getCameraCharacteristics(getActiveCamera());
-            if (zoomRatioRange(characteristics) != null) {
-                return true;
-            }
-            Float maxDigitalZoom =
-                    characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
-            return maxDigitalZoom != null && maxDigitalZoom > 1f;
-        } catch (CameraAccessException | RuntimeException e) {
-            Log.e(TAG, "Failed to query camera", e);
+    /**
+     * Whether the camera can hand back a frame it already has for a picture, rather than
+     * exposing a new one after the request arrives.
+     */
+    boolean isZeroShutterLagSupported() {
+        if (Build.VERSION.SDK_INT < 26) {
+            return false;
         }
-        return false;
+        try {
+            return mCameraManager.getCameraCharacteristics(getActiveCamera())
+                    .getAvailableCaptureRequestKeys().contains(CaptureRequest.CONTROL_ENABLE_ZSL);
+        } catch (CameraAccessException | RuntimeException e) {
+            Log.w(TAG, "Failed to ask whether the camera has zero shutter lag", e);
+            return false;
+        }
     }
 
     @Override
@@ -1286,8 +1459,9 @@ public class Camera2Module extends ICameraModule {
             // below one - so taking it here and then applying the ratio would count it twice.
             float full = TransformMath.fieldOfViewDegrees(
                     horizontal ? sensor.getWidth() : sensor.getHeight(), focalLengths[0]);
-            return TransformMath.zoomedFieldOfViewDegrees(
-                    full, effectiveZoomRatio(characteristics));
+            // The ratio means the same thing whether the camera zooms by ratio or by crop, so the
+            // one every request carries is the one the picture was taken at.
+            return TransformMath.zoomedFieldOfViewDegrees(full, mZoomRatio);
         } catch (CameraAccessException | IllegalArgumentException | IllegalStateException error) {
             if (DEBUG) Log.d(TAG, "Could not work out the field of view", error);
             return 0f;
@@ -1295,24 +1469,21 @@ public class Camera2Module extends ICameraModule {
     }
 
     /**
-     * How much this session is actually zoomed, whichever way it is doing it.
-     *
-     * <p>Two mechanisms, as in setZoomLevel: the zoom ratio control where it exists, which can
-     * cross between physical lenses, and a crop of the sensor's active array where it does not.
-     * Read here rather than worked out again, so that the angle of view cannot disagree with the
-     * request that produced the picture.</p>
+     * The Exif a picture taken now should carry about how it was taken: the active camera's
+     * optics, and the zoom and flash this session requests. The camera2 backend requests no
+     * exposure compensation, so the bias is always none.
      */
-    private float effectiveZoomRatio(@NonNull CameraCharacteristics characteristics) {
-        Range<Float> ratioRange = zoomRatioRange(characteristics);
-        if (ratioRange != null) {
-            return zoomRatioFor(ratioRange.getLower(), ratioRange.getUpper(), mZoomLevel);
+    @NonNull
+    ExifCaptureParameters exifCaptureParameters() {
+        ExifCaptureParameters parameters;
+        try {
+            parameters = ExifCaptureParameters.forCamera(mCameraManager, getActiveCamera())
+                    .setZoomRatio(mZoomRatio);
+        } catch (CameraAccessException | RuntimeException error) {
+            Log.w(TAG, "Unable to describe the camera for a picture's Exif", error);
+            parameters = new ExifCaptureParameters();
         }
-        Float maxDigitalZoom =
-                characteristics.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM);
-        if (maxDigitalZoom == null || maxDigitalZoom <= 1f) {
-            return 1f;
-        }
-        return cropZoomFor(maxDigitalZoom, mZoomLevel);
+        return parameters.setExposureCompensation(0).setFlash(getFlash(), hasFlash());
     }
 
     /** Rebuilds the repeating request, for a setting the request itself carries. */
@@ -1330,15 +1501,6 @@ public class Camera2Module extends ICameraModule {
         });
     }
 
-    /**
-     * Whether a picture can be taken while recording.
-     *
-     * <p>Camera2's mandatory stream combinations guarantee a preview, a recording and a still
-     * together from LIMITED hardware upwards - that combination is what a camera app's
-     * video-snapshot button uses - with the still no larger than the recording. LEGACY hardware
-     * guarantees nothing of the sort, and a session it cannot configure costs the recording as
-     * well as the picture, so there it records without one.</p>
-     */
     @Override
     public boolean isCameraReady() {
         return mCaptureSession != null && mActiveSession != null && mCameraDevice != null;
@@ -1481,6 +1643,15 @@ public class Camera2Module extends ICameraModule {
                 || mRegisteringSession instanceof StreamSession;
     }
 
+    /**
+     * Whether a picture can be taken while recording.
+     *
+     * <p>Camera2's mandatory stream combinations guarantee a preview, a recording and a still
+     * together from LIMITED hardware upwards - that combination is what a camera app's
+     * video-snapshot button uses - with the still no larger than the recording. LEGACY hardware
+     * guarantees nothing of the sort, and a session it cannot configure costs the recording as
+     * well as the picture, so there it records without one.</p>
+     */
     @Override
     public boolean isSnapshotWhileRecordingSupported() {
         return isRecordingSnapshotSupported();

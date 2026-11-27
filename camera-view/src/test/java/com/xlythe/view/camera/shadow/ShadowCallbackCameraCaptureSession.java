@@ -2,15 +2,20 @@ package com.xlythe.view.camera.shadow;
 
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CaptureRequest;
+import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
 import android.os.Handler;
+
+import androidx.annotation.Nullable;
 
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
 import org.robolectric.annotation.RealObject;
 import org.robolectric.annotation.Resetter;
+import org.robolectric.shadow.api.Shadow;
 import org.robolectric.shadows.ShadowCameraCaptureSessionImpl;
-import org.robolectric.util.ReflectionHelpers;
+import org.robolectric.shadows.ShadowCaptureResult;
+import org.robolectric.shadows.ShadowTotalCaptureResult;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -43,8 +48,12 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     private static final AtomicInteger sFrameNumber = new AtomicInteger();
     /** Every request made repeating, oldest first; the last is what the camera is running. */
     private static final List<CaptureRequest> sRepeatingRequests = new CopyOnWriteArrayList<>();
-    /** Every one-off capture, oldest first, which is where a still is asked for. */
-    private static final List<CaptureRequest> sCaptureRequests = new CopyOnWriteArrayList<>();
+    /** Every one-off request, such as a still or a metering trigger, oldest first. */
+    private static final List<CaptureRequest> sCaptures = new CopyOnWriteArrayList<>();
+    /** The auto-exposure state results report, or null for none. */
+    @Nullable private static Integer sAeState;
+    /** The repeating request in force, so a test can deliver more of its frames. */
+    @Nullable private static Runnable sNextRepeatingFrame;
 
     @RealObject private CameraCaptureSession realSession;
 
@@ -69,9 +78,21 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         return new ArrayList<>(sRepeatingRequests);
     }
 
-    /** Every one-off capture since the last {@link #reset}, oldest first. */
-    public static List<CaptureRequest> getCaptureRequests() {
-        return new ArrayList<>(sCaptureRequests);
+    /** Every one-off request since the last {@link #reset}, oldest first. */
+    public static List<CaptureRequest> getCaptures() {
+        return new ArrayList<>(sCaptures);
+    }
+
+    /** Has results report this auto-exposure state from now on. */
+    public static void setAeState(@Nullable Integer aeState) {
+        sAeState = aeState;
+    }
+
+    /** Delivers one more frame of the repeating request, as the camera would continuously. */
+    public static void deliverRepeatingFrame() {
+        if (sNextRepeatingFrame != null) {
+            sNextRepeatingFrame.run();
+        }
     }
 
     @Resetter
@@ -80,7 +101,9 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         sCompletedCaptures.set(0);
         sFrameNumber.set(0);
         sRepeatingRequests.clear();
-        sCaptureRequests.clear();
+        sCaptures.clear();
+        sAeState = null;
+        sNextRepeatingFrame = null;
     }
 
     @Implementation
@@ -89,6 +112,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
             throws android.hardware.camera2.CameraAccessException {
         int sequenceId = super.setRepeatingRequest(request, callback, handler);
         sRepeatingRequests.add(request);
+        sNextRepeatingFrame = () -> deliver(request, callback, handler);
         deliver(request, callback, handler);
         return sequenceId;
     }
@@ -98,7 +122,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
             CameraCaptureSession.CaptureCallback callback, Handler handler)
             throws android.hardware.camera2.CameraAccessException {
         int sequenceId = super.capture(request, callback, handler);
-        sCaptureRequests.add(request);
+        sCaptures.add(request);
         deliver(request, callback, handler);
         return sequenceId;
     }
@@ -111,10 +135,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         Runnable delivery = () -> {
             long frameNumber = sFrameNumber.incrementAndGet();
             callback.onCaptureStarted(realSession, request, System.nanoTime(), frameNumber);
-            // TotalCaptureResult has only a package-private constructor, so it has to be built
-            // reflectively; its accessors return empty rather than throwing.
-            TotalCaptureResult result =
-                    ReflectionHelpers.callConstructor(TotalCaptureResult.class);
+            TotalCaptureResult result = newResult();
             callback.onCaptureCompleted(realSession, request, result);
             sCompletedCaptures.incrementAndGet();
         };
@@ -123,5 +144,15 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         } else {
             delivery.run();
         }
+    }
+
+    /** An empty result, or one reporting the auto-exposure state a test asked for. */
+    private static TotalCaptureResult newResult() {
+        TotalCaptureResult result = ShadowTotalCaptureResult.newTotalCaptureResult();
+        if (sAeState != null) {
+            ShadowCaptureResult shadow = Shadow.extract(result);
+            shadow.set(CaptureResult.CONTROL_AE_STATE, sAeState);
+        }
+        return result;
     }
 }

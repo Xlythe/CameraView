@@ -113,7 +113,7 @@ public class ExposureCompensationTest {
 
         module.takePicture(new File(context.getCacheDir(), "exposure-still.jpg"));
         FakeCamera2.idleMainLooper();
-        List<CaptureRequest> stills = ShadowCallbackCameraCaptureSession.getCaptureRequests();
+        List<CaptureRequest> stills = ShadowCallbackCameraCaptureSession.getCaptures();
         assertEquals(1, stills.size());
         assertEquals(Integer.valueOf(4),
                 stills.get(0).get(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION));

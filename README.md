@@ -59,7 +59,8 @@ Camera(
 )
 ```
 
-Camera also accepts zoomLevel [0 to maxZoomLevel, or null to leave the zoom to pinchToZoom],
+Camera also accepts zoomRatio [minZoomRatio to maxZoomRatio, or null to leave the zoom to
+pinchToZoom], animateZoom [boolean], shutterSoundEnabled [boolean], shutterSound [raw resource],
 pictureQuality [1 to 100], colorSpace [srgb, displayP3], pictureFormat [jpeg, ultraHdr],
 exposureCompensation [integer], torchEnabled [boolean], dynamicRange [sdr, hdr],
 extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean] and
@@ -85,11 +86,29 @@ if (camera != null && camera.hasFlash) {
 ```
 
 CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, isZoomSupported,
-maxZoomLevel, isExposureCompensationSupported, minExposureCompensation, maxExposureCompensation,
-supportedColorSpaces, supportedPictureFormats, supportedDynamicRanges, supportedExtensions,
-isStabilizationSupported, isLowLightBoostSupported, isSnapshotWhileRecordingSupported,
-isFaceDetectionSupported, horizontalFieldOfView, verticalFieldOfView, isRecording and
-isAnalyzingFrames.
+minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
+minExposureCompensation, maxExposureCompensation, supportedColorSpaces, supportedPictureFormats,
+supportedDynamicRanges, supportedExtensions, isStabilizationSupported, isLowLightBoostSupported,
+isSnapshotWhileRecordingSupported, isFaceDetectionSupported, horizontalFieldOfView,
+verticalFieldOfView, isRecording and isAnalyzingFrames.
+
+Pass onZoomChanged to hear the zoom ratio whenever it changes, a pinch included, so that buttons
+for zoomPresets can follow it. Writing it back into zoomRatio is safe, and animateZoom eases over
+to each new ratio rather than jumping to it.
+```kotlin
+var zoom by remember { mutableStateOf(1f) }
+Camera(
+    controller = cameraController,
+    state = cameraState,
+    zoomRatio = zoom,
+    animateZoom = true,
+    onZoomChanged = { zoom = it }
+)
+
+cameraState.value?.zoomPresets?.forEach { preset ->
+    Button(onClick = { zoom = preset.ratio }) { Text("${preset.label}x") }
+}
+```
 
 Camera's methods are rather straight forward.
 
@@ -233,8 +252,8 @@ CameraFragment, then this will happen for free.
 CameraView includes the optional attributes quality [max, high, medium, low],
 flash [auto, on, off], lensFacing [back, front], maxVideoDuration [milliseconds],
 maxVideoSize [bytes], confirmImages [boolean], confirmVideos [boolean],
-pinchToZoomEnabled [boolean], matchPreviewAspectRatio [boolean],
-dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
+pinchToZoomEnabled [boolean], matchPreviewAspectRatio [boolean], shutterSoundEnabled [boolean],
+shutterSound [raw resource], dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
 stabilizationEnabled [boolean], exposureCompensation [integer], torchEnabled [boolean] and
 lowLightBoostEnabled [boolean].
 ```xml
@@ -261,6 +280,10 @@ Takes a picture and files it in the gallery, under Pictures
 ```java
 mCameraView.takePicture();
 ```
+The platform's shutter click plays as the picture is exposed, and a tone as a recording starts and
+stops. Turn them off with setShutterSoundEnabled(false); where the law requires them they play
+anyway. setShutterSound(R.raw.click) plays a sound of your own in place of the click. OnImageCapturedListener.onShutter() fires at the same moment, for a shutter animation or a
+sound of your own.
 Starts recording until stopRecording is called, the max duration is reached, or the max file size
 is reached, then files the video in the gallery, under Movies
 ```java
@@ -357,6 +380,30 @@ mCameraView.setFaceDetectionListener((faces, faceToView) -> {
 });
 mCameraView.setFaceDetectionListener(null);
 ```
+
+Zoom
+-----------------
+Zoom is a ratio in the camera's own terms, where 1 is the main lens. getMinZoomRatio is below 1 on
+a phone with an ultra-wide lens, and setZoomRatio switches between the lenses by itself where the
+phone allows it. getZoomPresets returns the stops worth a button each - one per lens, plus 2x where the
+main sensor can crop to it without upscaling - and setOnZoomChangedListener keeps those buttons in
+step with a pinch. Each preset has the exact ratio to zoom to and a rounded label to show, so a
+2.74x lens is labelled 3.
+```java
+for (ZoomPreset preset : mCameraView.getZoomPresets()) {
+  Button button = new Button(context);
+  button.setText(preset.getLabel() + "x");
+  button.setOnClickListener(v -> mCameraView.setZoomRatio(preset.getRatio(), true));
+  zoomBar.addView(button);
+}
+mCameraView.setOnZoomChangedListener(ratio -> highlightNearest(ratio));
+```
+setZoomRatio(ratio, true) eases over to the ratio rather than jumping, passing through the lenses
+on the way as a phone's camera app does, and the listener hears each step. A pinch takes over from
+wherever it has got to.
+
+setZoomLevel and getZoomLevel cover the same range as a position from 0 to getMaxZoomLevel, on a
+log scale, for a slider.
 
 Field of view
 -----------------

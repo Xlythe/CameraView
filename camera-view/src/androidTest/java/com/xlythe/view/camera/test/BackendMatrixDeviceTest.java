@@ -1,11 +1,14 @@
 package com.xlythe.view.camera.test;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.os.Build;
+import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
 import android.view.ViewGroup;
@@ -19,6 +22,7 @@ import androidx.test.rule.GrantPermissionRule;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.FrameStream;
 import com.xlythe.view.camera.VideoStream;
+import com.xlythe.view.camera.ZoomPreset;
 
 import org.junit.After;
 import org.junit.Assume;
@@ -29,14 +33,18 @@ import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -54,8 +62,34 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(Parameterized.class)
 public final class BackendMatrixDeviceTest {
     /** Log tag for what a run found, which is the evidence when comparing two devices. */
-    private static final String TAG = "BackendMatrix";
+    private static final String TAG = "BackendMatrixDeviceTest";
     private static final long TIMEOUT_SECONDS = 30;
+
+    /**
+     * How far a zoom may read back from the one asked for.
+     *
+     * <p>The old camera API zooms in steps of its own table, so it lands on the nearest entry
+     * rather than on the ratio; the other two land on it exactly.</p>
+     */
+    private static final float ZOOM_TOLERANCE = 0.05f;
+
+    /** Long enough for exposure and focus to settle, and a zero-shutter-lag buffer to fill. */
+    private static final long SETTLE_MILLIS = 2_000;
+    /** Pictures taken and thrown away first, so the numbers are not the first capture's. */
+    private static final int WARM_UP_PICTURES = 1;
+    /** Pictures timed after the warm-up. */
+    private static final int TIMED_PICTURES = 5;
+    /**
+     * The longest any backend may take to expose a picture. Loose on purpose: the numbers are
+     * the hardware's as much as the library's, and this only catches a capture that waits on
+     * something it should not.
+     */
+    private static final long MAX_SHUTTER_MILLIS = 1_000;
+    /**
+     * Comfortably under the three seconds a flash picture may wait for metering, so a picture
+     * inside it was metered rather than timed out.
+     */
+    private static final long MAX_FLASH_PICTURE_MILLIS = 2_500;
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<CameraView.Backend> backends() {
@@ -127,6 +161,103 @@ public final class BackendMatrixDeviceTest {
 
         assertNotNull("the capture failed on " + backend, captured.get());
         assertTrue(captured.get().length() > 0);
+    }
+
+    /**
+     * How long a picture takes: to be exposed, which is the lag a person feels, and to be saved.
+     *
+     * <p>Logged so backends and devices can be compared, and asserted only loosely. The sounds
+     * are off, since eighteen clicks in a row are for nobody's benefit.</p>
+     */
+    @Test
+    public void theShutterLagIsMeasured() throws Exception {
+        List<Long> exposed = new ArrayList<>();
+        List<Long> saved = new ArrayList<>();
+
+        withOpenCamera(camera -> {
+            camera.setShutterSoundEnabled(false);
+            sleep(SETTLE_MILLIS);
+            for (int i = 0; i < WARM_UP_PICTURES + TIMED_PICTURES; i++) {
+                long[] millis = takeTimedPicture(camera);
+                if (i >= WARM_UP_PICTURES) {
+                    exposed.add(millis[0]);
+                    saved.add(millis[1]);
+                }
+            }
+        });
+
+        Log.i(TAG, backend + " on " + Build.MODEL + ": exposed after " + summary(exposed)
+                + ", saved after " + summary(saved));
+        for (long millis : exposed) {
+            assertTrue(backend + " took " + millis + "ms to expose a picture",
+                    millis < MAX_SHUTTER_MILLIS);
+        }
+    }
+
+    /** Takes a picture, returning how long it took to be exposed and to be saved. */
+    private long[] takeTimedPicture(CameraView camera) throws Exception {
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicInteger shutters = new AtomicInteger();
+        AtomicLong exposedAt = new AtomicLong();
+        AtomicLong savedAt = new AtomicLong();
+        camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onShutter() {
+                exposedAt.compareAndSet(0, SystemClock.elapsedRealtime());
+                shutters.incrementAndGet();
+            }
+
+            @Override public void onImageConfirmation() {}
+
+            @Override public void onImageCaptured(File file) {
+                savedAt.set(SystemClock.elapsedRealtime());
+                finished.countDown();
+            }
+
+            @Override public void onFailure() {
+                finished.countDown();
+            }
+        });
+
+        long pressedAt = SystemClock.elapsedRealtime();
+        camera.takePicture(temporaryFile(".jpg"));
+
+        assertTrue("the capture never reported on " + backend,
+                finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        assertFalse("the capture failed on " + backend, savedAt.get() == 0);
+        assertEquals("one shutter per picture on " + backend, 1, shutters.get());
+        assertTrue("the shutter comes before the picture is saved",
+                exposedAt.get() <= savedAt.get());
+        return new long[] {exposedAt.get() - pressedAt, savedAt.get() - pressedAt};
+    }
+
+    /**
+     * A flash picture is metered with a pre-flash first, and that has to finish on a real
+     * camera: one that waited out the timeout instead would still produce a file, late.
+     */
+    @Test
+    public void aFlashPictureIsMeteredAndTaken() throws Exception {
+        DeviceState.assumeTheLampMayBeLit();
+        AtomicLong millis = new AtomicLong();
+
+        withOpenCamera(camera -> {
+            Assume.assumeTrue("this camera has no flash", camera.hasFlash());
+            camera.setShutterSoundEnabled(false);
+            camera.setFlash(CameraView.Flash.ON);
+            sleep(SETTLE_MILLIS);
+            millis.set(takeTimedPicture(camera)[1]);
+        });
+
+        Log.i(TAG, backend + " took a flash picture in " + millis.get() + "ms");
+        assertTrue(backend + " took " + millis.get() + "ms over a flash picture",
+                millis.get() < MAX_FLASH_PICTURE_MILLIS);
+    }
+
+    /** The median and range of some timings, in milliseconds. */
+    private static String summary(List<Long> millis) {
+        List<Long> sorted = new ArrayList<>(millis);
+        Collections.sort(sorted);
+        return "median " + sorted.get(sorted.size() / 2) + "ms (" + sorted.get(0) + "-"
+                + sorted.get(sorted.size() - 1) + "ms)";
     }
 
     /**
@@ -494,6 +625,77 @@ public final class BackendMatrixDeviceTest {
         assertTrue("the recording never reported on " + backend,
                 finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
         return recorded.get();
+    }
+
+    /**
+     * Zoom answers in the camera's own terms on every backend: 1x is inside the range, the
+     * presets are inside it too, and a ratio reads back as the one asked for.
+     *
+     * <p>The presets are logged, since what each backend makes of the lenses is the part only a
+     * real phone can show.</p>
+     */
+    @Test
+    public void theZoomAnswersInRatios() throws Exception {
+        AtomicReference<float[]> range = new AtomicReference<>();
+        AtomicReference<float[]> presets = new AtomicReference<>();
+        AtomicReference<List<ZoomPreset>> labelled = new AtomicReference<>();
+        AtomicReference<Float> target = new AtomicReference<>();
+        AtomicReference<Float> zoomed = new AtomicReference<>();
+
+        withOpenCamera(camera -> {
+            CountDownLatch changed = new CountDownLatch(1);
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                range.set(new float[] {camera.getMinZoomRatio(), camera.getMaxZoomRatio()});
+                labelled.set(camera.getZoomPresets());
+                float[] ratios = new float[labelled.get().size()];
+                for (int i = 0; i < ratios.length; i++) {
+                    ratios[i] = labelled.get().get(i).getRatio();
+                }
+                presets.set(ratios);
+                // The longest preset reaches a telephoto where there is one, which is the switch
+                // most worth seeing happen; a camera with a single stop is asked for 2x instead.
+                float[] stops = presets.get();
+                target.set(stops.length > 1
+                        ? stops[stops.length - 1] : Math.min(2f, camera.getMaxZoomRatio()));
+                camera.setOnZoomChangedListener(ratio -> {
+                    if (Math.abs(ratio - target.get()) <= ZOOM_TOLERANCE * target.get()) {
+                        changed.countDown();
+                    }
+                });
+            });
+            Log.i(TAG, backend + " zooms " + range.get()[0] + "x to " + range.get()[1]
+                    + "x with presets " + labelled.get());
+            if (target.get() <= camera.getZoomRatio()) {
+                return;
+            }
+
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(
+                    () -> camera.setZoomRatio(target.get()));
+            assertTrue("the zoom never reported reaching " + target.get() + "x on " + backend,
+                    changed.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            zoomed.set(camera.getZoomRatio());
+            Log.i(TAG, backend + " asked for " + target.get() + "x and reads "
+                    + zoomed.get() + "x");
+        });
+
+        float min = range.get()[0];
+        float max = range.get()[1];
+        assertTrue("1x has to be inside " + min + "-" + max + " on " + backend,
+                min <= 1f && 1f <= max);
+        float[] stops = presets.get();
+        assertFalse("there is always a preset on " + backend, stops.length == 0);
+        boolean hasOne = false;
+        for (int i = 0; i < stops.length; i++) {
+            assertTrue(stops[i] + "x is outside " + min + "-" + max + " on " + backend,
+                    min <= stops[i] && stops[i] <= max);
+            assertTrue("presets increase on " + backend, i == 0 || stops[i] > stops[i - 1]);
+            hasOne |= stops[i] == 1f;
+        }
+        assertTrue("1x is always a preset on " + backend, hasOne);
+        if (zoomed.get() != null) {
+            assertEquals("the zoom reads back as asked on " + backend,
+                    target.get(), zoomed.get(), ZOOM_TOLERANCE * target.get());
+        }
     }
 
     /** What a test does with an open camera. */
