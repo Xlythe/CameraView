@@ -2,6 +2,7 @@ package com.xlythe.view.camera.pano;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.WorkerThread;
 
 import java.io.ByteArrayOutputStream;
@@ -34,6 +35,7 @@ import java.util.regex.Pattern;
  * packet already there, since two packets disagree and a reader takes whichever it finds
  * first.</p>
  */
+@RequiresApi(19)
 final class GPanoMetadata {
     /** The namespace every property is in. */
     static final String NAMESPACE = "http://ns.google.com/photos/1.0/panorama/";

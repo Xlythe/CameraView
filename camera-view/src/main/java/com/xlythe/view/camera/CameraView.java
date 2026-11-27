@@ -160,12 +160,18 @@ public class CameraView extends FrameLayout {
     private static final long FOCUS_TIMEOUT_MILLIS = 3000;
 
     /**
-     * The largest frame a sweep asks for: as much detail as a panorama keeps, and small enough to
-     * convert and paint several times a second. A cap this shape picks a frame the shape of the
+     * The widest frame a sweep asks for: as much detail as a panorama keeps, and small enough to
+     * convert and paint several times a second. Two ints rather than a Size, since this class
+     * loads below API 21, where Size does not exist.
+     */
+    private static final int PANORAMA_FRAME_WIDTH = 1024;
+
+    /**
+     * The tallest frame a sweep asks for. A cap this shape, 4:3, picks a frame the shape of the
      * sensor wherever the camera offers one, where a wider cap can pick a 16:9 frame instead, which
      * is the sensor cropped and sees less across a phone held upright.
      */
-    private static final Size PANORAMA_FRAME_SIZE = new Size(1024, 768);
+    private static final int PANORAMA_FRAME_HEIGHT = 768;
 
     /**
      * How long an animated {@link #setZoomRatio(float, boolean)} takes. About what a phone's own
@@ -1782,9 +1788,10 @@ public class CameraView extends FrameLayout {
             Log.w(TAG, "This device cannot report the rotation or the optics a sweep needs");
             return false;
         }
-        if (mCameraModule.isFrameAnalysisSupported()) {
+        if (Build.VERSION.SDK_INT >= 21 && mCameraModule.isFrameAnalysisSupported()) {
+            Size maxSize = new Size(PANORAMA_FRAME_WIDTH, PANORAMA_FRAME_HEIGHT);
             mPanoramaFrames = new FrameStream(mCameraModule.getCanvas(), this,
-                    new FrameStream.Params().setMaxSize(PANORAMA_FRAME_SIZE), frame -> {
+                    new FrameStream.Params().setMaxSize(maxSize), frame -> {
                         PanoramaFrame panoramaFrame = PanoramaFrame.fromImage(frame.getImage(),
                                 frame.getRotationDegrees(), frame.isMirrored(),
                                 SystemClock.elapsedRealtimeNanos(), System.nanoTime());
