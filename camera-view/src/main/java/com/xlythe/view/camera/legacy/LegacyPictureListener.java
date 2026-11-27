@@ -46,9 +46,10 @@ class LegacyPictureListener implements Camera.PictureCallback {
 
     @Override
     public void onPictureTaken(final byte[] data, final Camera camera) {
-        new AsyncTask<Void, Void, Void>() {
+        new AsyncTask<Void, Void, Boolean>() {
+            /** @return whether the picture reached disk */
             @Override
-            protected Void doInBackground(Void... params) {
+            protected Boolean doInBackground(Void... params) {
                 FileOutputStream output = null;
                 try {
                     output = new FileOutputStream(mFile);
@@ -74,8 +75,7 @@ class LegacyPictureListener implements Camera.PictureCallback {
                     Log.w(TAG, "Saved the picture without some of its Exif tags", e);
                 } catch (IOException e) {
                     Log.e(TAG, "Failed to write the file", e);
-                    mModule.onImageFailed();
-                    cancel(true);
+                    return false;
                 } finally {
                     if (output != null) {
                         try {
@@ -86,12 +86,17 @@ class LegacyPictureListener implements Camera.PictureCallback {
                     }
                 }
 
-                return null;
+                return true;
             }
 
+            /** Reported here, on the main thread, where the app hears every other callback. */
             @Override
-            protected void onPostExecute(Void aVoid) {
-                mModule.showImageConfirmation(mFile);
+            protected void onPostExecute(Boolean written) {
+                if (Boolean.TRUE.equals(written)) {
+                    mModule.showImageConfirmation(mFile);
+                } else {
+                    mModule.onImageFailed();
+                }
             }
         }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
         camera.startPreview();
