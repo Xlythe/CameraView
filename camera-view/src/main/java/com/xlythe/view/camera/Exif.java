@@ -11,6 +11,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.util.Log;
 
+import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
@@ -18,16 +19,24 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.RandomAccessFile;
+import java.io.SequenceInputStream;
+import java.lang.annotation.Retention;
+import java.lang.annotation.RetentionPolicy;
+import java.nio.channels.FileChannel;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
 import java.util.Date;
-import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.TimeZone;
+import java.util.TreeMap;
 import java.util.UUID;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.IntDef;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
@@ -41,6 +50,46 @@ import androidx.exifinterface.media.ExifInterface;
 public class Exif {
     private static final String TAG = Exif.class.getSimpleName();
     private static final boolean DEBUG = false;
+
+    /** The types a tag's value can have, as the Exif standard numbers them. */
+    @IntDef({TYPE_BYTE, TYPE_ASCII, TYPE_SHORT, TYPE_LONG, TYPE_RATIONAL, TYPE_SBYTE,
+            TYPE_UNDEFINED, TYPE_SSHORT, TYPE_SLONG, TYPE_SRATIONAL, TYPE_FLOAT, TYPE_DOUBLE,
+            TYPE_UTF8})
+    @Retention(RetentionPolicy.SOURCE)
+    public @interface TagType {}
+
+    /** Unsigned 8-bit integers, written as decimals separated by commas. */
+    public static final int TYPE_BYTE = 1;
+    /** Text. */
+    public static final int TYPE_ASCII = 2;
+    /** Unsigned 16-bit integers, written as decimals separated by commas. */
+    public static final int TYPE_SHORT = 3;
+    /** Unsigned 32-bit integers, written as decimals separated by commas. */
+    public static final int TYPE_LONG = 4;
+    /**
+     * Unsigned fractions, each written as "numerator/denominator" or as a decimal, separated by
+     * commas.
+     */
+    public static final int TYPE_RATIONAL = 5;
+    /** Signed 8-bit integers, written as decimals separated by commas. */
+    public static final int TYPE_SBYTE = 6;
+    /** Bytes with no structure, written as text or as the bytes themselves. */
+    public static final int TYPE_UNDEFINED = 7;
+    /** Signed 16-bit integers, written as decimals separated by commas. */
+    public static final int TYPE_SSHORT = 8;
+    /** Signed 32-bit integers, written as decimals separated by commas. */
+    public static final int TYPE_SLONG = 9;
+    /**
+     * Signed fractions, each written as "numerator/denominator" or as a decimal, separated by
+     * commas.
+     */
+    public static final int TYPE_SRATIONAL = 10;
+    /** Single-precision floating point numbers, written as decimals separated by commas. */
+    public static final int TYPE_FLOAT = 11;
+    /** Double-precision floating point numbers, written as decimals separated by commas. */
+    public static final int TYPE_DOUBLE = 12;
+    /** Text in UTF-8. */
+    public static final int TYPE_UTF8 = 129;
 
     // SimpleDateFormat keeps mutable parsing state, so a shared instance cannot be used from more
     // than one thread. Pictures are saved on AsyncTask's thread pool, so two captures finishing
@@ -172,26 +221,28 @@ public class Exif {
      */
     private boolean mHasThumbnail;
 
-    /**
-     * The {@link ExifTags} tags the file is to carry: those it held when opened, as
-     * {@link #setTags} has changed them since. ExifInterface cannot parse them, so its save
-     * drops them, and every save writes these back after it.
-     */
-    private final Map<ExifTags.Tag, ExifTags.Value> mTags;
+    /** The file's Exif private directory as stored when opened, or as the last save left it. */
+    private Map<Integer, ExifTags.Value> mDirectory;
 
-    /** Whether this is a JPEG file, the one kind whose Exif block {@link ExifTags} can write. */
+    /**
+     * The private directory entries every save writes itself, after ExifInterface's: the file's
+     * own that ExifInterface does not keep, since its save drops them, and the ones set by
+     * number. They replace any entry ExifInterface writes for the same tag.
+     */
+    private final Map<Integer, ExifTags.Value> mTags;
+
+    /** Tags removed by number, which every save takes out of the private directory. */
+    private final Set<Integer> mRemovedTags = new HashSet<>();
+
+    /** Whether this is a JPEG file, the one kind whose private directory can be written. */
     private final boolean mCanWriteTags;
 
     // When true, avoid saving any time. This is a privacy issue.
     private boolean mRemoveTimestamp = false;
 
     /**
-     * What a file's metadata says, as one line, or why it could not be read.
-     *
-     * <p>For logging, which is the only thing a caller wants the whole of this for. Reading
-     * metadata means opening the file, and doing that for a log line costs four lines of
-     * ceremony around one of interest - which is a tempting place to swallow the failure
-     * silently. This never throws: a file whose metadata cannot be read says so.</p>
+     * What a file's metadata says, as one line for a log, or why it could not be read. Never
+     * throws.
      */
     @NonNull
     public static String describe(@NonNull File file) {
@@ -212,24 +263,64 @@ public class Exif {
         mHasThumbnail = mExifInterface.hasThumbnail();
         byte[] head = readHead(filePath);
         mCanWriteTags = ExifSegment.isJpeg(head);
-        mTags = ExifTags.readAll(head);
+        mDirectory = ExifTags.readAll(head);
+        mTags = ownTags(mDirectory);
     }
 
+    /** Reads the metadata of an image from a stream, such as one opened from a content URI. */
     public Exif(InputStream is) throws IOException {
-        mExifInterface = new ExifInterface(is);
+        // The head is read ahead of ExifInterface and handed back to it. A stream that can go
+        // back, a file by seeking or another by mark and reset, is handed back as it is, so
+        // ExifInterface still sees what it was given; any other is replayed.
+        FileChannel channel = is instanceof FileInputStream
+                ? ((FileInputStream) is).getChannel() : null;
+        long start = position(channel);
+        InputStream source = is;
+        byte[] head;
+        if (start >= 0) {
+            head = readHead(is);
+            if (!rewind(channel, start)) {
+                source = new SequenceInputStream(new ByteArrayInputStream(head), is);
+            }
+        } else if (is.markSupported()) {
+            is.mark(HEAD_BYTES);
+            head = readHead(is);
+            is.reset();
+        } else {
+            head = readHead(is);
+            source = new SequenceInputStream(new ByteArrayInputStream(head), is);
+        }
+        mExifInterface = new ExifInterface(source);
         mFilePath = null;
         mHasThumbnail = mExifInterface.hasThumbnail();
         mCanWriteTags = false;
-        mTags = new EnumMap<>(ExifTags.Tag.class);
+        mDirectory = ExifTags.readAll(head);
+        mTags = ownTags(mDirectory);
     }
 
     /**
-     * Persists changes to disc. The {@link ExifTags} tags the file held and those
-     * {@link #setTags} set are written, a thumbnail the file already holds is kept, and one
-     * {@link #attachThumbnail()} asked for is written.
+     * The entries of a private directory ExifInterface does not keep, which every save writes
+     * back. It keeps an entry only if it has a name for the tag and could read the value.
+     */
+    @NonNull
+    private Map<Integer, ExifTags.Value> ownTags(@NonNull Map<Integer, ExifTags.Value> directory) {
+        Map<Integer, ExifTags.Value> own = new TreeMap<>();
+        for (Map.Entry<Integer, ExifTags.Value> entry : directory.entrySet()) {
+            int tag = entry.getKey();
+            String name = ExifTags.attributeName(tag);
+            if (tag == ExifTags.TAG_INTEROPERABILITY_POINTER
+                    || (name != null && mExifInterface.hasAttribute(name))) {
+                continue;
+            }
+            own.put(tag, entry.getValue());
+        }
+        return own;
+    }
+
+    /**
+     * Writes the changes to the file.
      *
-     * @throws IOException if the file cannot be saved, or its Exif block has no room left for
-     *     the {@link ExifTags} tags, in which case everything else is still saved
+     * @throws IOException if the file cannot be written
      */
     @WorkerThread
     public void save() throws IOException {
@@ -239,43 +330,57 @@ public class Exif {
         attachMandatoryTags();
         mExifInterface.saveAttributes();
         restoreUndefinedTypes();
-        try {
-            saveTags();
-        } catch (IOException error) {
-            // As with the thumbnail: a picture without these tags is still a picture, and a save
-            // that otherwise succeeded is never failed over metadata that did not fit.
-            Log.w(TAG, "Unable to save the Exif 3.0 tags", error);
-        }
-        saveThumbnail();
+        finishBlock();
     }
 
     /**
-     * Writes the {@link ExifTags} tags into the block saveAttributes has just rewritten without
-     * them. They follow restoreUndefinedTypes, since the private directory they are added to is
-     * copied as it stands, and precede the thumbnail, which takes whatever room they leave.
-     *
-     * @throws IOException if the file cannot be rewritten or its block has no room for them
+     * Adds what saveAttributes cannot write to the block it has just written: the private
+     * directory entries it drops, the removals by number, and the thumbnail, whose bytes it
+     * cannot add and whose Compression tag it can lose. This follows restoreUndefinedTypes,
+     * since the private directory is copied as it stands. The tags go first and the thumbnail
+     * takes the room they leave.
      */
     @WorkerThread
-    private void saveTags() throws IOException {
-        if (mTags.isEmpty()) {
+    private void finishBlock() throws IOException {
+        boolean thumbnail = mHasThumbnail || mThumbnailRequested;
+        if (mFilePath == null || !mCanWriteTags
+                || (mTags.isEmpty() && mRemovedTags.isEmpty() && !thumbnail)) {
+            // A stream has no file to add any of this to, and only a JPEG's private directory
+            // can be written here.
             return;
         }
-        // Only a JPEG file has tags to write, so there is always a file.
         File file = new File(mFilePath);
-        byte[] updated;
+        byte[] original;
+        byte[] jpeg;
         try {
-            byte[] jpeg = read(file);
-            updated = jpeg == null ? null : ExifTags.write(jpeg, mTags);
+            original = read(file);
+            if (original == null) {
+                return;
+            }
+            jpeg = original;
+            if (!mRemovedTags.isEmpty()) {
+                jpeg = original.clone();
+                ExifTags.remove(jpeg, mRemovedTags);
+            }
+            byte[] withTags = mTags.isEmpty() ? jpeg : ExifTags.write(jpeg, mTags);
+            if (withTags == null) {
+                // A picture without these tags is still a picture, and a save that otherwise
+                // succeeded is never failed over metadata that did not fit.
+                Log.w(TAG, "No room in the Exif block for " + mTags.keySet());
+            } else {
+                jpeg = withTags;
+            }
         } catch (RuntimeException | OutOfMemoryError error) {
-            throw new IOException("Unable to write " + mTags.keySet(), error);
+            throw new IOException("Unable to write the Exif tags", error);
         }
-        if (updated == null) {
-            throw new IOException("No room in the Exif block for " + mTags.keySet());
+        jpeg = withThumbnail(file, jpeg);
+        if (jpeg != original) {
+            try (FileOutputStream out = new FileOutputStream(file)) {
+                out.write(jpeg);
+            }
         }
-        try (FileOutputStream out = new FileOutputStream(file)) {
-            out.write(updated);
-        }
+        mHasThumbnail = ExifThumbnail.hasThumbnail(jpeg);
+        mDirectory = ExifTags.readAll(jpeg);
     }
 
     /**
@@ -403,7 +508,11 @@ public class Exif {
         return value == null || value.trim().isEmpty();
     }
 
+    /** Copies another picture's metadata onto this one, to be written by {@link #save()}. */
     public void copyFrom(Exif exif) {
+        for (Map.Entry<Integer, ExifTags.Value> tag : exif.mTags.entrySet()) {
+            putTag(tag.getKey(), tag.getValue());
+        }
         copy(exif, ExifInterface.TAG_APERTURE_VALUE);
         copy(exif, ExifInterface.TAG_ARTIST);
         copy(exif, ExifInterface.TAG_BITS_PER_SAMPLE);
@@ -563,7 +672,7 @@ public class Exif {
     private void copy(Exif exif, String attribute) {
         ExifInterface exifInterface = exif.mExifInterface;
         if (exifInterface.hasAttribute(attribute)) {
-            mExifInterface.setAttribute(attribute, exifInterface.getAttribute(attribute));
+            putAttribute(attribute, exifInterface.getAttribute(attribute));
         }
     }
 
@@ -572,9 +681,11 @@ public class Exif {
     public String toString() {
         return String.format(Locale.ENGLISH, "Exif{width=%s, height=%s, rotation=%d, "
                         + "isFlippedVertically=%s, isFlippedHorizontally=%s, location=%s, "
-                        + "timestamp=%s, description=%s}",
+                        + "timestamp=%s, description=%s, title=%s, photographer=%s, "
+                        + "copyright=%s, ambientConditions=%s}",
                 getWidth(), getHeight(), getRotation(), isFlippedVertically(), isFlippedHorizontally(),
-                getLocation(), getTimestamp(), getDescription());
+                getLocation(), getTimestamp(), getDescription(), getTitle(), getPhotographer(),
+                getCopyright(), getAmbientConditions());
     }
 
     private int getOrientation() {
@@ -582,21 +693,49 @@ public class Exif {
     }
 
     /**
-     * Reads any tag {@code ExifInterface} names, by its {@code ExifInterface.TAG_} constant. The
-     * Exif 3.0 tags it has no name for are read with {@link #getTag}.
+     * Reads a tag by its standard Exif name, such as "FNumber".
+     *
+     * @return the value as text, or null when the tag is absent
      */
     @Nullable
     public String getAttribute(@NonNull String tag) {
+        int[] standard = ExifTags.standardTag(tag);
+        if (standard != null) {
+            return getTag(standard[0]);
+        }
         return mExifInterface.getAttribute(tag);
     }
 
     /**
-     * Sets any tag {@code ExifInterface} names, by its {@code ExifInterface.TAG_} constant, to be
-     * written by {@link #save()}. Null removes it. The Exif 3.0 tags it has no name for are
-     * written with {@link #setTags}.
+     * Sets a tag by its standard Exif name, such as "FNumber", to be written by {@link #save()}.
+     * Null removes it.
      */
     public void setAttribute(@NonNull String tag, @Nullable String value) {
+        int[] standard = ExifTags.standardTag(tag);
+        if (standard == null) {
+            putAttribute(tag, value);
+        } else if (value == null) {
+            putTag(standard[0], null);
+        } else {
+            ExifTags.Value encoded = standard[1] == TYPE_ASCII
+                    ? ExifTags.text(value) : ExifTags.encode(standard[1], value);
+            if (encoded != null) {
+                putTag(standard[0], encoded);
+            }
+        }
+    }
+
+    /**
+     * Sets a tag ExifInterface writes, and forgets any value set by number for the same tag, so
+     * the later of the two is the one saved.
+     */
+    private void putAttribute(@NonNull String tag, @Nullable String value) {
         mExifInterface.setAttribute(tag, value);
+        int number = ExifTags.attributeTag(tag);
+        if (number >= 0) {
+            mTags.remove(number);
+            mRemovedTags.remove(number);
+        }
     }
 
     /**
@@ -653,10 +792,7 @@ public class Exif {
         }
     }
 
-    /**
-     * Has {@link #save()} write a thumbnail, if the file has none and there is room for one.
-     * Saving writes it after the rest of the block, so this may be called at any point before.
-     */
+    /** Has {@link #save()} write a thumbnail if the file has none. Call it any time before. */
     @AnyThread
     @RestrictTo(RestrictTo.Scope.LIBRARY)
     public void attachThumbnail() {
@@ -670,63 +806,43 @@ public class Exif {
     }
 
     /**
-     * Writes the thumbnail into the block saveAttributes has just rewritten: the one the file
-     * holds, declared again, or a new one if {@link #attachThumbnail()} asked for it. The bytes
-     * go straight into the file, since ExifInterface cannot add a thumbnail, and so they go last:
-     * saveAttributes rewrites the block from what it read, which drops them.
+     * The file with its thumbnail written into the block saveAttributes has just rewritten: the
+     * one the file holds, declared again, or a new one if {@link #attachThumbnail()} asked for
+     * it. The bytes go straight into the file, since ExifInterface cannot add a thumbnail.
+     *
+     * @return the updated file, or the one given when there is nothing to do or no room
      */
     @WorkerThread
-    private void saveThumbnail() {
+    @NonNull
+    private byte[] withThumbnail(@NonNull File file, @NonNull byte[] jpeg) {
         if (!mHasThumbnail && !mThumbnailRequested) {
-            return;
+            return jpeg;
         }
-        // Only ever after a save, which a stream cannot have, so there is always a file.
-        File file = new File(mFilePath);
         try {
-            byte[] original = read(file);
-            if (original == null) {
-                return;
+            int orientation = getOrientation();
+            // A camera's own thumbnail often loses its Compression tag when the block is
+            // rewritten, and naming it again is cheaper than encoding a new one.
+            byte[] declared = ExifThumbnail.declareExistingThumbnail(jpeg, orientation);
+            if (declared != null) {
+                return declared;
             }
-            byte[] updated = repairOrEncode(file, original);
-            if (updated == null) {
-                mHasThumbnail = ExifThumbnail.hasThumbnail(original);
-                return;
+            int room = ExifThumbnail.roomForThumbnail(jpeg);
+            if (room <= 0) {
+                if (DEBUG) Log.d(TAG, "No room beside this file's Exif for a thumbnail");
+                return jpeg;
             }
-            try (FileOutputStream out = new FileOutputStream(file)) {
-                out.write(updated);
+            byte[] thumbnail = encodeThumbnail(file, room);
+            if (thumbnail == null) {
+                return jpeg;
             }
-            mHasThumbnail = true;
-        } catch (IOException | RuntimeException | OutOfMemoryError error) {
+            byte[] attached = ExifThumbnail.attach(jpeg, thumbnail, orientation);
+            return attached == null ? jpeg : attached;
+        } catch (RuntimeException | OutOfMemoryError error) {
             // A photograph without a thumbnail is a photograph. Losing one is never worth
             // failing a save that has otherwise succeeded.
             Log.w(TAG, "Unable to save a thumbnail", error);
+            return jpeg;
         }
-    }
-
-    /**
-     * Declares the thumbnail already in the file, or makes one if there is none. A camera's own
-     * thumbnail often loses its Compression tag when the block is rewritten, and naming it again
-     * is cheaper than encoding a new one.
-     *
-     * @return the updated file, or null when nothing could be done
-     */
-    @Nullable
-    private byte[] repairOrEncode(@NonNull File file, @NonNull byte[] original) {
-        int orientation = getOrientation();
-        byte[] declared = ExifThumbnail.declareExistingThumbnail(original, orientation);
-        if (declared != null) {
-            return declared;
-        }
-        int room = ExifThumbnail.roomForThumbnail(original);
-        if (room <= 0) {
-            if (DEBUG) Log.d(TAG, "No room beside this file's Exif for a thumbnail");
-            return null;
-        }
-        byte[] thumbnail = encodeThumbnail(file, room);
-        if (thumbnail == null) {
-            return null;
-        }
-        return ExifThumbnail.attach(original, thumbnail, orientation);
     }
 
     /**
@@ -778,33 +894,203 @@ public class Exif {
     }
 
     /**
-     * Reads a tag the standard defines but {@code ExifInterface} has no name for, which is most
-     * of what Exif 3.0 added: the value the file held when opened, or the one {@link #setTags}
-     * has set since.
+     * Reads a tag of the Exif private directory by its number, such as 0x829D for FNumber: as
+     * the file stores it, or as {@link #setTag} has set it since.
      *
-     * @return the value as text in the shape the file stores it, a rational as
-     *     "numerator/denominator", or null when the tag is absent
+     * @return the value as text in the shape the file stores it, which {@link TagType} describes
+     *     for each type, or null when the tag is absent
      */
     @AnyThread
     @Nullable
-    public String getTag(@NonNull ExifTags.Tag tag) {
-        ExifTags.Value value = mTags.get(tag);
+    public String getTag(int tag) {
+        ExifTags.Value value = tagValue(tag);
         return value == null ? null : value.text();
     }
 
     /**
-     * Sets tags the standard defines but {@code ExifInterface} has no name for, to be written by
-     * {@link #save()} as {@link #setAttribute} is. A null value removes the tag. Saving writes
-     * them after the rest of the block, so this may be called at any point before. If the block
-     * has no room left for them, the save leaves them out and keeps everything else.
+     * Reads a tag of the Exif private directory by its number, as bytes, for a value that isn't
+     * text, such as one of type {@link #TYPE_UNDEFINED}. Numbers come most significant byte
+     * first.
      *
-     * @return true if saving will write them; false, with nothing changed, when a value does not
-     *     suit its tag, such as a word for a number, or this was opened on a stream or on a file
-     *     other than a JPEG, which have no Exif block these can be written into
+     * @return the bytes, or null when the tag is absent
      */
     @AnyThread
-    public boolean setTags(@NonNull ExifTags.Builder tags) {
-        return mCanWriteTags && ExifTags.apply(tags, mTags);
+    @Nullable
+    public byte[] getTagBytes(int tag) {
+        ExifTags.Value value = tagValue(tag);
+        return value == null ? null : value.bytes.clone();
+    }
+
+    /**
+     * Sets a tag of the Exif private directory by its number, to be written by {@link #save()}.
+     * This reaches any tag, including one newer than this library. The value is saved in place
+     * of the same tag set any other way before this call.
+     *
+     * @param type the type to store the value as
+     * @param value the value as text, in the shape {@link TagType} describes for the type, or
+     *     null to remove the tag
+     * @return false, with nothing changed, when the value doesn't suit the type, such as a word
+     *     for a number, or the tag locates other data rather than holding a value
+     */
+    @AnyThread
+    public boolean setTag(int tag, @TagType int type, @Nullable String value) {
+        if (!holdsValue(tag)) {
+            return false;
+        }
+        if (value == null) {
+            putTag(tag, null);
+            return true;
+        }
+        ExifTags.Value encoded = ExifTags.encode(type, value);
+        if (encoded == null) {
+            return false;
+        }
+        putTag(tag, encoded);
+        return true;
+    }
+
+    /**
+     * Sets a tag of the Exif private directory by its number to bytes of type
+     * {@link #TYPE_UNDEFINED}, to be written by {@link #save()}. Otherwise as
+     * {@link #setTag(int, int, String)}.
+     *
+     * @param value the bytes, or null to remove the tag
+     * @return false, with nothing changed, when there are no bytes, or the tag locates other data
+     *     rather than holding a value
+     */
+    @AnyThread
+    public boolean setTag(int tag, @Nullable byte[] value) {
+        if (!holdsValue(tag) || (value != null && value.length == 0)) {
+            return false;
+        }
+        putTag(tag, value == null ? null : ExifTags.undefined(value));
+        return true;
+    }
+
+    /** Whether a number names a private directory entry that holds a value of its own. */
+    private static boolean holdsValue(int tag) {
+        return tag >= 0 && tag <= 0xFFFF && tag != ExifTags.TAG_INTEROPERABILITY_POINTER;
+    }
+
+    /** A tag's value as {@link #getTag} reads it, or null. */
+    @Nullable
+    private ExifTags.Value tagValue(int tag) {
+        if (mTags.containsKey(tag)) {
+            return mTags.get(tag);
+        }
+        return mRemovedTags.contains(tag) ? null : mDirectory.get(tag);
+    }
+
+    /** Sets a private directory entry for every save to write, or to remove when null. */
+    private void putTag(int tag, @Nullable ExifTags.Value value) {
+        if (value == null) {
+            mTags.remove(tag);
+            mRemovedTags.add(tag);
+        } else {
+            mTags.put(tag, value);
+            mRemovedTags.remove(tag);
+        }
+    }
+
+    /** Sets text for every save to write, or removes it when null. */
+    private void putText(int tag, @Nullable String text) {
+        putTag(tag, text == null ? null : ExifTags.text(text));
+    }
+
+    /** A reading of the conditions, or NaN when it is absent. */
+    private double reading(int tag) {
+        ExifTags.Value value = tagValue(tag);
+        return value == null ? Double.NaN : value.number();
+    }
+
+    /** Sets a reading of the conditions, or removes it when absent or the tag can't hold it. */
+    private void putReading(int tag, double reading, boolean signed) {
+        putTag(tag, Double.isNaN(reading) ? null : ExifTags.rational(reading, signed));
+    }
+
+    /** Returns the image's title, or null. */
+    @AnyThread
+    @Nullable
+    public String getTitle() {
+        return getTag(ExifTags.TAG_IMAGE_TITLE);
+    }
+
+    /** Sets the image's title, or removes it when null. */
+    @AnyThread
+    public void setTitle(@Nullable String title) {
+        putText(ExifTags.TAG_IMAGE_TITLE, title);
+    }
+
+    /** Returns who took the picture, or null. */
+    @AnyThread
+    @Nullable
+    public String getPhotographer() {
+        String photographer = getTag(ExifTags.TAG_PHOTOGRAPHER);
+        return !isBlank(photographer)
+                ? photographer : mExifInterface.getAttribute(ExifInterface.TAG_ARTIST);
+    }
+
+    /** Sets who took the picture, or removes it when null. */
+    @AnyThread
+    public void setPhotographer(@Nullable String photographer) {
+        // Artist too, the older tag, which every reader knows.
+        putText(ExifTags.TAG_PHOTOGRAPHER, photographer);
+        putAttribute(ExifInterface.TAG_ARTIST, photographer);
+    }
+
+    /** Returns the image's copyright notice, or null. */
+    @AnyThread
+    @Nullable
+    public String getCopyright() {
+        return mExifInterface.getAttribute(ExifInterface.TAG_COPYRIGHT);
+    }
+
+    /** Sets the image's copyright notice, or removes it when null. */
+    @AnyThread
+    public void setCopyright(@Nullable String copyright) {
+        putAttribute(ExifInterface.TAG_COPYRIGHT, copyright);
+    }
+
+    /** Returns the conditions the picture was taken in, or null if none were recorded. */
+    @AnyThread
+    @Nullable
+    public AmbientConditions getAmbientConditions() {
+        AmbientConditions conditions = new AmbientConditions.Builder()
+                .setTemperature(reading(ExifTags.TAG_TEMPERATURE))
+                .setHumidity(reading(ExifTags.TAG_HUMIDITY))
+                .setPressure(reading(ExifTags.TAG_PRESSURE))
+                .setWaterDepth(reading(ExifTags.TAG_WATER_DEPTH))
+                .setAcceleration(reading(ExifTags.TAG_ACCELERATION))
+                .setCameraElevationAngle(reading(ExifTags.TAG_CAMERA_ELEVATION_ANGLE))
+                .build();
+        return conditions.isEmpty() ? null : conditions;
+    }
+
+    /**
+     * Records the conditions the picture was taken in, in place of any recorded before. A
+     * reading the conditions leave out is removed, as is one outside what the file can hold,
+     * such as a negative humidity.
+     */
+    @AnyThread
+    public void attachAmbientConditions(@NonNull AmbientConditions conditions) {
+        putReading(ExifTags.TAG_TEMPERATURE, conditions.getTemperature(), true);
+        putReading(ExifTags.TAG_HUMIDITY, conditions.getHumidity(), false);
+        putReading(ExifTags.TAG_PRESSURE, conditions.getPressure(), false);
+        putReading(ExifTags.TAG_WATER_DEPTH, conditions.getWaterDepth(), true);
+        putReading(ExifTags.TAG_ACCELERATION, conditions.getAcceleration(), false);
+        putReading(ExifTags.TAG_CAMERA_ELEVATION_ANGLE, conditions.getCameraElevationAngle(),
+                true);
+    }
+
+    /** Removes the conditions the picture was taken in. */
+    @AnyThread
+    public void removeAmbientConditions() {
+        putTag(ExifTags.TAG_TEMPERATURE, null);
+        putTag(ExifTags.TAG_HUMIDITY, null);
+        putTag(ExifTags.TAG_PRESSURE, null);
+        putTag(ExifTags.TAG_WATER_DEPTH, null);
+        putTag(ExifTags.TAG_ACCELERATION, null);
+        putTag(ExifTags.TAG_CAMERA_ELEVATION_ANGLE, null);
     }
 
     /** The start of a file, enough to hold its Exif segment if it has one. */
@@ -814,6 +1100,45 @@ public class Exif {
             byte[] head = new byte[(int) Math.min(file.length(), HEAD_BYTES)];
             file.readFully(head);
             return head;
+        }
+    }
+
+    /** The start of a stream, as much of it as there is up to what a file's head holds. */
+    @NonNull
+    private static byte[] readHead(@NonNull InputStream in) throws IOException {
+        byte[] head = new byte[HEAD_BYTES];
+        int read = 0;
+        while (read < head.length) {
+            int count = in.read(head, read, head.length - read);
+            // Nothing read is taken for the end too, since a stream that never ends would
+            // otherwise hold this here.
+            if (count <= 0) {
+                break;
+            }
+            read += count;
+        }
+        return read == head.length ? head : Arrays.copyOf(head, read);
+    }
+
+    /** Where a file's channel is, or -1 when there is no channel or it can't seek. */
+    private static long position(@Nullable FileChannel channel) {
+        if (channel == null) {
+            return -1;
+        }
+        try {
+            return channel.position();
+        } catch (IOException error) {
+            return -1;
+        }
+    }
+
+    /** Moves a file's channel back to where it was, or says it can't. */
+    private static boolean rewind(@NonNull FileChannel channel, long position) {
+        try {
+            channel.position(position);
+            return true;
+        } catch (IOException error) {
+            return false;
         }
     }
 
@@ -854,11 +1179,13 @@ public class Exif {
         return mExifInterface.getAttributeInt(ExifInterface.TAG_IMAGE_LENGTH, 0);
     }
 
+    /** Returns the image's description, or null. */
     @Nullable
     public String getDescription() {
         return mExifInterface.getAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION);
     }
 
+    /** Sets the image's description, or removes it when null. */
     public void setDescription(@Nullable String description) {
         mExifInterface.setAttribute(ExifInterface.TAG_IMAGE_DESCRIPTION, description);
     }
@@ -1246,21 +1573,21 @@ public class Exif {
         long now = System.currentTimeMillis();
         String datetime = convertToExifDateTime(now);
 
-        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, datetime);
-        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, datetime);
+        putAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, datetime);
+        putAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, datetime);
         // And the IFD0 one, which removeTimestamp has always cleared: a file that kept DateTime
         // while losing the other two was stripped of nothing a reader actually looks at first.
-        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, datetime);
+        putAttribute(ExifInterface.TAG_DATETIME, datetime);
         String offset = offsetFromUtc(now);
-        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, offset);
-        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED, offset);
-        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME, offset);
+        putAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, offset);
+        putAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED, offset);
+        putAttribute(ExifInterface.TAG_OFFSET_TIME, offset);
 
         try {
             String subsec = formatSubSecond(now - convertFromExifDateTime(datetime).getTime());
-            mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subsec);
-            mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, subsec);
-            mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, subsec);
+            putAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, subsec);
+            putAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, subsec);
+            putAttribute(ExifInterface.TAG_SUBSEC_TIME, subsec);
         } catch (ParseException e) {
             Log.w(TAG, "Unable to record the sub-second timestamp", e);
         }
@@ -1272,15 +1599,15 @@ public class Exif {
      * Removes the timestamp from the file.
      */
     public void removeTimestamp() {
-        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, null);
-        mExifInterface.setAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED, null);
+        putAttribute(ExifInterface.TAG_DATETIME, null);
+        putAttribute(ExifInterface.TAG_DATETIME_ORIGINAL, null);
+        putAttribute(ExifInterface.TAG_DATETIME_DIGITIZED, null);
+        putAttribute(ExifInterface.TAG_SUBSEC_TIME, null);
+        putAttribute(ExifInterface.TAG_SUBSEC_TIME_ORIGINAL, null);
+        putAttribute(ExifInterface.TAG_SUBSEC_TIME_DIGITIZED, null);
+        putAttribute(ExifInterface.TAG_OFFSET_TIME, null);
+        putAttribute(ExifInterface.TAG_OFFSET_TIME_ORIGINAL, null);
+        putAttribute(ExifInterface.TAG_OFFSET_TIME_DIGITIZED, null);
         mRemoveTimestamp = true;
     }
 
@@ -1357,8 +1684,8 @@ public class Exif {
     }
 
     /**
-     * Removes the location from the file: the whole GPS directory, since a heading, an accuracy
-     * or the time of a fix still says something about where the picture was taken.
+     * Removes the location from the file, with everything else recorded about the fix, such as
+     * its heading, accuracy and time.
      */
     public void removeLocation() {
         for (String tag : GPS_TAGS) {

@@ -1,5 +1,9 @@
 package com.xlythe.view.camera;
 
+import static com.xlythe.view.camera.ExifFixtures.TAG_EXIF_VERSION;
+import static com.xlythe.view.camera.ExifFixtures.TAG_UNDEFINED_BY_ANY_STANDARD;
+import static com.xlythe.view.camera.ExifFixtures.exifJpeg;
+import static com.xlythe.view.camera.ExifFixtures.privateTags;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
@@ -7,85 +11,134 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
+import androidx.exifinterface.media.ExifInterface;
+
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
-import java.io.ByteArrayOutputStream;
 import java.util.Collections;
-import java.util.EnumMap;
 import java.util.Map;
+import java.util.TreeMap;
 
 /**
- * The tags the standard defines and {@code ExifInterface} cannot name, and the directory they go
- * into: in ascending order, with the right count, every existing entry still resolving, and IFD0
- * pointing at the new copy.
+ * The entries of the Exif private directory, by number: read as the bytes a file stores, and
+ * written into a copy of the directory in ascending order, with the right count, every existing
+ * entry still resolving, and IFD0 pointing at the copy.
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {29, 37})
 public class ExifTagsTest {
-    private static final int ENTRY_BYTES = 12;
-    private static final int TAG_EXIF_IFD_POINTER = 0x8769;
-    /** An existing SubIFD tag the fixture carries, so replacement can be told from addition. */
-    private static final int TAG_EXIF_VERSION = 0x9000;
-    private static final int TYPE_SHORT = 3;
-    private static final int TYPE_LONG = 4;
-    private static final int TYPE_UNDEFINED = 7;
+    private static final int TAG_IMAGE_TITLE = 0xA436;
+    private static final int TAG_PHOTOGRAPHER = 0xA437;
+    private static final int TAG_HUMIDITY = 0x9401;
+    private static final int TAG_PRESSURE = 0x9402;
+    private static final int TAG_CAMERA_ELEVATION_ANGLE = 0x9405;
+    private static final int TAG_NOISE_REDUCTION = 0xA412;
+    private static final int TAG_COMPOSITE_IMAGE = 0xA460;
+    private static final int TAG_SOURCE_IMAGE_NUMBER = 0xA461;
+    private static final int TAG_SOURCE_EXPOSURE_TIMES = 0xA462;
 
     /** A big-endian file, as ExifInterface saves one, whose counts must be read big-endian. */
     @Test
     public void aBigEndianFileWorksTheSameWay() {
-        byte[] jpeg = exifJpeg(false);
-
-        byte[] out = write(jpeg, new ExifTags.Builder()
-                .set(ExifTags.Tag.IMAGE_TITLE, "Motorola order")
-                .set(ExifTags.Tag.HUMIDITY, "44.5"));
+        byte[] out = write(exifJpeg(false),
+                TAG_IMAGE_TITLE, Exif.TYPE_ASCII, "Motorola order",
+                TAG_HUMIDITY, Exif.TYPE_RATIONAL, "44.5");
 
         assertNotNull("a big-endian file should accept tags too", out);
-        assertEquals("Motorola order", read(out, ExifTags.Tag.IMAGE_TITLE));
-        assertEquals("44500/1000", read(out, ExifTags.Tag.HUMIDITY));
+        assertEquals("Motorola order", read(out, TAG_IMAGE_TITLE));
+        assertEquals("44500/1000", read(out, TAG_HUMIDITY));
     }
 
-    /** The case it exists for: a tag androidx has no constant for, written and read back. */
+    /** A tag no edition of the standard defines is written and read back like any other. */
     @Test
-    public void aTagAndroidxCannotNameIsWrittenAndReadBack() {
-        byte[] jpeg = exifJpeg();
-
-        byte[] out = write(jpeg, new ExifTags.Builder()
-                .set(ExifTags.Tag.PHOTOGRAPHER, "A. Photographer"));
-
-        assertNotNull("a well-formed Exif JPEG should accept a tag", out);
-        assertEquals("A. Photographer", read(out, ExifTags.Tag.PHOTOGRAPHER));
-    }
-
-    /** Several at once, of different types, all of them legible afterwards. */
-    @Test
-    public void tagsOfEveryTypeSurvive() {
-        byte[] out = write(exifJpeg(), new ExifTags.Builder()
-                .set(ExifTags.Tag.IMAGE_TITLE, "Harbour at dawn")
-                .set(ExifTags.Tag.NOISE_REDUCTION, "1")
-                .set(ExifTags.Tag.HUMIDITY, "61.5")
-                .set(ExifTags.Tag.CAMERA_ELEVATION_ANGLE, "-12.25")
-                .set(ExifTags.Tag.LEARNING_OPT_OUT_IN, "1"));
+    public void aTagNoStandardDefinesIsWrittenAndReadBack() {
+        byte[] out = write(exifJpeg(true),
+                TAG_UNDEFINED_BY_ANY_STANDARD, Exif.TYPE_ASCII, "From the future");
 
         assertNotNull(out);
-        assertEquals("Harbour at dawn", read(out, ExifTags.Tag.IMAGE_TITLE));
-        assertEquals("a short", "1", read(out, ExifTags.Tag.NOISE_REDUCTION));
-        assertEquals("a rational", "61500/1000", read(out, ExifTags.Tag.HUMIDITY));
-        assertEquals("a signed rational going the other way",
-                "-12250/1000", read(out, ExifTags.Tag.CAMERA_ELEVATION_ANGLE));
-        assertEquals("bytes", "1", read(out, ExifTags.Tag.LEARNING_OPT_OUT_IN));
+        assertEquals("From the future", read(out, TAG_UNDEFINED_BY_ANY_STANDARD));
+    }
+
+    /** Values of every type survive, several of a number in one entry where the type allows. */
+    @Test
+    public void valuesOfEveryTypeSurvive() {
+        byte[] out = write(exifJpeg(true),
+                0xB001, Exif.TYPE_BYTE, "1,255",
+                0xB002, Exif.TYPE_ASCII, "Harbour at dawn",
+                0xB003, Exif.TYPE_SHORT, "1,65535",
+                0xB004, Exif.TYPE_LONG, "4294967295",
+                0xB006, Exif.TYPE_RATIONAL, "61.5,1/3",
+                0xB007, Exif.TYPE_SBYTE, "-128,127",
+                0xB008, Exif.TYPE_UNDEFINED, "1",
+                0xB009, Exif.TYPE_SSHORT, "-2",
+                0xB00A, Exif.TYPE_SLONG, "-70000",
+                0xB00B, Exif.TYPE_SRATIONAL, "-12.25",
+                0xB00C, Exif.TYPE_FLOAT, "1.5,-0.25",
+                0xB00D, Exif.TYPE_DOUBLE, "3.25",
+                0xB00E, Exif.TYPE_UTF8, "Café");
+
+        assertNotNull(out);
+        assertEquals("1,255", read(out, 0xB001));
+        assertEquals("Harbour at dawn", read(out, 0xB002));
+        assertEquals("1,65535", read(out, 0xB003));
+        assertEquals("4294967295", read(out, 0xB004));
+        assertEquals("61500/1000,1/3", read(out, 0xB006));
+        assertEquals("-128,127", read(out, 0xB007));
+        assertEquals("1", read(out, 0xB008));
+        assertEquals("-2", read(out, 0xB009));
+        assertEquals("-70000", read(out, 0xB00A));
+        assertEquals("-12250/1000", read(out, 0xB00B));
+        assertEquals("1.5,-0.25", read(out, 0xB00C));
+        assertEquals("3.25", read(out, 0xB00D));
+        assertEquals("Café", read(out, 0xB00E));
+    }
+
+    /** Each type reads back as the first number it holds, or NaN for one that holds none. */
+    @Test
+    public void eachTypeReadsAsANumber() {
+        assertEquals(-12.25, ExifTags.encode(Exif.TYPE_SRATIONAL, "-12.25").number(), 1e-9);
+        assertEquals(65535, ExifTags.encode(Exif.TYPE_SHORT, "65535,1").number(), 0);
+        assertEquals(-2, ExifTags.encode(Exif.TYPE_SSHORT, "-2").number(), 0);
+        assertEquals(255, ExifTags.encode(Exif.TYPE_BYTE, "255").number(), 0);
+        assertEquals(-1, ExifTags.encode(Exif.TYPE_SBYTE, "-1").number(), 0);
+        assertEquals(4294967295.0, ExifTags.encode(Exif.TYPE_LONG, "4294967295").number(), 0);
+        assertEquals(-70000, ExifTags.encode(Exif.TYPE_SLONG, "-70000").number(), 0);
+        assertEquals(1.5, ExifTags.encode(Exif.TYPE_FLOAT, "1.5").number(), 0);
+        assertEquals(3.25, ExifTags.encode(Exif.TYPE_DOUBLE, "3.25").number(), 0);
+        assertTrue(Double.isNaN(ExifTags.encode(Exif.TYPE_ASCII, "12").number()));
+        assertTrue("a zero denominator is no number", Double.isNaN(
+                new ExifTags.Value(Exif.TYPE_RATIONAL, 1, new byte[] {0, 0, 0, 1, 0, 0, 0, 0})
+                        .number()));
     }
 
     /** A rational written as a fraction is stored as that fraction, not re-derived. */
     @Test
     public void aFractionIsStoredAsWritten() {
-        byte[] out = write(exifJpeg(), new ExifTags.Builder()
-                .set(ExifTags.Tag.PRESSURE, "10132/10"));
+        byte[] out = write(exifJpeg(true), TAG_PRESSURE, Exif.TYPE_RATIONAL, "10132/10");
 
         assertNotNull(out);
-        assertEquals("10132/10", read(out, ExifTags.Tag.PRESSURE));
+        assertEquals("10132/10", read(out, TAG_PRESSURE));
+    }
+
+    /** A decimal too big for thousandths is written as finely as the type can hold it. */
+    @Test
+    public void aLargeDecimalIsWrittenCoarser() {
+        assertEquals("4000000000/1",
+                ExifTags.encode(Exif.TYPE_RATIONAL, "4000000000").text());
+        assertEquals("980665000/100", ExifTags.rational(9806650, false).text());
+        assertNull("nor anything past what one number holds",
+                ExifTags.encode(Exif.TYPE_RATIONAL, "5000000000"));
+    }
+
+    /** Text goes in as ASCII when it can, and as UTF-8 when it holds anything more. */
+    @Test
+    public void textTakesThePlainestTypeThatHoldsIt() {
+        assertEquals(Exif.TYPE_ASCII, ExifTags.text("Plain").type);
+        assertEquals(Exif.TYPE_UTF8, ExifTags.text("Café").type);
+        assertEquals("Café", ExifTags.text("Café").text());
     }
 
     /**
@@ -94,13 +147,13 @@ public class ExifTagsTest {
      */
     @Test
     public void entriesStayInAscendingTagOrder() {
-        byte[] out = write(exifJpeg(), new ExifTags.Builder()
-                .set(ExifTags.Tag.COMPOSITE_IMAGE, "2")
-                .set(ExifTags.Tag.TEMPERATURE, "21.5")
-                .set(ExifTags.Tag.IMAGE_TITLE, "Out of order on purpose"));
+        byte[] out = write(exifJpeg(true),
+                TAG_COMPOSITE_IMAGE, Exif.TYPE_SHORT, "2",
+                0x9400, Exif.TYPE_SRATIONAL, "21.5",
+                TAG_IMAGE_TITLE, Exif.TYPE_ASCII, "Out of order on purpose");
 
         assertNotNull(out);
-        int[] tags = subIfdTags(out);
+        int[] tags = privateTags(out);
         for (int i = 1; i < tags.length; i++) {
             assertTrue("tag 0x" + Integer.toHexString(tags[i]) + " follows 0x"
                             + Integer.toHexString(tags[i - 1]),
@@ -111,143 +164,121 @@ public class ExifTagsTest {
     /** What was already in the directory is still there, and still says what it said. */
     @Test
     public void theEntriesAlreadyThereAreKept() {
-        byte[] jpeg = exifJpeg();
-
-        byte[] out = write(jpeg, new ExifTags.Builder()
-                .set(ExifTags.Tag.IMAGE_TITLE, "Added later"));
+        byte[] out = write(exifJpeg(true), TAG_IMAGE_TITLE, Exif.TYPE_ASCII, "Added later");
 
         assertNotNull(out);
-        int[] tags = subIfdTags(out);
-        boolean found = false;
-        for (int tag : tags) {
-            if (tag == TAG_EXIF_VERSION) found = true;
-        }
-        assertTrue("the version the fixture carried should have survived", found);
-        assertEquals("and the new one should be there too", 2, tags.length);
+        assertArrayEquals(new int[] {TAG_EXIF_VERSION, TAG_IMAGE_TITLE}, privateTags(out));
+        assertEquals("0232", read(out, TAG_EXIF_VERSION));
     }
 
     /** Setting a tag that is already present replaces it rather than writing it twice. */
     @Test
     public void settingATagTwiceLeavesOneOfIt() {
-        byte[] once = write(exifJpeg(), new ExifTags.Builder()
-                .set(ExifTags.Tag.IMAGE_TITLE, "First"));
+        byte[] once = write(exifJpeg(true), TAG_IMAGE_TITLE, Exif.TYPE_ASCII, "First");
         assertNotNull(once);
 
-        byte[] twice = write(once, new ExifTags.Builder()
-                .set(ExifTags.Tag.IMAGE_TITLE, "Second"));
+        byte[] twice = write(once, TAG_IMAGE_TITLE, Exif.TYPE_ASCII, "Second");
 
         assertNotNull(twice);
-        assertEquals("Second", read(twice, ExifTags.Tag.IMAGE_TITLE));
-        int titles = 0;
-        for (int tag : subIfdTags(twice)) {
-            if (tag == ExifTags.Tag.IMAGE_TITLE.getId()) titles++;
-        }
-        assertEquals("one entry per tag, always", 1, titles);
-    }
-
-    /** A null value removes the tag, which is how a caller takes one back out. */
-    @Test
-    public void aNullValueRemovesTheTag() {
-        byte[] withIt = write(exifJpeg(), new ExifTags.Builder()
-                .set(ExifTags.Tag.PHOTOGRAPHER, "A. Photographer"));
-        assertNotNull(withIt);
-
-        byte[] without = write(withIt, new ExifTags.Builder()
-                .set(ExifTags.Tag.PHOTOGRAPHER, null));
-
-        assertNotNull(without);
-        assertNull(read(without, ExifTags.Tag.PHOTOGRAPHER));
+        assertEquals("Second", read(twice, TAG_IMAGE_TITLE));
+        assertArrayEquals(new int[] {TAG_EXIF_VERSION, TAG_IMAGE_TITLE}, privateTags(twice));
     }
 
     /**
-     * Writing none of these tags clears those the file had, since what is written is the whole
-     * set, and leaves every other entry where it was.
+     * Removing takes entries out where they are, the others moving up and nothing added, which is
+     * why it needs no room.
      */
     @Test
-    public void writingNoneOfThemClearsThemAndNothingElse() {
-        byte[] withIt = write(exifJpeg(), new ExifTags.Builder()
-                .set(ExifTags.Tag.PHOTOGRAPHER, "A. Photographer"));
-        assertNotNull(withIt);
+    public void removingTakesEntriesOutInPlace() {
+        byte[] jpeg = write(exifJpeg(true),
+                TAG_HUMIDITY, Exif.TYPE_RATIONAL, "44.5",
+                TAG_IMAGE_TITLE, Exif.TYPE_ASCII, "Going",
+                TAG_PHOTOGRAPHER, Exif.TYPE_ASCII, "Staying");
+        assertNotNull(jpeg);
+        int length = jpeg.length;
 
-        byte[] without = ExifTags.write(withIt,
-                Collections.<ExifTags.Tag, ExifTags.Value>emptyMap());
+        assertTrue(ExifTags.remove(jpeg, Collections.singleton(TAG_IMAGE_TITLE)));
 
-        assertNotNull(without);
-        assertTrue(ExifTags.readAll(without).isEmpty());
-        assertArrayEquals(new int[] {TAG_EXIF_VERSION}, subIfdTags(without));
+        assertEquals("nothing is added", length, jpeg.length);
+        assertArrayEquals(new int[] {TAG_EXIF_VERSION, TAG_HUMIDITY, TAG_PHOTOGRAPHER},
+                privateTags(jpeg));
+        assertEquals("Staying", read(jpeg, TAG_PHOTOGRAPHER));
+        assertEquals("44500/1000", read(jpeg, TAG_HUMIDITY));
+        assertFalse("and removing what isn't there changes nothing",
+                ExifTags.remove(jpeg, Collections.singleton(TAG_IMAGE_TITLE)));
     }
 
-    /** A word handed to a numeric tag writes nothing, rather than a field full of rubbish. */
+    /** A word handed to a numeric type writes nothing, rather than a field full of rubbish. */
     @Test
     public void anUnparseableNumberIsRefused() {
-        assertNull(write(exifJpeg(), new ExifTags.Builder()
-                .set(ExifTags.Tag.NOISE_REDUCTION, "quite a lot")));
+        assertNull(ExifTags.encode(Exif.TYPE_SHORT, "quite a lot"));
+        assertNull(ExifTags.encode(Exif.TYPE_RATIONAL, "1/"));
+        assertNull(ExifTags.encode(Exif.TYPE_FLOAT, "one and a half"));
+        assertNull("nor one in a list", ExifTags.encode(Exif.TYPE_LONG, "1,,2"));
+        assertNull("nor a type the standard doesn't define", ExifTags.encode(99, "1"));
     }
 
-    /** Nor does a number too big for its type, or a fraction over nothing. */
+    /** Nor does a number too big for its type, a fraction over nothing, or no number at all. */
     @Test
     public void aNumberTheTypeCannotHoldIsRefused() {
-        Map<ExifTags.Tag, ExifTags.Value> values = new EnumMap<>(ExifTags.Tag.class);
-        assertFalse("a short holds no more than 65535", ExifTags.apply(new ExifTags.Builder()
-                .set(ExifTags.Tag.NOISE_REDUCTION, "65536"), values));
-        assertFalse("nor anything negative", ExifTags.apply(new ExifTags.Builder()
-                .set(ExifTags.Tag.NOISE_REDUCTION, "-1"), values));
-        assertFalse("an unsigned rational takes no minus sign", ExifTags.apply(
-                new ExifTags.Builder().set(ExifTags.Tag.HUMIDITY, "-3/1"), values));
-        assertFalse("a denominator of zero is no number", ExifTags.apply(
-                new ExifTags.Builder().set(ExifTags.Tag.PRESSURE, "1013/0"), values));
-        assertFalse("bytes have to be some bytes", ExifTags.apply(
-                new ExifTags.Builder().set(ExifTags.Tag.LEARNING_OPT_OUT_IN, ""), values));
-        assertTrue(values.isEmpty());
-    }
-
-    /** One bad value refuses the whole builder, so what was there before stays. */
-    @Test
-    public void oneBadValueChangesNothing() {
-        Map<ExifTags.Tag, ExifTags.Value> values = ExifTags.readAll(write(exifJpeg(),
-                new ExifTags.Builder().set(ExifTags.Tag.IMAGE_TITLE, "Before")));
-
-        assertFalse(ExifTags.apply(new ExifTags.Builder()
-                .set(ExifTags.Tag.IMAGE_TITLE, "After")
-                .set(ExifTags.Tag.NOISE_REDUCTION, "quite a lot"), values));
-
-        assertEquals("Before", values.get(ExifTags.Tag.IMAGE_TITLE).text());
-        assertNull(values.get(ExifTags.Tag.NOISE_REDUCTION));
+        assertNull("a short holds no more than 65535", ExifTags.encode(Exif.TYPE_SHORT, "65536"));
+        assertNull("nor anything negative", ExifTags.encode(Exif.TYPE_SHORT, "-1"));
+        assertNull("a byte holds no more than 255", ExifTags.encode(Exif.TYPE_BYTE, "256"));
+        assertNull(ExifTags.encode(Exif.TYPE_SBYTE, "128"));
+        assertNull(ExifTags.encode(Exif.TYPE_SSHORT, "32768"));
+        assertNull(ExifTags.encode(Exif.TYPE_SLONG, "2147483648"));
+        assertNull("an unsigned rational takes no minus sign",
+                ExifTags.encode(Exif.TYPE_RATIONAL, "-3/1"));
+        assertNull("a denominator of zero is no number",
+                ExifTags.encode(Exif.TYPE_RATIONAL, "1013/0"));
+        assertNull(ExifTags.encode(Exif.TYPE_SRATIONAL, "NaN"));
+        assertNull(ExifTags.rational(Double.POSITIVE_INFINITY, true));
+        assertNull("bytes have to be some bytes", ExifTags.encode(Exif.TYPE_UNDEFINED, ""));
+        assertNull(ExifTags.undefined(new byte[0]));
     }
 
     /** Anything that is not an Exif JPEG is declined rather than mangled. */
     @Test
     public void somethingThatIsNotExifIsLeftAlone() {
-        assertNull(write(new byte[] {0, 1, 2, 3},
-                new ExifTags.Builder().set(ExifTags.Tag.IMAGE_TITLE, "nope")));
-        assertTrue(ExifTags.readAll(new byte[] {0, 1, 2, 3}).isEmpty());
+        byte[] junk = {0, 1, 2, 3};
+        Map<Integer, ExifTags.Value> title = new TreeMap<>();
+        title.put(TAG_IMAGE_TITLE, ExifTags.text("nope"));
+
+        assertNull(ExifTags.write(junk, title));
+        assertFalse(ExifTags.remove(junk, Collections.singleton(TAG_IMAGE_TITLE)));
+        assertTrue(ExifTags.readAll(junk).isEmpty());
     }
 
-    /** The tags in a file that never had them read as absent rather than as anything else. */
+    /** A tag a file never had reads as absent rather than as anything else. */
     @Test
     public void anAbsentTagReadsAsNull() {
-        assertNull(read(exifJpeg(), ExifTags.Tag.WATER_DEPTH));
+        assertNull(read(exifJpeg(true), 0x9403));
     }
 
     /**
      * A value read from a file of one byte order and written into a file of the other says the
-     * same thing there, a rational's two halves each turned around.
+     * same thing there, each number turned around.
      */
     @Test
     public void aValueMovesBetweenByteOrders() {
-        byte[] little = write(exifJpeg(true), new ExifTags.Builder()
-                .set(ExifTags.Tag.CAMERA_ELEVATION_ANGLE, "-12.25")
-                .set(ExifTags.Tag.NOISE_REDUCTION, "513")
-                .set(ExifTags.Tag.IMAGE_TITLE, "Either way"));
+        byte[] little = write(exifJpeg(true),
+                TAG_CAMERA_ELEVATION_ANGLE, Exif.TYPE_SRATIONAL, "-12.25",
+                TAG_NOISE_REDUCTION, Exif.TYPE_SHORT, "513",
+                0xB00C, Exif.TYPE_FLOAT, "1.5",
+                0xB00D, Exif.TYPE_DOUBLE, "-3.25",
+                TAG_IMAGE_TITLE, Exif.TYPE_ASCII, "Either way");
         assertNotNull(little);
-        Map<ExifTags.Tag, ExifTags.Value> values = ExifTags.readAll(little);
+        Map<Integer, ExifTags.Value> values = ExifTags.readAll(little);
+        values.remove(TAG_EXIF_VERSION);
 
         byte[] big = ExifTags.write(exifJpeg(false), values);
 
         assertNotNull(big);
-        assertEquals("-12250/1000", read(big, ExifTags.Tag.CAMERA_ELEVATION_ANGLE));
-        assertEquals("513", read(big, ExifTags.Tag.NOISE_REDUCTION));
-        assertEquals("Either way", read(big, ExifTags.Tag.IMAGE_TITLE));
+        assertEquals("-12250/1000", read(big, TAG_CAMERA_ELEVATION_ANGLE));
+        assertEquals("513", read(big, TAG_NOISE_REDUCTION));
+        assertEquals("1.5", read(big, 0xB00C));
+        assertEquals("-3.25", read(big, 0xB00D));
+        assertEquals("Either way", read(big, TAG_IMAGE_TITLE));
     }
 
     /**
@@ -261,64 +292,85 @@ public class ExifTagsTest {
         byte[] composite = {0, 0, 0, 2};
         byte[] exposures = {0, 0, 0, 1, (byte) 0xFF, (byte) 0xFE, (byte) 0x80, 0x7F, 0, 1};
         byte[] jpeg = exifJpeg(false,
-                new int[] {ExifTags.Tag.COMPOSITE_IMAGE.getId(), TYPE_LONG, 1},
-                composite,
-                new int[] {ExifTags.Tag.SOURCE_IMAGE_NUMBER_OF_COMPOSITE_IMAGE.getId(),
-                        TYPE_SHORT, 2},
-                sources,
-                new int[] {ExifTags.Tag.SOURCE_EXPOSURE_TIMES_OF_COMPOSITE_IMAGE.getId(),
-                        TYPE_UNDEFINED, exposures.length},
+                new int[] {TAG_COMPOSITE_IMAGE, Exif.TYPE_LONG, 1}, composite,
+                new int[] {TAG_SOURCE_IMAGE_NUMBER, Exif.TYPE_SHORT, 2}, sources,
+                new int[] {TAG_SOURCE_EXPOSURE_TIMES, Exif.TYPE_UNDEFINED, exposures.length},
                 exposures);
-        Map<ExifTags.Tag, ExifTags.Value> values = ExifTags.readAll(jpeg);
+        Map<Integer, ExifTags.Value> values = ExifTags.readAll(jpeg);
+        values.remove(TAG_EXIF_VERSION);
         assertEquals("the fixture should carry all three", 3, values.size());
 
         byte[] out = ExifTags.write(exifJpeg(true), values);
 
         assertNotNull(out);
-        Map<ExifTags.Tag, ExifTags.Value> written = ExifTags.readAll(out);
-        assertStored(written.get(ExifTags.Tag.COMPOSITE_IMAGE), TYPE_LONG, 1, composite);
-        assertStored(written.get(ExifTags.Tag.SOURCE_IMAGE_NUMBER_OF_COMPOSITE_IMAGE),
-                TYPE_SHORT, 2, sources);
-        assertStored(written.get(ExifTags.Tag.SOURCE_EXPOSURE_TIMES_OF_COMPOSITE_IMAGE),
-                TYPE_UNDEFINED, exposures.length, exposures);
-        assertEquals("a long reads as its number", "2",
-                written.get(ExifTags.Tag.COMPOSITE_IMAGE).text());
+        Map<Integer, ExifTags.Value> written = ExifTags.readAll(out);
+        assertStored(written.get(TAG_COMPOSITE_IMAGE), Exif.TYPE_LONG, 1, composite);
+        assertStored(written.get(TAG_SOURCE_IMAGE_NUMBER), Exif.TYPE_SHORT, 2, sources);
+        assertStored(written.get(TAG_SOURCE_EXPOSURE_TIMES), Exif.TYPE_UNDEFINED,
+                exposures.length, exposures);
+        assertEquals("a long reads as its number", "2", written.get(TAG_COMPOSITE_IMAGE).text());
+        assertEquals("two shorts read as both", "3,2",
+                written.get(TAG_SOURCE_IMAGE_NUMBER).text());
     }
 
     /** An entry whose value points outside the block is no value, rather than stray bytes. */
     @Test
     public void aValueOutsideTheBlockIsSkipped() {
-        byte[] jpeg = exifJpeg(true,
-                new int[] {ExifTags.Tag.IMAGE_TITLE.getId(), 2, 64}, new byte[0]);
+        byte[] jpeg = exifJpeg(true, new int[] {TAG_IMAGE_TITLE, Exif.TYPE_ASCII, 64}, new byte[0]);
 
-        assertTrue(ExifTags.readAll(jpeg).isEmpty());
+        assertArrayEquals(new Object[] {TAG_EXIF_VERSION},
+                ExifTags.readAll(jpeg).keySet().toArray());
     }
 
-    /** Every tag in the enum carries the id the standard assigns it. */
+    /** An entry of a type the standard doesn't define is no value either. */
     @Test
-    public void theTagIdsAreTheOnesTheStandardAssigns() {
-        assertEquals(0x9287, ExifTags.Tag.LEARNING_OPT_OUT_IN.getId());
-        assertEquals(0x9400, ExifTags.Tag.TEMPERATURE.getId());
-        assertEquals(0x9405, ExifTags.Tag.CAMERA_ELEVATION_ANGLE.getId());
-        assertEquals(0xA40F, ExifTags.Tag.DISTORTION_CORRECTION.getId());
-        assertEquals(0xA436, ExifTags.Tag.IMAGE_TITLE.getId());
-        assertEquals(0xA43C, ExifTags.Tag.METADATA_EDITING_SOFTWARE.getId());
-        assertEquals(0xA462, ExifTags.Tag.SOURCE_EXPOSURE_TIMES_OF_COMPOSITE_IMAGE.getId());
-        assertNull("a tag androidx does name is not one of these",
-                ExifTags.Tag.forId(TAG_EXIF_VERSION));
+    public void aTypeWithNoSizeIsSkipped() {
+        byte[] jpeg = exifJpeg(true, new int[] {TAG_IMAGE_TITLE, 99, 1}, new byte[] {1});
+
+        assertNull(read(jpeg, TAG_IMAGE_TITLE));
     }
 
-    /** The file with the builder's changes applied, as a save applies them, or null. */
-    private static byte[] write(byte[] jpeg, ExifTags.Builder builder) {
-        Map<ExifTags.Tag, ExifTags.Value> values = ExifTags.readAll(jpeg);
-        if (!ExifTags.apply(builder, values)) {
-            return null;
+    /**
+     * Tags are known by the numbers the standard assigns them, apart from those ExifInterface
+     * reads and writes by name.
+     */
+    @Test
+    public void theTagNumbersAreTheOnesTheStandardAssigns() {
+        assertArrayEquals(new int[] {0x9287, Exif.TYPE_UNDEFINED},
+                ExifTags.standardTag("LearningOptOutIn"));
+        assertArrayEquals(new int[] {0x9400, Exif.TYPE_SRATIONAL},
+                ExifTags.standardTag("Temperature"));
+        assertArrayEquals(new int[] {0xA435, Exif.TYPE_ASCII},
+                ExifTags.standardTag(ExifInterface.TAG_LENS_SERIAL_NUMBER));
+        assertArrayEquals(new int[] {0xA436, Exif.TYPE_ASCII},
+                ExifTags.standardTag("ImageTitle"));
+        assertArrayEquals(new int[] {0xA462, Exif.TYPE_UNDEFINED},
+                ExifTags.standardTag("SourceExposureTimesOfCompositeImage"));
+        assertNull("a name ExifInterface reads is not one of these",
+                ExifTags.standardTag(ExifInterface.TAG_F_NUMBER));
+        assertEquals(0x829D, ExifTags.attributeTag(ExifInterface.TAG_F_NUMBER));
+        assertEquals(ExifInterface.TAG_GAMMA, ExifTags.attributeName(0xA500));
+        assertEquals(-1, ExifTags.attributeTag("ImageTitle"));
+        assertNull(ExifTags.attributeName(TAG_UNDEFINED_BY_ANY_STANDARD));
+        assertEquals("ImageTitle (0xA436)", ExifTags.describe(TAG_IMAGE_TITLE));
+        assertEquals("FNumber (0x829D)", ExifTags.describe(0x829D));
+        assertEquals("0xA4F0", ExifTags.describe(TAG_UNDEFINED_BY_ANY_STANDARD));
+    }
+
+    /** The file with each {tag, type, text} triple set, as a save sets them, or null. */
+    private static byte[] write(byte[] jpeg, Object... triples) {
+        Map<Integer, ExifTags.Value> values = new TreeMap<>();
+        for (int i = 0; i < triples.length; i += 3) {
+            ExifTags.Value value =
+                    ExifTags.encode((Integer) triples[i + 1], (String) triples[i + 2]);
+            assertNotNull("the fixture's value should encode", value);
+            values.put((Integer) triples[i], value);
         }
         return ExifTags.write(jpeg, values);
     }
 
     /** A tag's value in the file, as text. */
-    private static String read(byte[] jpeg, ExifTags.Tag tag) {
+    private static String read(byte[] jpeg, int tag) {
         ExifTags.Value value = ExifTags.readAll(jpeg).get(tag);
         return value == null ? null : value.text();
     }
@@ -328,167 +380,5 @@ public class ExifTagsTest {
         assertEquals("type", type, value.type);
         assertEquals("count", count, value.count);
         assertArrayEquals("bytes", bytes, value.bytes);
-    }
-
-    /** The tags of the Exif private directory, in the order they are stored. */
-    private static int[] subIfdTags(byte[] jpeg) {
-        int tiff = 12;
-        int ifd0 = tiff + readInt(jpeg, tiff + 4);
-        int count = readShort(jpeg, ifd0);
-        int subIfd = -1;
-        for (int i = 0; i < count; i++) {
-            int entry = ifd0 + 2 + i * ENTRY_BYTES;
-            if (readShort(jpeg, entry) == TAG_EXIF_IFD_POINTER) {
-                subIfd = tiff + readInt(jpeg, entry + 8);
-            }
-        }
-        if (subIfd < 0) return new int[0];
-        int entries = readShort(jpeg, subIfd);
-        int[] tags = new int[entries];
-        for (int i = 0; i < entries; i++) {
-            tags[i] = readShort(jpeg, subIfd + 2 + i * ENTRY_BYTES);
-        }
-        return tags;
-    }
-
-    /** The order the fixture last wrote, so the reader below matches it. */
-    private static boolean sLittleEndian = true;
-
-    private static int readShort(byte[] data, int at) {
-        return sLittleEndian
-                ? ((data[at + 1] & 0xFF) << 8) | (data[at] & 0xFF)
-                : ((data[at] & 0xFF) << 8) | (data[at + 1] & 0xFF);
-    }
-
-    private static int readInt(byte[] data, int at) {
-        return sLittleEndian
-                ? ((data[at + 3] & 0xFF) << 24) | ((data[at + 2] & 0xFF) << 16)
-                        | ((data[at + 1] & 0xFF) << 8) | (data[at] & 0xFF)
-                : ((data[at] & 0xFF) << 24) | ((data[at + 1] & 0xFF) << 16)
-                        | ((data[at + 2] & 0xFF) << 8) | (data[at + 3] & 0xFF);
-    }
-
-    /** A little-endian Exif JPEG with an IFD0 pointing at a one-entry private directory. */
-    private static byte[] exifJpeg() {
-        return exifJpeg(true);
-    }
-
-    /**
-     * An Exif JPEG with an IFD0 pointing at a private directory that carries ExifVersion and then
-     * any further entries, given as pairs of {tag, type, count} and big-endian value bytes, in
-     * ascending tag order. A value of more than four bytes follows the directory; an empty one
-     * leaves the entry pointing past the end of the block.
-     */
-    private static byte[] exifJpeg(boolean little, Object... extra) {
-        sLittleEndian = little;
-        ByteArrayOutputStream tiff = new ByteArrayOutputStream();
-        writeShort(tiff, little ? 0x4949 : 0x4D4D);
-        writeShort(tiff, 42);
-        writeInt(tiff, 8);
-
-        // IFD0: orientation, then the pointer to the private directory.
-        int ifd0 = 8;
-        int ifd0Size = 2 + 2 * ENTRY_BYTES + 4;
-        int subIfd = ifd0 + ifd0Size;
-        writeShort(tiff, 2);
-        writeEntry(tiff, 0x0112, 3, 1, 1);
-        writeEntry(tiff, TAG_EXIF_IFD_POINTER, 4, 1, subIfd);
-        writeInt(tiff, 0);
-
-        // The private directory, carrying one tag so replacement differs from addition.
-        int entries = 1 + extra.length / 2;
-        writeShort(tiff, entries);
-        writeEntry(tiff, TAG_EXIF_VERSION, 7, 4, 0x32333230);
-        ByteArrayOutputStream values = new ByteArrayOutputStream();
-        int valuesAt = subIfd + 2 + entries * ENTRY_BYTES + 4;
-        for (int i = 0; i < extra.length; i += 2) {
-            int[] entry = (int[]) extra[i];
-            byte[] bytes = inOrder((byte[]) extra[i + 1], entry[1], little);
-            writeShort(tiff, entry[0]);
-            writeShort(tiff, entry[1]);
-            writeInt(tiff, entry[2]);
-            if (bytes.length == 0) {
-                writeInt(tiff, 0x7FFF);
-            } else if (bytes.length <= 4) {
-                tiff.write(bytes, 0, bytes.length);
-                for (int pad = bytes.length; pad < 4; pad++) tiff.write(0);
-            } else {
-                writeInt(tiff, valuesAt + values.size());
-                values.write(bytes, 0, bytes.length);
-            }
-        }
-        writeInt(tiff, 0);
-        byte[] valueBytes = values.toByteArray();
-        tiff.write(valueBytes, 0, valueBytes.length);
-
-        byte[] tiffBytes = tiff.toByteArray();
-        ByteArrayOutputStream out = new ByteArrayOutputStream();
-        out.write(0xFF);
-        out.write(0xD8);
-        out.write(0xFF);
-        out.write(0xE1);
-        int payload = 6 + tiffBytes.length;
-        out.write(((payload + 2) >> 8) & 0xFF);
-        out.write((payload + 2) & 0xFF);
-        for (byte b : new byte[] {0x45, 0x78, 0x69, 0x66, 0x00, 0x00}) {
-            out.write(b);
-        }
-        out.write(tiffBytes, 0, tiffBytes.length);
-        out.write(0xFF);
-        out.write(0xD9);
-        return out.toByteArray();
-    }
-
-    /** Big-endian value bytes in the fixture's order: each short or long turned around. */
-    private static byte[] inOrder(byte[] bigEndian, int type, boolean little) {
-        byte[] bytes = bigEndian.clone();
-        int unit = type == TYPE_SHORT ? 2 : type == TYPE_LONG ? 4 : 1;
-        if (little) {
-            for (int start = 0; start + unit <= bytes.length; start += unit) {
-                for (int i = start, j = start + unit - 1; i < j; i++, j--) {
-                    byte swap = bytes[i];
-                    bytes[i] = bytes[j];
-                    bytes[j] = swap;
-                }
-            }
-        }
-        return bytes;
-    }
-
-    private static void writeEntry(ByteArrayOutputStream out, int tag, int type, int count,
-            int value) {
-        writeShort(out, tag);
-        writeShort(out, type);
-        writeInt(out, count);
-        if (type == 3) {
-            writeShort(out, value);
-            writeShort(out, 0);
-        } else {
-            writeInt(out, value);
-        }
-    }
-
-    private static void writeShort(ByteArrayOutputStream out, int value) {
-        if (sLittleEndian) {
-            out.write(value & 0xFF);
-            out.write((value >> 8) & 0xFF);
-        } else {
-            out.write((value >> 8) & 0xFF);
-            out.write(value & 0xFF);
-        }
-    }
-
-    private static void writeInt(ByteArrayOutputStream out, int value) {
-        if (sLittleEndian) {
-            out.write(value & 0xFF);
-            out.write((value >> 8) & 0xFF);
-            out.write((value >> 16) & 0xFF);
-            out.write((value >> 24) & 0xFF);
-        } else {
-            out.write((value >> 24) & 0xFF);
-            out.write((value >> 16) & 0xFF);
-            out.write((value >> 8) & 0xFF);
-            out.write(value & 0xFF);
-        }
     }
 }

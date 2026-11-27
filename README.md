@@ -465,6 +465,16 @@ manually rotate/flip images if you cannot use another library.
 ```java
 Exif exif = new Exif(file);
 exif.removeLocation();
+exif.setTitle("Harbour at dawn");
+exif.setPhotographer("A. Photographer");
+exif.attachAmbientConditions(new AmbientConditions.Builder().setTemperature(21.5).build());
+exif.save();
+```
+Any other tag can be read and written by its standard name, or by its number for one newer than
+the library.
+```java
+exif.setAttribute("ImageEditor", "A. Editor");
+exif.setTag(0xA4F0, Exif.TYPE_ASCII, "A tag from a later standard");
 ```
 
 VideoView

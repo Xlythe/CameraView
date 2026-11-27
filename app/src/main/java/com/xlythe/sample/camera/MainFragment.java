@@ -145,7 +145,8 @@ public class MainFragment extends CameraFragment {
     public void onImageSaved(@NonNull Uri uri) {
         report("Picture saved to " + uri);
 
-        // Print out metadata (EXIF data) about the picture using the library's Exif helper.
+        // Print out metadata (EXIF data) about the picture using the library's Exif helper: its
+        // title, photographer and copyright, the conditions it was taken in, where and when.
         try (InputStream input = requireContext().getContentResolver().openInputStream(uri)) {
             if (input != null) {
                 Log.d(TAG, new Exif(input).toString());

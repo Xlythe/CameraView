@@ -144,16 +144,15 @@ public class ExifThumbnailEncodingTest {
     }
 
     /**
-     * Spec tags and a thumbnail asked for together are both written, and a later plain save
-     * keeps both, in a block that still parses and stays inside its 64KB.
+     * Tags and a thumbnail asked for together are both written, and a later plain save keeps
+     * both, in a block that still parses and stays inside its 64KB.
      */
     @Test
-    public void specTagsAndAThumbnailAreBothKept() throws IOException {
+    public void tagsAndAThumbnailAreBothKept() throws IOException {
         File file = picture(640, 480);
         Exif exif = new Exif(file);
-        assertTrue(exif.setTags(new ExifTags.Builder()
-                .set(ExifTags.Tag.IMAGE_TITLE, "Both")
-                .set(ExifTags.Tag.TEMPERATURE, "21.5")));
+        exif.setTitle("Both");
+        exif.attachAmbientConditions(new AmbientConditions.Builder().setTemperature(21.5).build());
         exif.attachThumbnail();
         exif.save();
 
@@ -169,13 +168,12 @@ public class ExifThumbnailEncodingTest {
 
     /** A thumbnailed file given tags later keeps the thumbnail it had. */
     @Test
-    public void specTagsSetLaterKeepTheThumbnail() throws IOException {
+    public void tagsSetLaterKeepTheThumbnail() throws IOException {
         File file = thumbnailed(picture(640, 480));
 
         Exif exif = new Exif(file);
-        exif.setTags(new ExifTags.Builder()
-                .set(ExifTags.Tag.IMAGE_TITLE, "Both")
-                .set(ExifTags.Tag.TEMPERATURE, "21.5"));
+        exif.setTitle("Both");
+        exif.attachAmbientConditions(new AmbientConditions.Builder().setTemperature(21.5).build());
         exif.save();
 
         assertTagsAndThumbnail(file);
@@ -189,8 +187,8 @@ public class ExifThumbnailEncodingTest {
         assertOneDeclaredThumbnail(file);
         Exif saved = new Exif(file);
         assertTrue(saved.hasThumbnail());
-        assertEquals("Both", saved.getTag(ExifTags.Tag.IMAGE_TITLE));
-        assertEquals("21500/1000", saved.getTag(ExifTags.Tag.TEMPERATURE));
+        assertEquals("Both", saved.getTitle());
+        assertEquals(21.5, saved.getAmbientConditions().getTemperature(), 0);
         ExifSegment.Segment segment = ExifSegment.find(readAll(file));
         assertNotNull("the Exif segment should still parse", segment);
         assertTrue(segment.payloadLength <= ExifSegment.MAX_APP1_PAYLOAD);
