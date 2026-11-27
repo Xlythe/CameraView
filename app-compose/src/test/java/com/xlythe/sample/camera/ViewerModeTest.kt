@@ -1,17 +1,18 @@
 package com.xlythe.sample.camera
 
+import com.xlythe.view.camera.viewer.MediaView
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
-/** Which viewer the Compose sample opens a capture in. */
+/** The Compose media demo's choices. */
 class ViewerModeTest {
-    /** The camera's photo spheres are 2:1, its panoramas wider, and a DNG is always flat. */
+    /** Each choice names its own kind of media, and Auto stands for what a file is found to be. */
     @Test
-    fun picksTheViewerByShape() {
-        assertEquals(ViewerMode.PHOTOSPHERE, guessViewerMode("image/jpeg", 3016, 1508))
-        assertEquals(ViewerMode.PANORAMA, guessViewerMode("image/jpeg", 3032, 532))
-        assertEquals(ViewerMode.PICTURE, guessViewerMode("image/jpeg", 4000, 3000))
-        assertEquals(ViewerMode.PICTURE, guessViewerMode("image/x-adobe-dng", 4000, 2000))
-        assertEquals(ViewerMode.PICTURE, guessViewerMode(null, -1, -1))
+    fun eachChoiceIsAKindOfMedia() {
+        for (mode in ViewerMode.entries) {
+            assertEquals(mode, ViewerMode.of(mode.type))
+        }
+        assertEquals(MediaView.UNKNOWN, ViewerMode.AUTO.type)
+        assertEquals(ViewerMode.AUTO, ViewerMode.of(99))
     }
 }

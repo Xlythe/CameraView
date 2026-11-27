@@ -7,23 +7,21 @@
     android:background="#000000"
     tools:context=".ViewerFragment">
 
-    <!-- One of the three is shown at a time, whichever suits the picture. -->
-    <com.xlythe.view.camera.viewer.LargeImageView
-        android:id="@+id/viewer_picture"
+    <!-- Works out what the file is and shows it the way it suits. -->
+    <com.xlythe.view.camera.viewer.MediaView
+        android:id="@+id/viewer_media"
         android:layout_width="match_parent"
         android:layout_height="match_parent"
-        android:visibility="gone" />
+        android:contentDescription="@string/viewer_media_description" />
 
-    <com.xlythe.view.camera.viewer.PanoramaView
-        android:id="@+id/viewer_panorama"
+    <TextView
+        android:id="@+id/viewer_info"
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:visibility="gone" />
-
-    <com.xlythe.view.camera.viewer.PhotosphereView
-        android:id="@+id/viewer_photosphere"
-        android:layout_width="match_parent"
-        android:layout_height="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top"
+        android:background="#80000000"
+        android:padding="8dp"
+        android:textColor="#FFFFFF"
         android:visibility="gone" />
 
     <ProgressBar
@@ -73,44 +71,58 @@
                 android:orientation="horizontal">
 
                 <RadioGroup
-                    android:id="@+id/viewer_mode"
+                    android:id="@+id/viewer_type"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:checkedButton="@id/viewer_type_detect"
                     android:orientation="horizontal">
 
                     <RadioButton
-                        android:id="@+id/viewer_mode_picture"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:buttonTint="#FFFFFF"
-                        android:text="@string/viewer_mode_picture"
-                        android:textColor="#FFFFFF" />
+                        android:id="@+id/viewer_type_detect"
+                        style="@style/ViewerChoice"
+                        android:text="@string/viewer_mode_detect" />
 
                     <RadioButton
-                        android:id="@+id/viewer_mode_panorama"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:buttonTint="#FFFFFF"
-                        android:text="@string/viewer_mode_panorama"
-                        android:textColor="#FFFFFF" />
+                        android:id="@+id/viewer_type_picture"
+                        style="@style/ViewerChoice"
+                        android:text="@string/viewer_mode_picture" />
 
                     <RadioButton
-                        android:id="@+id/viewer_mode_photosphere"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:buttonTint="#FFFFFF"
-                        android:text="@string/viewer_mode_photosphere"
-                        android:textColor="#FFFFFF" />
+                        android:id="@+id/viewer_type_panorama"
+                        style="@style/ViewerChoice"
+                        android:text="@string/viewer_mode_panorama" />
+
+                    <RadioButton
+                        android:id="@+id/viewer_type_photosphere"
+                        style="@style/ViewerChoice"
+                        android:text="@string/viewer_mode_photosphere" />
+
+                    <RadioButton
+                        android:id="@+id/viewer_type_video"
+                        style="@style/ViewerChoice"
+                        android:text="@string/viewer_mode_video" />
+
+                    <RadioButton
+                        android:id="@+id/viewer_type_motion"
+                        style="@style/ViewerChoice"
+                        android:text="@string/viewer_mode_motion" />
+
+                    <RadioButton
+                        android:id="@+id/viewer_type_spherical"
+                        style="@style/ViewerChoice"
+                        android:text="@string/viewer_mode_spherical" />
+
+                    <RadioButton
+                        android:id="@+id/viewer_type_audio"
+                        style="@style/ViewerChoice"
+                        android:text="@string/viewer_mode_audio" />
 
                 </RadioGroup>
 
                 <CheckBox
                     android:id="@+id/viewer_gyroscope"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:buttonTint="#FFFFFF"
+                    style="@style/ViewerChoice"
                     android:text="@string/viewer_gyroscope"
-                    android:textColor="#FFFFFF"
                     android:visibility="gone" />
 
             </LinearLayout>
