@@ -6,6 +6,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
+import android.Manifest;
 import android.content.Context;
 import android.hardware.camera2.CaptureRequest;
 import android.media.FakeImage;
@@ -27,6 +28,7 @@ import org.junit.runner.RunWith;
 import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowPausedAsyncTask;
@@ -150,9 +152,11 @@ public class CameraViewBurstTest {
         assertEquals(CameraView.PictureFormat.RAW, cameraView.getPictureFormat());
 
         cameraView.startBurst(directory, 3, heard);
+        assertEquals("refused at once", List.of(0), heard.finishes);
         cameraView.setPictureFormat(CameraView.PictureFormat.RAW_JPEG);
         idle();
         cameraView.startBurst(directory, 3, heard);
+        assertEquals("refused at once", List.of(0, 0), heard.finishes);
         idle();
 
         assertEquals(List.of(0, 0), heard.finishes);
@@ -252,6 +256,7 @@ public class CameraViewBurstTest {
         cameraView.startRecording(new File(directory, "single.mp4"));
         Heard second = new Heard();
         cameraView.startBurst(directory, 3, second);
+        assertEquals("a second burst is refused at once", List.of(0), second.finishes);
         idle();
 
         assertEquals(1, pictureFailures);
@@ -259,6 +264,33 @@ public class CameraViewBurstTest {
         assertEquals("only one burst runs at a time", List.of(0), second.finishes);
         assertFalse("and the first is still going", cameraView.isRecording());
         assertEquals(0, heard.finishes.size());
+    }
+
+    /**
+     * A burst asked for while recording finishes at once with nothing, having asked the camera for
+     * nothing, and the recording goes on.
+     */
+    @Test
+    public void aBurstDuringARecordingFinishesAtOnceWithNothing() {
+        Shadows.shadowOf(RuntimeEnvironment.getApplication())
+                .grantPermissions(Manifest.permission.RECORD_AUDIO);
+        open();
+        cameraView.startRecording(new File(context.getCacheDir(), "recording.mp4"));
+        idle();
+        assertTrue("the recording never started", cameraView.isRecording());
+
+        cameraView.startBurst(directory, 3, heard);
+
+        assertEquals("refused at once", List.of(0), heard.finishes);
+        idle();
+        assertEquals("and heard only once", List.of(0), heard.finishes);
+        assertEquals(0, heard.captured.size());
+        assertTrue("the recording goes on", cameraView.isRecording());
+        for (CaptureRequest request : ShadowCallbackCameraCaptureSession.getCaptures()) {
+            assertFalse("no burst picture should be asked for", request.getTag() instanceof File);
+        }
+        cameraView.stopRecording();
+        idle();
     }
 
     /** A picture awaiting confirmation holds the preview, so a burst waits for it. */

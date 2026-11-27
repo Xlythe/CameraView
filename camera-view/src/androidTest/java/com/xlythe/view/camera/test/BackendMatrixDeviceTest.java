@@ -558,6 +558,104 @@ public final class BackendMatrixDeviceTest {
     }
 
     /**
+     * A burst asked for during another burst, during a recording, or while the format is RAW
+     * finishes before startBurst returns, with a count of 0, and leaves what was running alone.
+     * Each state the camera can be put in is checked; RAW only where the camera writes it.
+     */
+    @Test
+    public void aBurstThatCannotStartFinishesAtOnceWithNothing() throws Exception {
+        File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                "refused-" + backend);
+        Map<String, Integer> refusals = new LinkedHashMap<>();
+        CountDownLatch firstFinished = new CountDownLatch(1);
+        AtomicInteger firstCount = new AtomicInteger(-1);
+
+        withOpenCamera(camera -> {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                camera.setShutterSoundEnabled(false);
+                camera.startBurst(directory, 5, new CameraView.OnBurstListener() {
+                    @Override public void onBurstFinished(int pictures) {
+                        firstCount.set(pictures);
+                        firstFinished.countDown();
+                    }
+                });
+                refusals.put("during a burst", refusedCount(camera, directory));
+            });
+            assertTrue("the first burst never finished on " + backend,
+                    firstFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            assertEquals("a refused burst cost the running one pictures on " + backend,
+                    5, firstCount.get());
+
+            if (DeviceState.canRecord(backend)) {
+                CountDownLatch recorded = new CountDownLatch(1);
+                camera.setOnVideoCapturedListener(new CameraView.OnVideoCapturedListener() {
+                    @Override public void onVideoConfirmation() {}
+
+                    @Override public void onVideoCaptured(File saved) {
+                        recorded.countDown();
+                    }
+
+                    @Override public void onFailure() {
+                        recorded.countDown();
+                    }
+                });
+                File video = temporaryFile(".mp4");
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(
+                        () -> camera.startRecording(video));
+                sleep(2_000);
+                AtomicBoolean stillRecording = new AtomicBoolean();
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                    if (camera.isRecording()) {
+                        refusals.put("during a recording", refusedCount(camera, directory));
+                        stillRecording.set(camera.isRecording());
+                    }
+                });
+                camera.stopRecording();
+                assertTrue("the recording never reported on " + backend,
+                        recorded.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                if (refusals.containsKey("during a recording")) {
+                    assertTrue("a refused burst stopped the recording on " + backend,
+                            stillRecording.get());
+                }
+            }
+
+            for (CameraView.PictureFormat raw : new CameraView.PictureFormat[] {
+                    CameraView.PictureFormat.RAW, CameraView.PictureFormat.RAW_JPEG}) {
+                AtomicBoolean offered = new AtomicBoolean();
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                    offered.set(camera.isPictureFormatSupported(raw));
+                    if (offered.get()) {
+                        camera.setPictureFormat(raw);
+                        refusals.put("as " + raw, refusedCount(camera, directory));
+                        camera.setPictureFormat(CameraView.PictureFormat.JPEG);
+                    }
+                });
+            }
+        });
+
+        Log.i(BURST_TAG, backend + " refused bursts: " + refusals);
+        assertTrue("no refusal was checked on " + backend, refusals.containsKey("during a burst"));
+        for (Map.Entry<String, Integer> refusal : refusals.entrySet()) {
+            assertEquals("a burst " + refusal.getKey() + " has to finish at once with 0 on "
+                    + backend, Integer.valueOf(0), refusal.getValue());
+        }
+    }
+
+    /**
+     * Asks for a burst, on the main thread, and gives the count it finished with before
+     * startBurst returned, or null if it had not finished by then.
+     */
+    private static Integer refusedCount(CameraView camera, File directory) {
+        List<Integer> heard = new ArrayList<>();
+        camera.startBurst(directory, 3, new CameraView.OnBurstListener() {
+            @Override public void onBurstFinished(int pictures) {
+                heard.add(pictures);
+            }
+        });
+        return heard.isEmpty() ? null : heard.get(0);
+    }
+
+    /**
      * Fails unless a burst picture matches a single picture taken just after it: the same size
      * and orientation, the same values for what the settings decide, and the same tags present
      * for what the scene decides.
