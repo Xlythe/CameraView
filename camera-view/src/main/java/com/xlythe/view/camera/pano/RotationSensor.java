@@ -53,6 +53,12 @@ final class RotationSensor implements SensorEventListener {
     /** The span the gyroscope's speed is averaged over, either side of the time asked about. */
     private static final long GYROSCOPE_WINDOW_NANOS = 50_000_000L;
 
+    /**
+     * A gyroscope that has read nothing this long into the rotation never will, and the rotation
+     * is then taken on trust, as on a device without one.
+     */
+    static final long GYROSCOPE_SILENCE_NANOS = 1_000_000_000L;
+
     /** Where the rotation is kept for the sweep to look up. */
     final OrientationHistory history = new OrientationHistory();
 
@@ -172,16 +178,22 @@ final class RotationSensor implements SensorEventListener {
 
     /**
      * Whether the rotation at a moment can be trusted: it turned as fast as the gyroscope says
-     * the device did. True when there is no gyroscope, or no reading of it then, to say otherwise.
+     * the device did. Until both have read enough around the moment to tell, it cannot be, since
+     * the first readings are the ones most likely to be settling. True on a device without a
+     * gyroscope, or with one that has said nothing since the rotation began.
      */
     boolean isSettled(long timeNanos) {
         if (mGyroscope == null) {
             return true;
         }
+        if (!history.canMeasureSpeed(timeNanos)) {
+            return false;
+        }
         float measured = gyroscope.average(
                 timeNanos - GYROSCOPE_WINDOW_NANOS, timeNanos + GYROSCOPE_WINDOW_NANOS);
         if (Float.isNaN(measured)) {
-            return true;
+            return gyroscope.isEmpty()
+                    && timeNanos - history.oldestTime() > GYROSCOPE_SILENCE_NANOS;
         }
         float reported = history.speed(timeNanos);
         return Math.abs(reported - measured)

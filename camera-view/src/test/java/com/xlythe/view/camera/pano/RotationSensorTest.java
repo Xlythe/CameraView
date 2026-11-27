@@ -96,8 +96,10 @@ public class RotationSensorTest {
         long ms = 1_000_000L;
         // Thirty degrees a second.
         sensor.onReading(false, now + 100 * ms, vector(uprightFacing(0f)));
+        assertFalse("one reading says nothing of how fast it turns",
+                sensor.isSettled(now + 150 * ms));
         sensor.onReading(false, now + 200 * ms, vector(uprightFacing(3f)));
-        assertTrue("no gyroscope reading then says otherwise", sensor.isSettled(now + 150 * ms));
+        assertFalse("no gyroscope reading then to check it by", sensor.isSettled(now + 150 * ms));
 
         sensor.onGyroscopeReading(now + 140 * ms, new float[] {0f, 0f, 0f});
         sensor.onGyroscopeReading(now + 160 * ms, new float[] {0f, 0f, 0f});
@@ -109,6 +111,19 @@ public class RotationSensorTest {
         sensor.onGyroscopeReading(now + 240 * ms, new float[] {0f, thirty * 0.95f, 0f});
         sensor.onGyroscopeReading(now + 260 * ms, new float[] {0f, thirty * 1.05f, 0f});
         assertTrue(sensor.isSettled(now + 250 * ms));
+    }
+
+    @Test
+    public void aSilentGyroscope_isGivenUpOnAfterASecond() {
+        addSensor(Sensor.TYPE_GAME_ROTATION_VECTOR);
+        addSensor(Sensor.TYPE_GYROSCOPE);
+        RotationSensor sensor = new RotationSensor(context());
+        long ms = 1_000_000L;
+        for (long t = 0; t <= 1200 * ms; t += 100 * ms) {
+            sensor.onReading(false, t, vector(uprightFacing(t / (float) ms * 0.03f)));
+        }
+        assertFalse(sensor.isSettled(500 * ms));
+        assertTrue(sensor.isSettled(1150 * ms));
     }
 
     @Test

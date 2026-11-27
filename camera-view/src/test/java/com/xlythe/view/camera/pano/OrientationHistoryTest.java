@@ -118,6 +118,20 @@ public class OrientationHistoryTest {
         assertEquals(0f, history.speed(100 * MILLIS), 0f);
     }
 
+    @Test
+    public void speed_canBeMeasured_onlyWithReadingsEitherSideOfWhereItStarts() {
+        OrientationHistory history = new OrientationHistory();
+        assertEquals(0L, history.oldestTime());
+        assertFalse(history.canMeasureSpeed(100 * MILLIS));
+        history.add(100 * MILLIS, uprightFacing(0f));
+        assertFalse("one reading", history.canMeasureSpeed(150 * MILLIS));
+        history.add(200 * MILLIS, uprightFacing(3f));
+        assertEquals(100 * MILLIS, history.oldestTime());
+        assertTrue(history.canMeasureSpeed(150 * MILLIS));
+        assertFalse("nothing before it", history.canMeasureSpeed(120 * MILLIS));
+        assertFalse("nothing after it", history.canMeasureSpeed(260 * MILLIS));
+    }
+
     private static float yaw(float[] quaternion) {
         return SphereMathTest.backCamera(matrixOf(quaternion)).yaw();
     }

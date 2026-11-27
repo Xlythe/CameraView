@@ -45,6 +45,11 @@ final class GyroscopeHistory {
         mSpeeds[slot] = degreesPerSecond;
     }
 
+    /** Whether nothing has been read yet. */
+    synchronized boolean isEmpty() {
+        return mCount == 0;
+    }
+
     /**
      * The mean speed of the readings taken from one moment to another, both included.
      *

@@ -91,6 +91,20 @@ final class OrientationHistory {
         return mCount == 0 ? 0 : mTimes[index(mCount - 1)];
     }
 
+    /** The time of the oldest reading still held, or 0 when there is none. */
+    synchronized long oldestTime() {
+        return mCount == 0 ? 0 : mTimes[mStart];
+    }
+
+    /**
+     * Whether there are readings either side of where {@link #speed} starts measuring at a
+     * moment, so that it measures the turn there rather than calling it 0 for want of history.
+     */
+    synchronized boolean canMeasureSpeed(long timeNanos) {
+        long from = timeNanos - SPEED_WINDOW_NANOS;
+        return mCount > 1 && mTimes[mStart] <= from && mTimes[index(mCount - 1)] > from;
+    }
+
     /**
      * The rotation at a moment, as w, x, y, z.
      *

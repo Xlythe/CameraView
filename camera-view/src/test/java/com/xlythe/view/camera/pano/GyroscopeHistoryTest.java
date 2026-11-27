@@ -1,6 +1,7 @@
 package com.xlythe.view.camera.pano;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
@@ -11,7 +12,11 @@ public class GyroscopeHistoryTest {
 
     @Test
     public void average_withNothingRead_isUnknown() {
-        assertTrue(Float.isNaN(new GyroscopeHistory().average(0, 100 * MILLIS)));
+        GyroscopeHistory history = new GyroscopeHistory();
+        assertTrue(history.isEmpty());
+        assertTrue(Float.isNaN(history.average(0, 100 * MILLIS)));
+        history.add(100 * MILLIS, 5f);
+        assertFalse(history.isEmpty());
     }
 
     @Test
