@@ -29,6 +29,9 @@ import androidx.annotation.Nullable;
  * background thread operations, permissions, and UI binding to layout controls.
  */
 public class MainFragment extends CameraFragment {
+    /** How long the preview takes to come back after blinking for a picture. */
+    private static final long SHUTTER_BLINK_MILLIS = 150;
+
     /** The CameraView the zoom presets drive, held while the view exists. */
     @Nullable
     private CameraView mCameraView;
@@ -120,6 +123,18 @@ public class MainFragment extends CameraFragment {
             View button = mZoomPresets.getChildAt(i);
             button.setSelected(button == nearest);
         }
+    }
+
+    /**
+     * Callback triggered as the picture is exposed. The library has already played the shutter
+     * click; blinking the preview shows the moment too, as camera apps do.
+     */
+    @Override
+    public void onShutter() {
+        View camera = requireView().findViewById(R.id.camera);
+        camera.animate().cancel();
+        camera.setAlpha(0f);
+        camera.animate().alpha(1f).setDuration(SHUTTER_BLINK_MILLIS);
     }
 
     /**

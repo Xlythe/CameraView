@@ -63,6 +63,9 @@ public class LegacyCameraModule extends ICameraModule {
     /** The recorder for a recording in progress, or null when nothing is being recorded. */
     private MediaRecorder mVideoRecorder;
 
+    /** Whether the platform's click is silenced so the library can play the app's sound. */
+    private volatile boolean mPlaysOwnClick;
+
     /** Where the recording in progress is being written. */
     private File mVideoFile;
 
@@ -95,6 +98,7 @@ public class LegacyCameraModule extends ICameraModule {
             parameters.setJpegQuality(getPictureQuality());
             float zoomRatio = applyZoom(parameters, mZoomRatio);
             mCamera.setParameters(parameters);
+            applyShutterSound();
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
             mCamera.startPreview();
@@ -182,6 +186,49 @@ public class LegacyCameraModule extends ICameraModule {
         setTransform(matrix);
     }
 
+    /** The platform plays the old API's click and recording tones itself. */
+    @Override
+    protected boolean playsSystemSounds() {
+        return true;
+    }
+
+    @Override
+    protected boolean playsOwnClick() {
+        return mPlaysOwnClick;
+    }
+
+    @Override
+    public void setShutterSoundEnabled(boolean enabled) {
+        super.setShutterSoundEnabled(enabled);
+        applyShutterSound();
+    }
+
+    @Override
+    public void setShutterSound(int soundRes) {
+        super.setShutterSound(soundRes);
+        applyShutterSound();
+    }
+
+    /**
+     * Asks the platform to play its click or not, silencing it for the app's own sound. Where a
+     * shutter sound is required it refuses, and its click plays instead of the app's. The
+     * recording tones it plays regardless.
+     */
+    private void applyShutterSound() {
+        if (mCamera == null) {
+            mPlaysOwnClick = false;
+            return;
+        }
+        boolean custom = getShutterSound() != 0;
+        try {
+            boolean applied = mCamera.enableShutterSound(isShutterSoundEnabled() && !custom);
+            mPlaysOwnClick = custom && applied;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to set the shutter sound", e);
+            mPlaysOwnClick = false;
+        }
+    }
+
     @Override
     public void takePicture(File file) {
         if (mCamera == null) {
@@ -192,7 +239,7 @@ public class LegacyCameraModule extends ICameraModule {
             onImageFailed();
             return;
         }
-        mCamera.takePicture(null, null, new LegacyPictureListener(
+        mCamera.takePicture(this::onShutter, null, new LegacyPictureListener(
                 file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(), this));
     }
 
