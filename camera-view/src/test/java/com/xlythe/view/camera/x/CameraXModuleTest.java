@@ -213,6 +213,7 @@ public final class CameraXModuleTest {
             assertEquals(format + " otherwise", format,
                     CameraXModule.boundPictureFormat(format, false));
         }
+    }
 
     /**
      * A capture whose Exif has no room for the camera's own tags keeps the picture and the rest
