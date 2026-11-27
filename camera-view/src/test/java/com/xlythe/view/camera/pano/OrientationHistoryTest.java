@@ -85,17 +85,17 @@ public class OrientationHistoryTest {
         OrientationHistory history = new OrientationHistory();
         int readings = OrientationHistory.CAPACITY + 10;
         for (int i = 0; i < readings; i++) {
-            history.add(i * 10 * MILLIS, uprightFacing(i * 0.5f));
+            history.add(i * 10 * MILLIS, uprightFacing(i * 0.1f));
         }
         float[] quaternion = new float[4];
         assertFalse(history.sample(5 * 10 * MILLIS, quaternion));
         long newest = (readings - 1) * 10 * MILLIS;
         assertEquals(newest, history.newestTime());
         assertTrue(history.sample(newest - 5 * MILLIS, quaternion));
-        assertEquals((readings - 1.5f) * 0.5f, yaw(quaternion), 0.01f);
+        assertEquals((readings - 1.5f) * 0.1f, yaw(quaternion), 0.01f);
         long oldest = 10 * 10 * MILLIS;
         assertTrue(history.sample(oldest, quaternion));
-        assertEquals(5f, yaw(quaternion), 0.01f);
+        assertEquals(1f, yaw(quaternion), 0.01f);
     }
 
     @Test

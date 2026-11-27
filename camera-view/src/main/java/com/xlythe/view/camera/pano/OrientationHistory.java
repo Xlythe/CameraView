@@ -18,10 +18,10 @@ import androidx.annotation.NonNull;
 @AnyThread
 final class OrientationHistory {
     /**
-     * How many readings are kept: over a second at the rate the sweep asks the sensor for,
-     * which is longer than any frame takes to arrive.
+     * How many readings are kept: five seconds at the rate the sweep asks the sensor for, which
+     * covers a frame that a busy device delivers seconds late.
      */
-    static final int CAPACITY = 128;
+    static final int CAPACITY = 512;
 
     /**
      * How far past the newest reading a time may be and still be given that reading.

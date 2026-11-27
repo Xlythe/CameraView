@@ -27,13 +27,43 @@ public class TimeBaseTest {
     }
 
     @Test
-    public void stampOnNeitherClock_isTakenAsArriving() {
-        assertEquals(ELAPSED_NOW, TimeBase.toElapsedRealtime(12345L, ELAPSED_NOW, MONOTONIC_NOW));
+    public void aFrameSecondsLate_isStillReadOnItsOwnClock() {
+        // A busy device can take this long; reading it as arriving now would place it with the
+        // rotation of three seconds later.
+        long captured = ELAPSED_NOW - 3 * SECOND;
+        assertEquals(captured,
+                TimeBase.toElapsedRealtime(captured, ELAPSED_NOW, MONOTONIC_NOW));
     }
 
     @Test
-    public void stampFromTheFuture_isTakenAsArriving() {
-        assertEquals(ELAPSED_NOW,
+    public void whenBothClocksFit_theNearerOneWins() {
+        // A device that has barely slept: the clocks are a second apart, and a stamp fits both.
+        long elapsed = 100 * SECOND;
+        long monotonic = 99 * SECOND;
+        long captured = monotonic - 50_000_000L;
+        assertEquals(elapsed - 50_000_000L,
+                TimeBase.toElapsedRealtime(captured, elapsed, monotonic));
+        captured = elapsed - 50_000_000L;
+        assertEquals(captured, TimeBase.toElapsedRealtime(captured, elapsed, monotonic));
+    }
+
+    @Test
+    public void stampOnNeitherClock_isUnknown() {
+        assertEquals(TimeBase.UNKNOWN,
+                TimeBase.toElapsedRealtime(12345L, ELAPSED_NOW, MONOTONIC_NOW));
+    }
+
+    @Test
+    public void stampFromTheFuture_isUnknown() {
+        assertEquals(TimeBase.UNKNOWN,
                 TimeBase.toElapsedRealtime(ELAPSED_NOW + SECOND, ELAPSED_NOW, MONOTONIC_NOW));
+    }
+
+    @Test
+    public void anUnknownTime_hasNoRotation() {
+        OrientationHistory history = new OrientationHistory();
+        history.add(SECOND, SphereMathTest.uprightFacing(0f));
+        history.add(2 * SECOND, SphereMathTest.uprightFacing(0f));
+        assertEquals(false, history.sample(TimeBase.UNKNOWN, new float[4]));
     }
 }
