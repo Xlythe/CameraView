@@ -14,6 +14,7 @@ import android.location.Location;
 import android.os.Build;
 import android.os.Handler;
 import android.util.Log;
+import android.util.Range;
 import android.util.Size;
 import android.view.Surface;
 
@@ -96,8 +97,9 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.hasFlash();
     }
 
+    /** The flash strategy, which is OFF while a photo mode is on: a mode never fires it. */
     CameraView.Flash getFlash() {
-        return mCamera2Module.getFlash();
+        return mCamera2Module.getEffectiveFlash();
     }
 
     boolean isZeroShutterLagSupported() {
@@ -197,14 +199,21 @@ abstract class SessionImpl implements Camera2Module.Session {
         return mCamera2Module.exifCaptureParameters();
     }
 
-    /** Whether the torch should be lit, which takes a camera with a flash to light. */
+    /**
+     * Whether the torch should be lit, which takes a camera with a flash to light, and no photo
+     * mode on.
+     */
     boolean isTorchLit() {
-        return mCamera2Module.isTorchEnabled() && hasFlash();
+        return mCamera2Module.isTorchEnabled() && hasFlash() && !mCamera2Module.isInPhotoMode();
     }
 
-    /** Whether low-light boost should be asked for, which takes a camera that has it. */
+    /**
+     * Whether low-light boost should be asked for, which takes a camera that has it, and no photo
+     * mode on.
+     */
     boolean isLowLightBoostOn() {
-        return mCamera2Module.isLowLightBoostEnabled() && mCamera2Module.isLowLightBoostSupported();
+        return mCamera2Module.isLowLightBoostEnabled() && mCamera2Module.isLowLightBoostSupported()
+                && !mCamera2Module.isInPhotoMode();
     }
 
     /**
@@ -279,7 +288,7 @@ abstract class SessionImpl implements Camera2Module.Session {
      * parameter on many cameras and changing it for one capture would reconfigure the stream.</p>
      */
     void applyStabilization(@NonNull CaptureRequest.Builder builder) {
-        if (!mCamera2Module.isStabilizationEnabled()) {
+        if (!mCamera2Module.isStabilizationEnabled() || mCamera2Module.isInPhotoMode()) {
             return;
         }
         CameraCharacteristics characteristics = mCamera2Module.getCameraCharacteristics();
@@ -386,6 +395,13 @@ abstract class SessionImpl implements Camera2Module.Session {
     @Override
     public void setCropRegion(@Nullable Rect region) {
         mCropRegion = region;
+    }
+
+    /** The camera's own range, which only a photo mode's session narrows. */
+    @Nullable
+    @Override
+    public Range<Float> getZoomRatioRange() {
+        return null;
     }
 
     @Nullable

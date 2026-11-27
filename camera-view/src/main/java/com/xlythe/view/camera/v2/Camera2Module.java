@@ -13,6 +13,7 @@ import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraExtensionCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
@@ -397,36 +398,59 @@ public class Camera2Module extends ICameraModule {
         mHandler.post(this::applyFrameEffect);
     }
 
+    @MainThread
+    @Override
+    protected void onFrameDrawingChanged() {
+        mHandler.post(this::applyFrameEffect);
+    }
+
     /**
-     * Brings the pipeline into line with what the caller has asked for.
+     * Brings the pipeline into line with what is to be drawn: the caller's renderer, or the
+     * library's background blur, or nothing while the camera's own photo mode is on.
      *
      * <p>Rebuilds the session only when the pipeline comes up or goes down, because that is
      * when the surfaces the camera writes to change. Changing what is drawn is a field on a
      * renderer that is already running, and reconfiguring the camera for it would drop frames
      * for nothing.</p>
      */
+    @MainThread
     private void applyFrameEffect() {
+        if (updateFrameEffect()) {
+            restartActiveSession();
+        }
+    }
+
+    /**
+     * {@link #applyFrameEffect} without the rebuild, for a caller that rebuilds the session
+     * anyway.
+     *
+     * @return whether the pipeline came up or went down, which the session has to be rebuilt for
+     */
+    @MainThread
+    private boolean updateFrameEffect() {
         if (!isFrameEffectSupported()) {
             // A subclass that draws the frames itself, which the AR backend does.
-            return;
+            return false;
         }
-        boolean wanted = getFrameRenderer() != null || getCameraTextureProvider() != null;
+        FrameRenderer renderer = getDrawingRenderer();
+        CameraTextureProvider provider = getDrawingTextureProvider();
+        boolean wanted = renderer != null || provider != null;
         boolean running = mEffect != null;
         if (wanted == running) {
             if (mEffect != null) {
-                mEffect.setFrameRenderer(getFrameRenderer());
+                mEffect.setFrameRenderer(renderer);
             }
-            return;
+            return false;
         }
         if (wanted) {
             FrameRenderThread effect = new FrameRenderThread("CameraViewCamera2Renderer");
-            effect.setCameraTextureProvider(getCameraTextureProvider());
-            effect.setFrameRenderer(getFrameRenderer());
+            effect.setCameraTextureProvider(provider);
+            effect.setFrameRenderer(renderer);
             if (!effect.start()) {
                 // A device whose driver will not give us a context is a device the camera still
                 // has to work on, so the effect is refused and not offered again.
                 mGlUnavailable = true;
-                return;
+                return false;
             }
             mEffect = effect;
         } else {
@@ -436,7 +460,7 @@ public class Camera2Module extends ICameraModule {
                 effect.stop();
             }
         }
-        restartActiveSession();
+        return true;
     }
 
     /** The pipeline, for the sessions that have to point the camera at it. */
@@ -540,7 +564,7 @@ public class Camera2Module extends ICameraModule {
         }
         try {
             FrameStream stream = FrameStream.forLibrary(
-                    getCanvas(), new FrameStream.Params(), analyzer);
+                    getLibraryCanvas(), new FrameStream.Params(), analyzer);
             stream.start();
             mSegmentationStream = stream;
             mSegmentationAnalyzer = analyzer;
@@ -601,6 +625,10 @@ public class Camera2Module extends ICameraModule {
 
     /** The cameras that would not configure a still beside a stream, which are not asked again. */
     private final Set<String> mStillBesideStreamRefused = new HashSet<>();
+
+    /** Which photo modes each camera runs through the phone maker's processing. */
+    @NonNull
+    private final ExtensionSupport mExtensionSupport;
 
     /**
      * The current capture session. There is one capture session per {@link Session}.
@@ -870,6 +898,7 @@ public class Camera2Module extends ICameraModule {
         mCameraManager = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
         mHandler = new Handler(Looper.getMainLooper());
         mBusyRetry = new BusyCameraRetry(mHandler);
+        mExtensionSupport = new ExtensionSupport(mCameraManager);
     }
 
     private void setSession(Session requested) {
@@ -879,9 +908,10 @@ public class Camera2Module extends ICameraModule {
             return;
         }
         final Session session;
-        if (isBuiltForAnotherStream(requested)) {
-            // Built before a stream came or went, and waited on the session before it. The stream
-            // as it is now wins, or a stream attached in the meantime is quietly dropped.
+        if (isBuiltForAnotherStream(requested) || isBuiltForAnotherPhotoMode(requested)) {
+            // Built before a stream or a photo mode came or went, and waited on the session
+            // before it. Things as they are now win, or a stream attached in the meantime is
+            // quietly dropped.
             closeSession(requested);
             session = newPictureSession();
         } else {
@@ -936,6 +966,11 @@ public class Camera2Module extends ICameraModule {
                 throw new IllegalStateException("Camera has no stream configuration map");
             }
             session.initialize(map);
+
+            if (Build.VERSION.SDK_INT >= 31 && session instanceof ExtensionSession) {
+                configureExtensionSession((ExtensionSession) session);
+                return;
+            }
 
             // Now, with all of our surfaces, we'll ask for a new session
             createCaptureSession(session.getSurfaces(), new CameraCaptureSession.StateCallback() {
@@ -999,6 +1034,9 @@ public class Camera2Module extends ICameraModule {
 
     /** Whether a session was built beside a stream other than the one attached now. */
     private boolean isBuiltForAnotherStream(@NonNull Session session) {
+        if (Build.VERSION.SDK_INT >= 31 && session instanceof ExtensionSession) {
+            return mStreamProvider != null;
+        }
         if (!(session instanceof PictureSession) || session instanceof VideoSession) {
             return false;
         }
@@ -1008,16 +1046,159 @@ public class Camera2Module extends ICameraModule {
     }
 
     /**
-     * The session to show the preview and take pictures in: beside the attached stream, if one
-     * is, with a still output unless this camera has refused one there.
+     * Whether a session to take pictures in was built for a photo mode other than the one the
+     * camera's own processing is to run now.
+     */
+    private boolean isBuiltForAnotherPhotoMode(@NonNull Session session) {
+        if (session instanceof VideoSession || session instanceof StreamSession) {
+            return false;
+        }
+        int builtFor = Build.VERSION.SDK_INT >= 31 && session instanceof ExtensionSession
+                ? ((ExtensionSession) session).getPhotoMode() : CameraView.PhotoMode.NONE;
+        return builtFor != photoModeForNewSession();
+    }
+
+    /**
+     * The session to show the preview and take pictures in: through the camera's own photo mode,
+     * if one is on and nothing else is attached; beside the attached stream, if one is, with a
+     * still output unless this camera has refused one there; and otherwise an ordinary one.
      */
     @NonNull
-    private PictureSession newPictureSession() {
+    private Session newPictureSession() {
         VideoRecorder.SurfaceProvider stream = mStreamProvider;
-        if (stream == null) {
-            return new PictureSession(this);
+        if (stream != null) {
+            return new StreamSession(
+                    this, stream, !mStillBesideStreamRefused.contains(mActiveCamera));
         }
-        return new StreamSession(this, stream, !mStillBesideStreamRefused.contains(mActiveCamera));
+        if (Build.VERSION.SDK_INT >= 31) {
+            ExtensionSession extension = newExtensionSession();
+            if (extension != null) {
+                return extension;
+            }
+        }
+        return new PictureSession(this);
+    }
+
+    /**
+     * The photo mode a session built now runs through the camera's own processing, or NONE. Only
+     * an ordinary session becomes one: a recording or a stream keeps its own.
+     */
+    @CameraView.PhotoMode
+    private int photoModeForNewSession() {
+        if (Build.VERSION.SDK_INT < 31 || mIsRecording || mStreamProvider != null) {
+            return CameraView.PhotoMode.NONE;
+        }
+        return getOwnPhotoMode();
+    }
+
+    /** A session through the camera's own photo mode, or null while none is to run. */
+    @RequiresApi(31)
+    @Nullable
+    private ExtensionSession newExtensionSession() {
+        int photoMode = photoModeForNewSession();
+        if (photoMode == CameraView.PhotoMode.NONE) {
+            return null;
+        }
+        try {
+            CameraExtensionCharacteristics characteristics =
+                    mCameraManager.getCameraExtensionCharacteristics(getActiveCamera());
+            return new ExtensionSession(this, photoMode, characteristics);
+        } catch (CameraAccessException | RuntimeException e) {
+            Log.w(TAG, "Unable to read the camera's photo mode", e);
+            forgetPhotoMode(photoMode);
+            return null;
+        }
+    }
+
+    /**
+     * Configures a session through the camera's own photo mode. One the camera will not
+     * configure is forgotten for this camera, and an ordinary session is built in its place.
+     */
+    @RequiresApi(31)
+    private void configureExtensionSession(@NonNull ExtensionSession session)
+            throws CameraAccessException {
+        CameraDevice device = mCameraDevice;
+        if (device == null) {
+            throw new IllegalStateException("Camera has no device to configure");
+        }
+        session.configure(device, new ExtensionSession.Callback() {
+            @Override
+            public void onConfigured() {
+                if (!mIsOpen || mCameraDevice == null || mRegisteringSession != session) {
+                    closeSession(session);
+                    return;
+                }
+                try {
+                    mActiveSession = session;
+                    mRegisteringSession = null;
+                    mReopenAttempts = 0;
+                    clampExposureCompensation();
+                    clampZoomToActiveCamera();
+                    applyZoom(session);
+                    if (!mIsPaused) {
+                        session.start(mCameraDevice);
+                    }
+                    onCameraReady();
+                    mAwaitingFormatSession = false;
+                    capturePendingPicture();
+                } catch (CameraAccessException | RuntimeException e) {
+                    Log.w(TAG, "The photo mode would not start", e);
+                    fallBackFrom(session);
+                }
+            }
+
+            @Override
+            public void onConfigureFailed() {
+                if (!mIsOpen || mRegisteringSession != session) {
+                    closeSession(session);
+                    return;
+                }
+                Log.w(TAG, "The camera would not configure its photo mode");
+                fallBackFrom(session);
+            }
+        });
+    }
+
+    /** Stops offering a photo mode the active camera listed but would not run. */
+    private void forgetPhotoMode(@CameraView.PhotoMode int photoMode) {
+        try {
+            mExtensionSupport.forget(getActiveCamera(), photoMode);
+        } catch (CameraAccessException | RuntimeException e) {
+            Log.w(TAG, "Unable to name the camera whose photo mode failed", e);
+        }
+    }
+
+    @AnyThread
+    @Override
+    protected boolean offersOwnPhotoMode(@CameraView.PhotoMode int photoMode) {
+        try {
+            return mExtensionSupport.offers(getActiveCamera(), photoMode);
+        } catch (CameraAccessException | RuntimeException e) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its photo modes", e);
+            return false;
+        }
+    }
+
+    /**
+     * Rebuilds the session around the new mode: through the camera's own processing, or an
+     * ordinary one, with the frames drawn or not to match.
+     */
+    @MainThread
+    @Override
+    protected void onPhotoModeChanged() {
+        updateFrameEffect();
+        restartActiveSession();
+    }
+
+    /** Whether a photo mode is on, for the sessions that leave the flash and torch off for it. */
+    boolean isInPhotoMode() {
+        return isPhotoModeOn();
+    }
+
+    /** The flash strategy the requests carry: OFF while a photo mode is on, as it never fires. */
+    @NonNull
+    CameraView.Flash getEffectiveFlash() {
+        return isPhotoModeOn() ? CameraView.Flash.OFF : getFlash();
     }
 
     /**
@@ -1031,6 +1212,18 @@ public class Camera2Module extends ICameraModule {
      * @return whether a session was built in this one's place
      */
     private boolean fallBackFrom(@NonNull Session session) {
+        if (Build.VERSION.SDK_INT >= 31 && session instanceof ExtensionSession) {
+            // Forgotten first, so the session built in its place is an ordinary one, and
+            // background blur goes through the library's own once the camera is ready.
+            forgetPhotoMode(((ExtensionSession) session).getPhotoMode());
+            if (mActiveSession == session) {
+                mActiveSession = null;
+            }
+            mRegisteringSession = null;
+            closeSession(session);
+            setSession(newPictureSession());
+            return true;
+        }
         if (!(session instanceof StreamSession)) {
             return false;
         }
@@ -1169,7 +1362,7 @@ public class Camera2Module extends ICameraModule {
         // Brought back up if a renderer is still set, since close() took it down: an app that
         // sets a renderer once and then rotates the screen expects it to still be there.
         if (mEffect == null && !mGlUnavailable) {
-            applyFrameEffect();
+            updateFrameEffect();
         }
         closeCameraResources();
         mIsOpen = true;
@@ -1297,7 +1490,7 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public void focus(Rect focus, Rect metering) {
-        if (mCaptureSession == null) {
+        if (!hasLiveSession()) {
             if (DEBUG) Log.w(TAG, "Cannot focus. No capture session.");
             return;
         }
@@ -1338,7 +1531,7 @@ public class Camera2Module extends ICameraModule {
             // on the very first frame the new request produces.
             mIsFocusPending = true;
             if (!mIsPaused) {
-                mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+                invalidateActiveSession();
             }
             onFocusRequested(focus);
         } catch (CameraAccessException | RuntimeException e) {
@@ -1378,7 +1571,7 @@ public class Camera2Module extends ICameraModule {
         mZoomRatio = clamped;
         onZoomChanged(clamped);
 
-        if (mCameraDevice == null || mCaptureSession == null || mActiveSession == null) {
+        if (!hasLiveSession()) {
             if (DEBUG) Log.w(TAG, "No active session available");
             return;
         }
@@ -1386,7 +1579,7 @@ public class Camera2Module extends ICameraModule {
         try {
             applyZoom(mActiveSession);
             if (!mIsPaused) {
-                mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+                invalidateActiveSession();
             }
         } catch (CameraAccessException | RuntimeException e) {
             Log.e(TAG, "Failed to zoom", e);
@@ -1541,9 +1734,17 @@ public class Camera2Module extends ICameraModule {
         return largest == null ? 0 : largest.getWidth();
     }
 
-    /** The active camera's zoom range; 1 to 1 when it cannot zoom or cannot be read. */
+    /**
+     * The active camera's zoom range, or the narrower one a photo mode's session lists; 1 to 1
+     * when it cannot zoom or cannot be read.
+     */
     @NonNull
     private Range<Float> zoomRange() {
+        Session session = mActiveSession;
+        Range<Float> sessionRange = session == null ? null : session.getZoomRatioRange();
+        if (sessionRange != null) {
+            return sessionRange;
+        }
         try {
             return zoomRange(mCameraManager.getCameraCharacteristics(getActiveCamera()));
         } catch (CameraAccessException | RuntimeException e) {
@@ -1673,14 +1874,18 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public void pause() {
-        if (mCaptureSession == null) {
+        if (!hasLiveSession()) {
             if (DEBUG) Log.w(TAG, "Cannot pause. No capture session.");
             return;
         }
 
         if (!mIsPaused) {
             try {
-                mCaptureSession.stopRepeating();
+                if (Build.VERSION.SDK_INT >= 31 && mActiveSession instanceof ExtensionSession) {
+                    ((ExtensionSession) mActiveSession).stop();
+                } else if (mCaptureSession != null) {
+                    mCaptureSession.stopRepeating();
+                }
             } catch (CameraAccessException | RuntimeException e) {
                 Log.e(TAG, "Failed to pause the camera", e);
             }
@@ -1693,24 +1898,19 @@ public class Camera2Module extends ICameraModule {
     @Override
     public void resume() {
         try {
-            if (mCaptureSession == null) {
-                if (DEBUG) Log.w(TAG, "Cannot pause. No capture session.");
-                return;
-            }
-
-            if (mActiveSession == null) {
-                if (DEBUG) Log.w(TAG, "Cannot pause. No active session.");
-                return;
-            }
-
-            if (mCameraDevice == null) {
-                if (DEBUG) Log.w(TAG, "Cannot pause. No camera device.");
+            if (!hasLiveSession()) {
+                if (DEBUG) Log.w(TAG, "Cannot resume. No capture session.");
                 return;
             }
 
             if (mIsPaused) {
                 try {
-                    mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
+                    if (Build.VERSION.SDK_INT >= 31
+                            && mActiveSession instanceof ExtensionSession) {
+                        ((ExtensionSession) mActiveSession).start(mCameraDevice);
+                    } else {
+                        mActiveSession.onAvailable(mCameraDevice, mCaptureSession);
+                    }
                 } catch (CameraAccessException | RuntimeException e) {
                     Log.e(TAG, "Failed to resume the camera", e);
                 }
@@ -2039,27 +2239,50 @@ public class Camera2Module extends ICameraModule {
         Integer exposureCompensation = getRequestedExposureCompensation();
         return parameters
                 .setExposureCompensation(exposureCompensation == null ? 0 : exposureCompensation)
-                .setFlash(getFlash(), hasFlash());
+                .setFlash(getEffectiveFlash(), hasFlash())
+                .setPhotoMode(getPhotoModeInUse());
     }
 
     /** Rebuilds the repeating request, for a setting the request itself carries. */
     private void reissueRepeatingRequest(String what) {
         mHandler.post(() -> {
-            if (mCameraDevice == null || mCaptureSession == null || mActiveSession == null
-                    || mIsPaused) {
+            if (!hasLiveSession() || mIsPaused) {
                 return;
             }
             try {
-                mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+                invalidateActiveSession();
             } catch (CameraAccessException | RuntimeException e) {
                 Log.e(TAG, "Failed to apply " + what, e);
             }
         });
     }
 
+    /**
+     * Whether a session is configured and running: an ordinary one in its capture session, or
+     * one through the camera's own photo mode.
+     */
+    private boolean hasLiveSession() {
+        if (mCameraDevice == null || mActiveSession == null) {
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 31 && mActiveSession instanceof ExtensionSession) {
+            return ((ExtensionSession) mActiveSession).isConfigured();
+        }
+        return mCaptureSession != null;
+    }
+
+    /** Sends the active session's repeating request again, with whatever has changed since. */
+    private void invalidateActiveSession() throws CameraAccessException {
+        if (Build.VERSION.SDK_INT >= 31 && mActiveSession instanceof ExtensionSession) {
+            ((ExtensionSession) mActiveSession).start(mCameraDevice);
+        } else {
+            mActiveSession.onInvalidate(mCameraDevice, mCaptureSession);
+        }
+    }
+
     @Override
     public boolean isCameraReady() {
-        return mCaptureSession != null && mActiveSession != null && mCameraDevice != null;
+        return hasLiveSession();
     }
 
     @Override
@@ -2121,6 +2344,10 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     public boolean isPictureFormatSupported(CameraView.PictureFormat format) {
+        if (format != CameraView.PictureFormat.JPEG && isPhotoModeOn()) {
+            // A photo mode writes the JPEG its processing makes, or the library draws.
+            return false;
+        }
         if (format == CameraView.PictureFormat.RAW
                 || format == CameraView.PictureFormat.RAW_JPEG) {
             // A drawn picture is a JPEG, so there is no sensor frame to write a DNG from.
@@ -2515,13 +2742,15 @@ public class Camera2Module extends ICameraModule {
             awaitSessionThenCapture(file);
             return;
         }
-        if (mCaptureSession == null || mActiveSession == null || mCameraDevice == null) {
+        if (!hasLiveSession()) {
             Log.w(TAG, "Cannot take picture before Camera2 preview is ready");
             onImageFailed();
             return;
         }
 
-        if (mActiveSession instanceof PictureSession) {
+        if (Build.VERSION.SDK_INT >= 31 && mActiveSession instanceof ExtensionSession) {
+            ((ExtensionSession) mActiveSession).takePicture(file, mCameraDevice);
+        } else if (mActiveSession instanceof PictureSession) {
             PictureSession pictureSession = (PictureSession) mActiveSession;
             pictureSession.takePicture(file, mCameraDevice, mCaptureSession);
         } else {
@@ -2878,6 +3107,8 @@ public class Camera2Module extends ICameraModule {
         @Nullable Rect getCropRegion();
         void setZoomRatio(@Nullable Float zoomRatio);
         @Nullable Float getZoomRatio();
+        /** The ratios this session can zoom between, or null for the camera's own range. */
+        @Nullable Range<Float> getZoomRatioRange();
         void onAvailable(@NonNull CameraDevice cameraDevice, @NonNull CameraCaptureSession session) throws CameraAccessException;
         void onInvalidate(@NonNull CameraDevice cameraDevice, @NonNull CameraCaptureSession session) throws CameraAccessException;
         void close();
