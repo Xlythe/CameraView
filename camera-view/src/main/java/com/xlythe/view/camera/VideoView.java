@@ -31,6 +31,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import androidx.annotation.Nullable;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 import androidx.annotation.RequiresApi;
 
@@ -68,6 +69,10 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     private int mVideoOrientation;
     // The last known info about the video being mirrored.
     private boolean mVideoMirrored;
+    /** Whether the video is letterboxed inside the view rather than filling it. */
+    private boolean mFitsInside;
+    /** Hears whether a file or uri is ready to play. */
+    @Nullable private PrepareListener mPrepareListener;
 
     // ---------- File ----------
 
@@ -320,6 +325,42 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         mEventListener = listener;
     }
 
+    /** Hears whether a file or uri the view was given is ready to play, or cannot be played. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public interface PrepareListener {
+        /** The video is ready, showing its first frame. */
+        @UiThread
+        void onPrepared();
+
+        /** The video cannot be played. */
+        @UiThread
+        void onPrepareFailed();
+    }
+
+    /** Hears whether each file or uri is ready to play. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public void setPrepareListener(@Nullable PrepareListener listener) {
+        mPrepareListener = listener;
+    }
+
+    /**
+     * Letterboxes the video inside the view, all of it showing, rather than filling the view and
+     * cropping what overflows, which is the default.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public void setFitsInside(boolean fitsInside) {
+        mFitsInside = fitsInside;
+        if (mVideoWidth > 0 && mVideoHeight > 0) {
+            transformPreview(mVideoWidth, mVideoHeight, mVideoOrientation, mVideoMirrored);
+        }
+    }
+
+    private void notifyPrepareFailed() {
+        if (mPrepareListener != null) {
+            mPrepareListener.onPrepareFailed();
+        }
+    }
+
     protected void prepare() {
         switch (mInputType) {
             case UNKNOWN:
@@ -359,6 +400,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 }
                 if (metadata == null) {
                     setPlayingState(false);
+                    notifyPrepareFailed();
                     return;
                 }
                 startPreparing(file, uri, surfaceTexture, metadata, generation);
@@ -455,12 +497,16 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 if (mIsPlaying) {
                     playFile();
                 }
+                if (mPrepareListener != null) {
+                    mPrepareListener.onPrepared();
+                }
             });
             mMediaPlayer.setOnErrorListener((mediaPlayer, what, extra) -> {
                 Log.e(TAG, "Failed to prepare video " + source
                         + " (what=" + what + ", extra=" + extra + ")");
                 closePreparingInputStream();
                 setPlayingState(false);
+                notifyPrepareFailed();
                 return true;
             });
             mMediaPlayer.prepareAsync();
@@ -468,6 +514,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             Log.e(TAG, "Failed to prepare video " + source, e);
             closePreparingInputStream();
             setPlayingState(false);
+            notifyPrepareFailed();
         } finally {
             surface.release();
         }
@@ -861,11 +908,11 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         // Asking for a mirrored view of a mirrored recording shows it the way round it was
         // taken, so the two cancel.
         boolean mirrored = flipped != isMirrored();
-        mTextureView.setTransform(TransformMath.asTextureTransform(
-                TransformMath.centerCrop(
-                        new RectF(0f, 0f, videoWidth, videoHeight),
-                        TransformMath.within360(cameraOrientation),
-                        mirrored, viewWidth, viewHeight),
+        RectF whole = new RectF(0f, 0f, videoWidth, videoHeight);
+        int rotation = TransformMath.within360(cameraOrientation);
+        mTextureView.setTransform(TransformMath.asTextureTransform(mFitsInside
+                ? TransformMath.centerInside(whole, rotation, mirrored, viewWidth, viewHeight)
+                : TransformMath.centerCrop(whole, rotation, mirrored, viewWidth, viewHeight),
                 videoWidth, videoHeight, viewWidth, viewHeight));
     }
 
