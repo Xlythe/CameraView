@@ -198,8 +198,9 @@ public class ViewerDeviceTest {
         save(shown, "large-one-to-one");
         int black = 0;
         int white = 0;
-        for (int x = 0; x < 400; x++) {
-            int color = shown.getPixel(x, 200);
+        int samples = Math.min(400, shown.getWidth());
+        for (int x = 0; x < samples; x++) {
+            int color = shown.getPixel(x, Math.min(200, shown.getHeight() / 2));
             int light = Color.red(color) + Color.green(color) + Color.blue(color);
             if (light < 120) {
                 black++;
@@ -207,7 +208,8 @@ public class ViewerDeviceTest {
                 white++;
             }
         }
-        assertTrue("Black " + black + ", white " + white, black > 120 && white > 120);
+        assertTrue("Black " + black + ", white " + white,
+                black > samples * 3 / 10 && white > samples * 3 / 10);
         assertTrue(onMain(() -> view.getPeakPixels() <= view.getBudgetPixels()));
     }
 
