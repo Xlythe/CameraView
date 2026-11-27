@@ -4,6 +4,7 @@ import static com.xlythe.sample.camera.MainActivity.TAG;
 
 import android.annotation.SuppressLint;
 import android.os.Build;
+import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
@@ -16,10 +17,8 @@ import androidx.annotation.Nullable;
 
 import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.CameraView;
-import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.VideoView;
 
-import java.io.File;
 import java.util.Objects;
 
 /**
@@ -87,17 +86,13 @@ public class StreamFragment extends CameraFragment {
     }
 
     @Override
-    public void onImageCaptured(final File file) {
-        Log.d(TAG, Exif.describe(file));
-
-        CaptureSaver.save(requireContext(), file, false /* isVideo */, uri ->
-                report(uri == null ? "Could not save the picture" : "Picture saved to " + uri));
+    public void onImageSaved(@NonNull Uri uri) {
+        report("Picture saved to " + uri);
     }
 
     @Override
-    public void onVideoCaptured(final File file) {
-        CaptureSaver.save(requireContext(), file, true /* isVideo */, uri ->
-                report(uri == null ? "Could not save the video" : "Video saved to " + uri));
+    public void onVideoSaved(@NonNull Uri uri) {
+        report("Video saved to " + uri);
     }
 
     @Override
