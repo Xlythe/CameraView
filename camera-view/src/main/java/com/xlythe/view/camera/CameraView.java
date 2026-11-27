@@ -150,9 +150,11 @@ public class CameraView extends FrameLayout {
 
     /**
      * The largest frame a sweep asks for: as much detail as a panorama keeps, and small enough to
-     * convert and paint several times a second.
+     * convert and paint several times a second. A cap this shape picks a frame the shape of the
+     * sensor wherever the camera offers one, where a wider cap can pick a 16:9 frame instead, which
+     * is the sensor cropped and sees less across a phone held upright.
      */
-    private static final Size PANORAMA_FRAME_SIZE = new Size(1280, 960);
+    private static final Size PANORAMA_FRAME_SIZE = new Size(1024, 768);
 
     private static final String EXTRA_SUPER = "super";
     private static final String EXTRA_MODULE = "module";
