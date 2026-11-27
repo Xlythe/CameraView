@@ -47,7 +47,8 @@ public class ColorFilterTest {
     public void setUp() {
         ShadowRecordingGles20.reset();
         frame = new GlFrame(new OesTextureProgram());
-        frame.set(CAMERA_TEXTURE, quarterTurn, 640, 480, 1_000L, new int[] {0, 0, 640, 480});
+        frame.set(CAMERA_TEXTURE, quarterTurn, GlMath.identity(), null, 640, 480, 1_000L,
+                new int[] {0, 0, 640, 480});
     }
 
     /** A filter given a matrix is drawn with exactly that matrix. */

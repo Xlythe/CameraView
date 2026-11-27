@@ -10,10 +10,12 @@ import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
 
 import com.xlythe.view.camera.ICameraModule;
 
@@ -59,6 +61,56 @@ public final class FrameRenderThread {
      * on to until the system kills the app.</p>
      */
     private static final long START_TIMEOUT_SECONDS = 2;
+
+    /**
+     * A camera texture somebody else fills, and says when they have.
+     *
+     * <p>ARCore's shared camera is the one there is. The camera writes into a SurfaceTexture of
+     * ARCore's, ARCore copies each frame into the texture it was given the name of inside
+     * {@code Session.update()}, and it is told of each frame by the camera's capture results
+     * rather than by that SurfaceTexture, which it consumes itself. So this thread makes no
+     * SurfaceTexture of its own, and draws when {@link #requestFrame} says there may be a frame,
+     * asking the owner to {@link #advance} to it.</p>
+     *
+     * <p>Every method is called on the render thread with the context current.</p>
+     */
+    public interface ExternalCameraTexture {
+        /** Creates the texture to be filled, and returns its name. Called once, at start. */
+        int onCreateCameraTexture();
+
+        /**
+         * Fills the texture with the newest frame, if there is one it has not been filled with.
+         *
+         * @return whether it now holds a frame not drawn before
+         */
+        boolean advance();
+
+        /**
+         * The matrix to sample the texture with for the frame {@link #advance} filled it with, as
+         * {@link SurfaceTexture#getTransformMatrix} would have given it.
+         */
+        void getTransformMatrix(@NonNull float[] into);
+
+        /** When that frame was captured, on the clock {@link SurfaceTexture#getTimestamp} uses. */
+        long getTimestampNanos();
+
+        /** Lets go of the texture, which this thread never deletes itself. The last call. */
+        void onReleaseCameraTexture(int textureName);
+    }
+
+    /** Says what is known about the camera's optics and position, frame by frame. */
+    public interface GeometrySource {
+        /**
+         * Fills in the geometry of a frame that has just been consumed, before it is drawn.
+         *
+         * <p>Called on the render thread with the context current, once for every frame and
+         * once for every still, with the geometry already cleared.</p>
+         *
+         * @param bufferSize the size of the buffer the camera wrote, which decides how much of
+         *     the sensor it shows, or null if nobody has said
+         */
+        void onFrameGeometry(@NonNull FrameGeometry geometry, @Nullable Size bufferSize);
+    }
 
     /** How the matrix a frame is drawn with is arrived at, which is the backend's business. */
     public interface TextureTransform {
@@ -231,8 +283,34 @@ public final class FrameRenderThread {
     /** The external texture behind {@link #mStillTexture}, or 0. */
     private int mStillTextureName;
 
+    /** The size the still input was made at, which is the size its frames arrive at. */
+    @Nullable private Size mStillSize;
+
     /** What to do with the next frame to land on the still input, or null for nothing. */
     @Nullable private Still mPendingStill;
+
+    /**
+     * What to do with the next frame to arrive on the camera's own input, or null for nothing.
+     *
+     * <p>A still taken off the stream being drawn, for a camera whose session cannot be given a
+     * second input - ARCore owns the session while it tracks.</p>
+     */
+    @Nullable private Still mPendingFrameStill;
+
+    /** Who says what the camera's optics are, or null when nobody knows. */
+    @Nullable private volatile GeometrySource mGeometrySource;
+
+    /** The geometry of the frame being drawn. Render thread only. */
+    private final FrameGeometry mGeometry = new FrameGeometry();
+
+    /** The geometry of the still being drawn, which is a buffer of its own size. */
+    private final FrameGeometry mStillGeometry = new FrameGeometry();
+
+    /** Who fills the camera texture in place of a camera writing to it, or null. */
+    @Nullable private ExternalCameraTexture mExternalTexture;
+
+    /** Whether a {@link #requestFrame} is waiting to be drawn, so that requests coalesce. */
+    private final AtomicBoolean mFrameRequested = new AtomicBoolean();
     /** What draws each frame, or null to draw the camera frame unchanged. */
     @Nullable private volatile FrameRenderer mRenderer;
     /** Who creates the camera texture, or null for one of this thread's own. */
@@ -260,6 +338,39 @@ public final class FrameRenderThread {
     /** What draws each frame, or null to draw the camera frame and nothing else. */
     public void setFrameRenderer(@Nullable FrameRenderer renderer) {
         mRenderer = renderer;
+    }
+
+    /** Who says what the camera's optics are, or null to leave a renderer without them. */
+    public void setGeometrySource(@Nullable GeometrySource source) {
+        mGeometrySource = source;
+    }
+
+    /**
+     * Has someone else fill the camera texture, in place of a camera writing to a SurfaceTexture
+     * this thread makes. Must be set before {@link #start}, and takes the place of a
+     * {@link #setCameraTextureProvider texture provider}.
+     */
+    public void setExternalCameraTexture(@Nullable ExternalCameraTexture texture) {
+        if (mRunning) {
+            throw new IllegalStateException("The camera texture is created when the renderer starts");
+        }
+        mExternalTexture = texture;
+    }
+
+    /**
+     * Draws the next frame of an {@link ExternalCameraTexture}, which its owner may now have.
+     * Requests that arrive while one waits are the same request.
+     */
+    @AnyThread
+    public void requestFrame() {
+        Handler handler = mHandler;
+        if (!mRunning || handler == null || !mFrameRequested.compareAndSet(false, true)) {
+            return;
+        }
+        handler.post(() -> {
+            mFrameRequested.set(false);
+            drawExternalFrame();
+        });
     }
 
     /**
@@ -382,6 +493,7 @@ public final class FrameRenderThread {
         }
         egl.makeCurrent();
         releaseStillInput();
+        mStillSize = size;
         mStillTextureName = program.createExternalTexture();
         SurfaceTexture texture = new SurfaceTexture(mStillTextureName);
         texture.setDefaultBufferSize(size.getWidth(), size.getHeight());
@@ -413,9 +525,34 @@ public final class FrameRenderThread {
         return true;
     }
 
+    /**
+     * Draws the next frame to arrive on the camera's own input into a surface as well, once.
+     *
+     * <p>For a camera whose session cannot take a second input for a still, so the photograph
+     * comes off the stream being drawn: at that stream's resolution, and with whatever the
+     * renderer draws over it.</p>
+     *
+     * @param onDrawn called on the render thread once the frame has been drawn and presented
+     * @return whether the request was armed
+     */
+    public boolean drawNextFrameInto(@NonNull Surface surface, @NonNull Size size,
+            @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform,
+            @NonNull Runnable onDrawn) {
+        Handler handler = mHandler;
+        if (!mRunning || handler == null) {
+            return false;
+        }
+        handler.post(() -> mPendingFrameStill =
+                new Still(surface, size, scaleType, transform, onDrawn));
+        return true;
+    }
+
     /** Stops waiting for a still, for a capture that failed before the camera wrote anything. */
     public void cancelStill() {
-        post(() -> mPendingStill = null);
+        post(() -> {
+            mPendingStill = null;
+            mPendingFrameStill = null;
+        });
     }
 
     /** Runs on the render thread: a full-size frame has arrived for a still. */
@@ -435,15 +572,17 @@ public final class FrameRenderThread {
             }
             mPendingStill = null;
             texture.getTransformMatrix(mSurfaceTextureMatrix);
-            drawStill(still, texture.getTimestamp());
+            fillGeometry(mStillGeometry, mStillSize);
+            drawStill(still, texture.getTimestamp(), mStillTextureName, mStillGeometry);
         } catch (RuntimeException | LinkageError error) {
             Log.w(TAG, "Dropped a still frame", error);
             mPendingStill = null;
         }
     }
 
-    /** Draws the still input into its one output, through the renderer like any other frame. */
-    private void drawStill(@NonNull Still still, long timestampNanos) {
+    /** Draws a still into its one output, through the renderer like any other frame. */
+    private void drawStill(@NonNull Still still, long timestampNanos, int textureName,
+            @NonNull FrameGeometry geometry) {
         EglCore egl = mEgl;
         GlFrame frame = mFrame;
         if (egl == null || frame == null) {
@@ -457,8 +596,8 @@ public final class FrameRenderThread {
             GLES20.glViewport(0, 0, still.mSize.getWidth(), still.mSize.getHeight());
             GLES20.glClearColor(0f, 0f, 0f, 1f);
             GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-            frame.set(mStillTextureName, mTextureMatrix, still.mSize.getWidth(),
-                    still.mSize.getHeight(), timestampNanos,
+            frame.set(textureName, mTextureMatrix, mSurfaceTextureMatrix, geometry,
+                    still.mSize.getWidth(), still.mSize.getHeight(), timestampNanos,
                     GlMath.viewport(still.mScaleType, still.mSize, still.mSize));
             FrameRenderer renderer = mRenderer;
             if (renderer == null || !renderer.onDrawFrame(frame)) {
@@ -478,6 +617,7 @@ public final class FrameRenderThread {
 
     private void releaseStillInput() {
         mPendingStill = null;
+        mStillSize = null;
         if (mStillSurface != null) {
             mStillSurface.release();
             mStillSurface = null;
@@ -572,6 +712,13 @@ public final class FrameRenderThread {
         mHandler = null;
     }
 
+    /** The render thread's handler, for a test to wait on, or null while stopped. */
+    @VisibleForTesting
+    @Nullable
+    public Handler getHandler() {
+        return mHandler;
+    }
+
     private void post(@NonNull Runnable work) {
         Handler handler = mHandler;
         if (handler == null) {
@@ -595,11 +742,18 @@ public final class FrameRenderThread {
             mCanvasProgram = new Texture2dProgram();
             mFrame = new GlFrame(program);
             CameraTextureProvider provider = mTextureProvider;
-            mTextureName = provider == null
-                    ? program.createExternalTexture() : provider.onCreateCameraTexture();
-            SurfaceTexture texture = new SurfaceTexture(mTextureName);
-            texture.setOnFrameAvailableListener(this::onFrameAvailable, mHandler);
-            mSurfaceTexture = texture;
+            ExternalCameraTexture external = mExternalTexture;
+            if (external != null) {
+                // Filled by its owner, so a SurfaceTexture of this thread's over the same name
+                // would be a second consumer of one texture.
+                mTextureName = external.onCreateCameraTexture();
+            } else {
+                mTextureName = provider == null
+                        ? program.createExternalTexture() : provider.onCreateCameraTexture();
+                SurfaceTexture texture = new SurfaceTexture(mTextureName);
+                texture.setOnFrameAvailableListener(this::onFrameAvailable, mHandler);
+                mSurfaceTexture = texture;
+            }
             FrameRenderer renderer = mRenderer;
             if (renderer != null) {
                 renderer.onRendererStarted();
@@ -628,14 +782,45 @@ public final class FrameRenderThread {
                 texture.updateTexImage();
             }
             texture.getTransformMatrix(mSurfaceTextureMatrix);
-            long timestampNanos = texture.getTimestamp();
-            for (Output output : mOutputs.values()) {
-                drawInto(output, timestampNanos);
-            }
+            drawFrame(texture.getTimestamp());
         } catch (RuntimeException | LinkageError error) {
             // One bad frame is not worth tearing the camera down for: the next one usually works,
             // and a surface that has genuinely gone is caught per output below.
             Log.w(TAG, "Dropped a camera frame", error);
+        }
+    }
+
+    /** Runs on the render thread: an {@link ExternalCameraTexture} may have a new frame. */
+    private void drawExternalFrame() {
+        EglCore egl = mEgl;
+        ExternalCameraTexture external = mExternalTexture;
+        if (!mRunning || egl == null || external == null) {
+            return;
+        }
+        try {
+            egl.makeCurrent();
+            if (!external.advance()) {
+                // Nothing new, which happens before its owner starts, as it stops, and when it
+                // was told of a frame before the frame itself arrived.
+                return;
+            }
+            external.getTransformMatrix(mSurfaceTextureMatrix);
+            drawFrame(external.getTimestampNanos());
+        } catch (RuntimeException | LinkageError error) {
+            Log.w(TAG, "Dropped a camera frame", error);
+        }
+    }
+
+    /** Draws the frame now on the camera texture into every output, and any still waiting. */
+    private void drawFrame(long timestampNanos) {
+        fillGeometry(mGeometry, mInputSize);
+        for (Output output : mOutputs.values()) {
+            drawInto(output, timestampNanos);
+        }
+        Still frameStill = mPendingFrameStill;
+        if (frameStill != null) {
+            mPendingFrameStill = null;
+            drawStill(frameStill, timestampNanos, mTextureName, mGeometry);
         }
     }
 
@@ -658,8 +843,8 @@ public final class FrameRenderThread {
                 GLES20.glViewport(0, 0, output.mSize.getWidth(), output.mSize.getHeight());
                 GLES20.glClearColor(0f, 0f, 0f, 1f);
                 GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
-                frame.set(mTextureName, mTextureMatrix, output.mSize.getWidth(),
-                        output.mSize.getHeight(), timestampNanos,
+                frame.set(mTextureName, mTextureMatrix, mSurfaceTextureMatrix, mGeometry,
+                        output.mSize.getWidth(), output.mSize.getHeight(), timestampNanos,
                         GlMath.viewport(output.mScaleType, output.mFrameSize, output.mSize));
                 if (renderer == null || !renderer.onDrawFrame(frame)) {
                     frame.drawCameraFrame();
@@ -729,8 +914,8 @@ public final class FrameRenderThread {
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT);
         int width = shownSize.getWidth();
         int height = shownSize.getHeight();
-        frame.set(mTextureName, cameraAsShown, width, height, timestampNanos,
-                new int[] {0, 0, width, height});
+        frame.set(mTextureName, cameraAsShown, mSurfaceTextureMatrix, mGeometry, width, height,
+                timestampNanos, new int[] {0, 0, width, height});
         if (!renderer.onDrawFrame(frame)) {
             frame.drawCameraFrame();
         }
@@ -743,6 +928,22 @@ public final class FrameRenderThread {
         canvasProgram.draw(canvas.getTexture(), asShown,
                 new int[] {0, 0, output.mSize.getWidth(), output.mSize.getHeight()});
         return true;
+    }
+
+    /** Asks the geometry source about the frame just consumed, keeping a renderer safe from it. */
+    private void fillGeometry(@NonNull FrameGeometry geometry, @Nullable Size bufferSize) {
+        geometry.clear();
+        GeometrySource source = mGeometrySource;
+        if (source == null) {
+            return;
+        }
+        try {
+            source.onFrameGeometry(geometry, bufferSize);
+        } catch (RuntimeException error) {
+            // A frame without geometry is still a frame worth drawing.
+            Log.w(TAG, "Could not work out a frame's geometry", error);
+            geometry.clear();
+        }
     }
 
     /** When an output is told a frame happened, which for an encoder is on its own clock. */
@@ -798,6 +999,7 @@ public final class FrameRenderThread {
         }
         mOutputs.clear();
         releaseStillInput();
+        mPendingFrameStill = null;
         if (mSurfaceTexture != null) {
             mSurfaceTexture.setOnFrameAvailableListener(null);
             mSurfaceTexture.release();
@@ -805,7 +1007,10 @@ public final class FrameRenderThread {
         }
         if (mTextureName != 0) {
             CameraTextureProvider provider = mTextureProvider;
-            if (provider != null) {
+            ExternalCameraTexture external = mExternalTexture;
+            if (external != null) {
+                external.onReleaseCameraTexture(mTextureName);
+            } else if (provider != null) {
                 provider.onReleaseCameraTexture(mTextureName);
             } else if (mProgram != null) {
                 mProgram.deleteTexture(mTextureName);

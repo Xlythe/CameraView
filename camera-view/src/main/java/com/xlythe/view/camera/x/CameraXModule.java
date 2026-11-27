@@ -2332,7 +2332,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         CameraTextureProvider textureProvider = getCameraTextureProvider();
         if (renderer == null && textureProvider == null) return;
         mFrameEffect = FrameEffect.create(FrameEffect.ALL_TARGETS, mMainExecutor, renderer,
-                textureProvider, this::onFrameEffectFailed);
+                textureProvider, null, this::onFrameEffectFailed);
         if (mFrameEffect == null) {
             // The renderer logged why. The camera goes on being bound without an effect, which is
             // a camera that works and an effect that does not, rather than no camera at all.

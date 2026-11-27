@@ -52,7 +52,8 @@ public class BackgroundReplacerTest {
     public void setUp() {
         ShadowRecordingGles20.reset();
         frame = new GlFrame(new OesTextureProgram());
-        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 1_000L, new int[] {0, 0, 1080, 1920});
+        frame.set(CAMERA_TEXTURE, mirror, GlMath.identity(), null, 1080, 1920, 1_000L,
+                new int[] {0, 0, 1080, 1920});
         replacer = new BackgroundReplacer();
     }
 

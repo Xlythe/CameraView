@@ -519,6 +519,148 @@ public final class GlMathTest {
         };
     }
 
+    /** A pinhole in the middle of a buffer, a quarter wider than it is tall, with no skew. */
+    private static final float[] CENTRED_LENS = {0.8f, 1.4f, 0.5f, 0.5f, 0f};
+
+    /** A pinhole off the middle and sheared, which every term of a projection has to carry. */
+    private static final float[] SKEWED_LENS = {0.75f, 1.3f, 0.47f, 0.53f, 0.02f};
+
+    /**
+     * The request a camera makes is the one the camera service composes for its sensor and lens,
+     * so a frame given it is drawn exactly as one straight from the camera.
+     */
+    @Test
+    public void theCameraRequestIsTheOneTheCameraServiceMakes() {
+        for (int orientation = 0; orientation < 360; orientation += 90) {
+            for (boolean front : new boolean[] {false, true}) {
+                assertArrayEquals(orientation + (front ? " front" : " back"),
+                        surfaceTextureMatrix(cameraRequest(orientation, front)),
+                        GlMath.multiply(GlMath.multiply(FLIP_T, HALF_TEXEL_CROP),
+                                GlMath.cameraRequest(orientation, front)), 1e-6f);
+            }
+        }
+    }
+
+    /** A back camera's request turns the buffer upright, the reverse of how it is shown. */
+    @Test
+    public void aBackCamerasRequestUndoesHowItsBufferIsShown() {
+        for (int orientation = 0; orientation < 360; orientation += 90) {
+            assertArrayEquals("at " + orientation,
+                    GlMath.invertAffine(GlMath.asShown(orientation, false)),
+                    GlMath.cameraRequest(orientation, false), 1e-6f);
+        }
+        assertArrayEquals("a whole turn is no turn", GlMath.cameraRequest(0, false),
+                GlMath.cameraRequest(360, false), 0f);
+    }
+
+    /** A point in front of the lens lands where the pinhole says, in the frame's clip space. */
+    @Test
+    public void aPointLandsWhereThePinholeSays() {
+        float[] projection = GlMath.projection(SKEWED_LENS, GlMath.identity(), 0.1f, 100f);
+        float x = 0.3f;
+        float y = -0.2f;
+        float z = -2f;
+        float[] ndc = project(projection, x, y, z);
+        // Measured from the top left as the camera wrote it, then counted up from the bottom.
+        float right = SKEWED_LENS[0] * x / -z - SKEWED_LENS[4] * y / -z + SKEWED_LENS[2];
+        float down = -SKEWED_LENS[1] * y / -z + SKEWED_LENS[3];
+        assertEquals(right * 2f - 1f, ndc[0], 1e-5f);
+        assertEquals((1f - down) * 2f - 1f, ndc[1], 1e-5f);
+    }
+
+    /** The optical axis meets the frame at the principal point, whatever the distance. */
+    @Test
+    public void theOpticalAxisMeetsThePrincipalPoint() {
+        float[] projection = GlMath.projection(CENTRED_LENS, GlMath.identity(), 0.1f, 100f);
+        for (float distance : new float[] {0.5f, 3f, 40f}) {
+            float[] ndc = project(projection, 0f, 0f, -distance);
+            assertEquals(0f, ndc[0], 1e-6f);
+            assertEquals(0f, ndc[1], 1e-6f);
+        }
+    }
+
+    /**
+     * Through an output that turns the buffer, a point lands where the output shows the part of
+     * the buffer the point is seen in.
+     */
+    @Test
+    public void aTurnedOutputShowsThePointWhereItShowsThatPartOfTheBuffer() {
+        float[] outputToBuffer = GlMath.cameraRequest(90, false);
+        float[] projection = GlMath.projection(SKEWED_LENS, outputToBuffer, 0.1f, 100f);
+        float[] ndc = project(projection, 0.25f, 0.4f, -1.5f);
+        float[] direct = project(
+                GlMath.projection(SKEWED_LENS, GlMath.identity(), 0.1f, 100f), 0.25f, 0.4f, -1.5f);
+        float[] buffer = {(direct[0] + 1f) / 2f, (direct[1] + 1f) / 2f};
+        float[] output = {(ndc[0] + 1f) / 2f, (ndc[1] + 1f) / 2f};
+        assertPoint(buffer, readBy(outputToBuffer, output));
+    }
+
+    /** The near plane is at the front of the depth range and the far plane at the back. */
+    @Test
+    public void theClippingPlanesBoundTheDepthRange() {
+        float[] projection = GlMath.projection(CENTRED_LENS, GlMath.identity(), 0.5f, 20f);
+        assertEquals(-1f, project(projection, 0f, 0f, -0.5f)[2], 1e-5f);
+        assertEquals(1f, project(projection, 0f, 0f, -20f)[2], 1e-5f);
+    }
+
+    @Test
+    public void aProjectionNeedsPlanesInFrontAndInOrder() {
+        assertThrows(IllegalArgumentException.class,
+                () -> GlMath.projection(CENTRED_LENS, GlMath.identity(), 0f, 10f));
+        assertThrows(IllegalArgumentException.class,
+                () -> GlMath.projection(CENTRED_LENS, GlMath.identity(), 2f, 1f));
+        assertThrows(IllegalArgumentException.class,
+                () -> GlMath.projection(CENTRED_LENS, GlMath.identity(), Float.NaN, 1f));
+    }
+
+    @Test
+    public void aProjectionNeedsALens() {
+        assertThrows(IllegalArgumentException.class,
+                () -> GlMath.projection(new float[4], GlMath.identity(), 0.1f, 10f));
+        assertThrows(IllegalArgumentException.class, () -> GlMath.projection(
+                new float[] {0f, 1f, 0.5f, 0.5f, 0f}, GlMath.identity(), 0.1f, 10f));
+        assertThrows(IllegalArgumentException.class, () -> GlMath.projection(
+                new float[] {1f, -1f, 0.5f, 0.5f, 0f}, GlMath.identity(), 0.1f, 10f));
+    }
+
+    /** A ray cast through a point of the buffer projects back onto that point. */
+    @Test
+    public void aRayThroughTheBufferProjectsBackOntoIt() {
+        float[] projection = GlMath.projection(SKEWED_LENS, GlMath.identity(), 0.1f, 100f);
+        float s = 0.31f;
+        float t = 0.72f;
+        float[] ray = GlMath.bufferRay(SKEWED_LENS, s, t);
+        assertEquals(-1f, ray[2], 0f);
+        for (float distance : new float[] {0.7f, 4f}) {
+            float[] ndc = project(projection, ray[0] * distance, ray[1] * distance, -distance);
+            assertEquals(s, (ndc[0] + 1f) / 2f, 1e-5f);
+            assertEquals(t, (ndc[1] + 1f) / 2f, 1e-5f);
+        }
+    }
+
+    /** Clip space to normalized device coordinates, as GL divides by w. */
+    @NonNull
+    private static float[] project(@NonNull float[] projection, float x, float y, float z) {
+        float[] clip = new float[4];
+        float[] point = {x, y, z, 1f};
+        for (int row = 0; row < 4; row++) {
+            for (int column = 0; column < 4; column++) {
+                clip[row] += projection[column * 4 + row] * point[column];
+            }
+        }
+        assertTrue("a point in front of the camera has a positive w", clip[3] > 0f);
+        return new float[] {clip[0] / clip[3], clip[1] / clip[3], clip[2] / clip[3]};
+    }
+
+    /** Where a matrix that moves and turns texture coordinates takes a point. */
+    @NonNull
+    private static float[] readBy(@NonNull float[] matrix, @NonNull float[] point) {
+        return new float[] {
+                matrix[0] * point[0] + matrix[4] * point[1] + matrix[12],
+                matrix[1] * point[0] + matrix[5] * point[1] + matrix[13],
+        };
+    }
+
     private static void assertPoint(@NonNull float[] expected, @NonNull float[] actual) {
         assertEquals(expected[0], actual[0], 1e-6f);
         assertEquals(expected[1], actual[1], 1e-6f);

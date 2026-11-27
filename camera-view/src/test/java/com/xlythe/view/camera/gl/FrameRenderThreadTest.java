@@ -34,6 +34,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -647,6 +648,226 @@ public class FrameRenderThreadTest {
         assertTrue("nothing was drawn into anything", ShadowRecordingGles20.draws().isEmpty());
     }
 
+    /** A pinhole for a geometry source to hand every frame. */
+    private static final float[] LENS = {0.8f, 1.4f, 0.5f, 0.5f, 0f};
+
+    /**
+     * Every frame is told what is known about the camera before it is drawn, so a renderer can
+     * project with it, and told the size of the buffer that decides how much of the sensor it
+     * shows.
+     */
+    @Test
+    public void eachFrameCarriesTheCamerasGeometry() {
+        RecordingRenderer renderer = new RecordingRenderer();
+        FrameRenderThread thread = newThread(renderer);
+        List<Size> buffers = Collections.synchronizedList(new ArrayList<>());
+        thread.setGeometrySource((geometry, bufferSize) -> {
+            buffers.add(bufferSize);
+            geometry.setNormalizedIntrinsics(LENS);
+            geometry.setViewMatrix(GlMath.identity());
+            geometry.setDepthTextureName(77);
+        });
+        assertTrue(thread.start());
+        thread.setInputBufferSize(LANDSCAPE);
+        thread.addOutput("preview", newSurface(), LANDSCAPE, LANDSCAPE,
+                GlMath.ScaleType.FILL_CENTER, copying(CAMERA_FLIP));
+
+        ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+
+        List<DrawnFrame> frames = renderer.frames();
+        assertEquals(1, frames.size());
+        assertTrue("the renderer could project", frames.get(0).projected);
+        assertTrue("and knew where the camera was", frames.get(0).viewed);
+        assertEquals(77, frames.get(0).depthTextureName);
+        assertEquals(Collections.singletonList(LANDSCAPE), buffers);
+    }
+
+    /** A geometry source that throws costs the frame its geometry, not the frame itself. */
+    @Test
+    public void aGeometrySourceThatThrowsStillLetsTheFrameBeDrawn() {
+        RecordingRenderer renderer = new RecordingRenderer();
+        FrameRenderThread thread = newThread(renderer);
+        thread.setGeometrySource((geometry, bufferSize) -> {
+            geometry.setNormalizedIntrinsics(LENS);
+            throw new IllegalStateException("The camera's optics cannot be read");
+        });
+        assertTrue(thread.start());
+        thread.addOutput("preview", newSurface(), LANDSCAPE, LANDSCAPE,
+                GlMath.ScaleType.FILL_CENTER, copying(CAMERA_FLIP));
+
+        ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+
+        List<DrawnFrame> frames = renderer.frames();
+        assertEquals(1, frames.size());
+        assertFalse("half a geometry is no geometry", frames.get(0).projected);
+    }
+
+    /**
+     * A texture somebody else fills gets no SurfaceTexture of the renderer's, and a frame is drawn
+     * whenever its owner says it has one, through the matrix and at the time the owner gives.
+     */
+    @Test
+    public void anExternalTextureIsDrawnWhenItsOwnerHasAFrame() {
+        RecordingRenderer renderer = new RecordingRenderer();
+        FrameRenderThread thread = newThread(renderer);
+        RecordingExternalTexture external = new RecordingExternalTexture();
+        thread.setExternalCameraTexture(external);
+        assertTrue(thread.start());
+        assertNull("the owner's frames do not arrive on a texture of ours",
+                thread.getInputSurfaceTexture());
+        assertEquals(1, external.created.get());
+        thread.addOutput("preview", newSurface(), LANDSCAPE, LANDSCAPE,
+                GlMath.ScaleType.FILL_CENTER,
+                (surfaceTextureMatrix, into) ->
+                        System.arraycopy(surfaceTextureMatrix, 0, into, 0, into.length));
+
+        external.hasFrame = false;
+        thread.requestFrame();
+        ShadowFrameSurfaceTexture.flush(thread.getHandler());
+        assertEquals(1, external.advanced.get());
+        assertTrue("no new frame, nothing drawn", renderer.frames().isEmpty());
+
+        external.hasFrame = true;
+        thread.requestFrame();
+        ShadowFrameSurfaceTexture.flush(thread.getHandler());
+        List<DrawnFrame> frames = renderer.frames();
+        assertEquals(1, frames.size());
+        assertEquals(RecordingExternalTexture.NAME, frames.get(0).textureName);
+        assertEquals(RecordingExternalTexture.TIMESTAMP, frames.get(0).timestampNanos);
+        assertArrayEquals(QUARTER_TURN, frames.get(0).textureMatrix, TOLERANCE);
+
+        thread.stop();
+        assertEquals(Collections.singletonList(RecordingExternalTexture.NAME), external.released);
+    }
+
+    /** Requests that pile up while one waits are one request, and none reach a stopped thread. */
+    @Test
+    public void frameRequestsCoalesceAndStopWithTheThread() {
+        FrameRenderThread thread = newThread(new RecordingRenderer());
+        RecordingExternalTexture external = new RecordingExternalTexture();
+        thread.setExternalCameraTexture(external);
+        thread.requestFrame();
+        assertEquals("not started", 0, external.advanced.get());
+        assertTrue(thread.start());
+        CountDownLatch held = new CountDownLatch(1);
+        thread.getHandler().post(() -> {
+            try {
+                held.await(5, TimeUnit.SECONDS);
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+        });
+        thread.requestFrame();
+        thread.requestFrame();
+        thread.requestFrame();
+        held.countDown();
+        ShadowFrameSurfaceTexture.flush(thread.getHandler());
+        assertEquals(1, external.advanced.get());
+    }
+
+    @Test
+    public void theTextureIsChosenBeforeTheThreadStarts() {
+        FrameRenderThread thread = started(new RecordingRenderer());
+        assertThrows(IllegalStateException.class,
+                () -> thread.setExternalCameraTexture(new RecordingExternalTexture()));
+    }
+
+    /**
+     * The next frame off the stream is drawn into a still once, through the still's own matrix
+     * and at its own size, and then the still is done.
+     */
+    @Test
+    public void theNextFrameIsDrawnIntoAStillOnce() {
+        RecordingRenderer renderer = new RecordingRenderer();
+        FrameRenderThread thread = started(renderer);
+        thread.addOutput("preview", newSurface(), LANDSCAPE, LANDSCAPE,
+                GlMath.ScaleType.FILL_CENTER, copying(CAMERA_FLIP));
+        AtomicInteger drawn = new AtomicInteger();
+        assertTrue(thread.drawNextFrameInto(newSurface(), PORTRAIT,
+                GlMath.ScaleType.FILL_CENTER, copying(QUARTER_TURN), drawn::incrementAndGet));
+        ShadowFrameSurfaceTexture.flush(thread.getHandler());
+
+        ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+        ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+
+        assertEquals(1, drawn.get());
+        assertEquals("the preview twice, and the still once", 3, renderer.frames().size());
+        assertEquals(1, renderer.framesAt(PORTRAIT));
+    }
+
+    /** A still that is given up before its frame is never drawn. */
+    @Test
+    public void aCancelledStillOffTheStreamIsNotDrawn() {
+        RecordingRenderer renderer = new RecordingRenderer();
+        FrameRenderThread thread = started(renderer);
+        AtomicInteger drawn = new AtomicInteger();
+        assertTrue(thread.drawNextFrameInto(newSurface(), PORTRAIT,
+                GlMath.ScaleType.FILL_CENTER, copying(QUARTER_TURN), drawn::incrementAndGet));
+        thread.cancelStill();
+        ShadowFrameSurfaceTexture.flush(thread.getHandler());
+
+        ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+
+        assertEquals(0, drawn.get());
+        assertEquals(0, renderer.framesAt(PORTRAIT));
+    }
+
+    @Test
+    public void aStoppedThreadDrawsNoStillOffTheStream() {
+        FrameRenderThread thread = newThread(new RecordingRenderer());
+        assertFalse(thread.drawNextFrameInto(newSurface(), PORTRAIT,
+                GlMath.ScaleType.FILL_CENTER, copying(QUARTER_TURN), () -> {}));
+    }
+
+    /** A camera texture filled by someone else, with a frame or without one as a test says. */
+    private static final class RecordingExternalTexture
+            implements FrameRenderThread.ExternalCameraTexture {
+        /** The texture name it hands out. */
+        static final int NAME = 4321;
+
+        /** When its frames were captured. */
+        static final long TIMESTAMP = 98_765L;
+
+        /** How many times it was asked to create its texture. */
+        final AtomicInteger created = new AtomicInteger();
+
+        /** How many times it was asked to advance. */
+        final AtomicInteger advanced = new AtomicInteger();
+
+        /** The textures it was asked to let go of. */
+        final List<Integer> released = Collections.synchronizedList(new ArrayList<>());
+
+        /** Whether advancing finds a new frame. */
+        volatile boolean hasFrame = true;
+
+        @Override
+        public int onCreateCameraTexture() {
+            created.incrementAndGet();
+            return NAME;
+        }
+
+        @Override
+        public boolean advance() {
+            advanced.incrementAndGet();
+            return hasFrame;
+        }
+
+        @Override
+        public void getTransformMatrix(@NonNull float[] into) {
+            System.arraycopy(QUARTER_TURN, 0, into, 0, QUARTER_TURN.length);
+        }
+
+        @Override
+        public long getTimestampNanos() {
+            return TIMESTAMP;
+        }
+
+        @Override
+        public void onReleaseCameraTexture(int textureName) {
+            released.add(textureName);
+        }
+    }
+
     private FrameRenderThread newThread(FrameRenderer renderer) {
         FrameRenderThread thread = new FrameRenderThread(THREAD_NAME);
         thread.setFrameRenderer(renderer);
@@ -688,6 +909,12 @@ public class FrameRenderThreadTest {
         final int textureName;
         final float[] textureMatrix;
         final String thread;
+        /** Whether the frame could say how to project onto itself. */
+        final boolean projected;
+        /** Whether the frame could say where the camera was. */
+        final boolean viewed;
+        /** The frame's depth texture, or 0. */
+        final int depthTextureName;
 
         DrawnFrame(GlFrame frame) {
             size = new Size(frame.getWidth(), frame.getHeight());
@@ -695,6 +922,9 @@ public class FrameRenderThreadTest {
             textureName = frame.getTextureName();
             textureMatrix = frame.getTextureMatrix().clone();
             thread = Thread.currentThread().getName();
+            projected = frame.getProjectionMatrix(new float[16], 0.1f, 10f);
+            viewed = frame.getViewMatrix(new float[16]);
+            depthTextureName = frame.getDepthTextureName();
         }
     }
 

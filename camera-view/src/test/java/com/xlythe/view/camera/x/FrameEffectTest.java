@@ -114,7 +114,7 @@ public class FrameEffectTest {
         RecordingRenderer renderer = new RecordingRenderer();
 
         assertNull(FrameEffect.create(FrameEffect.ALL_TARGETS, directExecutor, renderer, null,
-                error -> {}));
+                null, error -> {}));
         assertEquals(0, renderer.started.get());
     }
 
@@ -242,7 +242,7 @@ public class FrameEffectTest {
             throw new AssertionError("CameraX reported an error", error);
         };
         FrameEffect effect = FrameEffect.create(FrameEffect.ALL_TARGETS, directExecutor, renderer,
-                provider, errors);
+                provider, null, errors);
         assertNotNull("Robolectric's EGL should give the effect a context", effect);
         effects.add(effect);
         return effect;
