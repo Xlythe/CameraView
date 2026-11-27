@@ -10,6 +10,7 @@ import androidx.annotation.WorkerThread;
 
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifNoRoomException;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -68,6 +69,9 @@ class LegacyPictureListener implements Camera.PictureCallback {
                     }
                     ensureWritableTempDir(mModule.getContext());
                     exif.save();
+                } catch (ExifNoRoomException e) {
+                    // The picture keeps everything else, and is never failed over its metadata.
+                    Log.w(TAG, "Saved the picture without some of its Exif tags", e);
                 } catch (IOException e) {
                     Log.e(TAG, "Failed to write the file", e);
                     mModule.onImageFailed();

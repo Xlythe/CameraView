@@ -2,6 +2,7 @@ package com.xlythe.view.camera.x;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
@@ -14,14 +15,22 @@ import androidx.camera.core.resolutionselector.AspectRatioStrategy;
 import androidx.camera.core.resolutionselector.ResolutionSelector;
 import androidx.camera.core.resolutionselector.ResolutionStrategy;
 import androidx.camera.video.Quality;
+import androidx.exifinterface.media.ExifInterface;
 
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifFixtures;
 
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
 import java.util.Arrays;
 
 @RunWith(RobolectricTestRunner.class)
@@ -180,6 +189,24 @@ public final class CameraXModuleTest {
         assertEquals(new Size(1920, 1080), CameraXModule.imageTargetSize(CameraView.Quality.HIGH));
         assertEquals(new Size(1280, 720), CameraXModule.imageTargetSize(CameraView.Quality.MEDIUM));
         assertEquals(new Size(720, 480), CameraXModule.imageTargetSize(CameraView.Quality.LOW));
+    }
+
+    /**
+     * A capture whose Exif has no room for the camera's own tags keeps the picture and the rest
+     * of its metadata, rather than passing the save's complaint on.
+     */
+    @Test
+    public void aCaptureIsKeptWhenItsTagsDoNotFit() throws IOException {
+        File file = File.createTempFile("camerax", ".jpg");
+        file.deleteOnExit();
+        Files.write(file.toPath(), ExifFixtures.overfullCapture());
+
+        CameraXModule.writeExif(RuntimeEnvironment.getApplication(), file, null,
+                new ExifCaptureParameters());
+
+        Exif saved = new Exif(file);
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertNull(saved.getTag(ExifFixtures.TAG_UNDEFINED_BY_ANY_STANDARD));
     }
 
     /**
