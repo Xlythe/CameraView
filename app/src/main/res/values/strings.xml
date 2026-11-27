@@ -18,7 +18,7 @@
     <string name="panorama_saved">Saved to the gallery</string>
     <string name="panorama_image_description">The saved panorama</string>
     <string name="app_name_effect">Effect Demo</string>
-    <string name="app_name_viewer">Viewer Demo</string>
+    <string name="app_name_viewer">Media Demo</string>
     <string name="wear_status_idle">Open the companion app on your watch</string>
     <string name="wear_status_opening">Connecting to the watch…</string>
     <string name="wear_status_streaming">Streaming to the watch</string>
@@ -42,10 +42,32 @@
     <!-- Takes a DNG beside each JPEG -->
     <string name="raw">RAW</string>
 
-    <!-- The viewer before a picture is picked -->
-    <string name="viewer_empty">Take a picture, or open one to view it</string>
-    <!-- Picks a picture to view -->
+    <!-- The viewer before a file is picked -->
+    <string name="viewer_empty">Take a picture, or open any picture, video or recording</string>
+    <!-- Picks a file to view -->
     <string name="viewer_open">Open</string>
+    <!-- Shows the file as whatever it is found to be -->
+    <string name="viewer_mode_detect">Auto</string>
+    <!-- Plays the file as a video -->
+    <string name="viewer_mode_video">Video</string>
+    <!-- Shows the file as a motion photo, whose clip plays while it is held -->
+    <string name="viewer_mode_motion">Motion</string>
+    <!-- Plays the file as a 360 degree video -->
+    <string name="viewer_mode_spherical">360°</string>
+    <!-- Plays the file as a recording -->
+    <string name="viewer_mode_audio">Sound</string>
+    <!-- What the viewer shows, for accessibility services -->
+    <string name="viewer_media_description">The file being viewed</string>
+    <!-- What the file is shown as, then what its metadata says -->
+    <string name="viewer_info">%1$s · %2$s</string>
+    <!-- Where the file was captured, as latitude and longitude -->
+    <string name="viewer_location">%1$.5f, %2$.5f</string>
+    <!-- The file is in high dynamic range -->
+    <string name="viewer_hdr">HDR</string>
+    <!-- The file is a motion photo -->
+    <string name="viewer_motion_photo">Motion photo</string>
+    <!-- The file says nothing about itself -->
+    <string name="viewer_no_metadata">No metadata</string>
     <!-- Shows the picture flat, to zoom into -->
     <string name="viewer_mode_picture">Picture</string>
     <!-- Shows the picture as a strip to pan along -->
@@ -55,7 +77,7 @@
     <!-- Looks around the sphere by turning the phone -->
     <string name="viewer_gyroscope">Gyro</string>
     <!-- The picture could not be shown -->
-    <string name="viewer_failed">This device cannot show this picture</string>
+    <string name="viewer_failed">This device cannot show this file</string>
     <!-- A zoom preset button, such as 0.6x or 2x -->
     <string name="zoom_preset">%1$sx</string>
     <!-- How far exposure compensation shifts the exposure, in stops, such as +0.7 EV -->

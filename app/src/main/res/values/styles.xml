@@ -10,6 +10,14 @@
         <item name="textAppearanceBody2">@style/TextAppearance.App.Body2</item>
     </style>
 
+    <!-- One of the viewer's choices along its bottom bar. -->
+    <style name="ViewerChoice">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:buttonTint">#FFFFFF</item>
+        <item name="android:textColor">#FFFFFF</item>
+    </style>
+
     <style name="TextAppearance.App.Headline6" parent="TextAppearance.MaterialComponents.Subtitle1">
         <item name="android:textColor">#FFFFFF</item>
     </style>
