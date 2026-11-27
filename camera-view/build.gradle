@@ -20,12 +20,10 @@ if (localPropertiesFile.exists()) {
 }
 
 // Builds without the optional backends, for an app whose minSdk is older than the newest
-// androidx.camera, Compose and media3 releases support. CameraView's own floor is API 21, which
-// the camera2 and legacy backends cover on their own; what forces a higher one is the
-// dependencies CameraX, the Compose wrapper and the media3 video editor bring with them. Set
-// -Pcameraview.core=true to leave them out: the source directories and their dependencies go
-// together, so what is left is a library that compiles and links against nothing newer than
-// API 21.
+// androidx.camera, Compose and media3 releases support. Set -Pcameraview.core=true to leave them
+// out: the source directories and their dependencies go together, so what is left is a library
+// that needs nothing newer than API 14. Below 21 it drives the legacy backend, and what that
+// cannot do reports itself unsupported.
 boolean coreOnly = project.hasProperty('cameraview.core')
         && project.property('cameraview.core').toString().toBoolean()
 
@@ -33,7 +31,7 @@ android {
     compileSdkVersion 37
 
     defaultConfig {
-        minSdkVersion 21
+        minSdkVersion coreOnly ? 14 : 21
         targetSdkVersion 37
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
@@ -60,6 +58,9 @@ android {
         abortOnError = true
         checkReleaseBuilds = true
         targetSdk 37
+        if (coreOnly) {
+            lintConfig = file('lint-core.xml')
+        }
     }
     buildTypes {
         debug {

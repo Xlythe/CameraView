@@ -50,9 +50,12 @@ jobs:
           :camera-view:assembleRelease
           :app:assembleDebug
           :app-compose:assembleDebug
-      - name: Verify the core build's dependencies
+      # The core build is held at its minSdk by lint for its own code and by verifyCoreMinSdk for
+      # what it depends on.
+      - name: Verify the core build
         run: >-
           gradle --no-daemon --stacktrace -Pcameraview.core=true
+          :camera-view:lintDebug
           :camera-view:verifyCoreMinSdk
       - name: Upload verification reports
         if: always()
