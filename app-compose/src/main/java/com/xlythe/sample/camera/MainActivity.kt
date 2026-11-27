@@ -29,9 +29,14 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.BlurOn
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.FaceRetouchingNatural
+import androidx.compose.material.icons.filled.HdrOn
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Nightlight
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Transform
 import androidx.compose.material.icons.filled.Videocam
@@ -44,6 +49,7 @@ import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -65,12 +71,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.xlythe.view.camera.Barcode
 import com.xlythe.compose.camera.Camera
 import com.xlythe.compose.camera.CameraController
+import com.xlythe.compose.camera.CameraState
+import com.xlythe.compose.camera.PhotoMode
 import com.xlythe.compose.camera.Permissions
 import com.xlythe.compose.camera.Video
 import com.xlythe.compose.camera.VideoController
@@ -190,6 +199,8 @@ class MainActivity : ComponentActivity() {
 fun SimpleDemoScreen() {
     val context = LocalContext.current
     val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    val cameraState = remember { mutableStateOf<CameraState?>(null) }
+    var photoMode by remember { mutableStateOf(PhotoMode.NONE) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
     var uiStatusText by remember { mutableStateOf("") }
 
@@ -231,13 +242,22 @@ fun SimpleDemoScreen() {
             ) {
                 Camera(
                     modifier = Modifier.fillMaxSize(),
+                    photoMode = photoMode,
                     controller = cameraController,
+                    state = cameraState,
                     onImageConfirmation = { uiStatusText = "Confirm Image?" },
                     onImageSaved = { uri ->
                         uiStatusText = "Saved: $uri"
                         Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
                     },
                     onImageCaptureFailed = { uiStatusText = "Capture Failed" }
+                )
+
+                PhotoModeToggles(
+                    supported = cameraState.value?.supportedPhotoModes.orEmpty(),
+                    selected = photoMode,
+                    onSelected = { photoMode = it },
+                    modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp)
                 )
             }
 
@@ -282,6 +302,42 @@ fun SimpleDemoScreen() {
             }
         }
     }
+}
+
+/**
+ * An icon for each photo mode the camera has. Tapping one turns its mode on, and tapping it
+ * again turns it off; the one that is on takes the theme's primary colour.
+ */
+@Composable
+fun PhotoModeToggles(
+    supported: Set<PhotoMode>,
+    selected: PhotoMode,
+    onSelected: (PhotoMode) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(modifier = modifier) {
+        PhotoMode.entries.filter { it != PhotoMode.NONE && it in supported }.forEach { mode ->
+            IconToggleButton(
+                checked = mode == selected,
+                onCheckedChange = { checked -> onSelected(if (checked) mode else PhotoMode.NONE) }
+            ) {
+                Icon(
+                    imageVector = mode.icon(),
+                    contentDescription = mode.name,
+                    tint = if (mode == selected) MaterialTheme.colorScheme.primary else Color.White
+                )
+            }
+        }
+    }
+}
+
+/** The icon for a photo mode's button. */
+private fun PhotoMode.icon(): ImageVector = when (this) {
+    PhotoMode.BACKGROUND_BLUR -> Icons.Default.BlurOn
+    PhotoMode.HDR -> Icons.Default.HdrOn
+    PhotoMode.NIGHT -> Icons.Default.Nightlight
+    PhotoMode.FACE_RETOUCH -> Icons.Default.FaceRetouchingNatural
+    PhotoMode.AUTO, PhotoMode.NONE -> Icons.Default.AutoAwesome
 }
 
 @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])

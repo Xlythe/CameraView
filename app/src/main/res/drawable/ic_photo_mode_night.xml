@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Night: a crescent moon. Tinted by the button it is in. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/white"
+        android:pathData="M12.38,3.01A9,9 0,1 0,20.74 14.15A7,7 0,1 1,12.38 3.01Z" />
+</vector>

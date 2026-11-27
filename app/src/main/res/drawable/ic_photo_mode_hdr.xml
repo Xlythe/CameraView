@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- HDR: a circle half light and half dark. Tinted by the button it is in. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@android:color/white"
+        android:fillType="evenOdd"
+        android:pathData="M12,3A9,9 0,1 0,12 21A9,9 0,1 0,12 3ZM12,19L12,5A7,7 0,0 1,12 19Z" />
+</vector>

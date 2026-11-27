@@ -9,6 +9,7 @@ import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.ImageButton;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -23,9 +24,11 @@ import java.io.InputStream;
 import java.util.List;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.DrawableRes;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.StringRes;
 import androidx.annotation.VisibleForTesting;
 
 /**
@@ -37,6 +40,15 @@ public class MainFragment extends CameraFragment {
     /** How long the preview takes to come back after blinking for a picture. */
     private static final long SHUTTER_BLINK_MILLIS = 150;
 
+    /** The photo modes there are buttons for, in the order the row shows them. */
+    private static final int[] PHOTO_MODES = {
+            CameraView.PhotoMode.BACKGROUND_BLUR,
+            CameraView.PhotoMode.HDR,
+            CameraView.PhotoMode.NIGHT,
+            CameraView.PhotoMode.FACE_RETOUCH,
+            CameraView.PhotoMode.AUTO,
+    };
+
     /** The CameraView the zoom presets drive, held while the view exists. */
     @Nullable
     private CameraView mCameraView;
@@ -44,6 +56,10 @@ public class MainFragment extends CameraFragment {
     /** The row the zoom preset buttons go in, once the camera says what they are. */
     @Nullable
     private ViewGroup mZoomPresets;
+
+    /** The row of photo mode buttons, one for each mode the camera has. */
+    @Nullable
+    private ViewGroup mPhotoModes;
 
     /** The exposure compensation row, shown only where the camera can compensate. */
     @Nullable
@@ -69,6 +85,7 @@ public class MainFragment extends CameraFragment {
         super.onViewCreated(view, savedInstanceState);
         mCameraView = view.findViewById(R.id.camera);
         mZoomPresets = view.findViewById(R.id.zoom_presets);
+        mPhotoModes = view.findViewById(R.id.photo_modes);
         mExposureControl = view.findViewById(R.id.exposure_control);
         mExposureSlider = view.findViewById(R.id.exposure_slider);
         mExposureValue = view.findViewById(R.id.exposure_value);
@@ -99,6 +116,7 @@ public class MainFragment extends CameraFragment {
     public void onDestroyView() {
         mCameraView = null;
         mZoomPresets = null;
+        mPhotoModes = null;
         mExposureControl = null;
         mExposureSlider = null;
         mExposureValue = null;
@@ -110,15 +128,99 @@ public class MainFragment extends CameraFragment {
         super.onCameraOpened();
         showZoomPresets();
         showExposureControl();
+        showPhotoModes();
     }
 
     @Override
     protected void onToggle() {
         super.onToggle();
         // The presets belong to the lens, and the other one may have different stops. So may its
-        // exposure range and step.
+        // exposure range and step, and its photo modes.
         showZoomPresets();
         showExposureControl();
+        showPhotoModes();
+    }
+
+    /**
+     * Fills the row with an icon for each photo mode the camera has. Tapping one turns its mode
+     * on, and tapping it again turns it off; the one that is on is highlighted.
+     */
+    @MainThread
+    private void showPhotoModes() {
+        CameraView cameraView = mCameraView;
+        ViewGroup row = mPhotoModes;
+        if (cameraView == null || row == null) {
+            return;
+        }
+        row.removeAllViews();
+        LayoutInflater inflater = getLayoutInflater();
+        for (int photoMode : PHOTO_MODES) {
+            if (!cameraView.isPhotoModeSupported(photoMode)) {
+                continue;
+            }
+            ImageButton button = (ImageButton) inflater.inflate(R.layout.photo_mode, row, false);
+            button.setImageResource(photoModeIcon(photoMode));
+            button.setContentDescription(getString(photoModeDescription(photoMode)));
+            button.setTag(photoMode);
+            button.setOnClickListener(v -> {
+                cameraView.setPhotoMode(cameraView.getPhotoMode() == photoMode
+                        ? CameraView.PhotoMode.NONE : photoMode);
+                highlightPhotoMode(cameraView.getPhotoMode());
+            });
+            row.addView(button);
+        }
+        row.setVisibility(row.getChildCount() == 0 ? View.GONE : View.VISIBLE);
+        highlightPhotoMode(cameraView.getPhotoMode());
+    }
+
+    /** Highlights the button for the mode that is on, if there is one. */
+    @MainThread
+    private void highlightPhotoMode(@CameraView.PhotoMode int photoMode) {
+        if (mPhotoModes == null) {
+            return;
+        }
+        for (int i = 0; i < mPhotoModes.getChildCount(); i++) {
+            View button = mPhotoModes.getChildAt(i);
+            button.setSelected(Integer.valueOf(photoMode).equals(button.getTag()));
+        }
+    }
+
+    /** The icon for a photo mode's button. */
+    @DrawableRes
+    @VisibleForTesting
+    static int photoModeIcon(@CameraView.PhotoMode int photoMode) {
+        switch (photoMode) {
+            case CameraView.PhotoMode.BACKGROUND_BLUR:
+                return R.drawable.ic_photo_mode_background_blur;
+            case CameraView.PhotoMode.HDR:
+                return R.drawable.ic_photo_mode_hdr;
+            case CameraView.PhotoMode.NIGHT:
+                return R.drawable.ic_photo_mode_night;
+            case CameraView.PhotoMode.FACE_RETOUCH:
+                return R.drawable.ic_photo_mode_face_retouch;
+            case CameraView.PhotoMode.AUTO:
+            default:
+                return R.drawable.ic_photo_mode_auto;
+        }
+    }
+
+    /** What a photo mode's button turns on, for accessibility services. */
+    @StringRes
+    @VisibleForTesting
+    static int photoModeDescription(@CameraView.PhotoMode int photoMode) {
+        switch (photoMode) {
+            case CameraView.PhotoMode.BACKGROUND_BLUR:
+                return R.string.photo_mode_background_blur;
+            case CameraView.PhotoMode.HDR:
+                return R.string.photo_mode_hdr;
+            case CameraView.PhotoMode.NIGHT:
+                return R.string.photo_mode_night;
+            case CameraView.PhotoMode.FACE_RETOUCH:
+                return R.string.photo_mode_face_retouch;
+            case CameraView.PhotoMode.AUTO:
+            default:
+                return R.string.photo_mode_auto;
+        }
     }
 
     /**

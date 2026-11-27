@@ -39,6 +39,17 @@
             android:layout_height="match_parent"
             camera:quality="high" />
 
+        <!-- Photo modes, filled in by MainFragment with the ones the camera has -->
+        <LinearLayout
+            android:id="@+id/photo_modes"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_alignParentTop="true"
+            android:layout_centerHorizontal="true"
+            android:layout_marginTop="16dp"
+            android:orientation="horizontal"
+            android:visibility="gone" />
+
         <!-- Exposure compensation, shown by MainFragment where the camera can compensate -->
         <LinearLayout
             android:id="@+id/exposure_control"

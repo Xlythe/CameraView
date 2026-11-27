@@ -30,5 +30,11 @@
     <string name="exposure_compensation_none">0 EV</string>
     <!-- What the exposure compensation slider is, for accessibility services -->
     <string name="exposure_compensation_description">Exposure compensation</string>
+    <!-- What each photo mode button turns on, for accessibility services -->
+    <string name="photo_mode_background_blur">Background blur</string>
+    <string name="photo_mode_hdr">HDR</string>
+    <string name="photo_mode_night">Night</string>
+    <string name="photo_mode_face_retouch">Face retouch</string>
+    <string name="photo_mode_auto">Automatic photo mode</string>
 
 </resources>
