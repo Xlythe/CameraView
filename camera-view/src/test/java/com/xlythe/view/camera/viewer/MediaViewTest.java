@@ -470,6 +470,27 @@ public class MediaViewTest {
         assertTrue(MediaDetector.animatesHere(MediaTags.FORMAT_AVIF));
     }
 
+    /** A QuickTime movie Android would not open plays from a copy that it will. */
+    @Test
+    public void aQuickTimeMovieWithoutAFileTypePlaysFromACopy() throws IOException {
+        Context context = ApplicationProvider.getApplicationContext();
+        // A movie whose file type box gives way to the wide box an old QuickTime movie opens with.
+        byte[] mp4 = MediaTestFiles.movie();
+        int ftyp = ((mp4[0] & 0xFF) << 24) | ((mp4[1] & 0xFF) << 16) | ((mp4[2] & 0xFF) << 8)
+                | (mp4[3] & 0xFF);
+        byte[] rest = new byte[mp4.length - ftyp];
+        System.arraycopy(mp4, ftyp, rest, 0, rest.length);
+        File movie = file(MediaTestFiles.concat(new byte[] {0, 0, 0, 8, 'w', 'i', 'd', 'e'},
+                rest), ".mov");
+        MediaDetector.Detection detection = MediaDetector.detect(context,
+                ImageLocation.of(movie));
+        assertEquals(MediaView.VIDEO, detection.type);
+        assertNotNull(detection.playable);
+        assertTrue(detection.playable.file().getName().endsWith(".mov"));
+        assertNull(MediaDetector.detect(context, ImageLocation.of(
+                file(MediaTestFiles.movie(), ".mp4"))).playable);
+    }
+
     /** Draws without anything to show, which draws nothing. */
     @Test
     public void drawsNothingWhenEmpty() {

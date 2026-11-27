@@ -274,7 +274,7 @@ final class ImageSources {
 
     /** Deletes all but the newest copies. */
     @WorkerThread
-    private static void trim(@NonNull File directory) {
+    static void trim(@NonNull File directory) {
         File[] copies = directory.listFiles();
         if (copies == null || copies.length <= MAX_COPIES) {
             return;
@@ -295,7 +295,7 @@ final class ImageSources {
 
     /** A file name for a fingerprint. */
     @NonNull
-    private static String digest(@NonNull String fingerprint) {
+    static String digest(@NonNull String fingerprint) {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-1").digest(fingerprint.getBytes("UTF-8"));
             StringBuilder name = new StringBuilder(hash.length * 2);
