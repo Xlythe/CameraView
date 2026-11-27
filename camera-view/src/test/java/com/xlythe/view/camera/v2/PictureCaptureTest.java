@@ -18,10 +18,13 @@ import android.media.MediaActionSound;
 import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.ExifFixtures;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowCallbackCameraCaptureSession;
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader;
+
+import androidx.exifinterface.media.ExifInterface;
 
 import org.junit.After;
 import org.junit.Before;
@@ -286,6 +289,26 @@ public class PictureCaptureTest {
         assertEquals(output, captured.get());
         assertEquals("nothing may be asked of the radio", 0, FakeLocation.listeners(context));
         assertNull(new Exif(output).getLocation());
+    }
+
+    /**
+     * A picture whose Exif has no room for the camera's own tags is still written and reported,
+     * with the rest of its metadata.
+     */
+    @Test
+    public void aPictureIsKeptWhenItsTagsDoNotFit() throws IOException {
+        module.open();
+        FakeCamera2.idleMainLooper();
+
+        module.takePicture(output);
+        FakeCamera2.idleMainLooper();
+        deliverFrame(FakeImage.jpeg(1920, 1080, ExifFixtures.overfullCapture()));
+
+        assertEquals(output, captured.get());
+        assertFalse("should not have reported a failure", failed.get());
+        Exif saved = new Exif(output);
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertNull(saved.getTag(ExifFixtures.TAG_UNDEFINED_BY_ANY_STANDARD));
     }
 
     /** Hands the reader a frame and runs the save through to its callbacks. */

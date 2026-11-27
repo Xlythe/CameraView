@@ -18,10 +18,13 @@ import android.media.CamcorderProfile;
 import android.media.MediaActionSound;
 import android.media.MediaRecorder;
 
+import androidx.exifinterface.media.ExifInterface;
+
 import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
+import com.xlythe.view.camera.ExifFixtures;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowGeotaggingMediaRecorder;
@@ -212,6 +215,29 @@ public class LegacyCaptureTest {
         // - decode, orient, write, report - rather than the bytes.
         assertTrue("the capture has to come back one way or the other",
                 captured.get() != null || failures.get() > 0);
+    }
+
+    /**
+     * A picture whose Exif has no room for the camera's own tags is still kept and reported,
+     * with the rest of its metadata.
+     */
+    @Test
+    public void aPictureIsKeptWhenItsTagsDoNotFit() throws IOException {
+        AtomicReference<File> captured = new AtomicReference<>();
+        AtomicInteger failures = new AtomicInteger();
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onImageConfirmation() {}
+            @Override public void onImageCaptured(File file) { captured.set(file); }
+            @Override public void onFailure() { failures.incrementAndGet(); }
+        });
+
+        File file = savePicture(ExifFixtures.overfullCapture());
+
+        assertEquals(file, captured.get());
+        assertEquals(0, failures.get());
+        Exif saved = new Exif(file);
+        assertNotNull(saved.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
+        assertNull(saved.getTag(ExifFixtures.TAG_UNDEFINED_BY_ANY_STANDARD));
     }
 
     /** The platform clicks for the old API itself, so the library adds only the callback. */
@@ -451,13 +477,18 @@ public class LegacyCaptureTest {
      * into, so this hands it a real one as the driver would.</p>
      */
     private File savePicture() throws IOException {
+        return savePicture(EMPTY_JPEG);
+    }
+
+    /** Hands the picture listener the given frame and lets it save. */
+    private File savePicture(byte[] frame) throws IOException {
         File file = File.createTempFile("legacy", ".jpg");
         file.deleteOnExit();
         ShadowPausedAsyncTask.overrideExecutor(Runnable::run);
         Camera camera = Camera.open(1);
         try {
             new LegacyPictureListener(file, 0, false, new ExifCaptureParameters(), module)
-                    .onPictureTaken(EMPTY_JPEG, camera);
+                    .onPictureTaken(frame, camera);
             idle();
         } finally {
             camera.release();
