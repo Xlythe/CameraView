@@ -370,7 +370,12 @@ public final class ExifCaptureParameters {
         }
     }
 
-    /** How far exposure compensation was set, in the camera's steps. */
+    /**
+     * How far exposure compensation was set, as an index in the camera's own steps rather than in
+     * EV. The tag is written as the index times the step the camera reports, so index 4 in steps
+     * of 1/6 is +2/3 EV. An index of 0 is written as no bias on any camera; any other index is
+     * left out where the camera reported no step, since what it is worth in EV is unknown.
+     */
     @NonNull
     public ExifCaptureParameters setExposureCompensation(int index) {
         if (index == 0) {

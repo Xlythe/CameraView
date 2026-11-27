@@ -125,6 +125,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -341,6 +342,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Nullable private String mZoomPresetsKey;
     /** The bound camera's zoom presets, kept because each lens they come from costs a lookup. */
     @NonNull private float[] mZoomPresets = {1f};
+    /**
+     * The exposure index last asked for, which ICameraModule's is not: that one is what the camera
+     * confirmed. Applied again after every bind. Main thread only.
+     */
+    private int mRequestedExposureCompensation;
     /** Last non-zero CameraView layout width used to choose resolutions and ViewPort. */
     private int mLastWidth;
     /** Last non-zero CameraView layout height used to choose resolutions and ViewPort. */
@@ -395,6 +401,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private int mSnapshotMinExposure;
     /** Snapshot of maximum exposure compensation guarded by mSnapshotLock. */
     private int mSnapshotMaxExposure;
+    /** Snapshot of the EV one exposure compensation index is worth guarded by mSnapshotLock. */
+    private float mSnapshotExposureStep;
     /** Snapshot of low-light boost availability guarded by mSnapshotLock. */
     private boolean mSnapshotLowLightBoostSupported;
     /** Snapshot of supported vendor extensions guarded by mSnapshotLock. */
@@ -452,6 +460,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         boolean exposureSupported = false;
         int minExposure = 0;
         int maxExposure = 0;
+        float exposureStep = 0f;
         boolean lowLightBoostSupported = false;
         if (cameraInfo != null) {
             // Each of these asks the camera a separate question, and a camera that cannot answer
@@ -477,10 +486,19 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                     info -> Recorder.getVideoCapabilities(info).isStabilizationSupported(), false);
             exposureSupported = query(cameraInfo, "exposure",
                     info -> info.getExposureState().isExposureCompensationSupported(), false);
-            minExposure = query(cameraInfo, "minimum exposure",
-                    info -> info.getExposureState().getExposureCompensationRange().getLower(), 0);
-            maxExposure = query(cameraInfo, "maximum exposure",
-                    info -> info.getExposureState().getExposureCompensationRange().getUpper(), 0);
+            // A camera that cannot compensate reports no range, whatever it publishes, so that a
+            // control sized by it offers nothing the camera refuses.
+            if (exposureSupported) {
+                minExposure = query(cameraInfo, "minimum exposure",
+                        info -> info.getExposureState().getExposureCompensationRange().getLower(),
+                        0);
+                maxExposure = query(cameraInfo, "maximum exposure",
+                        info -> info.getExposureState().getExposureCompensationRange().getUpper(),
+                        0);
+                exposureStep = query(cameraInfo, "exposure step",
+                        info -> info.getExposureState().getExposureCompensationStep().floatValue(),
+                        0f);
+            }
             lowLightBoostSupported = query(cameraInfo, "low-light boost",
                     CameraInfo::isLowLightBoostSupported, false);
         }
@@ -500,6 +518,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mSnapshotExposureSupported = exposureSupported;
             mSnapshotMinExposure = minExposure;
             mSnapshotMaxExposure = maxExposure;
+            mSnapshotExposureStep = exposureStep;
             mSnapshotLowLightBoostSupported = lowLightBoostSupported;
             mSnapshotExtensions = Collections.unmodifiableSet(EnumSet.copyOf(supportedExtensions));
         }
@@ -1101,9 +1120,19 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         runOnMainThread(() -> setExposureCompensationOnMainThread(exposureCompensation));
     }
 
+    /**
+     * Asks the bound camera for an exposure index.
+     *
+     * <p>The index is reported as accepted once the camera confirms it, which it does through a
+     * later capture result. A rebind that lands first cancels the request without the camera
+     * having refused anything, so the request is kept in {@link #mRequestedExposureCompensation}
+     * and applied again once the next camera is bound. Only a refusal gives it up.</p>
+     */
+    @MainThread
     private void setExposureCompensationOnMainThread(int exposureCompensation) {
         Camera camera = mActiveCamera;
         if (camera == null) {
+            mRequestedExposureCompensation = exposureCompensation;
             super.setExposureCompensation(exposureCompensation);
             return;
         }
@@ -1114,12 +1143,24 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
         Range<Integer> range = exposure.getExposureCompensationRange();
         int clamped = Math.max(range.getLower(), Math.min(exposureCompensation, range.getUpper()));
+        mRequestedExposureCompensation = clamped;
         ListenableFuture<Integer> result = camera.getCameraControl().setExposureCompensationIndex(clamped);
         result.addListener(() -> {
             try {
                 super.setExposureCompensation(result.get());
+            } catch (CancellationException error) {
+                // Cancelled rather than refused, so the request stands.
+                if (DEBUG) Log.d(TAG, "Exposure request cancelled", error);
             } catch (ExecutionException error) {
+                if (error.getCause() instanceof CameraControl.OperationCanceledException) {
+                    // A rebind or a newer request, not a refusal, so the request stands.
+                    if (DEBUG) Log.d(TAG, "Exposure request cancelled", error.getCause());
+                    return;
+                }
                 Log.w(TAG, "Exposure request failed", error.getCause());
+                if (mRequestedExposureCompensation == clamped) {
+                    mRequestedExposureCompensation = getExposureCompensation();
+                }
             } catch (InterruptedException error) {
                 Thread.currentThread().interrupt();
                 Log.w(TAG, "Exposure request interrupted", error);
@@ -1136,6 +1177,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Override public int getMaxExposureCompensation() {
         synchronized (mSnapshotLock) {
             return mSnapshotMaxExposure;
+        }
+    }
+
+    @Override public float getExposureCompensationStep() {
+        synchronized (mSnapshotLock) {
+            return mSnapshotExposureStep;
         }
     }
 
@@ -2140,8 +2187,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // A new bind starts at 1x, and a new lens may not reach the zoom asked for.
             mConfirmedZoomRatio = 1f;
             applyZoomOnMainThread();
-            if (getExposureCompensation() != 0) {
-                setExposureCompensationOnMainThread(getExposureCompensation());
+            if (mRequestedExposureCompensation != 0) {
+                setExposureCompensationOnMainThread(mRequestedExposureCompensation);
             }
             if (isTorchEnabled()) setTorchEnabledOnMainThread(true);
             if (isLowLightBoostEnabled()) setLowLightBoostEnabledOnMainThread(true);

@@ -19,6 +19,7 @@ import org.robolectric.shadows.ShadowTotalCaptureResult;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicLong;
@@ -39,6 +40,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * pairs a frame with its result, for one that waits on metering, and for one that copies the
  * result into a file. A test can also hold one-off captures back, to have their frames arrive
  * before their results.</p>
+ *
+ * <p>Every request is also kept, so a test can read back what the backend asked the camera for.
+ * Robolectric runs no {@link Resetter} for a shadow a test names in its own {@code @Config}, so
+ * such a test calls {@link #reset} itself before it starts.</p>
  */
 @Implements(className = "android.hardware.camera2.impl.CameraCaptureSessionImpl",
         isInAndroidSdk = false)
@@ -48,8 +53,10 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     private static final AtomicInteger sFrameNumber = new AtomicInteger();
     /** The sensor timestamp of the last capture reported. */
     private static final AtomicLong sLastSensorTimestamp = new AtomicLong();
-    /** Every one-off request, in the order they were sent. */
-    private static final List<CaptureRequest> sCaptures = new ArrayList<>();
+    /** Every request made repeating, oldest first; the last is what the camera is running. */
+    private static final List<CaptureRequest> sRepeatingRequests = new CopyOnWriteArrayList<>();
+    /** Every one-off request, such as a still or a metering trigger, oldest first. */
+    private static final List<CaptureRequest> sCaptures = new CopyOnWriteArrayList<>();
     /** The auto-exposure state results report, or null for none. */
     @Nullable private static Integer sAeState;
     /** The repeating request in force, so a test can deliver more of its frames. */
@@ -73,12 +80,23 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         return sCompletedCaptures.get();
     }
 
+    /** The request the camera is repeating, or null when none has been made. */
+    public static CaptureRequest getLastRepeatingRequest() {
+        return sRepeatingRequests.isEmpty() ? null
+                : sRepeatingRequests.get(sRepeatingRequests.size() - 1);
+    }
+
+    /** Every request made repeating since the last {@link #reset}, oldest first. */
+    public static List<CaptureRequest> getRepeatingRequests() {
+        return new ArrayList<>(sRepeatingRequests);
+    }
+
     /** The sensor timestamp of the last capture reported, which its frame has to carry too. */
     public static long getLastSensorTimestamp() {
         return sLastSensorTimestamp.get();
     }
 
-    /** The one-off requests sent so far, such as stills and metering triggers. */
+    /** Every one-off request since the last {@link #reset}, oldest first. */
     public static List<CaptureRequest> getCaptures() {
         return new ArrayList<>(sCaptures);
     }
@@ -119,6 +137,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         sDeliverCallbacks = true;
         sCompletedCaptures.set(0);
         sFrameNumber.set(0);
+        sRepeatingRequests.clear();
         sLastSensorTimestamp.set(0);
         sCaptures.clear();
         sAeState = null;
@@ -133,6 +152,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
             CameraCaptureSession.CaptureCallback callback, Handler handler)
             throws android.hardware.camera2.CameraAccessException {
         int sequenceId = super.setRepeatingRequest(request, callback, handler);
+        sRepeatingRequests.add(request);
         sNextRepeatingFrame = () -> deliver(request, callback, handler);
         deliver(request, callback, handler);
         return sequenceId;

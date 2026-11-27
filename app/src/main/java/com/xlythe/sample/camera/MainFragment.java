@@ -2,12 +2,14 @@ package com.xlythe.sample.camera;
 
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
+import android.content.Context;
 import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -20,8 +22,11 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.List;
 
+import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
 /**
  * MainFragment demonstrates the standard usage of the CameraView library.
@@ -40,6 +45,18 @@ public class MainFragment extends CameraFragment {
     @Nullable
     private ViewGroup mZoomPresets;
 
+    /** The exposure compensation row, shown only where the camera can compensate. */
+    @Nullable
+    private View mExposureControl;
+
+    /** Picks the exposure compensation index; its progress is the index less the minimum. */
+    @Nullable
+    private SeekBar mExposureSlider;
+
+    /** Shows what the picked index is worth, in EV. */
+    @Nullable
+    private TextView mExposureValue;
+
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         // The layout contains a CameraView and control buttons (capture, confirm, cancel).
@@ -52,15 +69,39 @@ public class MainFragment extends CameraFragment {
         super.onViewCreated(view, savedInstanceState);
         mCameraView = view.findViewById(R.id.camera);
         mZoomPresets = view.findViewById(R.id.zoom_presets);
+        mExposureControl = view.findViewById(R.id.exposure_control);
+        mExposureSlider = view.findViewById(R.id.exposure_slider);
+        mExposureValue = view.findViewById(R.id.exposure_value);
         // Heard for a pinch as well as for a tap on a preset, so the highlight follows the zoom
         // however it got there.
         mCameraView.setOnZoomChangedListener(this::highlightZoomPreset);
+        mExposureSlider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override
+            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                CameraView cameraView = mCameraView;
+                if (!fromUser || cameraView == null) {
+                    return;
+                }
+                int index = cameraView.getMinExposureCompensation() + progress;
+                cameraView.setExposureCompensation(index);
+                showExposureValue(index, cameraView.getExposureCompensationStep());
+            }
+
+            @Override
+            public void onStartTrackingTouch(SeekBar seekBar) {}
+
+            @Override
+            public void onStopTrackingTouch(SeekBar seekBar) {}
+        });
     }
 
     @Override
     public void onDestroyView() {
         mCameraView = null;
         mZoomPresets = null;
+        mExposureControl = null;
+        mExposureSlider = null;
+        mExposureValue = null;
         super.onDestroyView();
     }
 
@@ -68,13 +109,59 @@ public class MainFragment extends CameraFragment {
     public void onCameraOpened() {
         super.onCameraOpened();
         showZoomPresets();
+        showExposureControl();
     }
 
     @Override
     protected void onToggle() {
         super.onToggle();
-        // The presets belong to the lens, and the other one may have different stops.
+        // The presets belong to the lens, and the other one may have different stops. So may its
+        // exposure range and step.
         showZoomPresets();
+        showExposureControl();
+    }
+
+    /**
+     * Sizes the exposure slider to the camera's range, or hides it where the camera cannot
+     * compensate.
+     */
+    @MainThread
+    private void showExposureControl() {
+        CameraView cameraView = mCameraView;
+        if (cameraView == null || mExposureControl == null || mExposureSlider == null) {
+            return;
+        }
+        if (!cameraView.isExposureCompensationSupported()) {
+            mExposureControl.setVisibility(View.GONE);
+            return;
+        }
+        int min = cameraView.getMinExposureCompensation();
+        int max = cameraView.getMaxExposureCompensation();
+        int index = Math.max(min, Math.min(cameraView.getExposureCompensation(), max));
+        mExposureSlider.setMax(max - min);
+        mExposureSlider.setProgress(index - min);
+        showExposureValue(index, cameraView.getExposureCompensationStep());
+        mExposureControl.setVisibility(View.VISIBLE);
+    }
+
+    @MainThread
+    private void showExposureValue(int index, float step) {
+        if (mExposureValue != null) {
+            mExposureValue.setText(formatExposure(requireContext(), index, step));
+        }
+    }
+
+    /**
+     * An exposure compensation index as the shift it makes in EV, such as "+0.7 EV". The index on
+     * its own means something different on each camera, so the EV is what a user is shown.
+     */
+    @AnyThread
+    @VisibleForTesting
+    static String formatExposure(@NonNull Context context, int index, float step) {
+        if (index == 0) {
+            return context.getString(R.string.exposure_compensation_none);
+        }
+        return context.getString(R.string.exposure_compensation, index * step);
     }
 
     /** Fills the row with a button for each zoom preset the camera suggests. */

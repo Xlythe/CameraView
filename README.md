@@ -68,12 +68,12 @@ Camera(
 Camera also accepts zoomRatio [minZoomRatio to maxZoomRatio, or null to leave the zoom to
 pinchToZoom], animateZoom [boolean], shutterSoundEnabled [boolean], shutterSound [raw resource],
 pictureQuality [1 to 100], colorSpace [srgb, displayP3],
-pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [integer],
-torchEnabled [boolean], dynamicRange [sdr, hdr],
-extension [none, bokeh, hdr, night, faceRetouch, auto], stabilizationEnabled [boolean],
-lowLightBoostEnabled [boolean], frameRenderer [FrameRenderer, see Filters and masks below] and
-cameraTextureProvider [CameraTextureProvider]. Not every camera can do all of these, so
-CameraState below says which this one supports.
+pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [minExposureCompensation to
+maxExposureCompensation, in steps of exposureCompensationStep EV], torchEnabled [boolean],
+dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
+stabilizationEnabled [boolean], lowLightBoostEnabled [boolean], frameRenderer [FrameRenderer, see
+Filters and masks below] and cameraTextureProvider [CameraTextureProvider]. Not every camera can
+do all of these, so CameraState below says which this one supports.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
 opens, and is republished when the camera reconfigures, so ask it before offering a control: a
@@ -95,11 +95,11 @@ if (camera != null && camera.hasFlash) {
 
 CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, isZoomSupported,
 minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
-minExposureCompensation, maxExposureCompensation, supportedColorSpaces, supportedPictureFormats,
-supportedDynamicRanges, supportedExtensions, isStabilizationSupported, isLowLightBoostSupported,
-isSnapshotWhileRecordingSupported, isFaceDetectionSupported, horizontalFieldOfView,
-verticalFieldOfView, isRecording, isAnalyzingFrames, isFrameEffectSupported and
-isReplacingBackground.
+minExposureCompensation, maxExposureCompensation, exposureCompensationStep, supportedColorSpaces,
+supportedPictureFormats, supportedDynamicRanges, supportedExtensions, isStabilizationSupported,
+isLowLightBoostSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
+horizontalFieldOfView, verticalFieldOfView, isRecording, isAnalyzingFrames, isFrameEffectSupported
+and isReplacingBackground.
 
 Pass onZoomChanged to hear the zoom ratio whenever it changes, a pinch included, so that buttons
 for zoomPresets can follow it. Writing it back into zoomRatio is safe, and animateZoom eases over
@@ -289,6 +289,10 @@ Each attribute has a matching setter. The last seven describe things not every c
 each also has a companion that reports whether the camera now open supports it, for example
 isDynamicRangeSupported(DynamicRange) or isLowLightBoostSupported(). Ask before relying on one; an
 unsupported request is logged and dropped rather than applied.
+
+exposureCompensation is an index rather than a number of stops, from
+getMinExposureCompensation() to getMaxExposureCompensation(). Each step is worth
+getExposureCompensationStep() EV, so with a step of 1/6, index 6 brightens by 1 EV.
 
 CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
 handle binding the Views to the appropriate methods on CameraView.

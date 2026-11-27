@@ -24,5 +24,11 @@
     <string name="btn_resize">Resize</string>
     <!-- A zoom preset button, such as 0.6x or 2x -->
     <string name="zoom_preset">%1$sx</string>
+    <!-- How far exposure compensation shifts the exposure, in stops, such as +0.7 EV -->
+    <string name="exposure_compensation">%1$+.1f EV</string>
+    <!-- Exposure compensation that shifts nothing -->
+    <string name="exposure_compensation_none">0 EV</string>
+    <!-- What the exposure compensation slider is, for accessibility services -->
+    <string name="exposure_compensation_description">Exposure compensation</string>
 
 </resources>
