@@ -179,6 +179,12 @@ public final class PanoramaSession implements GuideState.Source {
     /** Where every painted frame was aimed, as unit vectors. */
     private final List<float[]> mPainted = new ArrayList<>();
 
+    /** Where the frames to stitch wait until the sweep is over. */
+    private final KeyframeStore mKeyframes;
+
+    /** How each frame waiting to be stitched was taken, in the order they were kept. */
+    private final List<Keyframe> mKeyframeRecords = new ArrayList<>();
+
     /** Measures the lens's own focal length from the first frames painted. */
     private final LensCalibration mCalibration = new LensCalibration();
 
@@ -241,7 +247,8 @@ public final class PanoramaSession implements GuideState.Source {
             int quality, float sensorHorizontalFov, float sensorVerticalFov,
             @NonNull Callback callback, @NonNull Executor mainExecutor) {
         this(context, photosphere, file, quality, sensorHorizontalFov, sensorVerticalFov,
-                callback, mainExecutor, new RotationSensor(context));
+                callback, mainExecutor, new RotationSensor(context),
+                KeyframeStore.inCache(context));
     }
 
     @VisibleForTesting
@@ -249,6 +256,16 @@ public final class PanoramaSession implements GuideState.Source {
             int quality, float sensorHorizontalFov, float sensorVerticalFov,
             @NonNull Callback callback, @NonNull Executor mainExecutor,
             @NonNull RotationSensor sensor) {
+        this(context, photosphere, file, quality, sensorHorizontalFov, sensorVerticalFov,
+                callback, mainExecutor, sensor, KeyframeStore.inMemory());
+    }
+
+    @VisibleForTesting
+    PanoramaSession(@NonNull Context context, boolean photosphere, @NonNull File file,
+            int quality, float sensorHorizontalFov, float sensorVerticalFov,
+            @NonNull Callback callback, @NonNull Executor mainExecutor,
+            @NonNull RotationSensor sensor, @NonNull KeyframeStore keyframes) {
+        mKeyframes = keyframes;
         mContext = context.getApplicationContext();
         mPhotosphere = photosphere;
         mFile = file;
@@ -364,6 +381,7 @@ public final class PanoramaSession implements GuideState.Source {
         if (!tooFast && isWorthPainting(pose, coverage)) {
             ArgbImage image = frame.toArgb(MAX_FRAME_SIDE, mScratch);
             paint(image, pose);
+            keep(image, rotation, pose);
             if (!mCalibration.isDone()) {
                 mUncalibrated.add(new KeptFrame(image, rotation, pose));
                 mCalibration.offer(image, rotation, pose);
@@ -400,6 +418,19 @@ public final class PanoramaSession implements GuideState.Source {
             mFirstPhotoMillis = now;
         }
         mLastPhotoMillis = now;
+    }
+
+    /** Keeps a painted frame to stitch once the sweep is over. */
+    private void keep(@NonNull ArgbImage image, @NonNull float[] rotation,
+            @NonNull CameraPose pose) {
+        int index = mKeyframeRecords.size();
+        try {
+            mKeyframes.put(index, image);
+            mKeyframeRecords.add(new Keyframe(rotation, pose, pose.focal / mFocalScale,
+                    System.currentTimeMillis()));
+        } catch (IOException | RuntimeException | OutOfMemoryError error) {
+            Log.w(TAG, "Failed to keep a frame to stitch", error);
+        }
     }
 
     /**
@@ -578,6 +609,7 @@ public final class PanoramaSession implements GuideState.Source {
             if (mCanvas != null) {
                 mCanvas.release();
             }
+            mKeyframes.release();
         }
     }
 
@@ -615,30 +647,99 @@ public final class PanoramaSession implements GuideState.Source {
             SphereCanvas canvas = mCanvas;
             if (canvas == null || canvas.getFramesPainted() == 0) {
                 Log.w(TAG, "The sweep ended before a frame was painted");
+                mKeyframes.release();
                 return false;
             }
-            int bandRow = mPhotosphere ? -1
-                    : Math.max(0, Math.min(canvas.height - 1, (int) canvas.yOf(mBandPitch)));
-            int[] region = canvas.coveredRegion(bandRow);
-            if (region == null) {
-                return false;
+            Bitmap[] stitched = new Bitmap[1];
+            Stitcher.Result result = null;
+            try {
+                result = stitch(stitched);
+            } catch (RuntimeException | OutOfMemoryError error) {
+                Log.e(TAG, "Failed to stitch the sweep; saving it as it was painted", error);
+            } finally {
+                mKeyframes.release();
             }
-            int width = region[2];
-            int height = region[3];
-            bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-            int[] row = new int[width];
-            for (int y = 0; y < height; y++) {
-                canvas.readRow(region[1] + y, region[0], width, row, 0, UNPAINTED);
-                if (mFrontFacing) {
-                    // The preview of a front lens is mirrored, and so is what it saves.
-                    reverse(row);
+            if (result != null && stitched[0] != null) {
+                bitmap = stitched[0];
+                metadata = metadata(result.grid.width, result.grid.height,
+                        (float) result.grid.yawOrigin, mKeyframeRecords.size(), result.region);
+            } else {
+                if (stitched[0] != null) {
+                    stitched[0].recycle();
                 }
-                bitmap.setPixels(row, 0, width, 0, y, width, 1);
+                int bandRow = mPhotosphere ? -1 : Math.max(0,
+                        Math.min(canvas.height - 1, (int) canvas.yOf(mBandPitch)));
+                int[] region = canvas.coveredRegion(bandRow);
+                if (region == null) {
+                    return false;
+                }
+                bitmap = paintedPicture(canvas, region);
+                metadata = metadata(canvas.width, canvas.height, canvas.yawOrigin,
+                        canvas.getFramesPainted(), region);
             }
-            metadata = metadata(canvas, region);
             canvas.release();
             mCanvas = null;
         }
+        return save(bitmap, metadata);
+    }
+
+    /**
+     * Stitches the kept frames into a new bitmap.
+     *
+     * @param bitmap where the bitmap goes, as soon as it exists
+     * @return where the picture sits, or null if the frames could not be stitched
+     */
+    @Nullable
+    private Stitcher.Result stitch(@NonNull Bitmap[] bitmap) {
+        List<StitchFrame> frames = new ArrayList<>();
+        for (Keyframe keyframe : mKeyframeRecords) {
+            frames.add(new StitchFrame(new CameraPose(keyframe.rotation, keyframe.sensorRotation,
+                    keyframe.frontFacing, keyframe.width, keyframe.height,
+                    keyframe.focal * mFocalScale), keyframe.millis));
+        }
+        Stitcher stitcher = new Stitcher(frames, mKeyframes::get, mPhotosphere, mBandPitch,
+                mStartYaw, mPhotosphere ? PHOTOSPHERE_MAX_WIDTH : PANORAMA_MAX_WIDTH);
+        return stitcher.stitch((width, height) -> {
+            Bitmap picture = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            bitmap[0] = picture;
+            return (pixels, x, y, w, h) -> {
+                if (mFrontFacing) {
+                    // The preview of a front lens is mirrored, and so is what it saves.
+                    int[] row = new int[w];
+                    for (int r = 0; r < h; r++) {
+                        System.arraycopy(pixels, r * w, row, 0, w);
+                        reverse(row);
+                        picture.setPixels(row, 0, w, width - x - w, y + r, w, 1);
+                    }
+                } else {
+                    picture.setPixels(pixels, 0, w, x, y, w, h);
+                }
+            };
+        });
+    }
+
+    /** The sweep as it was painted while it ran, for when the frames cannot be stitched. */
+    @NonNull
+    private Bitmap paintedPicture(@NonNull SphereCanvas canvas, @NonNull int[] region) {
+        int width = region[2];
+        int height = region[3];
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        int[] row = new int[width];
+        for (int y = 0; y < height; y++) {
+            canvas.readRow(region[1] + y, region[0], width, row, 0, UNPAINTED);
+            if (mFrontFacing) {
+                // The preview of a front lens is mirrored, and so is what it saves.
+                reverse(row);
+            }
+            bitmap.setPixels(row, 0, width, 0, y, width, 1);
+        }
+        return bitmap;
+    }
+
+    /** Writes a picture with its Exif and photo sphere metadata. */
+    @WorkerThread
+    private boolean save(@NonNull Bitmap bitmap, @NonNull GPanoMetadata metadata)
+            throws IOException {
         try (FileOutputStream out = new FileOutputStream(mFile)) {
             if (!bitmap.compress(Bitmap.CompressFormat.JPEG, mQuality, out)) {
                 return false;
@@ -670,7 +771,8 @@ public final class PanoramaSession implements GuideState.Source {
      * left, which viewers do not follow. The heading says where the middle is instead.</p>
      */
     @NonNull
-    private GPanoMetadata metadata(@NonNull SphereCanvas canvas, @NonNull int[] region) {
+    private GPanoMetadata metadata(int fullWidth, int fullHeight, float yawOrigin, int photos,
+            @NonNull int[] region) {
         int width = region[2];
         int height = region[3];
         GPanoMetadata metadata = new GPanoMetadata();
@@ -680,16 +782,16 @@ public final class PanoramaSession implements GuideState.Source {
         metadata.projectionType = GPanoMetadata.EQUIRECTANGULAR;
         metadata.croppedAreaImageWidthPixels = width;
         metadata.croppedAreaImageHeightPixels = height;
-        metadata.fullPanoWidthPixels = canvas.width;
-        metadata.fullPanoHeightPixels = canvas.height;
-        metadata.croppedAreaLeftPixels = (canvas.width - width) / 2;
+        metadata.fullPanoWidthPixels = fullWidth;
+        metadata.fullPanoHeightPixels = fullHeight;
+        metadata.croppedAreaLeftPixels = (fullWidth - width) / 2;
         metadata.croppedAreaTopPixels = region[1];
 
-        float degreesPerPixel = 360f / canvas.width;
-        float middleYaw = canvas.yawOrigin
-                + (region[0] + width / 2f - canvas.width / 2f) * degreesPerPixel;
+        float degreesPerPixel = 360f / fullWidth;
+        float middleYaw = yawOrigin
+                + (region[0] + width / 2f - fullWidth / 2f) * degreesPerPixel;
         // The middle of the full panorama, which is up to half a pixel from the picture's own.
-        float fullMiddleYaw = middleYaw + (canvas.width / 2f
+        float fullMiddleYaw = middleYaw + (fullWidth / 2f
                 - (metadata.croppedAreaLeftPixels + width / 2f)) * degreesPerPixel;
         float offset = mSensor.getHeadingOffset();
         if (!Float.isNaN(offset)) {
@@ -700,13 +802,13 @@ public final class PanoramaSession implements GuideState.Source {
         metadata.posePitchDegrees = 0f;
         metadata.poseRollDegrees = 0f;
         metadata.initialViewPitchDegrees =
-                Math.round(90f - (region[1] + height / 2f) * 180f / canvas.height);
+                Math.round(90f - (region[1] + height / 2f) * 180f / fullHeight);
         metadata.initialViewRollDegrees = 0;
         metadata.initialHorizontalFovDegrees = mUprightHorizontalFov;
         metadata.initialVerticalFovDegrees = mUprightVerticalFov;
         metadata.firstPhotoDate = mFirstPhotoMillis;
         metadata.lastPhotoDate = mLastPhotoMillis;
-        metadata.sourcePhotosCount = canvas.getFramesPainted();
+        metadata.sourcePhotosCount = photos;
         metadata.exposureLockUsed = false;
         metadata.initialCameraDolly = 0f;
         return metadata;
@@ -716,6 +818,40 @@ public final class PanoramaSession implements GuideState.Source {
     private String applicationName() {
         CharSequence label = mContext.getApplicationInfo().loadLabel(mContext.getPackageManager());
         return label == null ? null : label.toString();
+    }
+
+    /** How a frame waiting to be stitched was taken. */
+    private static final class Keyframe {
+        /** The device's rotation when it was taken. */
+        final float[] rotation;
+
+        /** The clockwise turn that stands it upright. */
+        final int sensorRotation;
+
+        /** Whether it came from a lens facing the user. */
+        final boolean frontFacing;
+
+        /** Its width as kept. */
+        final int width;
+
+        /** Its height as kept. */
+        final int height;
+
+        /** Its focal length as the lens publishes it, before any calibration. */
+        final float focal;
+
+        /** When it was taken, in wall-clock milliseconds. */
+        final long millis;
+
+        Keyframe(@NonNull float[] rotation, @NonNull CameraPose pose, float focal, long millis) {
+            this.rotation = rotation.clone();
+            this.sensorRotation = pose.sensorRotation;
+            this.frontFacing = pose.frontFacing;
+            this.width = pose.width;
+            this.height = pose.height;
+            this.focal = focal;
+            this.millis = millis;
+        }
     }
 
     /** A painted frame, kept until the lens is calibrated. */
