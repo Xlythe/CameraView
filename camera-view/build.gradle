@@ -192,11 +192,43 @@ signing {
     sign publishing.publications
 }
 
+// The modules declared below with a version range. A range resolves to the newest version a
+// repository offers, pre-releases included, so for these this library's own builds turn
+// pre-releases down. An exact version another library asks for, such as ML Kit's own beta
+// dependency, is that library's choice and is left alone.
+def rangedModules = [
+        'androidx.legacy:legacy-support-v4',
+        'androidx.core:core',
+        'androidx.annotation:annotation',
+        'androidx.exifinterface:exifinterface',
+        'com.google.mlkit:barcode-scanning',
+        'com.google.guava:guava',
+        'androidx.camera:camera-core',
+        'androidx.camera:camera-camera2',
+        'androidx.camera:camera-lifecycle',
+        'androidx.camera:camera-extensions',
+        'androidx.camera:camera-video',
+        'androidx.activity:activity-compose',
+        'androidx.lifecycle:lifecycle-runtime-ktx',
+        'androidx.media3:media3-transformer',
+        'androidx.media3:media3-effect',
+] as Set
+configurations.configureEach {
+    resolutionStrategy.componentSelection.all { selection ->
+        def candidate = selection.candidate
+        if ("${candidate.group}:${candidate.module}" in rangedModules
+                && candidate.version ==~ /(?i).*[.-](alpha|beta|rc|dev|snapshot|eap)\d*([.-].*)?/) {
+            selection.reject('a pre-release')
+        }
+    }
+}
+
 dependencies {
     // A floor and no ceiling, for everything this library exposes. An exact version in a
     // published library is a version the consuming app has to agree to, and an app that
     // wants a newer androidx than we happened to build against should not have to override
-    // us to get it. The floors are the versions whose APIs the code actually uses.
+    // us to get it. Each floor is the latest stable release, so that is what an app gets unless
+    // it asks for newer.
     api fileTree(include: ['*.jar'], dir: 'libs')
     if (coreOnly) {
         // The core build is the exception: these have a ceiling too, at releases that declare a
@@ -207,10 +239,10 @@ dependencies {
         // Named for CameraFragment's registerReceiver flags, rather than left to whichever
         // version something else happens to bring.
         api 'androidx.core:core:[1.9.0,1.10)'
-        // Named because the library's own sources use these annotations throughout. A plain
-        // jar, so it sets no minSdk; capped only so that it never resolves a pre-release.
-        api 'androidx.annotation:annotation:[1.8.1,1.9)'
-        api 'androidx.exifinterface:exifinterface:[1.3.6,1.4)'
+        // Named because the library's own sources use these annotations throughout. A plain jar
+        // that sets no minSdk, so it needs no ceiling.
+        api 'androidx.annotation:annotation:[1.11.0,)'
+        api 'androidx.exifinterface:exifinterface:[1.3.7,1.4)'
         // ML Kit needs API 21, so the core build only compiles against it and leaves adding it to
         // the app. CameraView#enterBarcodeScanner returns false when it is missing.
         compileOnly 'com.google.mlkit:barcode-scanning:[17.3.0,)'
@@ -218,11 +250,10 @@ dependencies {
     } else {
         api 'com.google.mlkit:barcode-scanning:[17.3.0,)'
         api 'androidx.legacy:legacy-support-v4:[1.0.0,)'
-        // Below 1.5, whose releases need API 24 where this build declares 21, and whose
-        // pre-releases an open range would otherwise pick.
-        api 'androidx.exifinterface:exifinterface:[1.4.1,1.5)'
+        // Below 1.5, whose releases need API 24 where this build declares 21.
+        api 'androidx.exifinterface:exifinterface:[1.4.2,1.5)'
         // CameraX's futures and media3's lists are Guava types, so only this build needs it.
-        api 'com.google.guava:guava:[31.1-android,)'
+        api 'com.google.guava:guava:[33.8.0-android,)'
         // 1.7.0 rather than the older floor the rest keep: the slow-motion and frame-effect
         // paths call SessionConfig and CameraEffect, which arrived in it.
         api 'androidx.camera:camera-core:[1.7.0,)'
@@ -230,8 +261,8 @@ dependencies {
         api 'androidx.camera:camera-lifecycle:[1.7.0,)'
         api 'androidx.camera:camera-extensions:[1.7.0,)'
         api 'androidx.camera:camera-video:[1.7.0,)'
-        api 'androidx.activity:activity-compose:[1.10.1,)'
-        api 'androidx.lifecycle:lifecycle-runtime-ktx:[2.8.7,)'
+        api 'androidx.activity:activity-compose:[1.13.0,)'
+        api 'androidx.lifecycle:lifecycle-runtime-ktx:[2.11.1,)'
         api 'androidx.media3:media3-transformer:[1.11.1,)'
         api 'androidx.media3:media3-effect:[1.11.1,)'
     }
