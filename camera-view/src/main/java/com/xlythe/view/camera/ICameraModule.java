@@ -181,10 +181,40 @@ public abstract class ICameraModule {
      */
     public abstract void open();
 
-    /*
-     * Closes the camera.
+    /**
+     * Closes the camera, without losing a capture the camera has already started.
+     *
+     * <p>A close is not the user cancelling: it is an activity pausing, an app switch, or a lens
+     * toggle, any of which can land a moment after the shutter button. So every backend draws the
+     * same line, at the shutter:</p>
+     *
+     * <ul>
+     *   <li>A picture whose shutter has fired, which is the moment {@link #onShutter} reports, is
+     *       finished. The camera stays open, with its preview stopped, until the picture's frame
+     *       arrives, and is then released; the picture is saved and reported as usual. A camera
+     *       that never delivers the frame is given up on after
+     *       {@link #FINISH_PICTURE_TIMEOUT_MILLIS}, and the picture fails.</li>
+     *   <li>A picture whose shutter has not fired fails at once, through {@link #onImageFailed}.
+     *       It may still be metering for its flash, and finishing it would mean firing the flash
+     *       and holding the camera after the user has gone, for a frame the user never saw
+     *       exposed. An app that heard onShutter therefore always hears about the picture.</li>
+     *   <li>A recording is stopped and finalized before the camera goes, and reported as usual.
+     *   </li>
+     * </ul>
+     *
+     * <p>Opening again while a picture finishes takes effect once the picture is in, since the
+     * camera it would open may be the one still finishing.</p>
      */
     public abstract void close();
+
+    /**
+     * How long a closed camera keeps waiting for a picture it has already exposed.
+     *
+     * <p>A frame normally arrives within a second of its shutter, so this only bounds a camera
+     * that has stopped answering, which would otherwise hold the device open indefinitely.</p>
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    protected static final long FINISH_PICTURE_TIMEOUT_MILLIS = 10_000;
 
     /**
      * Takes a picture. Set a OnImageCapturedListener to be

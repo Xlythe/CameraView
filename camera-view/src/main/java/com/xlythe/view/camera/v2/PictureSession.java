@@ -15,7 +15,6 @@ import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.location.Location;
 import android.media.Image;
-import android.media.ImageReader;
 import android.os.AsyncTask;
 import android.os.Build;
 import android.util.Log;
@@ -145,6 +144,31 @@ class PictureSession extends PreviewSession {
         mPictureSurface.close();
     }
 
+    /**
+     * Whether a picture's shutter has fired and its frame has not yet reached the reader, which
+     * is the picture a closing camera stays open for.
+     */
+    @UiThread
+    boolean isFinishingPicture() {
+        return mPictureSurface.isExposed();
+    }
+
+    /**
+     * Tells a listener once the picture asked for has its frame, or has failed, and the camera
+     * has nothing more to deliver for it. Null stops telling.
+     */
+    @UiThread
+    void setOnPictureSettledListener(@Nullable Runnable listener) {
+        mPictureSurface.mOnSettled = listener;
+    }
+
+    /**
+     * Called as the camera closes with this session kept open for a picture: everything but the
+     * picture stops now. Nothing else is running in a picture session.
+     */
+    @UiThread
+    void onCameraClosing() {}
+
     /** Whether a flash picture may run auto-exposure's metering, with its pre-flash, first. */
     protected boolean metersForFlash() {
         return true;
@@ -231,6 +255,9 @@ class PictureSession extends PreviewSession {
                 @Override
                 public void onCaptureStarted(@NonNull CameraCaptureSession session,
                         @NonNull CaptureRequest request, long timestamp, long frameNumber) {
+                    // Before onShutter, because an app may close the camera from inside it, and
+                    // the close has to see a picture it must wait for.
+                    mPictureSurface.onExposed();
                     onShutter();
                 }
 
@@ -239,6 +266,18 @@ class PictureSession extends PreviewSession {
                         @NonNull CaptureRequest request, @NonNull TotalCaptureResult result) {
                     if (metered) {
                         endMetering(device, session);
+                    }
+                }
+
+                @Override
+                public void onCaptureFailed(@NonNull CameraCaptureSession session,
+                        @NonNull CaptureRequest request, @NonNull CaptureFailure failure) {
+                    // A failed capture may still have pushed its frame, which is then saved as
+                    // usual. One that did not will never deliver it.
+                    if (!failure.wasImageCaptured()) {
+                        Log.w(TAG, "The camera failed to capture the picture: "
+                                + failure.getReason());
+                        mPictureSurface.fail();
                     }
                 }
             }, getHandler());
@@ -367,8 +406,8 @@ class PictureSession extends PreviewSession {
         @Nullable
         private final Location mLocation;
 
-        // The image that was captured
-        private final Image mImage;
+        // The frame that was captured, closed as soon as its bytes are copied out
+        private final SafeCloseImageReader.Frame mFrame;
 
         // The orientation of the image
         private final int mOrientation;
@@ -380,10 +419,10 @@ class PictureSession extends PreviewSession {
         // The file to save the image to
         private final File mFile;
 
-        ImageSaver(@Nullable Location location, Image image, int orientation, boolean reversed,
-                File file) {
+        ImageSaver(@Nullable Location location, SafeCloseImageReader.Frame frame,
+                int orientation, boolean reversed, File file) {
             mLocation = location;
-            mImage = image;
+            mFrame = frame;
             mOrientation = orientation;
             mIsReversed = reversed;
             mFile = file;
@@ -398,7 +437,7 @@ class PictureSession extends PreviewSession {
             try {
                 bytes = getBytes();
             } finally {
-                mImage.close();
+                mFrame.close();
             }
             if (bytes == null) {
                 Log.e(TAG, "Failed to get bytes from image");
@@ -434,7 +473,7 @@ class PictureSession extends PreviewSession {
         }
 
         private byte[] getBytes() {
-            return toByteArray(mImage);
+            return toByteArray(mFrame.getImage());
         }
 
         private static byte[] toByteArray(Image image) {
@@ -542,49 +581,77 @@ class PictureSession extends PreviewSession {
             return Arrays.asList(sizes);
         }
 
-        private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
+        private final SafeCloseImageReader.OnImageAvailableListener mOnImageAvailableListener =
+                new SafeCloseImageReader.OnImageAvailableListener() {
             @Override
-            public void onImageAvailable(final ImageReader reader) {
+            public void onImageAvailable(@NonNull SafeCloseImageReader reader) {
+                SafeCloseImageReader.Frame frame;
                 try {
-                    if (mFile != null) {
-                        Image image = reader.acquireLatestImage();
-                        if (image == null) {
-                            Log.w(TAG, "OnImageAvailable called but no image available");
-                            onImageFailed();
-                            return;
-                        }
-                        final File file = mFile;
-                        new ImageSaver(
-                                getLocation(),
-                                image,
-                                mCameraView.getRelativeCameraOrientation(),
-                                isUsingFrontFacingCamera(),
-                                mFile) {
-                            @UiThread
-                            @Override
-                            protected void onPostExecute(Boolean saved) {
-                                if (Boolean.TRUE.equals(saved)) {
-                                    showImageConfirmation(file);
-                                } else {
-                                    onImageFailed();
-                                }
-                            }
-                        }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
-                        mFile = null;
-                    } else {
-                        Log.w(TAG, "OnImageAvailable called but no file to write to");
-                        onImageFailed();
-                    }
+                    frame = reader.acquireLatestImage();
                 } catch (IllegalStateException e) {
                     Log.e(TAG, "Failed to save image", e);
-                    onImageFailed();
+                    fail();
+                    return;
                 }
+                if (mFile == null) {
+                    Log.w(TAG, "OnImageAvailable called but no file to write to");
+                    // Given back, since a reader holding one frame takes no more.
+                    if (frame != null) {
+                        frame.close();
+                    }
+                    onImageFailed();
+                    return;
+                }
+                if (frame == null) {
+                    Log.w(TAG, "OnImageAvailable called but no image available");
+                    fail();
+                    return;
+                }
+                final File file = mFile;
+                new ImageSaver(mLocation, frame, mOrientation, mIsReversed, file) {
+                    @UiThread
+                    @Override
+                    protected void onPostExecute(Boolean saved) {
+                        if (Boolean.TRUE.equals(saved)) {
+                            showImageConfirmation(file);
+                        } else {
+                            onImageFailed();
+                        }
+                    }
+                }.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+                // Last, since a camera kept open for this frame is released here. The frame is
+                // the saver's now, and keeps the reader alive until it is written.
+                settle();
             }
         };
 
         private final CameraSurface mPreviewSurface;
-        private ImageReader mImageReader;
+        private SafeCloseImageReader mImageReader;
+
+        /** Where the picture asked for is to be written, or null when none is outstanding. */
+        @Nullable
         private File mFile;
+
+        /**
+         * The rotation the picture asked for is tagged with. This, its mirroring and its location
+         * are read when the picture is asked for rather than when its frame arrives, by which
+         * time a lens toggle may have changed every one of them.
+         */
+        private int mOrientation;
+
+        /** Whether the picture asked for came from a front lens, and is flipped to match. */
+        private boolean mIsReversed;
+
+        /** Where the picture asked for was taken, or null to leave it untagged. */
+        @Nullable
+        private Location mLocation;
+
+        /** Whether the camera has started exposing the picture asked for. */
+        private boolean mExposed;
+
+        /** Told once the picture asked for has its frame or has failed, then forgotten. */
+        @Nullable
+        private Runnable mOnSettled;
 
         /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
         private int mImageFormat = IMAGE_FORMAT_DEFAULT;
@@ -610,7 +677,7 @@ class PictureSession extends PreviewSession {
                 // replaced has to be handed back rather than dropped.
                 mImageReader.close();
             }
-            mImageReader = ImageReader.newInstance(
+            mImageReader = new SafeCloseImageReader(
                     getWidth(), getHeight(), mImageFormat, 1 /* maxImages */);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getHandler());
         }
@@ -630,11 +697,47 @@ class PictureSession extends PreviewSession {
 
         void initializePicture(File file) {
             mFile = file;
+            mExposed = false;
+            mOrientation = mCameraView.getRelativeCameraOrientation();
+            mIsReversed = isUsingFrontFacingCamera();
+            mLocation = getLocation();
             if (mFile.exists()) {
                 Log.w(TAG, "File already exists. Deleting.");
                 if (!mFile.delete()) {
                     Log.w(TAG, "Failed to delete existing file.");
                 }
+            }
+        }
+
+        /** The camera has started exposing the picture asked for. */
+        void onExposed() {
+            if (mFile != null) {
+                mExposed = true;
+            }
+        }
+
+        /** Whether the picture asked for has been exposed and its frame has not yet arrived. */
+        boolean isExposed() {
+            return mFile != null && mExposed;
+        }
+
+        /** Gives up on the picture asked for, if one is still outstanding. */
+        void fail() {
+            if (mFile != null) {
+                settle();
+                onImageFailed();
+            }
+        }
+
+        /** Nothing more is coming for the picture asked for. */
+        private void settle() {
+            mFile = null;
+            mExposed = false;
+            mLocation = null;
+            Runnable onSettled = mOnSettled;
+            mOnSettled = null;
+            if (onSettled != null) {
+                onSettled.run();
             }
         }
 
@@ -646,13 +749,12 @@ class PictureSession extends PreviewSession {
         @Override
         void close() {
             if (mImageReader != null) {
+                // Stops new frames only. A frame already handed to a saver keeps the reader's
+                // buffers alive until it is written.
                 mImageReader.close();
                 mImageReader = null;
             }
-            if (mFile != null) {
-                onImageFailed();
-                mFile = null;
-            }
+            fail();
         }
     }
 

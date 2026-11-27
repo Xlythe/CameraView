@@ -153,6 +153,15 @@ class VideoSession extends PictureSession {
         return false;
     }
 
+    /**
+     * The recording ends with the camera, even while the session stays open for a snapshot
+     * whose shutter has fired.
+     */
+    @Override
+    void onCameraClosing() {
+        mVideoSurface.stopRecording();
+    }
+
     @Override
     public void close() {
         super.close();
@@ -323,6 +332,9 @@ class VideoSession extends PictureSession {
         private boolean mIsInitialized;
         private boolean mAwaitingRecording;
 
+        /** Whether the recording has been stopped, so a second stop does not report it again. */
+        private boolean mStopped;
+
         private MediaRecorder mMediaRecorder;
 
         @NonNull
@@ -440,6 +452,10 @@ class VideoSession extends PictureSession {
         }
 
         void stopRecording() {
+            if (mStopped) {
+                return;
+            }
+            mStopped = true;
             if (mAwaitingRecording) {
                 mAwaitingRecording = false;
                 if (DEBUG) Log.d(TAG, "Cancelled recording before it started");

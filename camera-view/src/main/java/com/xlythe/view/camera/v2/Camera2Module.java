@@ -52,6 +52,7 @@ import androidx.annotation.VisibleForTesting;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.UiThread;
 
 import static java.lang.String.format;
 
@@ -315,6 +316,10 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     private CameraDevice mPendingCloseDevice;
 
+    /** A camera kept open after it was closed, for a picture whose shutter had fired, or null. */
+    @Nullable
+    private PictureDrain mPictureDrain;
+
     private CameraDevice.StateCallback createStateCallback(final int generation) {
         return new CameraDevice.StateCallback() {
             @Override
@@ -371,6 +376,10 @@ public class Camera2Module extends ICameraModule {
     private void handleCameraFailure(@NonNull CameraDevice cameraDevice, int generation,
             String message) {
         Log.e(TAG, message);
+        if (mPictureDrain != null && mPictureDrain.mDevice == cameraDevice) {
+            // A camera that has failed will not deliver the picture it was kept open for.
+            mPictureDrain.finish();
+        }
         cameraDevice.close();
         if (generation != mGeneration) {
             Log.w(TAG, "Ignoring a stale Camera2 failure callback");
@@ -625,6 +634,40 @@ public class Camera2Module extends ICameraModule {
         mIsRecording = false;
     }
 
+    /**
+     * Closes the camera as {@link #closeCameraResources} does, except under a picture whose
+     * shutter has fired, which the camera stays open for. See {@link ICameraModule#close}.
+     *
+     * <p>Only for a camera being put away. One that has failed will not deliver the picture, and
+     * is closed outright.</p>
+     */
+    private void closeCameraFinishingPicture() {
+        CameraCaptureSession captureSession = mCaptureSession;
+        Session activeSession = mActiveSession;
+        CameraDevice cameraDevice = mCameraDevice;
+        if (cameraDevice == null || captureSession == null
+                || !(activeSession instanceof PictureSession)
+                || !((PictureSession) activeSession).isFinishingPicture()) {
+            closeCameraResources();
+            return;
+        }
+        if (mPictureDrain != null) {
+            mPictureDrain.finish();
+        }
+        Session registeringSession = mRegisteringSession;
+        mCaptureSession = null;
+        mRegisteringSession = null;
+        mActiveSession = null;
+        mCameraDevice = null;
+        if (registeringSession != activeSession) {
+            closeSession(registeringSession);
+        }
+        mPictureDrain = new PictureDrain(cameraDevice, captureSession, (PictureSession) activeSession);
+        mPictureDrain.start();
+        mIsPaused = false;
+        mIsRecording = false;
+    }
+
     @RequiresPermission(Manifest.permission.CAMERA)
     @Override
     public void open() {
@@ -636,7 +679,15 @@ public class Camera2Module extends ICameraModule {
         mReopenAttempts = 0;
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
-        openCamera(++mGeneration);
+        int generation = ++mGeneration;
+        if (mPictureDrain != null) {
+            // The device this opens may be the one still finishing a picture, so it waits for
+            // that one to close, as a lens switch does.
+            mPendingOpenGeneration = generation;
+            mPendingCloseDevice = mPictureDrain.mDevice;
+        } else {
+            openCamera(generation);
+        }
     }
 
     @Override
@@ -647,7 +698,7 @@ public class Camera2Module extends ICameraModule {
         mPendingCloseDevice = null;
         mIsFocusPending = false;
         mGeneration++;
-        closeCameraResources();
+        closeCameraFinishingPicture();
     }
 
     @Override
@@ -719,13 +770,18 @@ public class Camera2Module extends ICameraModule {
     private void switchCamera(String cameraId) {
         boolean shouldReopen = mIsOpen;
         CameraDevice deviceToClose = mCameraDevice;
+        if (deviceToClose == null && mPictureDrain != null) {
+            // Still finishing a picture from before, and not to be opened over.
+            deviceToClose = mPictureDrain.mDevice;
+        }
         boolean mustAwaitDeviceClose = deviceToClose != null;
         mIsOpen = false;
         mReopenAttempts = 0;
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         mGeneration++;
-        closeCameraResources();
+        // The picture keeps the lens it was exposed on, and the new lens opens once it is in.
+        closeCameraFinishingPicture();
         mActiveCamera = cameraId;
         if (shouldReopen) {
             mIsOpen = true;
@@ -1787,6 +1843,73 @@ public class Camera2Module extends ICameraModule {
                 mActiveSession.onLayoutChanged();
             } catch (CameraAccessException | RuntimeException e) {
                 Log.e(TAG, "Failed to adjust the camera after a layout change", e);
+            }
+        }
+    }
+
+    /**
+     * A camera that has been closed, kept open for a picture whose shutter had fired.
+     *
+     * <p>Closing the device discards a capture in flight, so the device, its capture session and
+     * the picture session all stay open, the preview stopped, until the frame reaches its reader
+     * or the camera gives up on it. Then they close as they would have. Runs as its own timeout.
+     * </p>
+     */
+    private final class PictureDrain implements Runnable {
+        /** The device the picture is coming from. */
+        final CameraDevice mDevice;
+
+        /** The configured session the picture's request went to. */
+        private final CameraCaptureSession mCaptureSession;
+
+        /** The session whose reader the picture arrives in. */
+        private final PictureSession mSession;
+
+        PictureDrain(@NonNull CameraDevice device, @NonNull CameraCaptureSession captureSession,
+                @NonNull PictureSession session) {
+            mDevice = device;
+            mCaptureSession = captureSession;
+            mSession = session;
+        }
+
+        @UiThread
+        void start() {
+            mSession.setOnPictureSettledListener(this::finish);
+            mSession.onCameraClosing();
+            try {
+                mCaptureSession.stopRepeating();
+            } catch (CameraAccessException | RuntimeException e) {
+                Log.w(TAG, "Failed to stop the preview of a closing camera", e);
+            }
+            mHandler.postDelayed(this, FINISH_PICTURE_TIMEOUT_MILLIS);
+        }
+
+        @UiThread
+        @Override
+        public void run() {
+            Log.w(TAG, "A closed camera never delivered the picture it was kept open for");
+            finish();
+        }
+
+        /** Closes everything, failing the picture if its frame never came. */
+        @UiThread
+        void finish() {
+            if (mPictureDrain != this) {
+                return;
+            }
+            mPictureDrain = null;
+            mHandler.removeCallbacks(this);
+            mSession.setOnPictureSettledListener(null);
+            try {
+                mCaptureSession.close();
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Failed to close Camera2 capture session", e);
+            }
+            closeSession(mSession);
+            try {
+                mDevice.close();
+            } catch (RuntimeException e) {
+                Log.e(TAG, "Failed to close Camera2 device", e);
             }
         }
     }
