@@ -4,6 +4,7 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
 import android.content.Context;
+import android.graphics.ColorSpace;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
@@ -17,6 +18,7 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
+import android.hardware.camera2.params.ColorSpaceProfiles;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
@@ -782,7 +784,7 @@ public class Camera2Module extends ICameraModule {
             device.createCaptureSession(surfaces, callback, mHandler);
             return;
         }
-        android.graphics.ColorSpace.Named named = namedColorSpace(getColorSpace());
+        ColorSpace.Named named = namedColorSpace(getColorSpace());
         if (named == null) {
             device.createCaptureSession(surfaces, callback, mHandler);
             return;
@@ -1552,12 +1554,12 @@ public class Camera2Module extends ICameraModule {
             // would silently produce sRGB anyway.
             return false;
         }
-        android.graphics.ColorSpace.Named named = namedColorSpace(colorSpace);
+        ColorSpace.Named named = namedColorSpace(colorSpace);
         if (named == null) {
             return false;
         }
         try {
-            android.hardware.camera2.params.ColorSpaceProfiles profiles =
+            ColorSpaceProfiles profiles =
                     mCameraManager.getCameraCharacteristics(getActiveCamera())
                             .get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES);
             return profiles != null
@@ -1588,13 +1590,12 @@ public class Camera2Module extends ICameraModule {
      */
     @RequiresApi(34)
     @Nullable
-    private static android.graphics.ColorSpace.Named namedColorSpace(
-            CameraView.ColorSpace colorSpace) {
+    private static ColorSpace.Named namedColorSpace(CameraView.ColorSpace colorSpace) {
         switch (colorSpace) {
             case DISPLAY_P3:
-                return android.graphics.ColorSpace.Named.DISPLAY_P3;
+                return ColorSpace.Named.DISPLAY_P3;
             case SRGB:
-                return android.graphics.ColorSpace.Named.SRGB;
+                return ColorSpace.Named.SRGB;
             default:
                 return null;
         }
@@ -1738,8 +1739,8 @@ public class Camera2Module extends ICameraModule {
         if (colorSpace == CameraView.ColorSpace.SRGB) {
             return true;
         }
-        android.graphics.ColorSpace.Named named = namedColorSpace(colorSpace);
-        android.hardware.camera2.params.ColorSpaceProfiles profiles =
+        ColorSpace.Named named = namedColorSpace(colorSpace);
+        ColorSpaceProfiles profiles =
                 characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_COLOR_SPACE_PROFILES);
         return named != null && profiles != null
                 && profiles.getSupportedColorSpaces(ImageFormat.JPEG_R).contains(named);

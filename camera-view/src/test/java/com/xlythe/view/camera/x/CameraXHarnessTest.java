@@ -8,19 +8,21 @@ import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
+import android.graphics.Rect;
 
+import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAnnouncingCameraManager;
 import com.xlythe.view.camera.shadow.ShadowListingCamcorderProfile;
 
 import org.junit.Test;
-
-import java.io.File;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+
+import java.io.File;
 
 /**
  * The CameraX backend driven against Robolectric's camera2 shadows.
@@ -219,8 +221,7 @@ public class CameraXHarnessTest {
         // offering the gesture. The answer depends on the bound camera, so asking is a question
         // put to it rather than a constant - and must not disturb what is bound.
         module.isFocusSupported();
-        module.focus(new android.graphics.Rect(-100, -100, 100, 100),
-                new android.graphics.Rect(-200, -200, 200, 200));
+        module.focus(new Rect(-100, -100, 100, 100), new Rect(-200, -200, 200, 200));
         FakeCameraXHost.idle();
         assertTrue("asking about focus must not cost the bind", module.isCameraBoundForTesting());
     }
@@ -236,8 +237,7 @@ public class CameraXHarnessTest {
      */
     private static void exerciseAnalysis(CameraXModule module) {
         assertFalse("without ML Kit the request has to be declined, not thrown",
-                module.startBarcodeScanner(
-                        barcodes -> {}, com.xlythe.view.camera.Barcode.Format.QR_CODE));
+                module.startBarcodeScanner(barcodes -> {}, Barcode.Format.QR_CODE));
 
         // And a stop that matches a start that never happened is harmless.
         module.stopBarcodeScanner();

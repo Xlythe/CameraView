@@ -40,7 +40,7 @@ public class EffectFragment extends CameraFragment {
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container,
             @Nullable Bundle savedInstanceState) {
         View view = inflater.inflate(R.layout.fragment_effect, container, false);
-        mCameraView = view.findViewById(com.xlythe.view.camera.R.id.camera);
+        mCameraView = view.findViewById(R.id.camera);
         // Set before the camera opens, so the first configuration already carries the effect
         // rather than the camera being configured and then configured again.
         mCameraView.setFrameRenderer(new BandRenderer());

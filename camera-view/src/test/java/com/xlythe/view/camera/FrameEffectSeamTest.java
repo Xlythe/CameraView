@@ -14,6 +14,7 @@ import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.gl.GlFrame;
 import com.xlythe.view.camera.shadow.ShadowAnnouncingCameraManager;
+import com.xlythe.view.camera.v2.FakeCamera2;
 
 import org.junit.After;
 import org.junit.Before;
@@ -41,7 +42,7 @@ public class FrameEffectSeamTest {
     @Before
     public void setUp() {
         context = RuntimeEnvironment.getApplication();
-        com.xlythe.view.camera.v2.FakeCamera2.addBackAndFrontCameras(context);
+        FakeCamera2.addBackAndFrontCameras(context);
     }
 
     @After
