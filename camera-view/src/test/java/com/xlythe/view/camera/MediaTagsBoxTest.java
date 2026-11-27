@@ -37,6 +37,7 @@ import org.robolectric.RobolectricTestRunner;
 import java.io.File;
 import java.io.IOException;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.TimeZone;
 
@@ -242,7 +243,7 @@ public class MediaTagsBoxTest {
     private static String sample(byte[] file) {
         int at = Bytes.indexOf(file, ascii("stco"), 0);
         long offset = Bytes.u32(file, at + 12);
-        return new String(file, (int) offset, 6, java.nio.charset.StandardCharsets.ISO_8859_1);
+        return new String(file, (int) offset, 6, StandardCharsets.ISO_8859_1);
     }
 
     @Test
@@ -382,21 +383,50 @@ public class MediaTagsBoxTest {
         assertNull(MediaTags.open(file).getXmp("http://example.com/ns/", "Rating"));
     }
 
+    /** Fragments that count their data from themselves are pushed along when the moov grows. */
     @Test
-    public void aFragmentedMovieIsNeverMoved() throws IOException {
+    public void aFragmentedMovieIsPushedAlongRatherThanMoved() throws IOException {
         byte[] ftyp = ftyp("isom", "isom");
         byte[] moov = box("moov", mvhd(0), box("mvex", fullBox("trex", 0, 0, new byte[20])));
-        File file = file(concat(ftyp, moov, box("moof", new byte[8]), box("mdat",
-                new byte[8])), ".mp4");
+        byte[] moof = box("moof", box("traf", fullBox("tfhd", 0, 0x020000, u32(1))));
+        byte[] fragment = concat(moof, box("mdat", ascii("FRAGMENT")));
+        // A random access index, which says where each fragment starts, at the end.
+        long moofAt = ftyp.length + moov.length;
+        byte[] tfra = fullBox("tfra", 1, 0, u32(1), u32(0), u32(1), u32(0), u32(0),
+                u32(moofAt >> 32), u32(moofAt), new byte[3]);
+        byte[] mfra = box("mfra", tfra, fullBox("mfro", 0, 0, u32(0)));
+        File file = file(concat(ftyp, moov, fragment, mfra), ".mp4");
         MediaTags tags = MediaTags.open(file);
         assertTrue(tags.setTitle("Too big for its place"));
-        try {
-            tags.save();
-            fail("A fragmented movie's moov has to stay ahead of its fragments");
-        } catch (IOException expected) {
-            // No room, and no moving.
-        }
-        assertNull(MediaTags.open(file).getTitle());
+        tags.save();
+
+        assertEquals("Too big for its place", MediaTags.open(file).getTitle());
+        byte[] saved = read(file);
+        int newMoof = Bytes.indexOf(saved, ascii("moof"), 0) - 4;
+        // The moov still leads the fragments, and the fragment is whole, just further along.
+        assertTrue(Bytes.indexOf(saved, ascii("moov"), 0) < newMoof);
+        assertEquals(new String(fragment, StandardCharsets.ISO_8859_1),
+                new String(saved, newMoof, fragment.length,
+                        StandardCharsets.ISO_8859_1));
+        int entry = Bytes.indexOf(saved, ascii("tfra"), 0) + 4 + 16 + 8;
+        assertEquals(newMoof, (Bytes.u32(saved, entry) << 32) | Bytes.u32(saved, entry + 4));
+    }
+
+    /** Fragments that count their data from the file's start cannot move, so none is written. */
+    @Test
+    public void aFragmentedMovieThatCannotMoveIsReadOnly() throws IOException {
+        byte[] ftyp = ftyp("isom", "isom");
+        byte[] moov = box("moov", mvhd(0), box("mvex", fullBox("trex", 0, 0, new byte[20])));
+        byte[] moof = box("moof", box("traf", fullBox("tfhd", 0, 0x000001, u32(1),
+                u32(0), u32(0))));
+        File file = file(concat(ftyp, moov, moof, box("mdat", new byte[8])), ".mp4");
+        MediaTags tags = MediaTags.open(file);
+        assertTrue(tags.isReadOnly());
+        assertFalse(tags.setTitle("Nowhere to go"));
+
+        byte[] indexed = concat(ftyp, box("sidx", new byte[24]), moov,
+                box("moof", new byte[8]), box("mdat", new byte[8]));
+        assertTrue(MediaTags.open(file(indexed, ".mp4")).isReadOnly());
     }
 
     @Test
