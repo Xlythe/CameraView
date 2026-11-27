@@ -39,6 +39,12 @@ public final class FakeCamera2 {
     static final Size SIZE_720P = new Size(1280, 720);
     static final Size SIZE_480P = new Size(640, 480);
 
+    /** What {@link #addUltraHighResolutionCamera} offers with its sensor read out unbinned. */
+    static final Size SIZE_UNBINNED = new Size(8000, 6000);
+
+    /** The unbinned sensor's active array, twice the binned one in each direction. */
+    static final Rect UNBINNED_ACTIVE_ARRAY = new Rect(0, 0, 8000, 6000);
+
     /**
      * JPEG's internal HAL format.
      *
@@ -172,8 +178,36 @@ public final class FakeCamera2 {
                 CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL);
     }
 
-    static void addCamera(Context context, String id, int lensFacing, int sensorOrientation,
-            int deviceType, boolean faceDetection, Integer hardwareLevel) {
+    /**
+     * Registers a back camera whose sensor can also be read out unbinned, at {@link
+     * #SIZE_UNBINNED}, and a front camera that cannot. API 31 and up only.
+     *
+     * @param capability whether the back camera reports the ultra high resolution capability. A
+     *     camera can publish the unbinned map without it, as a placeholder.
+     */
+    static void addUltraHighResolutionCamera(Context context, boolean capability) {
+        CameraCharacteristics characteristics = addCamera(context, BACK_ID,
+                CameraMetadata.LENS_FACING_BACK, 90, CameraMetadata.INFO_DEVICE_TYPE_BUILT_IN,
+                true /* faceDetection */, CameraMetadata.INFO_SUPPORTED_HARDWARE_LEVEL_FULL);
+        ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
+        shadow.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, capability
+                ? new int[] {
+                        CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
+                        CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_ULTRA_HIGH_RESOLUTION_SENSOR}
+                : new int[] {CameraMetadata.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
+        StreamConfigurationMapBuilder unbinned = StreamConfigurationMapBuilder.newBuilder();
+        unbinned.addOutputSize(SIZE_UNBINNED);
+        unbinned.addOutputSize(HAL_PIXEL_FORMAT_BLOB, SIZE_UNBINNED);
+        shadow.set(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP_MAXIMUM_RESOLUTION,
+                unbinned.build());
+        shadow.set(CameraCharacteristics.SENSOR_INFO_ACTIVE_ARRAY_SIZE_MAXIMUM_RESOLUTION,
+                UNBINNED_ACTIVE_ARRAY);
+        addCamera(context, FRONT_ID, CameraMetadata.LENS_FACING_FRONT, 270);
+        addCamcorderProfiles();
+    }
+
+    static CameraCharacteristics addCamera(Context context, String id, int lensFacing,
+            int sensorOrientation, int deviceType, boolean faceDetection, Integer hardwareLevel) {
         CameraCharacteristics characteristics = ShadowCameraCharacteristics.newCameraCharacteristics();
         ShadowCameraCharacteristics shadow = Shadow.extract(characteristics);
 
@@ -214,6 +248,7 @@ public final class FakeCamera2 {
         ShadowCameraManager shadowManager =
                 Shadow.extract(context.getSystemService(CameraManager.class));
         shadowManager.addCamera(id, characteristics);
+        return characteristics;
     }
 
     /**

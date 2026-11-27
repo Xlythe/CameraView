@@ -7,6 +7,7 @@ import android.graphics.YuvImage;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CameraDevice;
+import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
@@ -27,11 +28,13 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.UiThread;
 import androidx.annotation.WorkerThread;
 
@@ -73,7 +76,8 @@ class PictureSession extends PreviewSession {
         // then capped to it.
         onPreviewInitialized(map);
         if (hasStillCapture()) {
-            mPictureSurface.initialize(map, maxPictureSize(), allowsUltraHdr());
+            mPictureSurface.initialize(
+                    map, maxPictureSize(), allowsUltraHdr(), allowsMaximumResolution());
         }
     }
 
@@ -109,6 +113,14 @@ class PictureSession extends PreviewSession {
         return true;
     }
 
+    /**
+     * Whether a MAX still may read the sensor out unbinned, on a camera that offers it. The
+     * readout stalls the repeating frames while it happens, which a recording cannot afford.
+     */
+    protected boolean allowsMaximumResolution() {
+        return true;
+    }
+
     @NonNull
     @Override
     public List<Surface> getSurfaces() {
@@ -137,11 +149,19 @@ class PictureSession extends PreviewSession {
             builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
             applyFlash(builder);
             builder.addTarget(mPictureSurface.getSurface());
-            if (mMeteringRectangle != null) {
-                builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
-                builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
+            MeteringRectangle metering = mMeteringRectangle;
+            Rect cropRegion = mCropRegion;
+            if (Build.VERSION.SDK_INT >= 31 && mPictureSurface.isMaximumResolution()) {
+                builder.set(CaptureRequest.SENSOR_PIXEL_MODE,
+                        CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
+                metering = toMaximumResolution(metering);
+                cropRegion = toMaximumResolution(cropRegion);
             }
-            applyZoom(builder);
+            if (metering != null) {
+                builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{metering});
+                builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{metering});
+            }
+            applyZoom(builder, cropRegion);
             builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
             session.capture(builder.build(), null /* callback */, getHandler());
         } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
@@ -149,6 +169,21 @@ class PictureSession extends PreviewSession {
             Log.e(TAG, "Failed to create capture request", e);
             onImageFailed();
         }
+    }
+
+    /**
+     * A metering region moved onto the unbinned sensor, or null when it cannot be: a request in
+     * maximum resolution mode reads its regions against the larger array.
+     */
+    @RequiresApi(31)
+    @Nullable
+    private MeteringRectangle toMaximumResolution(@Nullable MeteringRectangle metering) {
+        if (metering == null) {
+            return null;
+        }
+        Rect region = toMaximumResolution(metering.getRect());
+        return region == null ? null
+                : new MeteringRectangle(region, metering.getMeteringWeight());
     }
 
     /**
@@ -336,6 +371,37 @@ class PictureSession extends PreviewSession {
             return Arrays.asList(sizes);
         }
 
+        /**
+         * The JPEG sizes a MAX still gains from reading the sensor out unbinned. Empty for any
+         * other quality or format: the guaranteed unbinned combination is a JPEG beside a
+         * preview, so an Ultra HDR still stays binned.
+         */
+        private List<Size> getMaximumResolutionSizes(List<Size> binned) {
+            List<Size> unbinned = new ArrayList<>();
+            if (getQuality() != CameraView.Quality.MAX || mImageFormat != ImageFormat.JPEG) {
+                return unbinned;
+            }
+            StreamConfigurationMap map = mCameraView.getMaximumResolutionMap();
+            if (map == null) {
+                return unbinned;
+            }
+            for (Size[] group : new Size[][] {
+                    map.getOutputSizes(ImageFormat.JPEG),
+                    map.getHighResolutionOutputSizes(ImageFormat.JPEG)}) {
+                if (group == null) {
+                    continue;
+                }
+                for (Size size : group) {
+                    // A size both maps list is configured for the binned mode, so it is never a
+                    // reason to switch.
+                    if (!binned.contains(size) && !unbinned.contains(size)) {
+                        unbinned.add(size);
+                    }
+                }
+            }
+            return unbinned;
+        }
+
         private final ImageReader.OnImageAvailableListener mOnImageAvailableListener = new ImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(final ImageReader reader) {
@@ -383,6 +449,12 @@ class PictureSession extends PreviewSession {
         /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
         private int mImageFormat = IMAGE_FORMAT_DEFAULT;
 
+        /**
+         * Whether {@link #mImageReader} has a size only the unbinned sensor offers, so a capture
+         * into it has to ask for maximum resolution mode. See {@link PictureSession#takePicture}.
+         */
+        private boolean mMaximumResolution;
+
         PictureSurface(Camera2Module camera2Module, CameraSurface previewSurface) {
             super(camera2Module);
             mPreviewSurface = previewSurface;
@@ -390,14 +462,21 @@ class PictureSession extends PreviewSession {
 
         @Override
         void initialize(StreamConfigurationMap map) {
-            initialize(map, null /* maxSize */, true /* ultraHdrAllowed */);
+            initialize(map, null /* maxSize */, true /* ultraHdrAllowed */,
+                    true /* maximumResolutionAllowed */);
         }
 
-        void initialize(
-                StreamConfigurationMap map, @Nullable Size maxSize, boolean ultraHdrAllowed) {
+        void initialize(StreamConfigurationMap map, @Nullable Size maxSize,
+                boolean ultraHdrAllowed, boolean maximumResolutionAllowed) {
             if (DEBUG) Log.d(TAG, "Initializing PictureSession");
             mImageFormat = chooseImageFormat(ultraHdrAllowed);
-            super.initialize(chooseSize(within(getSizes(map), maxSize), mPreviewSurface.mSize));
+            List<Size> sizes = getSizes(map);
+            List<Size> unbinned = maximumResolutionAllowed
+                    ? getMaximumResolutionSizes(sizes) : new ArrayList<>();
+            List<Size> choices = new ArrayList<>(sizes);
+            choices.addAll(unbinned);
+            super.initialize(chooseSize(within(choices, maxSize), mPreviewSurface.mSize));
+            mMaximumResolution = unbinned.contains(mSize);
             if (mImageReader != null) {
                 // Initialized again - a session can be, when the camera is reconfigured - and an
                 // ImageReader holds native buffers the collector cannot reclaim, so the one being
@@ -430,6 +509,10 @@ class PictureSession extends PreviewSession {
                     Log.w(TAG, "Failed to delete existing file.");
                 }
             }
+        }
+
+        boolean isMaximumResolution() {
+            return mMaximumResolution;
         }
 
         @Override

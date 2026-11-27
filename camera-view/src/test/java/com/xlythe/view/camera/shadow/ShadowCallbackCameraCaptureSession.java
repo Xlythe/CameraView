@@ -12,6 +12,8 @@ import org.robolectric.annotation.Resetter;
 import org.robolectric.shadows.ShadowCameraCaptureSessionImpl;
 import org.robolectric.util.ReflectionHelpers;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -34,12 +36,20 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     private static boolean sDeliverCallbacks = true;
     private static final AtomicInteger sCompletedCaptures = new AtomicInteger();
     private static final AtomicInteger sFrameNumber = new AtomicInteger();
+    private static final List<CaptureRequest> sCaptureRequests = new ArrayList<>();
 
     @RealObject private CameraCaptureSession realSession;
 
     /** Turns delivery off, for a test that wants the old do-nothing behavior. */
     public static void setDeliverCallbacks(boolean deliverCallbacks) {
         sDeliverCallbacks = deliverCallbacks;
+    }
+
+    /** Every one-off request a session was asked to capture, oldest first. */
+    public static List<CaptureRequest> getCaptureRequests() {
+        synchronized (sCaptureRequests) {
+            return new ArrayList<>(sCaptureRequests);
+        }
     }
 
     /** How many captures have been reported complete. */
@@ -52,6 +62,9 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         sDeliverCallbacks = true;
         sCompletedCaptures.set(0);
         sFrameNumber.set(0);
+        synchronized (sCaptureRequests) {
+            sCaptureRequests.clear();
+        }
     }
 
     @Implementation
@@ -68,6 +81,9 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
             CameraCaptureSession.CaptureCallback callback, Handler handler)
             throws android.hardware.camera2.CameraAccessException {
         int sequenceId = super.capture(request, callback, handler);
+        synchronized (sCaptureRequests) {
+            sCaptureRequests.add(request);
+        }
         deliver(request, callback, handler);
         return sequenceId;
     }
