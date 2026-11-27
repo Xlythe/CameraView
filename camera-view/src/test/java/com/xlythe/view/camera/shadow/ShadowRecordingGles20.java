@@ -346,6 +346,23 @@ public class ShadowRecordingGles20 {
     }
 
     @Implementation
+    protected static void glUniform2f(int location, float x, float y) {
+        recordUniform(location, new float[] {x, y}, 0, 2);
+    }
+
+    /** Answers the framebuffer bound and the viewport, which a renderer saves and restores. */
+    @Implementation
+    protected static void glGetIntegerv(int pname, int[] params, int offset) {
+        synchronized (sLock) {
+            if (pname == GLES20.GL_FRAMEBUFFER_BINDING) {
+                params[offset] = sFramebufferBound;
+            } else if (pname == GLES20.GL_VIEWPORT) {
+                System.arraycopy(sViewport, 0, params, offset, sViewport.length);
+            }
+        }
+    }
+
+    @Implementation
     protected static void glTexImage2D(int target, int level, int internalformat, int width,
             int height, int border, int format, int type, Buffer pixels) {
         byte[] bytes = null;
