@@ -551,7 +551,7 @@ class VideoSession extends PictureSession {
                 mOrientationHint = mCameraView.getRelativeCameraOrientation();
                 mMediaRecorder.setOrientationHint(mOrientationHint);
 
-                Location location = getLocation(getContext());
+                Location location = getLocation();
                 if (location != null) {
                     mMediaRecorder.setLocation((float) location.getLatitude(), (float) location.getLongitude());
                 }

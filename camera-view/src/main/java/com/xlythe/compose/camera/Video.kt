@@ -1,5 +1,6 @@
 package com.xlythe.compose.camera
 
+import android.net.Uri
 import android.util.Log
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -55,6 +56,7 @@ private class VideoControllerImpl(
  * @param loop If the video should loop after completing.
  * @param volume The volume from 0.0f to 1.0f.
  * @param file The file to play.
+ * @param uri The uri to play, such as the one [Camera]'s onVideoSaved reports.
  * @param stream The stream to play.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
  *  * {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
@@ -66,6 +68,7 @@ fun Video(
     loop: Boolean = false,
     volume: Float = 1f,
     file: File? = null,
+    uri: Uri? = null,
     stream: VideoStream? = null,
     controller: MutableState<VideoController?>,
     onCompletion: () -> Unit = {},
@@ -129,6 +132,9 @@ fun Video(
         view.setVolume(volume)
         if (file != null) {
             view.file = file
+        }
+        if (uri != null) {
+            view.setUri(uri)
         }
         if (stream != null) {
             view.stream = stream
