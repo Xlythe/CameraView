@@ -1,5 +1,6 @@
 package com.xlythe.view.camera.shadow;
 
+import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
@@ -150,7 +151,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     @Implementation
     protected int setRepeatingRequest(CaptureRequest request,
             CameraCaptureSession.CaptureCallback callback, Handler handler)
-            throws android.hardware.camera2.CameraAccessException {
+            throws CameraAccessException {
         int sequenceId = super.setRepeatingRequest(request, callback, handler);
         sRepeatingRequests.add(request);
         sNextRepeatingFrame = () -> deliver(request, callback, handler);
@@ -161,7 +162,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     @Implementation
     protected int capture(CaptureRequest request,
             CameraCaptureSession.CaptureCallback callback, Handler handler)
-            throws android.hardware.camera2.CameraAccessException {
+            throws CameraAccessException {
         int sequenceId = super.capture(request, callback, handler);
         sCaptures.add(request);
         if (sHoldCaptures) {

@@ -369,7 +369,7 @@ private class CameraControllerImpl(
         val requested = if (formats.isNotEmpty()) {
             formats
         } else {
-            intArrayOf(com.xlythe.view.camera.Barcode.Format.QR_CODE)
+            intArrayOf(Barcode.Format.QR_CODE)
         }
         val rest = if (requested.size > 1) {
             requested.sliceArray(1 until requested.size)
