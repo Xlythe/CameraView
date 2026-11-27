@@ -48,6 +48,7 @@ import com.xlythe.view.camera.ZoomMath;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderThread;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.LensCalibration;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
@@ -360,6 +361,12 @@ public class Camera2Module extends ICameraModule {
     private boolean mGlUnavailable;
 
     /**
+     * The open camera's calibration and zoom, for a renderer to project with. Kept up to date
+     * whether or not anything is drawing, so an effect that starts later finds it ready.
+     */
+    private final LensCalibration.Geometry mLensGeometry = new LensCalibration.Geometry();
+
+    /**
      * Whether the recording being made, or the last one made, is mirrored in the file.
      *
      * <p>Decided by each recording rather than once for the camera, because a front recording
@@ -420,6 +427,7 @@ public class Camera2Module extends ICameraModule {
             FrameRenderThread effect = new FrameRenderThread("CameraViewCamera2Renderer");
             effect.setCameraTextureProvider(getCameraTextureProvider());
             effect.setFrameRenderer(getFrameRenderer());
+            effect.setGeometrySource(mLensGeometry);
             if (!effect.start()) {
                 // A device whose driver will not give us a context is a device the camera still
                 // has to work on, so the effect is refused and not offered again.
@@ -817,6 +825,7 @@ public class Camera2Module extends ICameraModule {
             if (map == null) {
                 throw new IllegalStateException("Camera has no stream configuration map");
             }
+            mLensGeometry.setCalibration(LensCalibration.from(characteristics));
             session.initialize(map);
 
             // Now, with all of our surfaces, we'll ask for a new session
@@ -1408,6 +1417,9 @@ public class Camera2Module extends ICameraModule {
     private void applyZoom(@NonNull Session session) throws CameraAccessException {
         CameraCharacteristics characteristics =
                 mCameraManager.getCameraCharacteristics(getActiveCamera());
+        // The ratio means the same whether the camera zooms by ratio or by a centred crop, so
+        // that is what a renderer projects with either way.
+        mLensGeometry.setZoomRatio(mZoomRatio);
         if (zoomRatioRange(characteristics) != null) {
             session.setZoomRatio(mZoomRatio);
             session.setCropRegion(null);
@@ -1818,15 +1830,22 @@ public class Camera2Module extends ICameraModule {
             SizeF sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
             float[] focalLengths =
                     characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
-            if (sensor == null || focalLengths == null || focalLengths.length == 0) {
-                return 0f;
+            // The calibrated focal length where the camera publishes one, since that is what the
+            // lens actually does rather than what it was designed to.
+            LensCalibration calibration = LensCalibration.from(characteristics);
+            float full = calibration == null ? 0f : calibration.fieldOfViewDegrees(horizontal);
+            if (full <= 0f) {
+                if (sensor == null || focalLengths == null || focalLengths.length == 0) {
+                    return 0f;
+                }
+                // The first focal length, not the shortest: a zoom ratio of one means the lens
+                // the camera uses by default, and that is the one this array leads with. On a
+                // logical camera the shortest belongs to the ultra-wide, which the ratio reaches
+                // by going below one - so taking it here and applying the ratio would count it
+                // twice.
+                full = TransformMath.fieldOfViewDegrees(
+                        horizontal ? sensor.getWidth() : sensor.getHeight(), focalLengths[0]);
             }
-            // The first focal length, not the shortest: a zoom ratio of one means the lens the
-            // camera uses by default, and that is the one this array leads with. On a logical
-            // camera the shortest belongs to the ultra-wide, which the ratio reaches by going
-            // below one - so taking it here and then applying the ratio would count it twice.
-            float full = TransformMath.fieldOfViewDegrees(
-                    horizontal ? sensor.getWidth() : sensor.getHeight(), focalLengths[0]);
             // The ratio means the same thing whether the camera zooms by ratio or by crop, so the
             // one every request carries is the one the picture was taken at.
             return TransformMath.zoomedFieldOfViewDegrees(full, mZoomRatio);
