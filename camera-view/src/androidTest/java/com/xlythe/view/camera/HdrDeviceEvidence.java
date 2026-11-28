@@ -58,7 +58,8 @@ public final class HdrDeviceEvidence {
             Log.i(tag, label + " sf: " + line);
         }
         for (Map.Entry<String, String> layer : composedDataspaces(dump).entrySet()) {
-            Log.i(tag, label + " composed: " + layer.getKey() + " dataspace=" + layer.getValue());
+            Log.i(tag, label + " composed: " + layer.getKey() + " dataspace=" + layer.getValue()
+                    + " bufferTransform=" + layerValue(lines, layer.getKey(), "geomBufferTransform="));
         }
         return dump;
     }
@@ -99,24 +100,34 @@ public final class HdrDeviceEvidence {
             }
         }
         for (Map.Entry<String, String> layer : composed.entrySet()) {
-            String header = "+ LayerFE (" + layer.getKey() + ")";
-            for (int i = 0; i < lines.length; i++) {
-                if (!lines[i].trim().equals(header)) {
-                    continue;
-                }
-                for (int j = i + 1; j < lines.length && !lines[j].trim().startsWith("+ "); j++) {
-                    int at = lines[j].indexOf("dataspace=");
-                    if (at >= 0) {
-                        int space = lines[j].indexOf(' ', at);
-                        layer.setValue(lines[j].substring(at + "dataspace=".length(),
-                                space < 0 ? lines[j].length() : space));
-                        break;
-                    }
-                }
-                break;
-            }
+            layer.setValue(layerValue(lines, layer.getKey(), "dataspace="));
         }
         return composed;
+    }
+
+    /**
+     * One value from a layer's own block in the dump, the word after {@code key}, or "none" where
+     * the block has no such value.
+     */
+    @NonNull
+    private static String layerValue(@NonNull String[] lines, @NonNull String name,
+            @NonNull String key) {
+        String header = "+ LayerFE (" + name + ")";
+        for (int i = 0; i < lines.length; i++) {
+            if (!lines[i].trim().equals(header)) {
+                continue;
+            }
+            for (int j = i + 1; j < lines.length && !lines[j].trim().startsWith("+ "); j++) {
+                int at = lines[j].indexOf(key);
+                if (at >= 0) {
+                    int space = lines[j].indexOf(' ', at);
+                    return lines[j].substring(at + key.length(),
+                            space < 0 ? lines[j].length() : space);
+                }
+            }
+            return "none";
+        }
+        return "none";
     }
 
     /** Logs the camera service's account of the streams it is running. */
