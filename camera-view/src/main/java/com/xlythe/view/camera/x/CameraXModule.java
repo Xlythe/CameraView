@@ -2806,8 +2806,17 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }
     }
 
+    /** Whether a stream carries 10-bit HLG or PQ, which the HDR surface shows as HDR. */
+    private static boolean isTenBitHdr(@NonNull DynamicRange range) {
+        int encoding = range.getEncoding();
+        return range.getBitDepth() == DynamicRange.BIT_DEPTH_10_BIT
+                && encoding != DynamicRange.ENCODING_SDR
+                && encoding != DynamicRange.ENCODING_UNSPECIFIED
+                && encoding != DynamicRange.ENCODING_HDR_UNSPECIFIED;
+    }
+
     private void provideDisplaySurface(long generation, @NonNull SurfaceRequest request) {
-        if (generation == mGeneration && mOpenRequested && request.getDynamicRange().is10BitHdr()
+        if (generation == mGeneration && mOpenRequested && isTenBitHdr(request.getDynamicRange())
                 && generation != mHdrRefusedGeneration && getHdrSurface().isAvailable()) {
             new HdrDisplaySurface(generation, request).provide();
             return;
