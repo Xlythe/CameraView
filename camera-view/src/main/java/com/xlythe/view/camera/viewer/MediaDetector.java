@@ -69,6 +69,12 @@ final class MediaDetector {
         @Nullable
         final ImageLocation playable;
 
+        /**
+         * Whether a decoder here takes the video, or a motion photo's clip; true for anything
+         * else, and wherever it cannot be told.
+         */
+        final boolean decodable;
+
         Detection(@MediaView.MediaType int type, boolean hdr,
                 @Nullable MediaTags.MotionPhoto motionPhoto, @Nullable GPano sphere,
                 @NonNull float[] eye, @Nullable byte[] coverArt) {
@@ -79,6 +85,13 @@ final class MediaDetector {
                 @Nullable MediaTags.MotionPhoto motionPhoto, @Nullable GPano sphere,
                 @NonNull float[] eye, @Nullable byte[] coverArt,
                 @Nullable ImageLocation playable) {
+            this(type, hdr, motionPhoto, sphere, eye, coverArt, playable, true);
+        }
+
+        Detection(@MediaView.MediaType int type, boolean hdr,
+                @Nullable MediaTags.MotionPhoto motionPhoto, @Nullable GPano sphere,
+                @NonNull float[] eye, @Nullable byte[] coverArt,
+                @Nullable ImageLocation playable, boolean decodable) {
             this.type = type;
             this.hdr = hdr;
             this.motionPhoto = motionPhoto;
@@ -86,6 +99,7 @@ final class MediaDetector {
             this.eye = eye;
             this.coverArt = coverArt;
             this.playable = playable;
+            this.decodable = decodable;
         }
     }
 
@@ -120,8 +134,10 @@ final class MediaDetector {
                         && tags.getGainMap() != MediaTags.GAIN_MAP_NONE;
                 MediaTags.MotionPhoto motion = tags == null ? null : tags.getMotionPhoto();
                 if (motion != null) {
+                    boolean decodable = VideoDecoders.canDecode(context, location,
+                            motion.getVideoOffset(), motion.getVideoLength());
                     return new Detection(MediaView.MOTION_PHOTO, hdr, motion, null, wholeFrame,
-                            null);
+                            null, null, decodable);
                 }
                 if (tags != null && tags.isAnimated() && animatesHere(tags.getFormat())) {
                     return new Detection(MediaView.ANIMATION, false, null, null, wholeFrame,
@@ -140,13 +156,15 @@ final class MediaDetector {
                 MediaTags.SphericalVideo spherical =
                         tags == null ? null : tags.getSphericalVideo();
                 ImageLocation playable = playableCopy(context, location);
+                boolean decodable = VideoDecoders.canDecode(context,
+                        playable != null ? playable : location, -1, -1);
                 if (spherical != null && spherical.getProjection()
                         == MediaTags.SphericalVideo.PROJECTION_EQUIRECTANGULAR) {
                     return new Detection(MediaView.SPHERICAL_VIDEO, hdr, null, sphereOf(spherical),
-                            eyeOf(spherical.getStereoMode()), null, playable);
+                            eyeOf(spherical.getStereoMode()), null, playable, decodable);
                 }
                 return new Detection(MediaView.VIDEO, hdr, null, null, wholeFrame, null,
-                        playable);
+                        playable, decodable);
             }
             case MediaTags.KIND_AUDIO:
                 return new Detection(MediaView.AUDIO, false, null, null, wholeFrame,

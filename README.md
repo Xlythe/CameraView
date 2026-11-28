@@ -672,7 +672,9 @@ mMediaView.setMediaType(MediaView.PANORAMA);  // to show it as something else
 Media(uri = uri, onLoaded = { type -> ... })
 ```
 The line and the tap and hold can each be turned off, and the line restyled, with the MediaView
-attributes or setters; it draws no text.
+attributes or setters; it draws no text. A file it can't show calls `onMediaFailed` and shows a
+small struck-out picture in its place: `errorPlaceholder` or `setErrorPlaceholder` swaps it for a
+drawable of your own, `@null` removes it, and in Compose `Media` takes `showError = false`.
 
 What shows depends on what the device decodes:
 
@@ -685,7 +687,8 @@ What shows depends on what the device decodes:
 | DNG | Android 7.0 and newer; before that, the preview it carries, if any |
 | Other camera raws (CR2, CR3, NEF, ARW, RAF, ORF, RW2) | every version, as the largest JPEG the camera embedded, which for some cameras is smaller than the photo |
 | Ultra HDR and other gain maps, in HDR | Android 14 and newer; before that, as an ordinary picture |
-| Videos and sound | the codecs the device has; 10-bit, Dolby Vision and AV1 vary the most |
+| Videos and sound | the codecs the device has; 10-bit, Dolby Vision and AV1 vary the most. A video none of them decodes fails rather than playing its sound over nothing |
+| H.264 video, as most phones record it | Baseline on every version; High where the device has a decoder for it, which the decoders Android 5.1 and older come with are not |
 | TIFF, JPEG XL, AVI | not shown |
 
 VideoEditor

@@ -19,6 +19,7 @@ import com.xlythe.view.camera.viewer.PhotosphereView
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -177,6 +178,7 @@ class ViewersComposableTest {
                 holdToPlay = on.value,
                 showProgress = on.value,
                 hdr = on.value,
+                showError = on.value,
             )
         }
         compose.waitForIdle()
@@ -185,6 +187,7 @@ class ViewersComposableTest {
         assertFalse(view.isHoldToPlayEnabled)
         assertFalse(view.isProgressVisible)
         assertFalse(view.isHdrEnabled)
+        assertNull(view.errorPlaceholder)
 
         on.value = true
         compose.waitForIdle()
@@ -192,6 +195,8 @@ class ViewersComposableTest {
         assertTrue(view.isHoldToPlayEnabled)
         assertTrue(view.isProgressVisible)
         assertTrue(view.isHdrEnabled)
+        // The library's own icon comes back.
+        assertNotNull(view.errorPlaceholder)
     }
 
     @Test
