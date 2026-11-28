@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -77,6 +78,12 @@ public class MediaShotsDeviceTest {
             {"animation-apng-later", "stills/apng_bouncing_beach_ball.png", LATER},
             {"animation-webp-first", "stills/webp_animated_clock.webp", STILL},
             {"animation-webp-later", "stills/webp_animated_clock.webp", LATER},
+            {"animation-webp-stoplight-first", "stills/skia_stoplight_animated.webp", STILL},
+            {"animation-webp-stoplight-later", "stills/skia_stoplight_animated.webp", LATER},
+            {"animation-gif-flight-first", "stills/skia_flightAnim.gif", STILL},
+            {"animation-gif-flight-later", "stills/skia_flightAnim.gif", LATER},
+            {"video-av1", "video/androidx_sample_av1.mp4", PLAY},
+            {"video-hevc-rext-422", "video/chromium_hevc-rext-10bit-422.mp4", PLAY},
             {"hdr-on", "pixel/androidx_ultraHDR.jpg", STILL},
             {"hdr-off", "pixel/androidx_ultraHDR.jpg", NO_HDR},
             {"quicktime-without-ftyp", "apple/mxi_apple-livephoto-quicktime.mov", PLAY},
@@ -116,6 +123,7 @@ public class MediaShotsDeviceTest {
             File file = copy(instrumentation, (String) shot[1], directory);
             CountDownLatch done = new CountDownLatch(1);
             int[] type = {-1};
+            AtomicBoolean failed = new AtomicBoolean();
             AtomicReference<MediaView> made = new AtomicReference<>();
             instrumentation.runOnMainSync(() -> {
                 MediaView view = new MediaView(activity);
@@ -129,6 +137,7 @@ public class MediaShotsDeviceTest {
 
                     @Override
                     public void onMediaFailed() {
+                        failed.set(true);
                         done.countDown();
                     }
                 });
@@ -162,7 +171,8 @@ public class MediaShotsDeviceTest {
             save(screenshot(instrumentation, view), new File(shots,
                     name + "-api" + Build.VERSION.SDK_INT + ".png"));
             Log.i(TAG, "SHOT\t" + name + "\t" + shot[1] + "\t" + (reported ? type[0] : "hung")
-                    + "\tplaying=" + playing + "\tcolorMode=" + mode[0]);
+                    + "\tplaying=" + playing + "\tcolorMode=" + mode[0]
+                    + "\tfailed=" + failed.get());
             if (action == HOLD) {
                 instrumentation.runOnMainSync(() -> {
                     long now = SystemClock.uptimeMillis();

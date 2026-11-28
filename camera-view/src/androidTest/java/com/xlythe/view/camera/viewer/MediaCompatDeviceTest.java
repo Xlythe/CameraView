@@ -6,6 +6,7 @@ import static org.junit.Assume.assumeTrue;
 import android.app.Instrumentation;
 import android.content.Context;
 import android.graphics.BitmapFactory;
+import android.graphics.SurfaceTexture;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
@@ -13,7 +14,9 @@ import android.os.SystemClock;
 import android.text.TextUtils;
 import android.util.Log;
 import android.view.MotionEvent;
+import android.view.TextureView;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.FrameLayout;
 
 import androidx.annotation.Nullable;
@@ -45,6 +48,7 @@ import java.util.Locale;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -52,7 +56,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * what it is, shows or fails cleanly rather than crashing or hanging, stands the right way up,
  * sits on the sphere where its metadata says, plays its motion clip, and holds HDR where it
  * should. What decodes and plays on this release is written out as one line per file, for the
- * compatibility matrix.
+ * compatibility matrix, with how many frames a video drew: one that plays its sound over nothing
+ * drew none.
  *
  * <p>The corpus is pushed to /data/local/tmp/media-corpus, with an expected.tsv beside it; without
  * it the test skips. Before Android 6.0, whose shell commands never say they have finished, it is
@@ -115,7 +120,7 @@ public class MediaCompatDeviceTest {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                 new ByteArrayInputStream(expected), StandardCharsets.UTF_8));
                 PrintWriter out = new PrintWriter(new FileOutputStream(results), true)) {
-            out.println("path\texpected\tdetected\tshown\tmillis\tplays\thdr\tproblems");
+            out.println("path\texpected\tdetected\tshown\tmillis\tplays\thdr\tframes\tproblems");
             String line;
             while ((line = reader.readLine()) != null) {
                 String[] cells = line.split("\t");
@@ -173,16 +178,27 @@ public class MediaCompatDeviceTest {
 
         long start = SystemClock.elapsedRealtime();
         AtomicReference<MediaView> made = new AtomicReference<>();
-        int shown = show(file, made);
+        AtomicBoolean failed = new AtomicBoolean();
+        int shown = show(file, made, failed);
         long millis = SystemClock.elapsedRealtime() - start;
         MediaView view = made.get();
         String plays = "-";
+        String frames = "-";
         boolean hdr = false;
         if (shown == HUNG) {
             wrong.add("neither showed nor failed in " + LOAD_SECONDS + " s");
         } else if (shown != FAILED) {
             hdr = onMain(view::isHoldingHdr);
+            AtomicInteger drawn = shown == MediaView.VIDEO ? countFrames(view) : null;
             plays = checkShown(view, shown, cells, file, wrong);
+            if (drawn != null) {
+                frames = Integer.toString(drawn.get());
+            }
+            if (failed.get()) {
+                // It showed, then could not play: a clean failure, found later.
+                plays = "failed";
+                shown = FAILED;
+            }
         }
         boolean wantHdr = ("yes".equals(cells[6]) && Build.VERSION.SDK_INT >= 34)
                 || ("yes".equals(cells[7]) && Build.VERSION.SDK_INT >= 26);
@@ -198,7 +214,70 @@ public class MediaCompatDeviceTest {
         }
         return TextUtils.join("\t", new Object[] {path, nameOf(want), nameOf(detected),
                 shown == HUNG ? "HUNG" : shown == FAILED ? "FAILED" : "SHOWN", millis, plays,
-                hdr ? "HDR" : "-", TextUtils.join("; ", wrong)});
+                hdr ? "HDR" : "-", frames, TextUtils.join("; ", wrong)});
+    }
+
+    /**
+     * Counts the frames a video's texture receives from now on, by standing between it and the
+     * listener the video view gave it; null if it has no texture.
+     */
+    @Nullable
+    private AtomicInteger countFrames(MediaView view) {
+        AtomicInteger frames = new AtomicInteger();
+        boolean[] found = new boolean[1];
+        mInstrumentation.runOnMainSync(() -> {
+            TextureView texture = findTexture(view.getContentView());
+            if (texture == null) {
+                return;
+            }
+            found[0] = true;
+            TextureView.SurfaceTextureListener listener = texture.getSurfaceTextureListener();
+            if (listener == null) {
+                return;
+            }
+            texture.setSurfaceTextureListener(new TextureView.SurfaceTextureListener() {
+                @Override
+                public void onSurfaceTextureAvailable(SurfaceTexture surface, int width,
+                        int height) {
+                    listener.onSurfaceTextureAvailable(surface, width, height);
+                }
+
+                @Override
+                public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width,
+                        int height) {
+                    listener.onSurfaceTextureSizeChanged(surface, width, height);
+                }
+
+                @Override
+                public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
+                    return listener.onSurfaceTextureDestroyed(surface);
+                }
+
+                @Override
+                public void onSurfaceTextureUpdated(SurfaceTexture surface) {
+                    frames.incrementAndGet();
+                    listener.onSurfaceTextureUpdated(surface);
+                }
+            });
+        });
+        return found[0] ? frames : null;
+    }
+
+    @Nullable
+    private static TextureView findTexture(@Nullable View view) {
+        if (view instanceof TextureView) {
+            return (TextureView) view;
+        }
+        if (view instanceof ViewGroup) {
+            ViewGroup group = (ViewGroup) view;
+            for (int i = 0; i < group.getChildCount(); i++) {
+                TextureView found = findTexture(group.getChildAt(i));
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
     }
 
     /** Checks what showed: its orientation, place on the sphere, and that it plays. */
@@ -249,13 +328,29 @@ public class MediaCompatDeviceTest {
                 return animates && playing ? "animates" : "still";
             }
             default: {
+                // Watched from the main thread itself, as a motion clip is: a clip shorter than
+                // a look from here can start and finish between two looks.
+                AtomicBoolean seen = new AtomicBoolean();
+                AtomicBoolean watching = new AtomicBoolean(true);
+                Runnable[] watch = new Runnable[1];
+                watch[0] = () -> {
+                    if (view.isPlaying()) {
+                        seen.set(true);
+                    } else if (watching.get()) {
+                        view.postDelayed(watch[0], 2);
+                    }
+                };
+                mInstrumentation.runOnMainSync(() -> view.post(watch[0]));
                 boolean played = waitUntil(() -> {
-                    if (!onMain(view::isPlaying)) {
+                    if (!seen.get()) {
                         mInstrumentation.runOnMainSync(view::play);
                     }
                     SystemClock.sleep(200);
-                    return onMain(view::isPlaying);
+                    return seen.get();
                 }, PLAY_SECONDS);
+                watching.set(false);
+                // Long enough for a video that decodes to draw frames past its first.
+                SystemClock.sleep(1000);
                 mInstrumentation.runOnMainSync(view::pause);
                 return played ? "plays" : "no";
             }
@@ -322,11 +417,13 @@ public class MediaCompatDeviceTest {
     }
 
     /**
-     * Shows a file in a new MediaView, full screen, and waits until it shows or fails.
+     * Shows a file in a new MediaView, full screen, and waits until it shows or fails. Whether
+     * it fails, then or later, is set in failed.
      *
      * @return the type it showed as, {@link #FAILED}, or {@link #HUNG}
      */
-    private int show(File file, AtomicReference<MediaView> made) throws InterruptedException {
+    private int show(File file, AtomicReference<MediaView> made, AtomicBoolean failed)
+            throws InterruptedException {
         CountDownLatch done = new CountDownLatch(1);
         int[] type = {FAILED};
         MediaListener listener = new MediaListener() {
@@ -338,6 +435,7 @@ public class MediaCompatDeviceTest {
 
             @Override
             public void onMediaFailed() {
+                failed.set(true);
                 done.countDown();
             }
         };
