@@ -101,6 +101,12 @@ class ExtensionSession extends SessionImpl {
     /** Whether this session was closed, so that one the camera configures late is closed too. */
     private boolean mClosed;
 
+    /** Whether the camera has been asked for the extension session and has not yet answered. */
+    private boolean mConfiguring;
+
+    /** Whether the preview and still outputs have been let go. */
+    private boolean mOutputsReleased;
+
     /** Hears each preview frame's result, for the faces and focus it reports, from API 33. */
     private final CameraExtensionSession.ExtensionCaptureCallback mPreviewCallback =
             new CameraExtensionSession.ExtensionCaptureCallback() {
@@ -201,11 +207,14 @@ class ExtensionSession extends SessionImpl {
         List<OutputConfiguration> outputs = Arrays.asList(
                 new OutputConfiguration(mPreview.getSurface()),
                 new OutputConfiguration(mStill.getSurface()));
+        mConfiguring = true;
         device.createExtensionSession(new ExtensionSessionConfiguration(mExtension, outputs,
                 getHandler()::post, new CameraExtensionSession.StateCallback() {
                     @Override
                     public void onConfigured(@NonNull CameraExtensionSession session) {
+                        mConfiguring = false;
                         if (mClosed) {
+                            // The outputs go once this one has closed too.
                             closeQuietly(session);
                             return;
                         }
@@ -215,10 +224,17 @@ class ExtensionSession extends SessionImpl {
 
                     @Override
                     public void onConfigureFailed(@NonNull CameraExtensionSession session) {
+                        mConfiguring = false;
                         if (mClosed) {
+                            releaseOutputs();
                             return;
                         }
                         callback.onConfigureFailed();
+                    }
+
+                    @Override
+                    public void onClosed(@NonNull CameraExtensionSession session) {
+                        releaseOutputs();
                     }
                 }));
     }
@@ -325,17 +341,43 @@ class ExtensionSession extends SessionImpl {
         }
     }
 
+    /**
+     * Closes the extension session, and fails a picture still being taken.
+     *
+     * <p>The outputs outlive the call: the phone maker's processing goes on setting the session up
+     * on a thread of its own, and an output closed under it ends the app with an exception thrown
+     * on that thread. So they go once the camera says the session has closed, or that it was
+     * never configured.</p>
+     */
     @Override
     public void close() {
         super.close();
         mClosed = true;
+        mStill.fail();
         CameraExtensionSession session = mSession;
         mSession = null;
         if (session != null) {
             closeQuietly(session);
+        } else if (!mConfiguring) {
+            releaseOutputs();
         }
+    }
+
+    /** Lets go of the preview and still outputs, once. */
+    @MainThread
+    private void releaseOutputs() {
+        if (mOutputsReleased) {
+            return;
+        }
+        mOutputsReleased = true;
         mPreview.close();
         mStill.close();
+    }
+
+    /** Whether the outputs have been let go, which waits for the session to close. */
+    @VisibleForTesting
+    boolean areOutputsReleased() {
+        return mOutputsReleased;
     }
 
     private static void closeQuietly(@NonNull CameraExtensionSession session) {

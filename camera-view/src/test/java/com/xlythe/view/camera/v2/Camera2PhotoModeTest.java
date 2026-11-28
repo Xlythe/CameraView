@@ -309,6 +309,44 @@ public class Camera2PhotoModeTest {
         assertNotNull(ShadowCallbackCameraCaptureSession.getLastRepeatingRequest());
     }
 
+    /**
+     * The mode's outputs outlive its session until the camera says it has closed: the phone
+     * maker's processing can still be setting the session up, and an output closed under it ends
+     * the app from a thread of the platform's.
+     */
+    @Test
+    public void theModesOutputsWaitForItsSessionToClose() throws Exception {
+        module.setPhotoMode(CameraView.PhotoMode.NIGHT);
+        open();
+        ExtensionSession night = (ExtensionSession) activeSession();
+        CameraExtensionSession session = session();
+        ExtensionSessionConfiguration configuration = lastConfiguration();
+
+        module.setPhotoMode(CameraView.PhotoMode.NONE);
+        FakeCamera2.idleMainLooper();
+
+        verify(session).close();
+        assertFalse("kept until the session has closed", night.areOutputsReleased());
+        configuration.getStateCallback().onClosed(session);
+        assertTrue(night.areOutputsReleased());
+    }
+
+    /** A session the camera configures after it was closed is closed, and then its outputs go. */
+    @Test
+    public void aSessionConfiguredAfterItsCloseIsClosedToo() throws Exception {
+        module.setPhotoMode(CameraView.PhotoMode.NIGHT);
+        open();
+        ExtensionSession night = (ExtensionSession) activeSession();
+        ExtensionSessionConfiguration configuration = lastConfiguration();
+        CameraExtensionSession late = org.mockito.Mockito.mock(CameraExtensionSession.class);
+
+        night.close();
+        configuration.getStateCallback().onConfigured(late);
+        verify(late).close();
+        configuration.getStateCallback().onConfigureFailed(late);
+        assertTrue("a refusal after the close lets the outputs go", night.areOutputsReleased());
+    }
+
     /** A lens without the mode takes ordinary pictures, and the lens with it runs it again. */
     @Test
     public void theModeFollowsTheLens() throws Exception {
