@@ -59,6 +59,9 @@ android {
         sourceSets.test.kotlin.filter.exclude '**/com/xlythe/compose/**'
     }
 
+    // The device tests read the same freely licensed media the unit tests do.
+    sourceSets.androidTest.assets.srcDirs += 'src/test/resources'
+
     lint {
         abortOnError = true
         checkReleaseBuilds = true
