@@ -129,8 +129,11 @@ public final class Drawing {
 
     // ---------- JSON ----------
 
-    /** The drawing as JSON, in the format of Muse's ink documents. */
-    @WorkerThread
+    /**
+     * The drawing as JSON, in the format of Muse's ink documents. Quick enough for a view to
+     * keep its state with; a large drawing is better saved off the main thread.
+     */
+    @AnyThread
     @NonNull
     public String toJson() {
         try {
@@ -172,7 +175,7 @@ public final class Drawing {
      * @throws JSONException if it is not JSON, is a newer version of the format, or has strokes
      *     whose samples disagree
      */
-    @WorkerThread
+    @AnyThread
     @NonNull
     public static Drawing fromJson(@NonNull String json) throws JSONException {
         JSONObject document = new JSONObject(json);
