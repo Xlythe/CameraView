@@ -273,6 +273,24 @@ public class ExifCaptureParametersTest {
                 .get(ExifInterface.TAG_SCENE_CAPTURE_TYPE));
     }
 
+    /**
+     * A photo mode's scene stands over the one the frame reports, since a picture drawn through
+     * the library's blur comes from a frame the camera took as an ordinary one.
+     */
+    @Test
+    public void aPhotoModesSceneStandsOverTheFramesOwn() {
+        CaptureResult ordinary = Mockito.mock(CaptureResult.class);
+        Mockito.when(ordinary.get(CaptureResult.CONTROL_MODE))
+                .thenReturn(CameraMetadata.CONTROL_MODE_AUTO);
+
+        assertEquals("2", new ExifCaptureParameters()
+                .setPhotoMode(CameraView.PhotoMode.BACKGROUND_BLUR)
+                .setCaptureResult(ordinary).values().get(ExifInterface.TAG_SCENE_CAPTURE_TYPE));
+        assertEquals("0", new ExifCaptureParameters()
+                .setPhotoMode(CameraView.PhotoMode.NONE)
+                .setCaptureResult(ordinary).values().get(ExifInterface.TAG_SCENE_CAPTURE_TYPE));
+    }
+
     /** What a frame reports about its exposure goes in, for a picture the library encoded. */
     @Test
     public void aCaptureResultDescribesItsFrame() {

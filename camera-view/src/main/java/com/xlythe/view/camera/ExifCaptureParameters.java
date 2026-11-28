@@ -162,6 +162,13 @@ public final class ExifCaptureParameters {
     private boolean mFocusDistanceCalibrated;
 
     /**
+     * The scene a photo mode was taken for, which stands over the one the frame reports, or null
+     * for none.
+     */
+    @Nullable
+    private String mPhotoModeScene;
+
+    /**
      * Starts from what every capture the library asks for has in common: exposure and white
      * balance left to the camera, in its standard scene mode.
      */
@@ -430,15 +437,16 @@ public final class ExifCaptureParameters {
     public ExifCaptureParameters setPhotoMode(@CameraView.PhotoMode int photoMode) {
         switch (photoMode) {
             case CameraView.PhotoMode.NIGHT:
-                putScene(SCENE_NIGHT);
+                mPhotoModeScene = SCENE_NIGHT;
                 break;
             case CameraView.PhotoMode.BACKGROUND_BLUR:
-                putScene(SCENE_PORTRAIT);
+                mPhotoModeScene = SCENE_PORTRAIT;
                 break;
             default:
-                putScene(SCENE_STANDARD);
+                mPhotoModeScene = null;
                 break;
         }
+        putScene(mPhotoModeScene == null ? SCENE_STANDARD : mPhotoModeScene);
         return this;
     }
 
@@ -518,7 +526,9 @@ public final class ExifCaptureParameters {
             setZoomRatio(zoom);
         }
         Integer controlMode = result.get(CaptureResult.CONTROL_MODE);
-        if (controlMode != null) {
+        // A photo mode's scene stands: the frame a picture is drawn from reports the camera's
+        // ordinary scene, knowing nothing of the processing done to it after.
+        if (controlMode != null && mPhotoModeScene == null) {
             putScene(controlMode == CameraMetadata.CONTROL_MODE_USE_SCENE_MODE
                     ? sceneOf(result.get(CaptureResult.CONTROL_SCENE_MODE)) : SCENE_STANDARD);
         }
