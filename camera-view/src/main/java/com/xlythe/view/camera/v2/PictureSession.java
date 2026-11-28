@@ -176,6 +176,17 @@ class PictureSession extends PreviewSession {
                 new Size(mPictureSurface.getWidth(), mPictureSurface.getHeight()));
     }
 
+    /** An Ultra HDR picture is HDR too, so it is framed in HDR where the camera can. */
+    @Override
+    protected boolean framesHdr() {
+        if (super.framesHdr()) {
+            return true;
+        }
+        return hasStillCapture() && allowsUltraHdr()
+                && getPictureFormat() == CameraView.PictureFormat.ULTRA_HDR
+                && isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR);
+    }
+
     /** Lets a subclass add its own outputs once the preview has a size and before the still does. */
     protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
             throws CameraAccessException {}

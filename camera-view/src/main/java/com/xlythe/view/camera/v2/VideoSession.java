@@ -12,7 +12,9 @@ import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.location.Location;
 import android.media.CamcorderProfile;
+import android.media.MediaCodecInfo;
 import android.media.MediaRecorder;
+import android.os.Build;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -85,6 +87,25 @@ class VideoSession extends PictureSession {
     @Override
     protected boolean allowsUltraHdr() {
         return false;
+    }
+
+    @Override
+    protected boolean recordsHdr() {
+        return getModule().recordsHdr();
+    }
+
+    @Override
+    public long getDynamicRangeProfile(@NonNull Surface surface) {
+        if (mVideoSurface.mIsInitialized && mVideoSurface.mHdr
+                && surface == mVideoSurface.getSurface()) {
+            return getPreviewSurfaceProfile();
+        }
+        return super.getDynamicRangeProfile(surface);
+    }
+
+    /** The profile the preview streams in, which an HDR recording shares. */
+    private long getPreviewSurfaceProfile() {
+        return super.getDynamicRangeProfile(getPreviewSurface().getSurface());
     }
 
     @Override
@@ -506,6 +527,8 @@ class VideoSession extends PictureSession {
         private boolean mIsRecordingVideo;
         private boolean mIsInitialized;
         private boolean mAwaitingRecording;
+        /** Whether the recording is HDR: HLG, encoded as HEVC Main 10. */
+        private boolean mHdr;
 
         /**
          * How far the file is tagged to be turned clockwise when it is shown, which is the turn a
@@ -541,7 +564,12 @@ class VideoSession extends PictureSession {
                 mMediaRecorder.setVideoSource(MediaRecorder.VideoSource.SURFACE);
                 int intCameraId = getIntCameraId();
                 CamcorderProfile profile = chooseProfile(intCameraId, getQuality());
-                mMediaRecorder.setProfile(profile);
+                mHdr = mCameraView.recordsHdr();
+                if (mHdr) {
+                    setHdrProfile(mMediaRecorder, profile, Camera2Module.main10Level());
+                } else {
+                    mMediaRecorder.setProfile(profile);
+                }
                 mMediaRecorder.setOutputFile(mFile.getAbsolutePath());
                 mMediaRecorder.setMaxDuration((int) mCameraView.getMaxVideoDuration());
                 mMediaRecorder.setMaxFileSize(mCameraView.getMaxVideoSize());
@@ -585,6 +613,29 @@ class VideoSession extends PictureSession {
             } catch (IOException e) {
                 Log.e(TAG, "Failed to initialize", e);
             }
+        }
+
+        /**
+         * Sets up a recorder the way {@link MediaRecorder#setProfile} would, except that the
+         * video is HEVC Main 10. The camera's 10-bit HLG frames then reach the file as HLG; a
+         * profile's own encoder is 8-bit, and setProfile allows no other encoder after it.
+         */
+        @VisibleForTesting
+        static void setHdrProfile(@NonNull MediaRecorder recorder,
+                @NonNull CamcorderProfile profile, int level) {
+            recorder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4);
+            recorder.setVideoFrameRate(profile.videoFrameRate);
+            recorder.setVideoSize(profile.videoFrameWidth, profile.videoFrameHeight);
+            recorder.setVideoEncodingBitRate(profile.videoBitRate);
+            recorder.setVideoEncoder(MediaRecorder.VideoEncoder.HEVC);
+            if (Build.VERSION.SDK_INT >= 26) {
+                recorder.setVideoEncodingProfileLevel(
+                        MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10, level);
+            }
+            recorder.setAudioEncodingBitRate(profile.audioBitRate);
+            recorder.setAudioChannels(profile.audioChannels);
+            recorder.setAudioSamplingRate(profile.audioSampleRate);
+            recorder.setAudioEncoder(profile.audioCodec);
         }
 
         @Override
