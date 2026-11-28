@@ -46,10 +46,18 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
 import androidx.collection.ArrayMap;
 
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LegacyCameraModule extends ICameraModule {
+    /**
+     * How long a burst waits for the restarted preview to show a frame before it asks for the
+     * next picture anyway, for a view that is not drawing.
+     */
+    @VisibleForTesting
+    static final long PREVIEW_FRAME_TIMEOUT_MILLIS = 300;
+
     /** No camera chosen yet, which is not the same as camera zero. */
     private static final int INVALID_CAMERA_ID = -1;
 
@@ -87,8 +95,8 @@ public class LegacyCameraModule extends ICameraModule {
     private final Map<VideoRecorder.SurfaceProvider, LegacySurfaceHolder> mSurfaceProviders = new ArrayMap<>();
 
     /**
-     * Runs work on the main thread: each picture of a burst, after the callback for the one before
-     * has returned, and each retry of a busy camera.
+     * Runs work on the main thread: the wait for a burst's next preview frame, and each retry of a
+     * busy camera.
      */
     private final Handler mHandler = new Handler(Looper.getMainLooper());
 
@@ -100,6 +108,12 @@ public class LegacyCameraModule extends ICameraModule {
      * closes with one outstanding never delivers it.
      */
     @Nullable private File mBurstFile;
+
+    /** What runs once the preview shows its next frame, or null when nothing waits for one. */
+    @Nullable private Runnable mOnPreviewFrame;
+
+    /** Runs {@link #mOnPreviewFrame} when no frame is shown in time. */
+    private final Runnable mPreviewFrameTimeout = this::onPreviewFrameShown;
 
     /** Tries the open again while the camera is busy, on the main thread the open runs on. */
     private final BusyCameraRetry mBusyRetry = new BusyCameraRetry(mHandler);
@@ -248,6 +262,8 @@ public class LegacyCameraModule extends ICameraModule {
     public void close() {
         Log.d(TAG, "onClose() activeCamera="+getActiveCamera());
         mBusyRetry.cancel();
+        mOnPreviewFrame = null;
+        mHandler.removeCallbacks(mPreviewFrameTimeout);
         if (mBurst != null) {
             Burst burst = mBurst;
             File outstanding = mBurstFile;
@@ -465,9 +481,7 @@ public class LegacyCameraModule extends ICameraModule {
                                 burst.end();
                                 return;
                             }
-                            // Posted, so the camera is not asked for a picture from inside the
-                            // callback that delivered the last one.
-                            mHandler.post(() -> takeBurstPicture(burst));
+                            awaitPreviewFrame(() -> takeBurstPicture(burst));
                         }
 
                         @Override
@@ -485,6 +499,31 @@ public class LegacyCameraModule extends ICameraModule {
             mBurstFile = null;
             burst.onPictureFailed(file);
         }
+    }
+
+    /**
+     * Runs an action once the restarted preview shows a frame, or after
+     * {@link #PREVIEW_FRAME_TIMEOUT_MILLIS} if none is shown. A camera asked for a picture before
+     * its preview is running again can fail the request and stay broken until it is reopened, as
+     * the API 15 emulator's does; a frame on screen says the preview is running.
+     */
+    @MainThread
+    private void awaitPreviewFrame(@NonNull Runnable action) {
+        mOnPreviewFrame = action;
+        mHandler.removeCallbacks(mPreviewFrameTimeout);
+        mHandler.postDelayed(mPreviewFrameTimeout, PREVIEW_FRAME_TIMEOUT_MILLIS);
+    }
+
+    @MainThread
+    @Override
+    public void onPreviewFrameShown() {
+        Runnable action = mOnPreviewFrame;
+        if (action == null) {
+            return;
+        }
+        mOnPreviewFrame = null;
+        mHandler.removeCallbacks(mPreviewFrameTimeout);
+        action.run();
     }
 
     /**

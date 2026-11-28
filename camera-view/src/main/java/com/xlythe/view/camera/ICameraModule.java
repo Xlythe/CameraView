@@ -15,6 +15,7 @@ import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
 import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
@@ -873,6 +874,14 @@ public abstract class ICameraModule {
      * layout arriving at its answer all produce a run of layout passes at different sizes.</p>
      */
     public void onLayoutSettled() {}
+
+    /**
+     * Called on the main thread each time the view shows a new preview frame. The old camera API's
+     * burst waits for one before asking for its next picture.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    public void onPreviewFrameShown() {}
 
     public void setOnImageCapturedListener(CameraView.OnImageCapturedListener l) {
         mOnImageCapturedListener = l;

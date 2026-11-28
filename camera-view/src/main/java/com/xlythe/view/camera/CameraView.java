@@ -419,7 +419,9 @@ public class CameraView extends FrameLayout {
         }
 
         @Override
-        public void onSurfaceTextureUpdated(SurfaceTexture texture) {}
+        public void onSurfaceTextureUpdated(SurfaceTexture texture) {
+            mCameraModule.onPreviewFrameShown();
+        }
     };
 
     /** The current internal camera lifecycle status. Guarded by this CameraView monitor. */

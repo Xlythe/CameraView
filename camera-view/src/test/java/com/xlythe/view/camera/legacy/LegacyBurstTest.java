@@ -41,6 +41,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.TimeUnit;
 
 /**
  * A burst on the old camera API, which takes one picture at a time and has to restart its preview
@@ -155,6 +156,72 @@ public class LegacyBurstTest {
         idle();
 
         assertEquals(1, ShadowJpegCamera.getPicturesTaken());
+    }
+
+    /**
+     * The next picture waits for the restarted preview to show a frame. A camera asked for one
+     * before its preview is running again can fail and stay broken until it is reopened.
+     */
+    @Test
+    public void theNextPictureWaitsForThePreviewToShowAFrame() {
+        module.open();
+        Burst burst = new Burst(directory, "frame", 3, heard);
+
+        module.startBurst(burst);
+        idle();
+        assertEquals("the first is taken at once", 1, ShadowJpegCamera.getPicturesTaken());
+        assertTrue("and the preview restarted after it", shadow().isPreviewing());
+        idle();
+        assertEquals("the second waits for a frame", 1, ShadowJpegCamera.getPicturesTaken());
+
+        module.onPreviewFrameShown();
+        idle();
+        assertEquals(2, ShadowJpegCamera.getPicturesTaken());
+        module.onPreviewFrameShown();
+        idle();
+        assertEquals(3, ShadowJpegCamera.getPicturesTaken());
+        module.onPreviewFrameShown();
+        idle();
+
+        assertTrue(burst.isFinished());
+        assertEquals(3, heard.pictures.size());
+        assertEquals("a frame with nothing waiting on it asks for nothing",
+                3, ShadowJpegCamera.getPicturesTaken());
+    }
+
+    /** A view that draws no frames holds the burst up only briefly. */
+    @Test
+    public void aPreviewThatShowsNoFrameHoldsTheNextPictureOnlySoLong() {
+        module.open();
+        module.startBurst(new Burst(directory, "noframe", 2, heard));
+        idle();
+        assertEquals(1, ShadowJpegCamera.getPicturesTaken());
+
+        ShadowLooper.idleMainLooper(LegacyCameraModule.PREVIEW_FRAME_TIMEOUT_MILLIS - 1,
+                TimeUnit.MILLISECONDS);
+        assertEquals(1, ShadowJpegCamera.getPicturesTaken());
+        ShadowLooper.idleMainLooper(1, TimeUnit.MILLISECONDS);
+
+        assertEquals(2, ShadowJpegCamera.getPicturesTaken());
+    }
+
+    /** Closing while the next picture waits for a frame asks for nothing more. */
+    @Test
+    public void closingWhileWaitingForAFrameTakesNothingMore() {
+        module.open();
+        Burst burst = new Burst(directory, "closewait", 5, heard);
+        module.startBurst(burst);
+        idle();
+        assertEquals(1, ShadowJpegCamera.getPicturesTaken());
+
+        module.close();
+        module.onPreviewFrameShown();
+        ShadowLooper.idleMainLooper(LegacyCameraModule.PREVIEW_FRAME_TIMEOUT_MILLIS,
+                TimeUnit.MILLISECONDS);
+
+        assertEquals(1, ShadowJpegCamera.getPicturesTaken());
+        assertTrue(burst.isFinished());
+        assertEquals(1, heard.pictures.size());
     }
 
     @Test
@@ -326,6 +393,8 @@ public class LegacyBurstTest {
         });
         for (int i = 0; i < 20 && counts.isEmpty(); i++) {
             idle();
+            ShadowLooper.idleMainLooper(LegacyCameraModule.PREVIEW_FRAME_TIMEOUT_MILLIS,
+                    TimeUnit.MILLISECONDS);
         }
 
         assertEquals(List.of(2), counts);
@@ -341,10 +410,15 @@ public class LegacyBurstTest {
         return Shadow.extract(ShadowJpegCamera.getLastCamera());
     }
 
-    /** Each picture takes a few turns of the looper: delivery, save, and the next request. */
+    /**
+     * Each picture takes a few turns of the looper: delivery, save, and the next request, which
+     * waits for the preview to show a frame. The view here draws none, so the wait runs out.
+     */
     private static void runUntilFinished(Burst burst) {
         for (int i = 0; i < 50 && !burst.isFinished(); i++) {
             idle();
+            ShadowLooper.idleMainLooper(LegacyCameraModule.PREVIEW_FRAME_TIMEOUT_MILLIS,
+                    TimeUnit.MILLISECONDS);
         }
         assertTrue("the burst should have finished", burst.isFinished());
     }
