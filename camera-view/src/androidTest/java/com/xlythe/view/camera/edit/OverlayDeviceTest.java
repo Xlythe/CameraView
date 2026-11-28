@@ -46,6 +46,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CountDownLatch;
@@ -75,9 +76,10 @@ public final class OverlayDeviceTest {
         Context context = ApplicationProvider.getApplicationContext();
         File star = copy("editor/spinning_star.gif", "star.gif");
         File heart = copy("editor/heart.png", "heart.png");
-        try (ActivityScenario<ViewerTestActivity> scenario =
-                     ActivityScenario.launch(ViewerTestActivity.class)) {
-            AtomicReference<OverlayView> holder = new AtomicReference<>();
+        ActivityScenario<ViewerTestActivity> scenario =
+                ActivityScenario.launch(ViewerTestActivity.class);
+        AtomicReference<OverlayView> holder = new AtomicReference<>();
+        try {
             AtomicReference<DrawingView> drawingHolder = new AtomicReference<>();
             AtomicReference<View> zoneHolder = new AtomicReference<>();
             AtomicReference<View> cellHolder = new AtomicReference<>();
@@ -267,6 +269,14 @@ public final class OverlayDeviceTest {
             assertNotNull(result);
             proof("overlay-9-saved", result);
             SystemClock.sleep(800);
+        } finally {
+            // An animated sticker keeps the main thread from ever idling, which closing waits for.
+            onMain(() -> {
+                if (holder.get() != null) {
+                    holder.get().setOverlays(Collections.<Overlay>emptyList());
+                }
+            });
+            scenario.close();
         }
     }
 
