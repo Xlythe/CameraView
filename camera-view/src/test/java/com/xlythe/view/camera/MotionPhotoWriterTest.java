@@ -30,9 +30,10 @@ import java.util.Map;
 /**
  * The Motion Photo writer, checked by reading its output back the way a gallery would.
  *
- * <p>Every file is read back through {@link MediaTags}, which finds the clip the way MediaView and
- * the editors do, and the directory through {@link Xmp}, so a test passes because the file is right
- * rather than because the writer agrees with itself.</p>
+ * <p>Every file is written the way a camera writes it, a JPEG and a clip on disk, and read back
+ * through {@link MediaTags}, which finds the clip the way MediaView and the editors do, and the
+ * directory through {@link Xmp}, so a test passes because the file is right rather than because the
+ * writer agrees with itself.</p>
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {29, 37})
@@ -45,7 +46,7 @@ public class MotionPhotoWriterTest {
         byte[] jpeg = new Jpeg().jfif().exif().scan().build();
 
         ReadBack parsed = read(
-                appendVideo(MotionPhotoWriter.withMotionPhotoXmp(jpeg, 4242, 1_500_000), 4242));
+                motionPhoto(jpeg, 4242, 1_500_000));
 
         assertEquals("1", parsed.camera("MotionPhoto"));
         assertEquals("1", parsed.camera("MotionPhotoVersion"));
@@ -68,13 +69,12 @@ public class MotionPhotoWriterTest {
 
     @Test
     public void writesThePrefixesEveryReaderKnows() throws Exception {
-        String xmp = MotionPhotoWriter.buildXmp(null, 10, 0);
+        String xmp = new String(motionPhoto(new Jpeg().exif().scan().build(), 10, 0),
+                StandardCharsets.ISO_8859_1);
 
         assertTrue(xmp, xmp.contains("GCamera:MotionPhoto=\"1\""));
         assertTrue(xmp, xmp.contains("Container:Directory"));
         assertTrue(xmp, xmp.contains("Item:Semantic=\"MotionPhoto\""));
-        assertTrue("wrapped as an XMP packet", xmp.startsWith("<?xpacket begin="));
-        assertTrue(xmp.endsWith("<?xpacket end=\"w\"?>"));
     }
 
     @Test
@@ -83,28 +83,28 @@ public class MotionPhotoWriterTest {
         int afterExif = builder.size();
         byte[] jpeg = builder.quantization().scan().build();
 
-        byte[] described = MotionPhotoWriter.withMotionPhotoXmp(jpeg, 100, 0);
+        byte[] described = motionPhoto(jpeg, 100, 0);
 
         assertEquals("an APP1 marker", 0xFF, described[afterExif] & 0xFF);
         assertEquals(0xE1, described[afterExif + 1] & 0xFF);
-        assertTrue(startsWith(described, afterExif + 4, MotionPhotoWriter.XMP_SIGNATURE));
+        assertTrue(startsWith(described, afterExif + 4, JpegContainer.XMP_IDENTIFIER));
         int length = ((described[afterExif + 2] & 0xFF) << 8) | (described[afterExif + 3] & 0xFF);
         assertArrayEquals("everything before it is untouched",
                 Arrays.copyOfRange(jpeg, 0, afterExif),
                 Arrays.copyOfRange(described, 0, afterExif));
-        assertArrayEquals("and everything after it",
+        assertArrayEquals("and everything after it, up to the clip",
                 Arrays.copyOfRange(jpeg, afterExif, jpeg.length),
-                Arrays.copyOfRange(described, afterExif + 2 + length, described.length));
+                Arrays.copyOfRange(described, afterExif + 2 + length, described.length - 100));
     }
 
     @Test
     public void putsTheXmpFirstInAJpegWithNoHeaderSegments() throws Exception {
         byte[] jpeg = new Jpeg().quantization().scan().build();
 
-        byte[] described = MotionPhotoWriter.withMotionPhotoXmp(jpeg, 100, 0);
+        byte[] described = motionPhoto(jpeg, 100, 0);
 
         assertEquals(0xE1, described[3] & 0xFF);
-        assertTrue(startsWith(described, 6, MotionPhotoWriter.XMP_SIGNATURE));
+        assertTrue(startsWith(described, 6, JpegContainer.XMP_IDENTIFIER));
     }
 
     @Test
@@ -173,9 +173,10 @@ public class MotionPhotoWriterTest {
         byte[] ultraHdr = concat(primary, gainMap);
         int gainMapFromMpf = primary.length - mpfStart;
 
-        byte[] described = MotionPhotoWriter.withMotionPhotoXmp(ultraHdr, 5000, 1_000_000);
+        byte[] file = motionPhoto(ultraHdr, 5000, 1_000_000);
+        byte[] described = Arrays.copyOf(file, file.length - 5000);
 
-        ReadBack parsed = read(appendVideo(described, 5000));
+        ReadBack parsed = read(file);
         assertEquals("the gain map metadata stays", "1.0",
                 parsed.xmp.get(Xmp.NS_HDR_GAIN_MAP, "Version"));
         assertEquals(3, parsed.items.size());
@@ -200,12 +201,7 @@ public class MotionPhotoWriterTest {
                 + "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"/>"
                 + "</x:xmpmeta>").scan().build();
 
-        try {
-            MotionPhotoWriter.withMotionPhotoXmp(jpeg, 10, 0);
-            fail("the XMP follows the segment that locates the gain map");
-        } catch (IOException expected) {
-            assertTrue(expected.getMessage().contains("Multi-Picture"));
-        }
+        assertRefused("XMP after the segment that locates the gain map", jpeg, 10);
     }
 
     @Test
@@ -214,10 +210,10 @@ public class MotionPhotoWriterTest {
         int beforeMpf = builder.size();
         byte[] jpeg = builder.mpf().exif().scan().build();
 
-        byte[] described = MotionPhotoWriter.withMotionPhotoXmp(jpeg, 10, 0);
+        byte[] described = motionPhoto(jpeg, 10, 0);
 
         assertTrue("inserted where the locator was", startsWith(described, beforeMpf + 4,
-                MotionPhotoWriter.XMP_SIGNATURE));
+                JpegContainer.XMP_IDENTIFIER));
     }
 
     @Test
@@ -240,10 +236,8 @@ public class MotionPhotoWriterTest {
                 + "</rdf:li></rdf:Seq></Container:Directory>"
                 + "</rdf:Description></rdf:RDF></x:xmpmeta>";
 
-        ReadBack parsed = read(appendVideo(
-                MotionPhotoWriter.withMotionPhotoXmp(
-                        new Jpeg().xmp(existing).scan().build(), 77, 9),
-                77));
+        ReadBack parsed = read(motionPhoto(
+                        new Jpeg().xmp(existing).scan().build(), 77, 9));
 
         assertFalse(parsed.hasCamera("MicroVideo"));
         assertFalse(parsed.hasCamera("MicroVideoOffset"));
@@ -266,13 +260,12 @@ public class MotionPhotoWriterTest {
                 + "<Camera:MicroVideoOffset>12</Camera:MicroVideoOffset>"
                 + "</rdf:Description></rdf:RDF></x:xmpmeta>";
 
-        String xmp = MotionPhotoWriter.buildXmp(existing, 10, 3);
+        byte[] file = motionPhoto(new Jpeg().xmp(existing).scan().build(), 10, 3);
+        String xmp = new String(file, StandardCharsets.ISO_8859_1);
 
         assertFalse(xmp, xmp.contains("<Camera:MotionPhoto>"));
         assertFalse(xmp, xmp.contains("MicroVideoOffset"));
-        ReadBack parsed = read(
-                appendVideo(MotionPhotoWriter.withMotionPhotoXmp(
-                        new Jpeg().xmp(existing).scan().build(), 10, 3), 10));
+        ReadBack parsed = read(file);
         assertEquals("1", parsed.camera("MotionPhoto"));
     }
 
@@ -285,10 +278,8 @@ public class MotionPhotoWriterTest {
                 + "<Container:Directory/>"
                 + "</rdf:Description></rdf:RDF></x:xmpmeta>";
 
-        ReadBack parsed = read(appendVideo(
-                MotionPhotoWriter.withMotionPhotoXmp(
-                        new Jpeg().xmp(existing).scan().build(), 10, 0),
-                10));
+        ReadBack parsed = read(motionPhoto(
+                        new Jpeg().xmp(existing).scan().build(), 10, 0));
 
         assertEquals(2, parsed.items.size());
         assertEquals("Primary", parsed.items.get(0).get(Xmp.NS_ITEM + "Semantic"));
@@ -301,19 +292,16 @@ public class MotionPhotoWriterTest {
                 + "<rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"/>"
                 + "</x:xmpmeta>";
 
-        String xmp = MotionPhotoWriter.buildXmp(existing, 10, 0);
+        ReadBack parsed = read(motionPhoto(new Jpeg().xmp(existing).scan().build(), 10, 0));
 
-        assertTrue(xmp, xmp.contains("rdf:Description"));
-        assertTrue(xmp, xmp.contains("GCamera:MotionPhoto=\"1\""));
+        assertEquals("1", parsed.camera("MotionPhoto"));
+        assertEquals(2, parsed.items.size());
     }
 
     @Test
     public void refusesWhatItCannotDescribe() {
         assertRefused("not a JPEG", new byte[] {1, 2, 3, 4}, 10);
         assertRefused("no video", new Jpeg().scan().build(), 0);
-        byte[] truncated = new Jpeg().exif().build();
-        assertRefused("a segment longer than the file",
-                Arrays.copyOf(truncated, truncated.length - 3), 10);
         assertRefused("a byte where a marker belongs",
                 new byte[] {(byte) 0xFF, (byte) 0xD8, 0x12, 0x34, 0x00, 0x00}, 10);
         assertRefused("XMP that is not XML", new Jpeg().xmp("<x:xmpmeta").scan().build(), 10);
@@ -347,8 +335,7 @@ public class MotionPhotoWriterTest {
         byte[] rest = new Jpeg().exif().scan().build();
         jpeg.write(rest, 2, rest.length - 2);
 
-        ReadBack parsed = read(appendVideo(
-                MotionPhotoWriter.withMotionPhotoXmp(jpeg.toByteArray(), 10, 0), 10));
+        ReadBack parsed = read(motionPhoto(jpeg.toByteArray(), 10, 0));
 
         assertEquals("1", parsed.camera("MotionPhoto"));
     }
@@ -416,11 +403,11 @@ public class MotionPhotoWriterTest {
             motionPhoto = MediaTags.open(written).getMotionPhoto();
             int segments = 0;
             byte[] packet = null;
-            for (int at = 0; (at = indexOf(file, MotionPhotoWriter.XMP_SIGNATURE, at)) >= 0;
+            for (int at = 0; (at = indexOf(file, JpegContainer.XMP_IDENTIFIER, at)) >= 0;
                     at++) {
                 if (packet == null) {
                     int length = ((file[at - 2] & 0xFF) << 8) | (file[at - 1] & 0xFF);
-                    packet = Arrays.copyOfRange(file, at + MotionPhotoWriter.XMP_SIGNATURE.length,
+                    packet = Arrays.copyOfRange(file, at + JpegContainer.XMP_IDENTIFIER.length,
                             at - 2 + length);
                 }
                 segments++;
@@ -453,13 +440,34 @@ public class MotionPhotoWriterTest {
         return readBack;
     }
 
-    private void assertRefused(String why, byte[] jpeg, long videoLength) {
+    private void assertRefused(String why, byte[] jpeg, int videoLength) {
+        File picture;
         try {
-            MotionPhotoWriter.withMotionPhotoXmp(jpeg, videoLength, 0);
+            picture = write("refused" + (++mReads) + ".jpg", jpeg);
+            File video = write("refused" + mReads + ".mp4", fakeMp4(videoLength));
+            MotionPhotoWriter.write(picture, video, 0);
             fail("accepted " + why);
+            return;
         } catch (IOException expected) {
-            // Refused, as it should be.
+            // Refused, as it should be. What matters is what is left on disk.
         }
+        try {
+            assertArrayEquals(why + " left the still as it was", jpeg,
+                    Files.readAllBytes(new File(folder.getRoot(), "refused" + mReads + ".jpg")
+                            .toPath()));
+        } catch (IOException unreadable) {
+            throw new AssertionError(unreadable);
+        }
+        assertFalse(new File(folder.getRoot(), "refused" + mReads + ".jpg.motion").exists());
+    }
+
+    /** Writes a JPEG and a clip of a length to disk, makes them a motion photo, and reads it. */
+    private byte[] motionPhoto(byte[] jpeg, int videoLength, long presentationTimestampUs)
+            throws IOException {
+        File picture = write("picture" + (++mReads) + ".jpg", jpeg);
+        File video = write("clip" + mReads + ".mp4", fakeMp4(videoLength));
+        MotionPhotoWriter.write(picture, video, presentationTimestampUs);
+        return Files.readAllBytes(picture.toPath());
     }
 
     private File write(String name, byte[] data) throws IOException {
@@ -470,9 +478,6 @@ public class MotionPhotoWriterTest {
         return file;
     }
 
-    private static byte[] appendVideo(byte[] jpeg, int length) {
-        return concat(jpeg, fakeMp4(length));
-    }
 
     /** Bytes that start the way an MP4 does, which is all a container check looks at. */
     private static byte[] fakeMp4(int length) {
@@ -535,7 +540,7 @@ public class MotionPhotoWriterTest {
         }
 
         Jpeg xmp(String packet) {
-            return segment(0xE1, MotionPhotoWriter.XMP_SIGNATURE,
+            return segment(0xE1, JpegContainer.XMP_IDENTIFIER,
                     packet.getBytes(StandardCharsets.UTF_8));
         }
 
