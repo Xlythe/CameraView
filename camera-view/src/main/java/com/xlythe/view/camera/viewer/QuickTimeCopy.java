@@ -12,7 +12,7 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import java.nio.charset.Charset;
 
 /**
  * A copy of a QuickTime movie that opens without a file type box, as older QuickTime movies
@@ -20,6 +20,9 @@ import java.nio.charset.StandardCharsets;
  * movie at all; with the box, and every chunk offset moved along by its size, it plays.
  */
 final class QuickTimeCopy {
+    /** The charset of box and chunk names, by name, which every release has. */
+    private static final Charset ASCII = Charset.forName("US-ASCII");
+
     /** The boxes a QuickTime movie may open with, before brands. */
     private static final String[] OPENING_BOXES = {"wide", "free", "skip", "mdat", "moov",
             "pnot"};
@@ -80,7 +83,7 @@ final class QuickTimeCopy {
     /** Whether a file opens with a box a QuickTime movie may, rather than a file type box. */
     @VisibleForTesting
     static boolean needsCopy(@NonNull byte[] head) {
-        String type = new String(head, 4, 4, StandardCharsets.US_ASCII);
+        String type = new String(head, 4, 4, ASCII);
         for (String opening : OPENING_BOXES) {
             if (opening.equals(type)) {
                 return true;
@@ -106,7 +109,7 @@ final class QuickTimeCopy {
         int at = start;
         while (at + 8 <= end) {
             long size = u32(data, at);
-            String type = new String(data, at + 4, 4, StandardCharsets.US_ASCII);
+            String type = new String(data, at + 4, 4, ASCII);
             int header = 8;
             if (size == 1 && at + 16 <= end) {
                 size = (u32(data, at + 8) << 32) | u32(data, at + 12);
