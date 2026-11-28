@@ -6,7 +6,6 @@ import android.content.ContentResolver;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.RectF;
 import android.net.Uri;
@@ -126,8 +125,6 @@ public class EditorFragment extends Fragment {
     @Nullable private View mDeleteZone;
     @Nullable private Button mUndo;
     @Nullable private Button mRedo;
-    @Nullable private Button mFront;
-    @Nullable private Button mBack;
     @Nullable private BrushPanelView mBrushes;
     @Nullable private CheckBox mErase;
     @Nullable private CheckBox mShowResult;
@@ -170,8 +167,6 @@ public class EditorFragment extends Fragment {
         mDeleteZone = view.findViewById(R.id.editor_delete_zone);
         mUndo = view.findViewById(R.id.editor_undo);
         mRedo = view.findViewById(R.id.editor_redo);
-        mFront = view.findViewById(R.id.editor_front);
-        mBack = view.findViewById(R.id.editor_back);
         mBrushes = view.findViewById(R.id.editor_brushes);
         mErase = view.findViewById(R.id.editor_erase);
         mShowResult = view.findViewById(R.id.editor_show_result);
@@ -281,8 +276,6 @@ public class EditorFragment extends Fragment {
         mDeleteZone = null;
         mUndo = null;
         mRedo = null;
-        mFront = null;
-        mBack = null;
         mBrushes = null;
         mErase = null;
         mShowResult = null;
@@ -366,23 +359,16 @@ public class EditorFragment extends Fragment {
         File output = new File(directory == null ? requireContext().getFilesDir() : directory,
                 "edited-" + System.currentTimeMillis() + extensionOf(format));
         Drawing drawing = mDrawing == null ? null : mDrawing.getDrawing();
-        int[] size = overlaySize(mUprightWidth, mUprightHeight);
-        // The stickers are drawn here, on the main thread, and the ink beneath them off it.
-        Bitmap stickers = mOverlays == null || mOverlays.getOverlays().isEmpty() ? null
-                : mOverlays.toBitmap(size[0], size[1], 0);
-        Uri source = mUri;
         PictureEdits edits = edits();
+        if (mOverlays != null && (!mOverlays.getOverlays().isEmpty()
+                || (drawing != null && !drawing.isEmpty()))) {
+            // The ink and the stickers over it, as one picture to lay over the one edited.
+            int[] size = overlaySize(mUprightWidth, mUprightHeight);
+            edits = new PictureEdits.Builder(edits)
+                    .setOverlay(mOverlays.toBitmap(size[0], size[1], 0, drawing)).build();
+        }
         setBusy(true, null);
-        mExecutor.execute(() -> {
-            Bitmap overlay = overlay(drawing, stickers, size);
-            PictureEdits withOverlay = overlay == null ? edits
-                    : new PictureEdits.Builder(edits).setOverlay(overlay).build();
-            mHandler.post(() -> {
-                if (source.equals(mUri) && isAdded()) {
-                    startEditor(source, output, format, withOverlay);
-                }
-            });
-        });
+        startEditor(mUri, output, format, edits);
     }
 
     /** Writes the edited picture. */
@@ -440,22 +426,7 @@ public class EditorFragment extends Fragment {
                 Math.max(1, Math.round(height * scale))};
     }
 
-    /** The drawing with the stickers over it, as a picture to lay over the one edited, or null. */
-    @WorkerThread
-    @Nullable
-    private static Bitmap overlay(@Nullable Drawing drawing, @Nullable Bitmap stickers,
-            @NonNull int[] size) {
-        if (drawing == null || drawing.isEmpty()) {
-            return stickers;
-        }
-        Bitmap ink = drawing.toBitmap(size[0], size[1]);
-        if (stickers != null) {
-            new Canvas(ink).drawBitmap(stickers, 0, 0, null);
-        }
-        return ink;
-    }
-
-    /** Wires the sticker row, text, layer order and the delete zone to the overlay view. */
+    /** Wires the sticker row, text and the delete zone to the overlay view. */
     @MainThread
     private void setUpOverlays(@NonNull View root) {
         OverlayView overlays = mOverlays;
@@ -474,27 +445,12 @@ public class EditorFragment extends Fragment {
 
             @Override
             public void onSelectionChanged(@Nullable Overlay overlay) {
-                boolean chosen = overlay != null;
-                if (mDeleteZone != null && mFront != null && mBack != null) {
-                    mDeleteZone.setVisibility(chosen ? View.VISIBLE : View.GONE);
-                    mFront.setEnabled(chosen);
-                    mBack.setEnabled(chosen);
+                if (mDeleteZone != null) {
+                    mDeleteZone.setVisibility(overlay != null ? View.VISIBLE : View.GONE);
                 }
             }
         });
         root.findViewById(R.id.editor_text).setOnClickListener(v -> editText());
-        mFront.setOnClickListener(v -> {
-            String id = overlays.getSelectedId();
-            if (id != null) {
-                overlays.bringToFront(id);
-            }
-        });
-        mBack.setOnClickListener(v -> {
-            String id = overlays.getSelectedId();
-            if (id != null) {
-                overlays.sendToBack(id);
-            }
-        });
     }
 
     /** A sticker in the row: a tap adds it, and a long press drags it onto the picture. */

@@ -110,10 +110,6 @@
     <string name="editor_text">Text</string>
     <!-- Hint in the box where the text to add is typed -->
     <string name="editor_text_hint">Words to add</string>
-    <!-- Moves the chosen sticker or text above the others -->
-    <string name="editor_front">To front</string>
-    <!-- Moves the chosen sticker or text below the others -->
-    <string name="editor_back">To back</string>
     <!-- A sticker of a heart, to tap or drag onto the picture -->
     <string name="editor_sticker_heart">Heart sticker</string>
     <!-- An animated sticker of a spinning star, to tap or drag onto the picture -->

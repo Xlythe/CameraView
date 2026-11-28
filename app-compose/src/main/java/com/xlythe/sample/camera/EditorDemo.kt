@@ -8,7 +8,6 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.graphics.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -225,15 +224,6 @@ fun EditorDemoScreen(initialUri: Uri?) {
                 )
             }
             Button(onClick = { askingText = true }) { Text("Text") }
-            val selected = chosen
-            Button(
-                enabled = selected != null,
-                onClick = { selected?.let { overlayView?.bringToFront(it.id) } }
-            ) { Text("To front") }
-            Button(
-                enabled = selected != null,
-                onClick = { selected?.let { overlayView?.sendToBack(it.id) } }
-            ) { Text("To back") }
         }
         if (askingText) {
             val editing = chosen?.takeIf { it.kind == Overlay.KIND_TEXT }
@@ -324,24 +314,17 @@ fun EditorDemoScreen(initialUri: Uri?) {
                             val ink = drawing
                             val items = overlayView
                             val picture = preview
-                            val withOverlay = if (picture == null) edits else {
+                            val hasOverlay = (ink != null && !ink.isEmpty) ||
+                                items?.overlays?.isNotEmpty() == true
+                            val withOverlay = if (picture == null || items == null || !hasOverlay) {
+                                edits
+                            } else {
                                 val scale = minOf(1f, 2048f / maxOf(picture.width, picture.height))
                                 val width = (picture.width * scale).toInt().coerceAtLeast(1)
                                 val height = (picture.height * scale).toInt().coerceAtLeast(1)
-                                // Stickers are drawn on the main thread, the ink beneath them off it.
-                                val stickerLayer = items?.takeIf { it.overlays.isNotEmpty() }
-                                    ?.toBitmap(width, height, 0)
-                                val overlay = if (ink == null || ink.isEmpty) stickerLayer else {
-                                    withContext(Dispatchers.IO) {
-                                        ink.toBitmap(width, height).also { layer ->
-                                            stickerLayer?.let {
-                                                Canvas(layer).drawBitmap(it, 0f, 0f, null)
-                                            }
-                                        }
-                                    }
-                                }
-                                if (overlay == null) edits
-                                else PictureEdits.Builder(edits).setOverlay(overlay).build()
+                                // The ink and the stickers over it, as one picture.
+                                PictureEdits.Builder(edits)
+                                    .setOverlay(items.toBitmap(width, height, 0, ink)).build()
                             }
                             val file = editPicture(context, source, output, withOverlay, format, quality = 90)
                             edited?.delete()
