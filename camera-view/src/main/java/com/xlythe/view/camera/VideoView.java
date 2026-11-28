@@ -6,6 +6,8 @@ import android.content.res.TypedArray;
 import android.graphics.Matrix;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.media.MediaExtractor;
+import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
 import android.media.AudioAttributes;
 import android.media.AudioManager;
@@ -30,10 +32,14 @@ import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import androidx.annotation.MainThread;
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 import androidx.annotation.RequiresApi;
+import androidx.annotation.VisibleForTesting;
+import androidx.annotation.WorkerThread;
 
 import com.xlythe.view.camera.stream.AudioPlayer;
 import com.xlythe.view.camera.stream.VideoPlayer;
@@ -73,6 +79,17 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     private boolean mFitsInside;
     /** Hears whether a file or uri is ready to play. */
     @Nullable private PrepareListener mPrepareListener;
+    /** Shows an HDR file as HDR, where the display can, in place of the TextureView. */
+    private final HdrSurface mHdrSurface = new HdrSurface(this, () -> mTextureView);
+    /** Whether an HDR file may play on {@link #mHdrSurface}. */
+    private boolean mHdrEnabled = true;
+    /** The current file's claim on the HDR surface, or null while it plays on the TextureView. */
+    @Nullable private HdrSurface.Lease mHdrLease;
+    /**
+     * Where to pick up again once the HDR surface is back, in ms, after the window hiding it took
+     * the player down; or -1 to start from the first frame.
+     */
+    private int mResumePositionMs = -1;
 
     // ---------- File ----------
 
@@ -410,12 +427,17 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
 
     /** Container dimensions, already corrected for the rotation recorded in the file. */
     private static final class VideoMetadata {
+        /** The width the video shows at, upright. */
         final int width;
+        /** The height the video shows at, upright. */
         final int height;
+        /** Whether its brightness is encoded as HLG or PQ. */
+        final boolean hdr;
 
-        VideoMetadata(int width, int height) {
+        VideoMetadata(int width, int height, boolean hdr) {
             this.width = width;
             this.height = height;
+            this.hdr = hdr;
         }
     }
 
@@ -434,11 +456,13 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             int rotation = Build.VERSION.SDK_INT >= 17
                     ? extractAsInt(retriever, MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
                     : 0;
+            boolean hdr = isHdr(retriever, file, uri);
             if (DEBUG) Log.d(TAG, String.format(
-                    "Video metadata: width=%d, height=%d, rotation=%d", width, height, rotation));
+                    "Video metadata: width=%d, height=%d, rotation=%d, hdr=%b",
+                    width, height, rotation, hdr));
             return rotation == 90 || rotation == 270
-                    ? new VideoMetadata(height, width)
-                    : new VideoMetadata(width, height);
+                    ? new VideoMetadata(height, width, hdr)
+                    : new VideoMetadata(width, height, hdr);
         } catch (IOException | RuntimeException e) {
             Log.e(TAG, "Failed to read video metadata from " + (file == null ? uri : file), e);
             return null;
@@ -451,16 +475,125 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         }
     }
 
+    /**
+     * Whether a video's brightness is encoded as HLG or PQ.
+     *
+     * <p>Only asked where it can change anything: a window has no HDR colour mode before
+     * Android 8.0.</p>
+     */
+    @WorkerThread
+    private boolean isHdr(@NonNull MediaMetadataRetriever retriever, @Nullable File file,
+            @Nullable Uri uri) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            return isHdrTransfer(extractAsInt(
+                    retriever, MediaMetadataRetriever.METADATA_KEY_COLOR_TRANSFER));
+        }
+        if (Build.VERSION.SDK_INT < 26) {
+            return false;
+        }
+        MediaExtractor extractor = new MediaExtractor();
+        try {
+            if (file != null) {
+                extractor.setDataSource(file.getAbsolutePath());
+            } else {
+                extractor.setDataSource(getContext(), uri, null);
+            }
+            for (int i = 0; i < extractor.getTrackCount(); i++) {
+                MediaFormat format = extractor.getTrackFormat(i);
+                String mime = format.getString(MediaFormat.KEY_MIME);
+                if (mime != null && mime.startsWith("video/")
+                        && format.containsKey(MediaFormat.KEY_COLOR_TRANSFER)) {
+                    return isHdrTransfer(format.getInteger(MediaFormat.KEY_COLOR_TRANSFER));
+                }
+            }
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "Unable to read the colour of " + (file == null ? uri : file), e);
+        } finally {
+            extractor.release();
+        }
+        return false;
+    }
+
+    private static boolean isHdrTransfer(int transfer) {
+        return transfer == MediaFormat.COLOR_TRANSFER_ST2084
+                || transfer == MediaFormat.COLOR_TRANSFER_HLG;
+    }
+
+    /**
+     * Whether a file plays on the HDR surface: an HDR file, on a display that shows HDR, asked for
+     * no mirror, which a SurfaceView cannot show.
+     */
+    @MainThread
+    private boolean playsOnHdrSurface(@NonNull VideoMetadata metadata) {
+        return metadata.hdr && mHdrEnabled && !isMirrored() && mHdrSurface.isAvailable();
+    }
+
+    /**
+     * Starts preparing a file: on the HDR surface once there is one, where it plays there, and
+     * otherwise on the TextureView straight away.
+     */
+    @UiThread
+    private void startPreparing(@Nullable File file, @Nullable Uri uri,
+            @NonNull SurfaceTexture surfaceTexture, @NonNull VideoMetadata metadata,
+            int generation) {
+        if (!playsOnHdrSurface(metadata)) {
+            releaseHdrLease();
+            mHdrSurface.showSdr();
+            Surface surface = new Surface(surfaceTexture);
+            try {
+                startPreparing(file, uri, surface, metadata, generation);
+            } finally {
+                surface.release();
+            }
+            return;
+        }
+        releaseHdrLease();
+        mResumePositionMs = -1;
+        final HdrSurface.Lease[] holder = new HdrSurface.Lease[1];
+        holder[0] = mHdrSurface.acquire(0, 0, new HdrSurface.Listener() {
+            /** The generation the surface prepares; a lost surface prepares a new one. */
+            private int mGeneration = generation;
+
+            @Override
+            public void onSurfaceReady(@NonNull Surface surface) {
+                if (mHdrLease != holder[0] || mGeneration != mPrepareGeneration) {
+                    return;
+                }
+                startPreparing(file, uri, surface, metadata, mGeneration);
+            }
+
+            @Override
+            public void onSurfaceLost() {
+                if (mHdrLease != holder[0]) {
+                    return;
+                }
+                // The player draws into nothing until the window shows again, and then has to
+                // be given the new surface; it is quicker to prepare it again from where it was.
+                MediaPlayer player = mMediaPlayer;
+                if (player != null) {
+                    try {
+                        mResumePositionMs = player.getCurrentPosition();
+                    } catch (IllegalStateException notPrepared) {
+                        // Prepared from the start again.
+                    }
+                }
+                setPlayingState(false);
+                releasePlayerOnly();
+                mGeneration = mPrepareGeneration;
+            }
+        });
+        mHdrLease = holder[0];
+    }
+
     /** Prepares the player on the file, or on the uri when there is no file. */
     @UiThread
     private void startPreparing(@Nullable File file, @Nullable Uri uri,
-            SurfaceTexture surfaceTexture, VideoMetadata metadata, int generation) {
+            @NonNull Surface surface, @NonNull VideoMetadata metadata, int generation) {
         Object source = file == null ? uri : file;
         ensureMediaPlayer();
         transformPreview(metadata.width, metadata.height);
 
         closePreparingInputStream();
-        Surface surface = new Surface(surfaceTexture);
         try {
             // Reset stops whatever played from any state; stop would complain of a new player.
             Objects.requireNonNull(mMediaPlayer).reset();
@@ -489,7 +622,9 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 if (generation != mPrepareGeneration) {
                     return;
                 }
-                seekToFirstFrame();
+                int resumeAt = mResumePositionMs;
+                mResumePositionMs = -1;
+                seekToFrame(resumeAt > 0 ? resumeAt : 1);
                 if (mIsPlaying) {
                     playFile();
                 }
@@ -511,8 +646,6 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             closePreparingInputStream();
             setPlayingState(false);
             notifyPrepareFailed();
-        } finally {
-            surface.release();
         }
     }
 
@@ -595,6 +728,13 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     }
 
     private void releaseMediaPlayer() {
+        releasePlayerOnly();
+        releaseHdrLease();
+        mResumePositionMs = -1;
+    }
+
+    /** Releases the player, keeping the file's claim on the HDR surface. */
+    private void releasePlayerOnly() {
         // Invalidate any prepare still in flight, so its metadata cannot configure a player that
         // has gone away, and drop the descriptor it was holding open.
         mPrepareGeneration++;
@@ -604,6 +744,15 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         mMediaPlayer = null;
         if (mediaPlayer != null) {
             mediaPlayer.release();
+        }
+    }
+
+    /** Gives up the HDR surface, so the next file starts on the TextureView. */
+    private void releaseHdrLease() {
+        HdrSurface.Lease lease = mHdrLease;
+        mHdrLease = null;
+        if (lease != null) {
+            lease.release();
         }
     }
 
@@ -632,6 +781,8 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             case UNKNOWN:
                 break;
         }
+        // The window outlives the view, and should not stay in HDR on its behalf.
+        mHdrSurface.reset();
         super.onDetachedFromWindow();
     }
 
@@ -679,7 +830,12 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     }
 
     public void seekToFirstFrame() {
-        if (DEBUG) Log.d(TAG, "seekToFirstFrame()");
+        seekToFrame(1);
+    }
+
+    /** Shows the frame at a position, in ms, paused unless the view is playing. */
+    private void seekToFrame(int positionMs) {
+        if (DEBUG) Log.d(TAG, "seekToFrame(" + positionMs + ")");
         ensureMediaPlayer();
 
         try {
@@ -691,7 +847,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 }
             });
             mMediaPlayer.start();
-            mMediaPlayer.seekTo(1);
+            mMediaPlayer.seekTo(positionMs);
             mMediaPlayer.setLooping(isLooping());
         } catch (IllegalStateException e) {
             if (DEBUG) e.printStackTrace();
@@ -816,6 +972,44 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         return mIsLooping;
     }
 
+    /**
+     * Whether an HDR video shows as HDR on a display that can show it. On by default; off, it is
+     * tone-mapped like any other video, and follows every transform the view is given.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    public void setHdrEnabled(boolean enabled) {
+        if (mHdrEnabled == enabled) {
+            return;
+        }
+        mHdrEnabled = enabled;
+        if (mInputType == InputType.FILE && (mFile != null || mUri != null) && mIsAvailable) {
+            // Prepared again, onto whichever surface it belongs on now.
+            releaseMediaPlayer();
+            mHdrSurface.showSdr();
+            prepare();
+        }
+    }
+
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    public boolean isHdrEnabled() {
+        return mHdrEnabled;
+    }
+
+    /** Whether the video is showing on the HDR surface, for tests. */
+    @VisibleForTesting
+    boolean isShowingHdr() {
+        return mHdrLease != null && mHdrSurface.isShowing();
+    }
+
+    /** The HDR surface, for tests. */
+    @VisibleForTesting
+    @NonNull
+    HdrSurface getHdrSurface() {
+        return mHdrSurface;
+    }
+
     public void setVolume(float volume) {
         ensureMediaPlayer();
         float clampedVolume = Math.max(0f, Math.min(volume, 1f));
@@ -906,10 +1100,16 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         boolean mirrored = flipped != isMirrored();
         RectF whole = new RectF(0f, 0f, videoWidth, videoHeight);
         int rotation = TransformMath.within360(cameraOrientation);
-        mTextureView.setTransform(TransformMath.asTextureTransform(mFitsInside
+        Matrix transform = TransformMath.asTextureTransform(mFitsInside
                 ? TransformMath.centerInside(whole, rotation, mirrored, viewWidth, viewHeight)
                 : TransformMath.centerCrop(whole, rotation, mirrored, viewWidth, viewHeight),
-                videoWidth, videoHeight, viewWidth, viewHeight));
+                videoWidth, videoHeight, viewWidth, viewHeight);
+        mTextureView.setTransform(transform);
+        // The decoder turns a file's frames upright itself, and a file on the HDR surface is never
+        // mirrored, so what is left of the transform is a scale and a translation it can take.
+        if (mHdrLease != null) {
+            mHdrLease.setTransform(transform);
+        }
     }
 
     /**

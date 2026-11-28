@@ -11,6 +11,9 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.Size;
 
+import androidx.annotation.OptIn;
+import androidx.camera.core.ExperimentalZeroShutterLag;
+import androidx.camera.core.ImageCapture;
 import androidx.camera.core.resolutionselector.AspectRatioStrategy;
 import androidx.camera.core.resolutionselector.ResolutionSelector;
 import androidx.camera.core.resolutionselector.ResolutionStrategy;
@@ -172,6 +175,110 @@ public final class CameraXModuleTest {
                 LANDSCAPE_BUFFER, FULL_CROP, 90, false, true, 90, 0, 0).isIdentity());
     }
 
+    /**
+     * A portrait 16:9 stream in a portrait 16:9 view already fills it. The camera turns the
+     * buffer upright on its way to a SurfaceView, so nothing is left to do.
+     */
+    @Test
+    public void surfaceViewPreviewNeedsNoCorrectionWhenTheAspectRatioMatches() {
+        assertTrue(CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, FULL_CROP, 90, false, 90, 1080, 1920).isIdentity());
+        // A mirrored front camera, whose flip the camera applies too.
+        assertTrue(CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, FULL_CROP, 270, true, 270, 1080, 1920).isIdentity());
+    }
+
+    /**
+     * On a taller view the SurfaceView is scaled up and centred, to exactly the bounds the
+     * TextureView path and Camera2 produce, so switching to an HDR preview moves nothing.
+     */
+    @Test
+    public void surfaceViewPreviewCenterCropsLikeTheTextureView() {
+        Matrix transform = CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, FULL_CROP, 90, false, 90, 1080, 2400);
+        assertEquals(new RectF(-135f, 0f, 1215f, 2400f), shown(transform, 1080, 2400));
+        assertScaleAndTranslationOnly(transform);
+    }
+
+    /**
+     * In landscape the display rotation is undone by the compositor rather than by the transform,
+     * so the stream arrives landscape and is cropped top and bottom, not turned.
+     */
+    @Test
+    public void surfaceViewPreviewLeavesTheDisplayRotationToTheCompositor() {
+        Matrix transform = CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, FULL_CROP, 0, false, 90, 2400, 1080);
+        assertEquals(new RectF(0f, -135f, 2400f, 1215f), shown(transform, 2400, 1080));
+        assertScaleAndTranslationOnly(transform);
+
+        // A front camera in landscape is left the same turn, despite mirroring.
+        Matrix front = CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, FULL_CROP, 0, true, 270, 2400, 1080);
+        assertEquals(new RectF(0f, -135f, 2400f, 1215f), shown(front, 2400, 1080));
+    }
+
+    /**
+     * A ViewPort crop is what has to fill the view, and the rest of the buffer hangs off its
+     * edges. Here a 4:3 crop out of the middle of a 16:9 buffer, in a 3:4 portrait view: the
+     * whole buffer is 1080x1920 once upright, of which the crop is the middle 1440 rows.
+     */
+    @Test
+    public void surfaceViewPreviewFillsTheViewWithTheCrop() {
+        Matrix transform = CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, new Rect(240, 0, 1680, 1080), 90, false, 90, 1080, 1440);
+        assertEquals(new RectF(0f, -240f, 1080f, 1680f), shown(transform, 1080, 1440));
+        assertScaleAndTranslationOnly(transform);
+    }
+
+    /**
+     * Where the crop sits in the buffer follows the camera's turn: a crop off one end of the
+     * sensor's long side is the top of a back camera's portrait frame, and the bottom of a front
+     * camera's, which is turned the other way.
+     */
+    @Test
+    public void surfaceViewPreviewFollowsTheCropThroughTheCameraTurn() {
+        Rect leftEnd = new Rect(0, 0, 960, 1080);
+        Matrix back = CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, leftEnd, 90, false, 90, 1080, 960);
+        // Upright, the left end of a sensor turned a quarter clockwise is the top of the frame,
+        // so the buffer hangs off the bottom of the view.
+        assertEquals(new RectF(0f, 0f, 1080f, 1920f), shown(back, 1080, 960));
+
+        // So the buffer hangs off the top instead.
+        Matrix front = CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, leftEnd, 270, true, 270, 1080, 960);
+        assertEquals(new RectF(0f, -960f, 1080f, 960f), shown(front, 1080, 960));
+    }
+
+    @Test
+    public void degenerateSurfaceViewGeometryFallsBackToTheIdentity() {
+        assertTrue(CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, new Rect(), 90, false, 90, 1080, 1920).isIdentity());
+        assertTrue(CameraXMath.createSurfaceViewTransform(
+                LANDSCAPE_BUFFER, FULL_CROP, 90, false, 90, 0, 0).isIdentity());
+        assertTrue(CameraXMath.createSurfaceViewTransform(
+                new Size(0, 0), FULL_CROP, 90, false, 90, 1080, 1920).isIdentity());
+    }
+
+    /** Where a SurfaceView's stretched buffer lands once the transform is applied to the view. */
+    private static RectF shown(Matrix transform, int viewWidth, int viewHeight) {
+        RectF bounds = new RectF(0, 0, viewWidth, viewHeight);
+        transform.mapRect(bounds);
+        bounds.set(Math.round(bounds.left), Math.round(bounds.top),
+                Math.round(bounds.right), Math.round(bounds.bottom));
+        return bounds;
+    }
+
+    /** A View can scale and move a SurfaceView, and cannot turn, skew or flip one. */
+    private static void assertScaleAndTranslationOnly(Matrix transform) {
+        float[] values = new float[9];
+        transform.getValues(values);
+        assertEquals(0f, values[Matrix.MSKEW_X], 0f);
+        assertEquals(0f, values[Matrix.MSKEW_Y], 0f);
+        assertTrue(values[Matrix.MSCALE_X] > 0f);
+        assertTrue(values[Matrix.MSCALE_Y] > 0f);
+    }
+
     @Test
     public void qualityPrioritiesAreOrderedAndNeverEmpty() {
         assertEquals(Arrays.asList(Quality.UHD, Quality.FHD, Quality.HD, Quality.SD),
@@ -213,6 +320,24 @@ public final class CameraXModuleTest {
             assertEquals(format + " otherwise", format,
                     CameraXModule.boundPictureFormat(format, false));
         }
+    }
+
+    /**
+     * A picture comes from kept frames where the camera keeps them, below MAX and for anything
+     * but RAW. A drawn still is no exception, since it is taken apart from the effect and drawn
+     * after: taken without kept frames, it came out smaller than the undrawn picture.
+     */
+    @OptIn(markerClass = ExperimentalZeroShutterLag.class)
+    @Test
+    public void aStillIsTakenFromKeptFramesWhereTheCameraKeepsThem() {
+        assertEquals(ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, true, CameraView.PictureFormat.JPEG));
+        assertEquals(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, false, CameraView.PictureFormat.JPEG));
+        assertEquals(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, true, CameraView.PictureFormat.RAW));
+        assertEquals(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY, CameraXModule.captureMode(
+                CameraView.Quality.MAX, true, CameraView.PictureFormat.JPEG));
     }
 
     /**

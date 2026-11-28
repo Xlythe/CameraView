@@ -5,6 +5,7 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.ColorSpace;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
@@ -127,7 +128,8 @@ final class ImageSources {
         }
         RegionSource source;
         try {
-            source = DecoderRegionSource.open(location.openDescriptor(context));
+            source = DecoderRegionSource.open(location.openDescriptor(context),
+                    HdrStills.config(bounds), declaredHdrColorSpace(context, location, bounds));
             if (Build.VERSION.SDK_INT < 24 && !decodesAPiece(source)) {
                 source.close();
                 throw new IOException("The region decoder opened it but decodes nothing");
@@ -221,6 +223,24 @@ final class ImageSources {
         }
         trim(directory);
         return copy;
+    }
+
+    /**
+     * The HDR colour space a picture names that the platform does not decode it into, or null.
+     */
+    @WorkerThread
+    @Nullable
+    private static ColorSpace declaredHdrColorSpace(@NonNull Context context,
+            @NonNull ImageLocation location, @NonNull BitmapFactory.Options bounds) {
+        if (Build.VERSION.SDK_INT < 34 || HdrStills.isHdr(bounds)) {
+            return null;
+        }
+        try (InputStream input = location.open(context)) {
+            return HdrStills.declaredHdrColorSpace(input);
+        } catch (IOException | RuntimeException e) {
+            Log.d(TAG, "Unable to read the colour of " + location, e);
+            return null;
+        }
     }
 
     /**

@@ -81,9 +81,9 @@ import java.util.concurrent.TimeUnit;
  *   <li>an animated GIF, WebP or PNG, which plays as soon as it shows and a tap pauses.</li>
  * </ul>
  *
- * <p>HDR pictures and videos put the window in HDR colour mode while they show, where the device
- * has one, and it goes back once nothing in the window shows HDR. A picture's gain map is drawn
- * in HDR; a video is drawn tone-mapped to standard range.</p>
+ * <p>HDR pictures and videos show in HDR on a display that can, with the window in HDR colour
+ * mode while they do; it goes back once nothing in the window shows HDR. A video whose frames are
+ * HLG or PQ is drawn in HDR, but a 360&deg; one is drawn tone-mapped to standard range.</p>
  *
  * <h2>What each release shows</h2>
  * <ul>
@@ -99,6 +99,9 @@ import java.util.concurrent.TimeUnit;
  *       fails.</li>
  *   <li>Gain maps in HDR from Android 14. Before it, an Ultra HDR picture shows as an ordinary
  *       one.</li>
+ *   <li>Pictures that are HDR without a gain map - a 10-bit HEIF or AVIF in HLG or PQ, or a PNG
+ *       whose cICP chunk names one - in HDR from Android 14. Before it they are tone-mapped.</li>
+ *   <li>HLG and PQ videos in HDR from Android 8.0, on a display that can show HDR.</li>
  *   <li>Videos and sound in whichever codecs the device decodes. QuickTime movies that open
  *       without a file type, as older ones and some Live Photos do, play from a copy the
  *       platform recognises, kept in the app's cache.</li>
@@ -496,6 +499,7 @@ public class MediaView extends FrameLayout {
     private void showVideo(@NonNull ImageLocation location) {
         VideoView video = new VideoView(getContext());
         video.setFitsInside(true);
+        video.setHdrEnabled(mHdrEnabled);
         // Taps are this view's to decide, so the video does not play or pause on its own.
         video.setClickable(true);
         ViewCompat.setImportantForAccessibility(video,
@@ -1181,12 +1185,15 @@ public class MediaView extends FrameLayout {
     }
 
     /**
-     * Whether HDR pictures and videos put the window in HDR colour mode while they show. On by
-     * default.
+     * Whether HDR pictures and videos show in HDR, putting the window in HDR colour mode while
+     * they show. On by default; off, they are tone-mapped like everything else.
      */
     @MainThread
     public void setHdrEnabled(boolean enabled) {
         mHdrEnabled = enabled;
+        if (mContent instanceof VideoView) {
+            ((VideoView) mContent).setHdrEnabled(enabled);
+        }
         holdHdr(mDetection != null && mDetection.hdr && mType != AUDIO);
     }
 

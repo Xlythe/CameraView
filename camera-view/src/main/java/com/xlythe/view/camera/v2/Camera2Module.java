@@ -18,11 +18,14 @@ import android.hardware.camera2.CameraMetadata;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.params.ColorSpaceProfiles;
+import android.hardware.camera2.params.DynamicRangeProfiles;
 import android.hardware.camera2.params.MeteringRectangle;
 import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.ImageReader;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -36,11 +39,13 @@ import android.util.Size;
 import android.util.SizeF;
 import android.view.Surface;
 
+import com.xlythe.view.camera.BusyCameraRetry;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.FrameStream;
+import com.xlythe.view.camera.HdrSurface;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.SegmentationAnalyzer;
 import com.xlythe.view.camera.TransformMath;
@@ -77,6 +82,16 @@ import static java.lang.String.format;
 @RequiresApi(21)
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class Camera2Module extends ICameraModule {
+    /**
+     * DynamicRangeProfiles.STANDARD: an 8-bit stream, which every camera has. Named here because
+     * the class it belongs to arrived in API 33.
+     */
+    static final long STANDARD_PROFILE = 1L;
+
+    /** The level {@link #main10Level()} found, once it has looked. */
+    @Nullable
+    private static Integer sMain10Level;
+
     /** Maximum automatic reopen attempts before reporting a terminal Camera2 failure. */
     private static final int MAX_REOPEN_ATTEMPTS = 1;
 
@@ -639,6 +654,9 @@ public class Camera2Module extends ICameraModule {
     /** Number of consecutive reopen attempts since the last usable capture session. */
     private int mReopenAttempts;
 
+    /** Opens the camera again while another client holds it, for a short while. */
+    @NonNull private final BusyCameraRetry mBusyRetry;
+
     /**
      * Generation to open after the previous Camera2 device reports that it has fully closed, or
      * zero when no lens switch is waiting for device release.
@@ -665,27 +683,36 @@ public class Camera2Module extends ICameraModule {
 
     private CameraDevice.StateCallback createStateCallback(final int generation) {
         return new CameraDevice.StateCallback() {
+            /** Whether this open reached onOpened, after which a disconnect is not a busy camera. */
+            private boolean mOpened;
+
             @Override
             public void onOpened(@NonNull CameraDevice cameraDevice) {
+                mOpened = true;
                 if (!mIsOpen || generation != mGeneration) {
                     Log.w(TAG, "Ignoring a stale Camera2 open callback");
                     cameraDevice.close();
                     return;
                 }
 
+                mBusyRetry.cancel();
                 mCameraDevice = cameraDevice;
                 setSession(new PictureSession(Camera2Module.this));
             }
 
             @Override
             public void onDisconnected(@NonNull CameraDevice cameraDevice) {
-                handleCameraFailure(cameraDevice, generation, "Camera disconnected");
+                // Disconnected before it opened, the camera was taken by another client while
+                // this one was connecting, which is a camera changing hands.
+                handleCameraFailure(cameraDevice, generation, "Camera disconnected",
+                        !mOpened /* busy */, false /* permanent */);
             }
 
             @Override
             public void onError(@NonNull CameraDevice cameraDevice, int error) {
                 handleCameraFailure(cameraDevice, generation,
-                        "Camera device error: " + Camera2Module.toString(error));
+                        "Camera device error: " + Camera2Module.toString(error),
+                        isBusy(error), error == ERROR_CAMERA_DISABLED);
             }
 
             @Override
@@ -709,15 +736,68 @@ public class Camera2Module extends ICameraModule {
             mActiveCamera = getActiveCamera();
             if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
             mCameraManager.openCamera(mActiveCamera, createStateCallback(generation), mHandler);
-        } catch (CameraAccessException | RuntimeException e) {
-            mIsOpen = false;
-            closeCameraResources();
-            onCameraError(new IllegalStateException("Failed to open Camera2 device", e));
+        } catch (CameraAccessException e) {
+            // A camera in use is reported both here and to onError. Retrying moves the generation
+            // on, so the onError that follows is ignored as stale.
+            if (isBusy(e) && retryWhileBusy()) {
+                Log.w(TAG, "Camera " + mActiveCamera + " is in use; trying again", e);
+                return;
+            }
+            failToOpen(e);
+        } catch (RuntimeException e) {
+            failToOpen(e);
         }
     }
 
+    @MainThread
+    private void failToOpen(@NonNull Exception error) {
+        mIsOpen = false;
+        mBusyRetry.cancel();
+        closeCameraResources();
+        onCameraError(new IllegalStateException("Failed to open Camera2 device", error));
+    }
+
+    /**
+     * Opens the camera again shortly, under a new generation, while another client holds it.
+     *
+     * @return false once the camera has been busy for longer than the retry allows, or when the
+     *     camera is no longer wanted
+     */
+    @MainThread
+    private boolean retryWhileBusy() {
+        if (!mIsOpen) {
+            return false;
+        }
+        int retryGeneration = ++mGeneration;
+        return mBusyRetry.retry(() -> {
+            if (mIsOpen && retryGeneration == mGeneration) {
+                openCamera(retryGeneration);
+            }
+        });
+    }
+
+    /** Whether a camera refused because another client has it, or has too many others open. */
+    static boolean isBusy(int stateCallbackError) {
+        return stateCallbackError == CameraDevice.StateCallback.ERROR_CAMERA_IN_USE
+                || stateCallbackError == CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE;
+    }
+
+    /** The same, for the refusal openCamera throws, which names these reasons from API 23. */
+    static boolean isBusy(@NonNull CameraAccessException error) {
+        return Build.VERSION.SDK_INT >= 23
+                && (error.getReason() == CameraAccessException.CAMERA_IN_USE
+                || error.getReason() == CameraAccessException.MAX_CAMERAS_IN_USE);
+    }
+
+    /**
+     * Answers a camera that failed or went away.
+     *
+     * @param busy whether another client refused or took it, which is tried again for a short
+     *     while
+     * @param permanent whether it refuses however often it is asked, which is reported at once
+     */
     private void handleCameraFailure(@NonNull CameraDevice cameraDevice, int generation,
-            String message) {
+            String message, boolean busy, boolean permanent) {
         Log.e(TAG, message);
         cameraDevice.close();
         if (generation != mGeneration) {
@@ -725,7 +805,16 @@ public class Camera2Module extends ICameraModule {
             return;
         }
 
-        boolean shouldReopen = mIsOpen && mReopenAttempts < MAX_REOPEN_ATTEMPTS;
+        if (busy && mIsOpen) {
+            closeCameraResources();
+            if (!retryWhileBusy()) {
+                mIsOpen = false;
+                onCameraError(new IllegalStateException(message));
+            }
+            return;
+        }
+
+        boolean shouldReopen = mIsOpen && !permanent && mReopenAttempts < MAX_REOPEN_ATTEMPTS;
         closeCameraResources();
         if (shouldReopen) {
             mReopenAttempts++;
@@ -761,6 +850,7 @@ public class Camera2Module extends ICameraModule {
         super(cameraView);
         mCameraManager = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
         mHandler = new Handler(Looper.getMainLooper());
+        mBusyRetry = new BusyCameraRetry(mHandler);
     }
 
     private void setSession(final Session session) {
@@ -818,9 +908,24 @@ public class Camera2Module extends ICameraModule {
                 throw new IllegalStateException("Camera has no stream configuration map");
             }
             session.initialize(map);
+            // An HDR preview's surface can still be on its way; the session is built once it is.
+            if (!session.awaitSurfaces(() -> mHandler.post(() -> configureSession(session)))) {
+                return;
+            }
+            configureSession(session);
+        } catch (CameraAccessException | RuntimeException e) {
+            failSession(session, null, "Failed to create capture session", e);
+        }
+    }
 
+    /** Asks the device for a session around every surface the session has. */
+    private void configureSession(@NonNull final Session session) {
+        if (!mIsOpen || mCameraDevice == null || mRegisteringSession != session) {
+            return;
+        }
+        try {
             // Now, with all of our surfaces, we'll ask for a new session
-            createCaptureSession(session.getSurfaces(), new CameraCaptureSession.StateCallback() {
+            createCaptureSession(session, new CameraCaptureSession.StateCallback() {
                 @Override
                 public void onConfigured(@NonNull CameraCaptureSession cameraCaptureSession) {
                     if (!mIsOpen || mCameraDevice == null || mRegisteringSession != session) {
@@ -872,19 +977,24 @@ public class Camera2Module extends ICameraModule {
     }
 
     /**
-     * Asks the device for a session, naming a colour space when one was asked for.
+     * Asks the device for a session, naming a colour space when one was asked for, and the
+     * dynamic range of any output that streams HDR.
      *
-     * <p>A colour space belongs to the session configuration, which means the newer
-     * SessionConfiguration form of createCaptureSession and API 34. The older call is kept for
-     * everything else rather than replaced: it is the path every device this library has ever run
-     * on uses, and it has nothing to gain from being rewritten for a feature that is not in
-     * play.</p>
+     * <p>Both belong to the session configuration, which means the newer SessionConfiguration
+     * form of createCaptureSession. The older call is kept for everything else rather than
+     * replaced: it is the path every device this library has ever run on uses, and it has nothing
+     * to gain from being rewritten for a feature that is not in play.</p>
      */
-    private void createCaptureSession(@NonNull List<Surface> surfaces,
+    private void createCaptureSession(@NonNull Session session,
             @NonNull CameraCaptureSession.StateCallback callback) throws CameraAccessException {
         CameraDevice device = mCameraDevice;
         if (device == null) {
             throw new IllegalStateException("Camera has no device to configure");
+        }
+        List<Surface> surfaces = session.getSurfaces();
+        if (Build.VERSION.SDK_INT >= 33 && hasTenBitOutput(session, surfaces)) {
+            createTenBitSession(device, session, surfaces, callback);
+            return;
         }
         if (Build.VERSION.SDK_INT < 34 || getColorSpace() == CameraView.ColorSpace.SRGB) {
             device.createCaptureSession(surfaces, callback, mHandler);
@@ -904,6 +1014,229 @@ public class Camera2Module extends ICameraModule {
                 SessionConfiguration.SESSION_REGULAR, outputs, mHandler::post, callback);
         configuration.setColorSpace(named);
         device.createCaptureSession(configuration);
+    }
+
+    /** Whether any of a session's outputs streams in a 10-bit profile. */
+    private static boolean hasTenBitOutput(@NonNull Session session,
+            @NonNull List<Surface> surfaces) {
+        for (Surface surface : surfaces) {
+            if (session.getDynamicRangeProfile(surface) != STANDARD_PROFILE) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Builds a session some of whose outputs stream HDR.
+     *
+     * <p>A 10-bit stream is BT.2020, so no other colour space is asked of the session: what the
+     * camera writes in HDR is HDR's own.</p>
+     */
+    @RequiresApi(33)
+    private void createTenBitSession(@NonNull CameraDevice device, @NonNull Session session,
+            @NonNull List<Surface> surfaces, @NonNull CameraCaptureSession.StateCallback callback)
+            throws CameraAccessException {
+        if (getColorSpace() != CameraView.ColorSpace.SRGB) {
+            Log.w(TAG, "An HDR stream is BT.2020, so this session leaves its colour space alone");
+        }
+        List<OutputConfiguration> outputs = new ArrayList<>(surfaces.size());
+        for (Surface surface : surfaces) {
+            OutputConfiguration output = new OutputConfiguration(surface);
+            setProfile(output, session.getDynamicRangeProfile(surface));
+            outputs.add(output);
+        }
+        device.createCaptureSession(new SessionConfiguration(
+                SessionConfiguration.SESSION_REGULAR, outputs, mHandler::post, callback));
+    }
+
+    /**
+     * Names the profile an output streams in. The library streams in only two, so each is named
+     * as the platform's own constant.
+     */
+    @RequiresApi(33)
+    private static void setProfile(@NonNull OutputConfiguration output, long profile) {
+        output.setDynamicRangeProfile(profile == DynamicRangeProfiles.HLG10
+                ? DynamicRangeProfiles.HLG10 : DynamicRangeProfiles.STANDARD);
+    }
+
+    /**
+     * The 10-bit profile an HDR preview or recording streams in: HLG, which is what an HDR
+     * recording is written as, or {@link #STANDARD_PROFILE} for a camera that has no HLG stream.
+     */
+    @RequiresApi(33)
+    static long hdrProfile(@Nullable CameraCharacteristics characteristics) {
+        if (characteristics == null) {
+            return STANDARD_PROFILE;
+        }
+        int[] capabilities =
+                characteristics.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+        boolean tenBit = false;
+        if (capabilities != null) {
+            for (int capability : capabilities) {
+                if (capability == CameraCharacteristics
+                        .REQUEST_AVAILABLE_CAPABILITIES_DYNAMIC_RANGE_TEN_BIT) {
+                    tenBit = true;
+                }
+            }
+        }
+        DynamicRangeProfiles profiles = characteristics.get(
+                CameraCharacteristics.REQUEST_AVAILABLE_DYNAMIC_RANGE_PROFILES);
+        return tenBit && profiles != null
+                && profiles.getSupportedProfiles().contains(DynamicRangeProfiles.HLG10)
+                ? DynamicRangeProfiles.HLG10 : STANDARD_PROFILE;
+    }
+
+    /**
+     * The highest level an HEVC encoder here writes Main 10 at, which is what an HDR recording
+     * is encoded as, or 0 where none does.
+     */
+    static int main10Level() {
+        Integer level = sMain10Level;
+        if (level == null) {
+            level = 0;
+            try {
+                for (MediaCodecInfo info
+                        : new MediaCodecList(MediaCodecList.REGULAR_CODECS).getCodecInfos()) {
+                    if (!info.isEncoder()) {
+                        continue;
+                    }
+                    for (String type : info.getSupportedTypes()) {
+                        if (!"video/hevc".equalsIgnoreCase(type)) {
+                            continue;
+                        }
+                        for (MediaCodecInfo.CodecProfileLevel profileLevel
+                                : info.getCapabilitiesForType(type).profileLevels) {
+                            if (profileLevel.profile
+                                    == MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10) {
+                                level = Math.max(level, profileLevel.level);
+                            }
+                        }
+                    }
+                }
+            } catch (RuntimeException error) {
+                Log.w(TAG, "Unable to list the video encoders", error);
+            }
+            sMain10Level = level;
+        }
+        return level;
+    }
+
+    /** Forgets the encoder level read before, for tests that change the encoders. */
+    @VisibleForTesting
+    static void resetMain10Level() {
+        sMain10Level = null;
+    }
+
+    @Override
+    public synchronized boolean isDynamicRangeSupported(CameraView.DynamicRange dynamicRange) {
+        if (dynamicRange != CameraView.DynamicRange.HDR) {
+            return super.isDynamicRangeSupported(dynamicRange);
+        }
+        // A recording drawn through the renderer is 8-bit by the time it reaches the encoder.
+        return Build.VERSION.SDK_INT >= 33 && !isDrawingFrames()
+                && hdrProfile(getCameraCharacteristics()) != STANDARD_PROFILE
+                && main10Level() > 0;
+    }
+
+    @Override
+    public synchronized void setDynamicRange(CameraView.DynamicRange dynamicRange) {
+        CameraView.DynamicRange before = getDynamicRange();
+        super.setDynamicRange(dynamicRange);
+        if (getDynamicRange() != before) {
+            // The preview's dynamic range belongs to its output, which the session is built
+            // around.
+            restartActiveSession();
+        }
+    }
+
+    /** Whether an HDR recording is wanted, and this camera can make one. */
+    boolean recordsHdr() {
+        return getDynamicRange() == CameraView.DynamicRange.HDR
+                && isDynamicRangeSupported(CameraView.DynamicRange.HDR);
+    }
+
+    @Override
+    public void setHdrPreviewEnabled(boolean enabled) {
+        boolean before = isHdrPreviewEnabled();
+        super.setHdrPreviewEnabled(enabled);
+        if (enabled != before) {
+            restartActiveSession();
+        }
+    }
+
+    @Override
+    public boolean isHdrPreviewSupported() {
+        return Build.VERSION.SDK_INT >= 33 && !isDrawingFrames()
+                && hdrProfile(getCameraCharacteristics()) != STANDARD_PROFILE
+                && getHdrSurface().isAvailable();
+    }
+
+    /** Whether a preview that streams HDR is to be shown as HDR, on the HDR surface. */
+    @MainThread
+    boolean showsHdrPreview() {
+        return isHdrPreviewEnabled() && getHdrSurface().isAvailable();
+    }
+
+    /** Where a preview that streams HDR is shown as HDR. */
+    @MainThread
+    @NonNull
+    HdrSurface hdrSurface() {
+        return getHdrSurface();
+    }
+
+    /**
+     * Whether the camera would stream a 10-bit preview of this size beside its largest still in
+     * a format. Anything but a clear yes is a no.
+     */
+    @RequiresApi(33)
+    boolean supportsHdrPreview(@NonNull Size previewSize, int stillFormat) {
+        CameraDevice device = mCameraDevice;
+        CameraCharacteristics characteristics = getCameraCharacteristics();
+        long profile = hdrProfile(characteristics);
+        if (device == null || characteristics == null || profile == STANDARD_PROFILE) {
+            return false;
+        }
+        ImageReader probeReader = null;
+        try {
+            StreamConfigurationMap map =
+                    characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+            Size[] stills = map == null ? null : map.getOutputSizes(stillFormat);
+            if (stills == null || stills.length == 0) {
+                return false;
+            }
+            Size still = Collections.max(Arrays.asList(stills),
+                    new SessionImpl.CameraSurface.CompareSizesByArea());
+            probeReader = ImageReader.newInstance(
+                    still.getWidth(), still.getHeight(), stillFormat, 1);
+            OutputConfiguration preview =
+                    new OutputConfiguration(previewSize, SurfaceTexture.class);
+            setProfile(preview, profile);
+            List<OutputConfiguration> outputs = Arrays.asList(
+                    preview, new OutputConfiguration(probeReader.getSurface()));
+            SessionConfiguration configuration = new SessionConfiguration(
+                    SessionConfiguration.SESSION_REGULAR, outputs, mHandler::post,
+                    new CameraCaptureSession.StateCallback() {
+                        @Override public void onConfigured(@NonNull CameraCaptureSession session) {}
+                        @Override public void onConfigureFailed(@NonNull CameraCaptureSession session) {}
+                    });
+            return device.isSessionConfigurationSupported(configuration);
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera could not confirm an HDR preview", error);
+            return false;
+        } finally {
+            if (probeReader != null) {
+                probeReader.close();
+            }
+        }
+    }
+
+    /**
+     * Builds the session again around a new HDR surface, after the window hid the one it had.
+     */
+    @MainThread
+    void onHdrSurfaceLost() {
+        restartActiveSession();
     }
 
     private void failSession(Session session, @Nullable CameraCaptureSession captureSession,
@@ -993,6 +1326,7 @@ public class Camera2Module extends ICameraModule {
         closeCameraResources();
         mIsOpen = true;
         mReopenAttempts = 0;
+        mBusyRetry.cancel();
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         openCamera(++mGeneration);
@@ -1012,6 +1346,7 @@ public class Camera2Module extends ICameraModule {
         }
         mIsOpen = false;
         mReopenAttempts = 0;
+        mBusyRetry.cancel();
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         mIsFocusPending = false;
@@ -1091,6 +1426,7 @@ public class Camera2Module extends ICameraModule {
         boolean mustAwaitDeviceClose = deviceToClose != null;
         mIsOpen = false;
         mReopenAttempts = 0;
+        mBusyRetry.cancel();
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         mGeneration++;
@@ -2667,6 +3003,20 @@ public class Camera2Module extends ICameraModule {
      */
     interface Session {
         void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException;
+
+        /**
+         * Whether every surface is ready, once initialized; if not, the session is configured
+         * once {@code whenReady} runs.
+         */
+        default boolean awaitSurfaces(@NonNull Runnable whenReady) {
+            return true;
+        }
+
+        /** The dynamic range profile an output streams in. */
+        default long getDynamicRangeProfile(@NonNull Surface surface) {
+            return STANDARD_PROFILE;
+        }
+
         void onLayoutChanged() throws CameraAccessException;
         @NonNull List<Surface> getSurfaces();
         void setMeteringRectangle(@Nullable MeteringRectangle meteringRectangle);

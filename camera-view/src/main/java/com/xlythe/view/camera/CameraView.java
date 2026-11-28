@@ -221,6 +221,8 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_MATCH_PREVIEW_ASPECT_RATIO = "match_preview_aspect_ratio";
     /** Saved-state key for dynamic range. */
     private static final String EXTRA_DYNAMIC_RANGE = "dynamic_range";
+    /** Saved-state key for whether the preview may show in HDR. */
+    private static final String EXTRA_HDR_PREVIEW = "hdr_preview";
     /** Saved-state key for the CameraX photo extension. */
     private static final String EXTRA_EXTENSION = "extension";
     /** Saved-state key for stabilization. */
@@ -516,6 +518,8 @@ public class CameraView extends FrameLayout {
     private OnCameraStateChangedListener mOnCameraStateChangedListener;
 
     private TextureView mCameraView;
+    /** Takes the preview off the TextureView while the camera streams HDR. */
+    private final HdrSurface mHdrSurface = new HdrSurface(this, this::asTextureView);
     private ImageView mImagePreview;
     private VideoView mVideoPreview;
 
@@ -734,6 +738,7 @@ public class CameraView extends FrameLayout {
         state.putBoolean(EXTRA_CONFIRM_VIDEO, isVideoConfirmationEnabled());
         state.putBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO, isMatchPreviewAspectRatioEnabled());
         state.putInt(EXTRA_DYNAMIC_RANGE, getDynamicRange().id);
+        state.putBoolean(EXTRA_HDR_PREVIEW, isHdrPreviewEnabled());
         state.putInt(EXTRA_EXTENSION, getExtension().id);
         state.putBoolean(EXTRA_STABILIZATION, isStabilizationEnabled());
         state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
@@ -773,6 +778,7 @@ public class CameraView extends FrameLayout {
             setVideoConfirmationEnabled(state.getBoolean(EXTRA_CONFIRM_VIDEO));
             setMatchPreviewAspectRatio(state.getBoolean(EXTRA_MATCH_PREVIEW_ASPECT_RATIO));
             setDynamicRange(DynamicRange.fromId(state.getInt(EXTRA_DYNAMIC_RANGE, DynamicRange.SDR.id)));
+            setHdrPreviewEnabled(state.getBoolean(EXTRA_HDR_PREVIEW, true));
             setExtension(Extension.fromId(state.getInt(EXTRA_EXTENSION, Extension.NONE.id)));
             setStabilizationEnabled(state.getBoolean(EXTRA_STABILIZATION));
             setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
@@ -961,8 +967,21 @@ public class CameraView extends FrameLayout {
         return displayRotation;
     }
 
+    /**
+     * The view the preview is drawn on.
+     *
+     * <p>Except while an HDR recording is being framed on a display that can show HDR: the
+     * TextureView cannot carry an HDR stream, so for that stretch the preview is drawn on a
+     * SurfaceView instead and this view is hidden.</p>
+     */
     public TextureView asTextureView() {
         return mCameraView;
+    }
+
+    /** Where a backend shows a preview stream that carries HDR. */
+    @NonNull
+    HdrSurface getHdrSurface() {
+        return mHdrSurface;
     }
 
     @UiThread
@@ -1338,6 +1357,7 @@ public class CameraView extends FrameLayout {
         finishZoomAnimation();
         mCameraModule.close();
         mCameraModule.releaseSounds();
+        mHdrSurface.reset();
 
         if (!mHasSavedState) {
             // Destroy the TextureView we used for the previous round of camera activity. This is
@@ -2416,6 +2436,38 @@ public class CameraView extends FrameLayout {
         return mCameraModule.isDynamicRangeSupported(dynamicRange);
     }
 
+    /**
+     * Whether the preview may show in HDR while it frames HDR: a recording with
+     * {@link #setDynamicRange} set to HDR, or pictures in {@link PictureFormat#ULTRA_HDR}. On by
+     * default, and only possible where {@link #isHdrPreviewSupported()}.
+     *
+     * <p>While it shows in HDR, the window is in HDR colour mode, and the preview follows only
+     * the scaling and translation this view is given: not its alpha, rotation or a mirror.
+     * Turn it off for a preview that has to follow those; it then shows tone-mapped, as on a
+     * display without HDR.</p>
+     */
+    @UiThread
+    public void setHdrPreviewEnabled(boolean enabled) {
+        mCameraModule.setHdrPreviewEnabled(enabled);
+    }
+
+    /** Whether the preview may show in HDR. See {@link #setHdrPreviewEnabled}. */
+    @UiThread
+    public boolean isHdrPreviewEnabled() {
+        return mCameraModule.isHdrPreviewEnabled();
+    }
+
+    /**
+     * Whether the camera now open can show its preview in HDR on this display, as it does while
+     * it frames HDR. False before a camera opens, on a display that cannot show HDR, and for a
+     * camera that streams no HDR frames, which includes every camera before Android 13 and
+     * every camera while frames are drawn through a renderer.
+     */
+    @UiThread
+    public boolean isHdrPreviewSupported() {
+        return mCameraModule.isHdrPreviewSupported();
+    }
+
     /** Sets the optional CameraX photo-processing extension. */
     public void setExtension(Extension extension) {
         mCameraModule.setExtension(extension);
@@ -2674,6 +2726,8 @@ public class CameraView extends FrameLayout {
         // Nothing to reconfigure for a view that is no longer on screen, and the next layout pass
         // after it comes back will ask again.
         mHandler.removeCallbacks(mLayoutSettledRunnable);
+        // The window outlives the view, and should not stay in HDR on its behalf.
+        mHdrSurface.reset();
     }
 
     @Override

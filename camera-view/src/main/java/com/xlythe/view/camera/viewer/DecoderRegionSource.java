@@ -5,6 +5,7 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.BitmapRegionDecoder;
+import android.graphics.ColorSpace;
 import android.graphics.Rect;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
@@ -43,12 +44,26 @@ final class DecoderRegionSource implements RegionSource {
     /** The stored height. */
     private final int mHeight;
 
+    /** What each piece is decoded into: 10 bits a channel for an HDR picture stored with 10. */
+    @NonNull
+    private final Bitmap.Config mConfig;
+
+    /**
+     * The HDR colour space each piece is given after it is decoded, where the picture names one
+     * the decoder does not apply; or null to keep the decoder's.
+     */
+    @Nullable
+    private final ColorSpace mColorSpace;
+
     private DecoderRegionSource(@NonNull BitmapRegionDecoder decoder,
-            @NonNull ParcelFileDescriptor descriptor) {
+            @NonNull ParcelFileDescriptor descriptor, @NonNull Bitmap.Config config,
+            @Nullable ColorSpace colorSpace) {
         mDecoder = decoder;
         mDescriptor = descriptor;
         mWidth = decoder.getWidth();
         mHeight = decoder.getHeight();
+        mConfig = config;
+        mColorSpace = colorSpace;
     }
 
     /**
@@ -60,12 +75,25 @@ final class DecoderRegionSource implements RegionSource {
     @WorkerThread
     @NonNull
     static DecoderRegionSource open(@NonNull ParcelFileDescriptor descriptor) throws IOException {
+        return open(descriptor, Bitmap.Config.ARGB_8888, null);
+    }
+
+    /**
+     * Opens a picture for decoding in pieces into a config, each piece given a colour space
+     * where the picture names an HDR one the decoder does not apply.
+     *
+     * @throws IOException as {@link #open(ParcelFileDescriptor)}
+     */
+    @WorkerThread
+    @NonNull
+    static DecoderRegionSource open(@NonNull ParcelFileDescriptor descriptor,
+            @NonNull Bitmap.Config config, @Nullable ColorSpace colorSpace) throws IOException {
         try {
             BitmapRegionDecoder decoder = newDecoder(descriptor);
             if (decoder == null) {
                 throw new IOException("The picture cannot be decoded in pieces");
             }
-            return new DecoderRegionSource(decoder, descriptor);
+            return new DecoderRegionSource(decoder, descriptor, config, colorSpace);
         } catch (IOException | RuntimeException e) {
             closeQuietly(descriptor);
             throw e instanceof IOException ? (IOException) e : new IOException(e);
@@ -107,7 +135,8 @@ final class DecoderRegionSource implements RegionSource {
     public Bitmap decode(@NonNull Rect region, int sampleSize) {
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inSampleSize = sampleSize;
-        options.inPreferredConfig = Bitmap.Config.ARGB_8888;
+        // The picture's own colour space is kept, which for an HDR one is what makes it HDR.
+        options.inPreferredConfig = mConfig;
         // Held for the decode, so a close in the middle waits rather than freeing what the
         // decoder is reading from. The decoder serialises its own calls anyway.
         synchronized (mLock) {
@@ -115,7 +144,11 @@ final class DecoderRegionSource implements RegionSource {
                 return null;
             }
             try {
-                return mDecoder.decodeRegion(region, options);
+                Bitmap bitmap = mDecoder.decodeRegion(region, options);
+                if (bitmap != null && mColorSpace != null && Build.VERSION.SDK_INT >= 34) {
+                    HdrStills.applyColorSpace(bitmap, mColorSpace);
+                }
+                return bitmap;
             } catch (RuntimeException | OutOfMemoryError e) {
                 Log.w(TAG, "Unable to decode " + region + " at 1/" + sampleSize, e);
                 return null;

@@ -220,6 +220,21 @@ public class MediaViewTest {
         assertFalse(mView.isPlaying());
     }
 
+    /** Turning HDR off reaches the video, which then plays tone-mapped; so does a later video. */
+    @Test
+    public void hdrOffReachesTheVideo() throws IOException {
+        File movie = file(MediaTestFiles.movie(), ".mp4");
+        show(movie);
+        VideoView video = (VideoView) mView.getContentView();
+        assertTrue(video.isHdrEnabled());
+
+        mView.setHdrEnabled(false);
+        assertFalse(video.isHdrEnabled());
+
+        show(file(MediaTestFiles.movie(), ".mp4"));
+        assertFalse(((VideoView) mView.getContentView()).isHdrEnabled());
+    }
+
     @Test
     public void aSphericalVideoIsDrawnOnTheSphere() throws IOException {
         show(file(MediaTestFiles.sphericalMovie(), ".mp4"));

@@ -371,6 +371,11 @@ public class PhotosphereView extends FrameLayout {
      * The surface its frames go into arrives through the listener, and again whenever the view
      * makes a new one, such as after it was detached.
      *
+     * <p>An HLG or PQ video is drawn tone-mapped. Its frames are sampled into an 8-bit GL surface
+     * that the view hierarchy composites like any other view; drawing them in HDR would take a
+     * 10-bit BT.2020 window surface on a SurfaceView, and an external texture's conversion of
+     * HLG or PQ frames to RGB, which each GPU defines for itself.</p>
+     *
      * @param s0 where in each frame the sphere starts across, which a stereo video halves
      * @param t0 where it starts down
      * @param s1 where it ends across

@@ -38,6 +38,12 @@ class StreamSession extends PreviewSession {
         return mStreamSurface.mSurfaceProvider;
     }
 
+    /** A stream's encoder takes 8-bit frames, so the preview beside it stays 8-bit too. */
+    @Override
+    protected boolean framesHdr() {
+        return false;
+    }
+
     @Override
     public void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException {
         super.initialize(map);

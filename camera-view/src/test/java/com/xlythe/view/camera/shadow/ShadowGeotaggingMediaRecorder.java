@@ -1,11 +1,14 @@
 package com.xlythe.view.camera.shadow;
 
+import android.graphics.SurfaceTexture;
 import android.media.MediaRecorder;
+import android.view.Surface;
 
 import androidx.annotation.Nullable;
 
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
+import org.robolectric.annotation.RealObject;
 import org.robolectric.shadows.ShadowMediaRecorder;
 
 /**
@@ -13,11 +16,40 @@ import org.robolectric.shadows.ShadowMediaRecorder;
  *
  * <p>MediaRecorder hands the location straight to the native recorder, and Robolectric's shadow
  * keeps no record of it, so without this a recording's location cannot be seen at all.</p>
+ *
+ * <p>Its input surface is a new Surface object on every call, as the platform's is, so code that
+ * tells surfaces apart by the object it was given is tested against that.</p>
  */
 @Implements(MediaRecorder.class)
 public class ShadowGeotaggingMediaRecorder extends ShadowMediaRecorder {
     /** The latitude and longitude of the last call, or null when there has been none. */
     @Nullable private static float[] sLocation;
+
+    /** The last recorder given a video source, or null when there has been none. */
+    @Nullable private static MediaRecorder sLastRecorder;
+
+    /** The recorder this shadows. */
+    @RealObject private MediaRecorder mRecorder;
+
+    @Implementation
+    @Override
+    protected Surface getSurface() {
+        super.getSurface();
+        return new Surface(new SurfaceTexture(0));
+    }
+
+    @Implementation
+    @Override
+    protected void setVideoSource(int videoSource) {
+        sLastRecorder = mRecorder;
+        super.setVideoSource(videoSource);
+    }
+
+    /** The last recorder given a video source, or null for none since {@link #forgetLocation}. */
+    @Nullable
+    public static MediaRecorder getLastRecorder() {
+        return sLastRecorder;
+    }
 
     @Implementation
     protected void setLocation(float latitude, float longitude) {
@@ -36,5 +68,6 @@ public class ShadowGeotaggingMediaRecorder extends ShadowMediaRecorder {
      */
     public static void forgetLocation() {
         sLocation = null;
+        sLastRecorder = null;
     }
 }

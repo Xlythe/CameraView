@@ -27,6 +27,7 @@ import android.view.Surface;
 
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
+import com.xlythe.view.camera.DrawnPictures;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.ExifNoRoomException;
@@ -173,6 +174,17 @@ class PictureSession extends PreviewSession {
         }
         return effect.createStillInput(
                 new Size(mPictureSurface.getWidth(), mPictureSurface.getHeight()));
+    }
+
+    /** An Ultra HDR picture is HDR too, so it is framed in HDR where the camera can. */
+    @Override
+    protected boolean framesHdr() {
+        if (super.framesHdr()) {
+            return true;
+        }
+        return hasStillCapture() && allowsUltraHdr()
+                && getPictureFormat() == CameraView.PictureFormat.ULTRA_HDR
+                && isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR);
     }
 
     /** Lets a subclass add its own outputs once the preview has a size and before the still does. */
@@ -746,7 +758,7 @@ class PictureSession extends PreviewSession {
             }
             Bitmap bitmap;
             try {
-                bitmap = toBitmap(frame.getImage());
+                bitmap = DrawnPictures.toBitmap(frame.getImage());
             } catch (RuntimeException | OutOfMemoryError error) {
                 Log.e(TAG, "Failed to read back a drawn picture", error);
                 abandon();
@@ -835,33 +847,7 @@ class PictureSession extends PreviewSession {
         }
     }
 
-    /** The drawn frame as a bitmap, which is RGBA and so needs no conversion beyond the stride. */
-    @NonNull
-    private static Bitmap toBitmap(@NonNull Image drawn) {
-        Image.Plane plane = drawn.getPlanes()[0];
-        int rowStride = plane.getRowStride();
-        int pixelStride = plane.getPixelStride();
-        // The reader pads each row out to its stride, so the bitmap is made wide enough to hold
-        // the padding and then cropped - reading it as if it were packed shears the picture.
-        int padded = rowStride / pixelStride;
-        Bitmap full = Bitmap.createBitmap(padded, drawn.getHeight(), Bitmap.Config.ARGB_8888);
-        full.copyPixelsFromBuffer(plane.getBuffer());
-        if (padded == drawn.getWidth()) {
-            return full;
-        }
-        Bitmap cropped = Bitmap.createBitmap(full, 0, 0, drawn.getWidth(), drawn.getHeight());
-        full.recycle();
-        return cropped;
-    }
-
-    /**
-     * Writes a drawn picture, and tags it as {@link ImageSaver} tags a camera frame.
-     *
-     * <p>Separate from {@link ImageSaver} because what it is given is already pixels, already the
-     * right way up and mirrored as shown, rather than a camera frame. So the orientation it
-     * records is normal, where a camera frame's records the turn and the mirror a viewer still
-     * has to apply.</p>
-     */
+    /** Writes a drawn picture off the main thread, through {@link DrawnPictures#write}. */
     private static class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
         /** The application, whose name and version the picture records as its software. */
         private final Context mContext;
@@ -897,36 +883,8 @@ class PictureSession extends PreviewSession {
         @WorkerThread
         @Override
         protected Boolean doInBackground(Void... params) {
-            try (FileOutputStream output = new FileOutputStream(mFile)) {
-                if (!mBitmap.compress(Bitmap.CompressFormat.JPEG, mQuality, output)) {
-                    Log.e(TAG, "Failed to compress a drawn picture");
-                    return false;
-                }
-            } catch (IOException | RuntimeException error) {
-                Log.e(TAG, "Failed to write a drawn picture", error);
-                if (mFile.exists() && !mFile.delete()) {
-                    Log.w(TAG, "Failed to clean up a partially written picture");
-                }
-                return false;
-            } finally {
-                mBitmap.recycle();
-            }
-            try {
-                Exif exif = new Exif(mFile);
-                exif.attachTimestamp();
-                exif.attachCaptureDevice(mContext);
-                exif.attachThumbnail();
-                mExifParameters.applyTo(exif);
-                exif.setAttribute(ExifInterface.TAG_ORIENTATION,
-                        Integer.toString(ExifInterface.ORIENTATION_NORMAL));
-                if (mLocation != null) {
-                    exif.attachLocation(mLocation);
-                }
-                exif.save();
-            } catch (IOException error) {
-                Log.e(TAG, "Failed to update EXIF on a drawn picture", error);
-            }
-            return true;
+            return DrawnPictures.write(mContext, mBitmap, mFile, mQuality, mExifParameters,
+                    mLocation);
         }
     }
 

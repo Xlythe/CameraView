@@ -16,6 +16,7 @@ import android.util.Log;
 
 import androidx.annotation.AnyThread;
 import androidx.annotation.RawRes;
+import androidx.annotation.MainThread;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.NonNull;
@@ -61,6 +62,8 @@ public abstract class ICameraModule {
     private CameraView.Flash mFlash = CameraView.Flash.AUTO;
     /** Requested capture dynamic range. */
     private CameraView.DynamicRange mDynamicRange = CameraView.DynamicRange.SDR;
+    /** Whether the preview may show in HDR while HDR is being captured. */
+    private boolean mHdrPreviewEnabled = true;
     /** Requested CameraX photo extension. */
     private CameraView.Extension mExtension = CameraView.Extension.NONE;
     /** Whether a steadied picture is requested, of the preview and of a recording alike. */
@@ -240,6 +243,16 @@ public abstract class ICameraModule {
 
     protected Matrix getTransform(Matrix matrix) {
         return mView.getTransform(matrix);
+    }
+
+    /**
+     * Where to show a preview stream that carries HDR, which the TextureView behind
+     * {@link #getSurfaceTexture()} cannot show as HDR.
+     */
+    @MainThread
+    @NonNull
+    protected final HdrSurface getHdrSurface() {
+        return mView.getHdrSurface();
     }
 
     protected void setTransform(Matrix matrix) {
@@ -555,6 +568,29 @@ public abstract class ICameraModule {
 
     public synchronized boolean isDynamicRangeSupported(CameraView.DynamicRange dynamicRange) {
         return dynamicRange == CameraView.DynamicRange.SDR;
+    }
+
+    /**
+     * Lets the preview show in HDR while an HDR recording or Ultra HDR pictures are framed, where
+     * {@link #isHdrPreviewSupported()}.
+     */
+    @MainThread
+    public void setHdrPreviewEnabled(boolean enabled) {
+        mHdrPreviewEnabled = enabled;
+    }
+
+    @MainThread
+    public boolean isHdrPreviewEnabled() {
+        return mHdrPreviewEnabled;
+    }
+
+    /**
+     * Whether the camera now open can show its preview in HDR on this display. A camera that
+     * streams no HDR frames, or a display that shows none, cannot.
+     */
+    @MainThread
+    public boolean isHdrPreviewSupported() {
+        return false;
     }
 
     public synchronized void setExtension(CameraView.Extension extension) {

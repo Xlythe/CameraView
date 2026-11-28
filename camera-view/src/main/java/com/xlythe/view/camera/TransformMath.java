@@ -252,6 +252,31 @@ public final class TransformMath {
     }
 
     /**
+     * Fills a view with a camera stream drawn on a SurfaceView, the overflow split evenly.
+     *
+     * <p>The compositor turns and mirrors a camera's buffers on a SurfaceView itself, by the
+     * transform the camera tags them with, and counter to the display's rotation; the SurfaceView
+     * then stretches what it shows over its bounds. So all that is left is a scale and a
+     * translation, from that stretch to the buffer's own shape, which is the buffer turned by
+     * {@code turnDegrees}.</p>
+     *
+     * @param turnDegrees how far the buffer is turned to be shown upright: the sensor's
+     *     orientation relative to the display
+     * @return the transform, relative to the stretch, or an identity matrix when the buffer or
+     *     the view is empty
+     */
+    @NonNull
+    public static Matrix surfaceViewTransform(int bufferWidth, int bufferHeight, int turnDegrees,
+            int viewWidth, int viewHeight) {
+        int turn = within360(turnDegrees);
+        boolean transposed = turn == 90 || turn == 270;
+        int shownWidth = transposed ? bufferHeight : bufferWidth;
+        int shownHeight = transposed ? bufferWidth : bufferHeight;
+        return asTextureTransform(centerCrop(new RectF(0f, 0f, shownWidth, shownHeight), 0,
+                false, viewWidth, viewHeight), shownWidth, shownHeight, viewWidth, viewHeight);
+    }
+
+    /**
      * Re-expresses a buffer-to-view mapping as a TextureView transform.
      *
      * <p>A TextureView has already stretched the whole buffer over its own bounds by the time its

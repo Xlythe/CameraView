@@ -178,7 +178,12 @@ data class CameraState(
     /** Whether [CameraController.enterBackgroundReplacement] is in force. */
     val isReplacingBackground: Boolean = false,
     /** Whether a panorama or photosphere is being swept or saved. */
-    val isCapturingPanorama: Boolean = false
+    val isCapturingPanorama: Boolean = false,
+    /**
+     * Whether the preview can show in HDR on this display, as [Camera]'s hdrPreviewEnabled lets
+     * it while an HDR recording or [PictureFormat.ULTRA_HDR] pictures are framed.
+     */
+    val isHdrPreviewSupported: Boolean = false
 )
 
 interface CameraController {
@@ -634,7 +639,8 @@ private fun CameraView.readCameraState(): CameraState {
         isAnalyzingFrames = isAnalyzingFrames,
         isFrameEffectSupported = isFrameEffectSupported,
         isReplacingBackground = isReplacingBackground,
-        isCapturingPanorama = isCapturingPanorama
+        isCapturingPanorama = isCapturingPanorama,
+        isHdrPreviewSupported = isHdrPreviewSupported
     )
 }
 
@@ -733,6 +739,11 @@ private fun Extension.toCameraView() = when (this) {
  * @param colorSpace The range of colours pictures are recorded in.
  * @param pictureFormat The file a picture is written as.
  * @param dynamicRange The dynamic range videos are recorded in.
+ * @param hdrPreviewEnabled Shows the preview in HDR while it frames an HDR recording or
+ *  [PictureFormat.ULTRA_HDR] pictures, on a display that can, as [CameraState.isHdrPreviewSupported]
+ *  says. The window is put in HDR colour mode meanwhile, and the preview then follows only the
+ *  scaling and translation of the modifiers around it, not alpha, rotation or a mirror. Off, it
+ *  shows tone-mapped.
  * @param extension An optional vendor photo-processing extension.
  * @param pictureQuality How hard a still capture is compressed, from 1 to 100.
  * @param stabilizationEnabled Steadies the preview and recorded video against hand shake, on a
@@ -783,6 +794,7 @@ fun Camera(
     colorSpace: ColorSpace = ColorSpace.SRGB,
     pictureFormat: PictureFormat = PictureFormat.JPEG,
     dynamicRange: DynamicRange = DynamicRange.SDR,
+    hdrPreviewEnabled: Boolean = true,
     extension: Extension = Extension.NONE,
     pictureQuality: Int = ICameraModule.DEFAULT_PICTURE_QUALITY,
     stabilizationEnabled: Boolean = false,
@@ -826,6 +838,7 @@ fun Camera(
         colorSpace = colorSpace,
         pictureFormat = pictureFormat,
         dynamicRange = dynamicRange,
+        hdrPreviewEnabled = hdrPreviewEnabled,
         extension = extension,
         pictureQuality = pictureQuality,
         stabilizationEnabled = stabilizationEnabled,
@@ -920,6 +933,7 @@ fun Camera(
         colorSpace = colorSpace,
         pictureFormat = pictureFormat,
         dynamicRange = dynamicRange,
+        hdrPreviewEnabled = true,
         extension = extension,
         pictureQuality = pictureQuality,
         stabilizationEnabled = stabilizationEnabled,
@@ -1037,6 +1051,7 @@ private fun CameraImpl(
     colorSpace: ColorSpace,
     pictureFormat: PictureFormat,
     dynamicRange: DynamicRange,
+    hdrPreviewEnabled: Boolean,
     extension: Extension,
     pictureQuality: Int,
     stabilizationEnabled: Boolean,
@@ -1270,6 +1285,7 @@ private fun CameraImpl(
         view.colorSpace = colorSpace.toCameraView()
         view.pictureFormat = pictureFormat.toCameraView()
         view.dynamicRange = dynamicRange.toCameraView()
+        view.isHdrPreviewEnabled = hdrPreviewEnabled
         view.extension = extension.toCameraView()
         view.pictureQuality = pictureQuality
         view.isStabilizationEnabled = stabilizationEnabled

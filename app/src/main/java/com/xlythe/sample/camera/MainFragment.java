@@ -62,6 +62,13 @@ public class MainFragment extends CameraFragment {
     @Nullable
     private CheckBox mRaw;
 
+    /**
+     * Records HDR video, shown only where the camera can. Where the display can show HDR as well,
+     * the preview turns HDR with it.
+     */
+    @Nullable
+    private CheckBox mHdr;
+
     /** Opens the last picture filed in the viewer. */
     @Nullable
     private View mViewLast;
@@ -86,7 +93,15 @@ public class MainFragment extends CameraFragment {
         mExposureSlider = view.findViewById(R.id.exposure_slider);
         mExposureValue = view.findViewById(R.id.exposure_value);
         mRaw = view.findViewById(R.id.raw);
+        mHdr = view.findViewById(R.id.hdr);
         mViewLast = view.findViewById(R.id.view_last);
+        mHdr.setOnCheckedChangeListener((button, checked) -> {
+            CameraView cameraView = mCameraView;
+            if (cameraView != null) {
+                cameraView.setDynamicRange(checked
+                        ? CameraView.DynamicRange.HDR : CameraView.DynamicRange.SDR);
+            }
+        });
         mRaw.setOnCheckedChangeListener((button, checked) -> {
             CameraView cameraView = mCameraView;
             if (cameraView != null) {
@@ -133,6 +148,7 @@ public class MainFragment extends CameraFragment {
         mExposureSlider = null;
         mExposureValue = null;
         mRaw = null;
+        mHdr = null;
         mViewLast = null;
         super.onDestroyView();
     }
@@ -143,6 +159,7 @@ public class MainFragment extends CameraFragment {
         showZoomPresets();
         showExposureControl();
         showRaw();
+        showHdr();
     }
 
     @Override
@@ -153,6 +170,26 @@ public class MainFragment extends CameraFragment {
         showZoomPresets();
         showExposureControl();
         showRaw();
+        showHdr();
+    }
+
+    /**
+     * Offers HDR video where this lens can record it, and turns it off where it cannot. The
+     * preview follows on its own where the display shows HDR; this only says whether it will.
+     */
+    @MainThread
+    private void showHdr() {
+        CameraView cameraView = mCameraView;
+        if (cameraView == null || mHdr == null) {
+            return;
+        }
+        boolean supported = cameraView.isDynamicRangeSupported(CameraView.DynamicRange.HDR);
+        if (!supported) {
+            mHdr.setChecked(false);
+        }
+        mHdr.setVisibility(supported ? View.VISIBLE : View.GONE);
+        Log.d(TAG, "HDR video " + supported + ", framed in HDR "
+                + cameraView.isHdrPreviewSupported());
     }
 
     /** Offers RAW where this lens can write it, and turns it off where it cannot. */

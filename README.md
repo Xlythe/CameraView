@@ -72,8 +72,17 @@ pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [minExposureC
 maxExposureCompensation, in steps of exposureCompensationStep EV], torchEnabled [boolean],
 dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
 stabilizationEnabled [boolean], lowLightBoostEnabled [boolean], frameRenderer [FrameRenderer, see
-Filters and masks below] and cameraTextureProvider [CameraTextureProvider]. Not every camera can
-do all of these, so CameraState below says which this one supports.
+Filters and masks below], cameraTextureProvider [CameraTextureProvider] and hdrPreviewEnabled
+[boolean]. Not every camera can do all of these, so CameraState below says which this one
+supports.
+
+While the camera frames HDR, with dynamicRange set to hdr or pictureFormat set to ultraHdr, the
+preview shows in HDR too, on a display that can show it and with a camera that can stream it
+(CameraState.isHdrPreviewSupported). The window is put into HDR colour mode meanwhile, and the
+mode it had before comes back when the HDR preview ends, the camera closes or the Camera leaves
+the composition. An HDR preview follows the scaling and translation of the modifiers around it,
+and is clipped to its bounds, but not to a rounded shape, and takes no alpha, rotation or mirror;
+set hdrPreviewEnabled to false for a preview that needs those, and it shows tone-mapped instead.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
 opens, and is republished when the camera reconfigures, so ask it before offering a control: a
@@ -300,6 +309,14 @@ unsupported request is logged and dropped rather than applied.
 exposureCompensation is an index rather than a number of stops, from
 getMinExposureCompensation() to getMaxExposureCompensation(). Each step is worth
 getExposureCompensationStep() EV, so with a step of 1/6, index 6 brightens by 1 EV.
+
+While the camera frames HDR, with dynamicRange set to HDR or the picture format set to
+ULTRA_HDR, the preview shows in HDR too, where isHdrPreviewSupported() says the camera and the
+display can. CameraView puts its window into HDR colour mode meanwhile, and the mode the window
+had before comes back when the HDR preview ends, the camera closes or the view is removed from the
+window. An HDR preview follows this view's scaling and translation and is clipped to its bounds,
+but takes no alpha, rotation or mirror; for a preview that needs those,
+setHdrPreviewEnabled(false) keeps it tone-mapped instead.
 
 CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
 handle binding the Views to the appropriate methods on CameraView.
@@ -603,6 +620,10 @@ mVideoView.play();
 mVideoView.pause();
 ```
 
+An HDR video, one whose frames are HLG or PQ, plays in HDR on a display that can show it, and the
+window is in HDR colour mode while it does. It then follows the view's scaling and translation
+but not a mirror (setShouldMirror), alpha or rotation; a mirrored HDR video plays tone-mapped.
+
 Viewing pictures
 -----------------
 Three views show the pictures the camera takes, from a file or from a uri such as the one
@@ -637,8 +658,8 @@ Viewing any media
 MediaView shows whatever a file turns out to be, worked out from its contents: a picture to zoom
 into, a panorama to pan along, a photo sphere to look around, a video, a motion photo whose clip
 plays while it is held, a 360° video, a recording, or an animated picture. A tap plays and pauses;
-a thin line along the bottom shows how far it has played. HDR pictures show in HDR
-where the screen can; an HDR video puts the window in HDR mode, but is drawn in standard range.
+a thin line along the bottom shows how far it has played. HDR pictures and videos show in HDR
+where the screen can, except a 360° video, which is drawn in standard range.
 ```java
 mMediaView.setUri(uri);                  // or setFile(file)
 mMediaView.setMediaListener(new MediaListener() {
@@ -664,6 +685,8 @@ What shows depends on what the device decodes:
 | DNG | Android 7.0 and newer; before that, the preview it carries, if any |
 | Other camera raws (CR2, CR3, NEF, ARW, RAF, ORF, RW2) | every version, as the largest JPEG the camera embedded, which for some cameras is smaller than the photo |
 | Ultra HDR and other gain maps, in HDR | Android 14 and newer; before that, as an ordinary picture |
+| HDR pictures without a gain map (10-bit HEIF and AVIF in HLG or PQ, PNG with cICP), in HDR | Android 14 and newer; before that, tone-mapped |
+| HLG and PQ videos, in HDR | Android 8.0 and newer, on a screen that shows HDR; 360° videos are tone-mapped |
 | Videos and sound | the codecs the device has; 10-bit, Dolby Vision and AV1 vary the most |
 | TIFF, JPEG XL, AVI | not shown |
 

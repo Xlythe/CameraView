@@ -96,19 +96,59 @@ final class CameraXMath {
         int applied = within360(sensorOrientationDegrees);
         Size orientedBuffer = rotateSize(bufferSize, applied);
         RectF orientedCrop = mapThroughCameraTransform(
-                cropRectangle, bufferSize, orientedBuffer, applied, mirrored);
+                new RectF(cropRectangle), bufferSize, orientedBuffer, applied, mirrored);
         return createCenterCropTransform(orientedBuffer, orientedCrop,
                 remainingRotationDegrees(rotationDegrees, applied, mirrored),
                 false /* the camera already mirrored the buffer */, viewWidth, viewHeight);
     }
 
     /**
-     * Maps a crop rectangle from raw buffer coordinates into the coordinates TextureView actually
-     * draws, which are the buffer rotated by the camera and flipped when the stream is mirrored.
+     * Builds the SurfaceView transform which maps the CameraX crop rectangle into the view using
+     * center-crop scaling, for a stream the camera writes straight into the SurfaceView.
+     *
+     * <p>The camera tags such a stream to be turned by the sensor orientation, mirrored where
+     * asked, and turned back against the display's rotation, and the compositor does all three.
+     * That last turn is the rotation {@link #createTextureTransform} still has to apply to a
+     * TextureView, so the buffer arrives upright in the view's own coordinates and only a scale
+     * and a translation are left: a View can apply those to a SurfaceView, and could not turn
+     * it.</p>
+     *
+     * @return the transform, relative to the stretch a SurfaceView applies to a buffer over its
+     *     own bounds; an identity matrix when the crop or the view is empty
+     */
+    @NonNull
+    static Matrix createSurfaceViewTransform(
+            @NonNull Size bufferSize,
+            @NonNull Rect cropRectangle,
+            int rotationDegrees,
+            boolean mirrored,
+            int sensorOrientationDegrees,
+            int viewWidth,
+            int viewHeight) {
+        if (cropRectangle.isEmpty()) {
+            return new Matrix();
+        }
+        int applied = within360(sensorOrientationDegrees);
+        Size orientedBuffer = rotateSize(bufferSize, applied);
+        RectF orientedCrop = mapThroughCameraTransform(
+                new RectF(cropRectangle), bufferSize, orientedBuffer, applied, mirrored);
+        int remaining = remainingRotationDegrees(rotationDegrees, applied, mirrored);
+        Size shownBuffer = rotateSize(orientedBuffer, remaining);
+        RectF shownCrop = mapThroughCameraTransform(
+                orientedCrop, orientedBuffer, shownBuffer, remaining, false);
+        return createCenterCropTransform(
+                shownBuffer, shownCrop, 0, false, viewWidth, viewHeight);
+    }
+
+    /**
+     * Maps a crop rectangle from a buffer's coordinates into those of the buffer turned by
+     * {@code rotationDegrees} and then flipped when {@code mirrored}: from raw buffer coordinates
+     * into the ones TextureView draws, which is the turn and flip the camera applies, or onward
+     * from those through the turn the compositor applies to a SurfaceView.
      */
     @NonNull
     private static RectF mapThroughCameraTransform(
-            @NonNull Rect cropRectangle,
+            @NonNull RectF cropRectangle,
             @NonNull Size bufferSize,
             @NonNull Size orientedBufferSize,
             int rotationDegrees,
