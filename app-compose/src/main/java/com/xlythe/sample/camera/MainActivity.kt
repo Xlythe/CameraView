@@ -37,6 +37,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Panorama
@@ -107,7 +108,8 @@ enum class DemoScreen(val title: String) {
     RESIZING("Resizing Demo"),
     PANORAMA("Panorama Demo"),
     QR_CODE("QR Code Demo"),
-    VIEWER("Media Demo")
+    VIEWER("Media Demo"),
+    EDITOR("Editor Demo")
 }
 
 /**
@@ -159,6 +161,7 @@ class MainActivity : ComponentActivity() {
                                             DemoScreen.PANORAMA -> Icon(Icons.Default.Panorama, contentDescription = null)
                                             DemoScreen.QR_CODE -> Icon(Icons.Default.QrCode, contentDescription = null)
                                             DemoScreen.VIEWER -> Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                                            DemoScreen.EDITOR -> Icon(Icons.Default.Edit, contentDescription = null)
                                         }
                                     },
                                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
@@ -211,6 +214,7 @@ class MainActivity : ComponentActivity() {
                                 DemoScreen.PANORAMA -> PanoramaDemoScreen()
                                 DemoScreen.QR_CODE -> QrCodeDemoScreen()
                                 DemoScreen.VIEWER -> ViewerDemoScreen(initialUri = viewerUri)
+                                DemoScreen.EDITOR -> EditorDemoScreen(initialUri = viewerUri)
                             }
                         }
                     }

@@ -48,6 +48,12 @@
         tools:layout="@layout/fragment_viewer" />
 
     <fragment
+        android:id="@+id/editor_fragment"
+        android:name="com.xlythe.sample.camera.EditorFragment"
+        android:label="@string/app_name_editor"
+        tools:layout="@layout/fragment_editor" />
+
+    <fragment
         android:id="@+id/effect_fragment"
         android:name="com.xlythe.sample.camera.EffectFragment"
         android:label="@string/app_name_effect"

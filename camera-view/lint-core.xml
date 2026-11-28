@@ -5,7 +5,8 @@
 <lint>
     <issue id="all">
         <ignore path="src/main/java/com/xlythe/view/camera/x/**" />
-        <ignore path="src/main/java/com/xlythe/view/camera/edit/**" />
+        <ignore path="src/main/java/com/xlythe/view/camera/edit/VideoEdit*.java" />
+        <ignore path="src/main/java/com/xlythe/view/camera/edit/TransformerExporter.java" />
         <ignore path="src/main/java/com/xlythe/compose/**" />
         <ignore path="src/main/java/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java" />
         <ignore path="src/main/java/com/xlythe/view/camera/CameraXFrameAnalyzer.java" />

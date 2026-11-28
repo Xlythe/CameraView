@@ -5,6 +5,8 @@ import static com.xlythe.view.camera.MediaFixtures.fullBox;
 import static com.xlythe.view.camera.MediaFixtures.u32;
 import static com.xlythe.view.camera.MediaFixtures.xmp;
 
+import java.util.Arrays;
+
 /** Media files for tests outside this package, such as the viewers'. */
 public final class MediaTestFiles {
     private MediaTestFiles() {}
@@ -47,6 +49,29 @@ public final class MediaTestFiles {
     public static byte[] gainMapJpeg() {
         return MediaTagsFixtures.gainMapJpeg(xmp("xmlns:hdrgm=\"" + Xmp.NS_HDR_GAIN_MAP + "\"",
                 "hdrgm:Version=\"1.0\""), null, false);
+    }
+
+    /** A JPEG with an XMP segment put in straight after its start. */
+    public static byte[] withXmp(byte[] jpeg, String packet) {
+        return Bytes.concat(new byte[] {jpeg[0], jpeg[1]}, MediaFixtures.xmpSegment(packet),
+                Arrays.copyOfRange(jpeg, 2, jpeg.length));
+    }
+
+    /** A motion photo's XMP with the time the still shows. */
+    public static String motionPhotoXmpWithTime(long videoLength) {
+        return MediaTagsFixtures.motionPhotoXmp(videoLength, 0, true);
+    }
+
+    /** Samsung's trailer around a motion photo's clip. */
+    public static byte[] samsungTrailer(byte[] video) {
+        return MediaTagsFixtures.samsungTrailer(video);
+    }
+
+    /** A packet holding the given photo sphere metadata. */
+    public static String panoramaXmp(MediaTags.Panorama panorama) {
+        Xmp xmp = Xmp.empty();
+        panorama.writeTo(xmp);
+        return new String(xmp.toBytes(), Bytes.UTF_8);
     }
 
     /**

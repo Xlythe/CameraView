@@ -46,16 +46,22 @@ android {
 
     if (coreOnly) {
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/x/**'
-        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
+        // The video editor needs media3; the picture editor beside it is core.
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/edit/VideoEdit*.java'
+        sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/edit/TransformerExporter.java'
         sourceSets.main.kotlin.filter.exclude '**/com/xlythe/compose/**'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXBarcodeAnalyzer.java'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXSegmentationAnalyzer.java'
         sourceSets.main.java.filter.exclude '**/com/xlythe/view/camera/CameraXFrameAnalyzer.java'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/x/**'
         sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/CameraXSegmentationAnalyzerTest.java'
-        sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/edit/**'
+        sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/edit/VideoEdit*.java'
+        sourceSets.test.java.filter.exclude '**/com/xlythe/view/camera/edit/TransformerExporter*.java'
         sourceSets.test.kotlin.filter.exclude '**/com/xlythe/compose/**'
     }
+
+    // The device tests read the same freely licensed media the unit tests do.
+    sourceSets.androidTest.assets.srcDirs += 'src/test/resources'
 
     lint {
         abortOnError = true
