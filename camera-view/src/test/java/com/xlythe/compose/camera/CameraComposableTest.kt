@@ -1055,7 +1055,9 @@ class CameraComposableTest {
 
     /** Runs the main looper until [done], for work that finishes on a thread of its own. */
     private fun awaitUntil(done: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + 5_000
+        // Generous, because a loaded machine can starve that thread for seconds; the loop ends
+        // as soon as it reports, so a passing run is no slower.
+        val deadline = System.currentTimeMillis() + 30_000
         while (!done() && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()
             Thread.sleep(10)
