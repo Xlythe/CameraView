@@ -82,7 +82,8 @@ import java.util.concurrent.TimeUnit;
  * </ul>
  *
  * <p>HDR pictures and videos put the window in HDR colour mode while they show, where the device
- * has one, and it goes back once nothing in the window shows HDR.</p>
+ * has one, and it goes back once nothing in the window shows HDR. A picture's gain map is drawn
+ * in HDR; a video is drawn tone-mapped to standard range.</p>
  *
  * <h2>What each release shows</h2>
  * <ul>
