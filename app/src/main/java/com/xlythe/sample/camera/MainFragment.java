@@ -7,8 +7,10 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.util.Log;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.Button;
 import android.widget.SeekBar;
 import android.widget.TextView;
 import android.widget.Toast;
@@ -34,6 +36,9 @@ import androidx.annotation.VisibleForTesting;
  * background thread operations, permissions, and UI binding to layout controls.
  */
 public class MainFragment extends CameraFragment {
+    /** Where a held burst stops on its own, so one held by mistake does not fill the gallery. */
+    private static final int MAX_BURST_PICTURES = 50;
+
     /** How long the preview takes to come back after blinking for a picture. */
     private static final long SHUTTER_BLINK_MILLIS = 150;
 
@@ -93,6 +98,56 @@ public class MainFragment extends CameraFragment {
             @Override
             public void onStopTrackingTouch(SeekBar seekBar) {}
         });
+        Button burst = view.findViewById(R.id.burst);
+        burst.setOnTouchListener((button, event) -> onBurstTouched(burst, event));
+    }
+
+    /**
+     * Takes pictures for as long as the burst button is held, counting them on the button, and
+     * says how many were filed once it is let go.
+     */
+    private boolean onBurstTouched(Button burst, MotionEvent event) {
+        CameraView camera = mCameraView;
+        if (camera == null) {
+            return false;
+        }
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                burst.setPressed(true);
+                camera.startBurst(MAX_BURST_PICTURES, new CameraView.OnBurstListener() {
+                    /** How many pictures have been filed so far. */
+                    private int mSaved;
+
+                    @Override
+                    public void onBurstImageSaved(@NonNull Uri uri) {
+                        mSaved++;
+                        if (!isAdded()) {
+                            return;
+                        }
+                        burst.setText(getString(R.string.btn_burst_count, mSaved));
+                    }
+
+                    @Override
+                    public void onBurstFinished(int count) {
+                        if (!isAdded()) {
+                            return;
+                        }
+                        burst.setText(R.string.btn_burst);
+                        report(getResources().getQuantityString(
+                                R.plurals.burst_saved, count, count));
+                    }
+                });
+                return true;
+            case MotionEvent.ACTION_UP:
+                burst.performClick();
+                // Fall-through
+            case MotionEvent.ACTION_CANCEL:
+                burst.setPressed(false);
+                camera.stopBurst();
+                return true;
+            default:
+                return true;
+        }
     }
 
     @Override

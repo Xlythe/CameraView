@@ -36,6 +36,7 @@ import android.util.Size;
 import android.util.SizeF;
 import android.view.Surface;
 
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.BusyCameraRetry;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
@@ -700,6 +701,14 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     private Runnable mPendingPictureTimeout;
 
+    /** A burst waiting for that session, as a capture does, or null. */
+    @Nullable
+    private Burst mPendingBurst;
+
+    /** Ends {@link #mPendingBurst} if the session never configures. */
+    @Nullable
+    private Runnable mPendingBurstTimeout;
+
     private CameraDevice.StateCallback createStateCallback(final int generation) {
         return new CameraDevice.StateCallback() {
             /** Whether this open reached onOpened, after which a disconnect is not a busy camera. */
@@ -966,6 +975,7 @@ public class Camera2Module extends ICameraModule {
                         onCameraReady();
                         mAwaitingFormatSession = false;
                         capturePendingPicture();
+                        startPendingBurst();
                     } catch (CameraAccessException | RuntimeException e) {
                         failSession(session, cameraCaptureSession,
                                 "Failed to start " + session.getClass().getSimpleName(), e);
@@ -984,6 +994,7 @@ public class Camera2Module extends ICameraModule {
                     }
                     mAwaitingFormatSession = false;
                     cancelPendingPicture();
+                    cancelPendingBurst();
                     failSession(session, cameraCaptureSession,
                             "Failed to configure " + session.getClass().getSimpleName(), null);
                 }
@@ -1184,6 +1195,7 @@ public class Camera2Module extends ICameraModule {
     public void close() {
         mAwaitingFormatSession = false;
         cancelPendingPicture();
+        cancelPendingBurst();
         stopSegmentation();
         FrameRenderThread effect = mEffect;
         mEffect = null;
@@ -2241,6 +2253,56 @@ public class Camera2Module extends ICameraModule {
     }
 
     /**
+     * Holds a burst until the session being built for the format is configured, as
+     * {@link #awaitSessionThenCapture} holds a picture. The timeout ends it for a session that
+     * never configures.
+     */
+    private void awaitSessionThenBurst(@NonNull Burst burst) {
+        mPendingBurst = burst;
+        mPendingBurstTimeout = () -> {
+            mPendingBurstTimeout = null;
+            Burst pending = mPendingBurst;
+            if (pending != null) {
+                Log.w(TAG, "The session for this picture format never configured");
+                mPendingBurst = null;
+                pending.end();
+            }
+        };
+        mHandler.postDelayed(mPendingBurstTimeout, PENDING_PICTURE_TIMEOUT_MILLIS);
+    }
+
+    /** Starts the burst that was waiting for this session, if there was one. */
+    private void startPendingBurst() {
+        Burst burst = mPendingBurst;
+        if (burst == null) {
+            return;
+        }
+        mPendingBurst = null;
+        if (mPendingBurstTimeout != null) {
+            mHandler.removeCallbacks(mPendingBurstTimeout);
+            mPendingBurstTimeout = null;
+        }
+        // Stopped while it waited, and already reported as having taken nothing.
+        if (burst.isEnded()) {
+            return;
+        }
+        startBurst(burst);
+    }
+
+    /** Ends a waiting burst, which then finishes with nothing taken. */
+    private void cancelPendingBurst() {
+        if (mPendingBurstTimeout != null) {
+            mHandler.removeCallbacks(mPendingBurstTimeout);
+            mPendingBurstTimeout = null;
+        }
+        Burst burst = mPendingBurst;
+        if (burst != null) {
+            mPendingBurst = null;
+            burst.end();
+        }
+    }
+
+    /**
      * Whether a camera writes JPEG_R, in the colour space asked for. The gain map is composed by
      * the camera, so one that does not list the format cannot produce it.
      */
@@ -2276,6 +2338,7 @@ public class Camera2Module extends ICameraModule {
                 // waiting for one goes to the session there is.
                 mAwaitingFormatSession = false;
                 capturePendingPicture();
+                startPendingBurst();
                 return;
             }
             setSession(newPictureSession());
@@ -2527,6 +2590,34 @@ public class Camera2Module extends ICameraModule {
         } else {
             onImageFailed();
         }
+    }
+
+    @Override
+    protected void startBurst(@NonNull Burst burst) {
+        // A burst waits for the session a new format needs, as takePicture does.
+        if (mAwaitingFormatSession && mPendingBurst == null && mPendingPictureFile == null) {
+            awaitSessionThenBurst(burst);
+            return;
+        }
+        if (mCaptureSession == null || mActiveSession == null || mCameraDevice == null
+                || mIsPaused || mIsRecording || !(mActiveSession instanceof PictureSession)
+                || mPendingBurst != null || mPendingPictureFile != null) {
+            Log.w(TAG, "Cannot take a burst before Camera2 preview is ready");
+            burst.end();
+            return;
+        }
+        ((PictureSession) mActiveSession).startBurst(burst, mCameraDevice, mCaptureSession);
+    }
+
+    /** What the camera says it can write at the still's size, one picture after another. */
+    @Override
+    protected float getReportedBurstRate() {
+        CameraCharacteristics characteristics = getCameraCharacteristics();
+        if (!(mActiveSession instanceof PictureSession) || characteristics == null) {
+            return 0f;
+        }
+        return ((PictureSession) mActiveSession).getReportedBurstRate(
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP));
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)

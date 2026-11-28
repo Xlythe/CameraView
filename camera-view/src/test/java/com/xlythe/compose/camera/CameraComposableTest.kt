@@ -867,6 +867,59 @@ class CameraComposableTest {
         assertTrue(captured.isEmpty())
     }
 
+    /** A burst through the controller files each picture and then says how many there were. */
+    @Test
+    fun aBurstWithoutADirectoryIsFiledAndCounted() {
+        ShadowPausedAsyncTask.overrideExecutor { it.run() }
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent { Camera(controller = controller) }
+        compose.waitForIdle()
+        val saved = mutableListOf<Uri>()
+        val finishes = mutableListOf<Int>()
+
+        requireNotNull(controller.value).startBurst(
+            2, onImageSaved = { saved.add(it) }, onFinished = { finishes.add(it) })
+        compose.waitForIdle()
+        offerFrames(2)
+        awaitUntil { finishes.isNotEmpty() }
+
+        assertEquals(listOf(2), finishes)
+        assertEquals(2, saved.size)
+    }
+
+    /** A burst into a directory reports files, and stopping it keeps what was being taken. */
+    @Test
+    fun aBurstIntoADirectoryCanBeStopped() {
+        ShadowPausedAsyncTask.overrideExecutor { it.run() }
+        val controller = mutableStateOf<CameraController?>(null)
+        compose.setContent { Camera(controller = controller) }
+        compose.waitForIdle()
+        val directory = File(RuntimeEnvironment.getApplication().cacheDir, "compose-burst")
+        val captured = mutableListOf<File>()
+        val finishes = mutableListOf<Int>()
+
+        val camera = requireNotNull(controller.value)
+        camera.startBurst(
+            directory, 50, onImageCaptured = { captured.add(it) }, onFinished = { finishes.add(it) })
+        compose.waitForIdle()
+        camera.stopBurst()
+        offerFrames(3)
+        awaitUntil { finishes.isNotEmpty() }
+
+        assertEquals(listOf(3), finishes)
+        assertTrue(captured.all { it.parentFile == directory })
+    }
+
+    /** Hands the camera's reader one frame after another, as a sensor would during a burst. */
+    private fun offerFrames(count: Int) {
+        repeat(count) {
+            val reader = requireNotNull(ShadowInjectableImageReader.latestReader())
+            ShadowInjectableImageReader.offerImage(reader, FakeImage.jpeg(1920, 1080, JPEG_BYTES))
+            compose.waitForIdle()
+            ShadowLooper.idleMainLooper()
+        }
+    }
+
     /** A RAW_JPEG picture without a file reaches onImageSaved twice, the JPEG first. */
     @Test
     fun aRawJpegPictureWithoutAFileIsReportedByBothUris() {
