@@ -37,6 +37,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.MotionPhotosOff
+import androidx.compose.material.icons.filled.MotionPhotosOn
 import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Panorama
 import androidx.compose.material.icons.filled.QrCode
@@ -53,6 +55,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
@@ -255,6 +258,9 @@ fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
     // A DNG beside each JPEG, where the camera can write one.
     var raw by remember { mutableStateOf(false) }
     val rawSupported = cameraState.value?.supportedPictureFormats?.contains(PictureFormat.RAW_JPEG) == true
+    // Pictures with the moments around the shutter, where the camera can take them.
+    var motionPhoto by remember { mutableStateOf(false) }
+    val motionPhotoSupported = cameraState.value?.isMotionPhotoSupported == true
     // The last picture filed; with RAW on, the DNG, which is filed after the JPEG.
     var lastSaved by remember { mutableStateOf<Uri?>(null) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
@@ -300,6 +306,7 @@ fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
                     modifier = Modifier.fillMaxSize(),
                     controller = cameraController,
                     pictureFormat = if (raw && rawSupported) PictureFormat.RAW_JPEG else PictureFormat.JPEG,
+                    motionPhotoEnabled = motionPhoto,
                     state = cameraState,
                     onImageConfirmation = { uiStatusText = "Confirm Image?" },
                     onImageSaved = { uri ->
@@ -356,6 +363,15 @@ fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(checked = raw, onCheckedChange = { raw = it })
                         Text("RAW", color = Color.White)
+                    }
+                }
+                if (motionPhotoSupported) {
+                    IconToggleButton(checked = motionPhoto, onCheckedChange = { motionPhoto = it }) {
+                        Icon(
+                            if (motionPhoto) Icons.Default.MotionPhotosOn else Icons.Default.MotionPhotosOff,
+                            contentDescription = "Motion photo",
+                            tint = Color.White
+                        )
                     }
                 }
                 Button(

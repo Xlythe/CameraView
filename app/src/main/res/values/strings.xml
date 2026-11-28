@@ -41,6 +41,7 @@
     <string name="btn_view">View</string>
     <!-- Takes a DNG beside each JPEG -->
     <string name="raw">RAW</string>
+    <string name="motion_photo">Motion photo</string>
 
     <!-- The viewer before a file is picked -->
     <string name="viewer_empty">Take a picture, or open any picture, video or recording</string>
