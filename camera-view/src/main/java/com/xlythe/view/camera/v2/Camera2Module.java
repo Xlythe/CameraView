@@ -36,6 +36,7 @@ import android.util.Size;
 import android.util.SizeF;
 import android.view.Surface;
 
+import com.xlythe.view.camera.BusyCameraRetry;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.ExifCaptureParameters;
@@ -639,6 +640,9 @@ public class Camera2Module extends ICameraModule {
     /** Number of consecutive reopen attempts since the last usable capture session. */
     private int mReopenAttempts;
 
+    /** Opens the camera again while another client holds it, for a short while. */
+    @NonNull private final BusyCameraRetry mBusyRetry;
+
     /**
      * Generation to open after the previous Camera2 device reports that it has fully closed, or
      * zero when no lens switch is waiting for device release.
@@ -665,27 +669,36 @@ public class Camera2Module extends ICameraModule {
 
     private CameraDevice.StateCallback createStateCallback(final int generation) {
         return new CameraDevice.StateCallback() {
+            /** Whether this open reached onOpened, after which a disconnect is not a busy camera. */
+            private boolean mOpened;
+
             @Override
             public void onOpened(@NonNull CameraDevice cameraDevice) {
+                mOpened = true;
                 if (!mIsOpen || generation != mGeneration) {
                     Log.w(TAG, "Ignoring a stale Camera2 open callback");
                     cameraDevice.close();
                     return;
                 }
 
+                mBusyRetry.cancel();
                 mCameraDevice = cameraDevice;
                 setSession(new PictureSession(Camera2Module.this));
             }
 
             @Override
             public void onDisconnected(@NonNull CameraDevice cameraDevice) {
-                handleCameraFailure(cameraDevice, generation, "Camera disconnected");
+                // Disconnected before it opened, the camera was taken by another client while
+                // this one was connecting, which is a camera changing hands.
+                handleCameraFailure(cameraDevice, generation, "Camera disconnected",
+                        !mOpened /* busy */, false /* permanent */);
             }
 
             @Override
             public void onError(@NonNull CameraDevice cameraDevice, int error) {
                 handleCameraFailure(cameraDevice, generation,
-                        "Camera device error: " + Camera2Module.toString(error));
+                        "Camera device error: " + Camera2Module.toString(error),
+                        isBusy(error), error == ERROR_CAMERA_DISABLED);
             }
 
             @Override
@@ -709,15 +722,68 @@ public class Camera2Module extends ICameraModule {
             mActiveCamera = getActiveCamera();
             if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
             mCameraManager.openCamera(mActiveCamera, createStateCallback(generation), mHandler);
-        } catch (CameraAccessException | RuntimeException e) {
-            mIsOpen = false;
-            closeCameraResources();
-            onCameraError(new IllegalStateException("Failed to open Camera2 device", e));
+        } catch (CameraAccessException e) {
+            // A camera in use is reported both here and to onError. Retrying moves the generation
+            // on, so the onError that follows is ignored as stale.
+            if (isBusy(e) && retryWhileBusy()) {
+                Log.w(TAG, "Camera " + mActiveCamera + " is in use; trying again", e);
+                return;
+            }
+            failToOpen(e);
+        } catch (RuntimeException e) {
+            failToOpen(e);
         }
     }
 
+    @MainThread
+    private void failToOpen(@NonNull Exception error) {
+        mIsOpen = false;
+        mBusyRetry.cancel();
+        closeCameraResources();
+        onCameraError(new IllegalStateException("Failed to open Camera2 device", error));
+    }
+
+    /**
+     * Opens the camera again shortly, under a new generation, while another client holds it.
+     *
+     * @return false once the camera has been busy for longer than the retry allows, or when the
+     *     camera is no longer wanted
+     */
+    @MainThread
+    private boolean retryWhileBusy() {
+        if (!mIsOpen) {
+            return false;
+        }
+        int retryGeneration = ++mGeneration;
+        return mBusyRetry.retry(() -> {
+            if (mIsOpen && retryGeneration == mGeneration) {
+                openCamera(retryGeneration);
+            }
+        });
+    }
+
+    /** Whether a camera refused because another client has it, or has too many others open. */
+    static boolean isBusy(int stateCallbackError) {
+        return stateCallbackError == CameraDevice.StateCallback.ERROR_CAMERA_IN_USE
+                || stateCallbackError == CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE;
+    }
+
+    /** The same, for the refusal openCamera throws, which names these reasons from API 23. */
+    static boolean isBusy(@NonNull CameraAccessException error) {
+        return Build.VERSION.SDK_INT >= 23
+                && (error.getReason() == CameraAccessException.CAMERA_IN_USE
+                || error.getReason() == CameraAccessException.MAX_CAMERAS_IN_USE);
+    }
+
+    /**
+     * Answers a camera that failed or went away.
+     *
+     * @param busy whether another client refused or took it, which is tried again for a short
+     *     while
+     * @param permanent whether it refuses however often it is asked, which is reported at once
+     */
     private void handleCameraFailure(@NonNull CameraDevice cameraDevice, int generation,
-            String message) {
+            String message, boolean busy, boolean permanent) {
         Log.e(TAG, message);
         cameraDevice.close();
         if (generation != mGeneration) {
@@ -725,7 +791,16 @@ public class Camera2Module extends ICameraModule {
             return;
         }
 
-        boolean shouldReopen = mIsOpen && mReopenAttempts < MAX_REOPEN_ATTEMPTS;
+        if (busy && mIsOpen) {
+            closeCameraResources();
+            if (!retryWhileBusy()) {
+                mIsOpen = false;
+                onCameraError(new IllegalStateException(message));
+            }
+            return;
+        }
+
+        boolean shouldReopen = mIsOpen && !permanent && mReopenAttempts < MAX_REOPEN_ATTEMPTS;
         closeCameraResources();
         if (shouldReopen) {
             mReopenAttempts++;
@@ -761,6 +836,7 @@ public class Camera2Module extends ICameraModule {
         super(cameraView);
         mCameraManager = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
         mHandler = new Handler(Looper.getMainLooper());
+        mBusyRetry = new BusyCameraRetry(mHandler);
     }
 
     private void setSession(final Session session) {
@@ -993,6 +1069,7 @@ public class Camera2Module extends ICameraModule {
         closeCameraResources();
         mIsOpen = true;
         mReopenAttempts = 0;
+        mBusyRetry.cancel();
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         openCamera(++mGeneration);
@@ -1012,6 +1089,7 @@ public class Camera2Module extends ICameraModule {
         }
         mIsOpen = false;
         mReopenAttempts = 0;
+        mBusyRetry.cancel();
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         mIsFocusPending = false;
@@ -1091,6 +1169,7 @@ public class Camera2Module extends ICameraModule {
         boolean mustAwaitDeviceClose = deviceToClose != null;
         mIsOpen = false;
         mReopenAttempts = 0;
+        mBusyRetry.cancel();
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         mGeneration++;
