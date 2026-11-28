@@ -8,6 +8,11 @@
       it was taken has to be able to hold the permission that supplies it.
     -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <!--
+      For the stream tests that run one end on each of two devices, joined by a socket the host
+      forwards between them.
+    -->
+    <uses-permission android:name="android.permission.INTERNET" />
 
     <application>
         <activity
