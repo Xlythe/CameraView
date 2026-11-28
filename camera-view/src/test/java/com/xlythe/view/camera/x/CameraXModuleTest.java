@@ -5,10 +5,15 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
+import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
+import android.hardware.camera2.CameraCharacteristics;
+import android.hardware.camera2.params.StreamConfigurationMap;
 import android.util.Size;
 
 import androidx.annotation.OptIn;
@@ -33,6 +38,8 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadow.api.Shadow;
+import org.robolectric.shadows.ShadowCameraCharacteristics;
 import org.robolectric.shadows.ShadowLooper;
 
 import java.io.File;
@@ -40,6 +47,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 @RunWith(RobolectricTestRunner.class)
@@ -293,6 +301,149 @@ public final class CameraXModuleTest {
         assertNull(selector.getResolutionFilter());
         assertEquals(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY,
                 selector.getAspectRatioStrategy());
+    }
+
+    /**
+     * A still beside analysis keeps frames only where the camera promises a reprocessable
+     * session with a preview, analysis and a JPEG, which CameraDevice lists for FULL and above.
+     */
+    @Test
+    public void aStillBesideAnalysisKeepsFramesFromFullUp() {
+        assertTrue(CameraXModule.keepsFramesBesideAnalysis(
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL));
+        assertTrue(CameraXModule.keepsFramesBesideAnalysis(
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3));
+        assertFalse(CameraXModule.keepsFramesBesideAnalysis(
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LIMITED));
+        assertFalse(CameraXModule.keepsFramesBesideAnalysis(
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY));
+        assertFalse(CameraXModule.keepsFramesBesideAnalysis(
+                CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_EXTERNAL));
+        assertFalse(CameraXModule.keepsFramesBesideAnalysis(null));
+    }
+
+    /**
+     * A still beside analysis that keeps no frames is held to the sizes kept frames would hold it
+     * to. On the API 37 emulator HIGH's bound puts 1280x720 first, and CameraX holds a still
+     * taken from kept frames to 1856x1392: unheld, a picture beside the segmenter is 576x1280,
+     * against 836x1856 apart from it.
+     */
+    @Test
+    public void aStillBesideAnalysisIsHeldToTheSizesKeptFramesAllow() {
+        ResolutionSelector selector = CameraXModule.imageResolutionSelector(
+                CameraView.Quality.HIGH, AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY,
+                Collections.singletonList(new Size(1856, 1392)));
+
+        assertEquals(new Size(1920, 1080), selector.getResolutionStrategy().getBoundSize());
+        assertEquals(Collections.singletonList(new Size(1856, 1392)),
+                selector.getResolutionFilter().filter(Arrays.asList(new Size(1280, 720),
+                        new Size(1856, 1392), new Size(1024, 768), new Size(640, 480)), 90));
+    }
+
+    /** A MAX still held to some sizes still takes the largest of them first. */
+    @Test
+    public void aHeldMaxStillIsTheLargestItMayTake() {
+        ResolutionSelector selector = CameraXModule.imageResolutionSelector(
+                CameraView.Quality.MAX, AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY,
+                Arrays.asList(new Size(1920, 1080), new Size(4000, 3000)));
+
+        assertEquals(Arrays.asList(new Size(4000, 3000), new Size(1920, 1080)),
+                selector.getResolutionFilter().filter(Arrays.asList(new Size(1920, 1080),
+                        new Size(4080, 3060), new Size(4000, 3000)), 90));
+    }
+
+    /**
+     * A still keeps the order its selector gave the sizes it may take, and keeps every candidate
+     * where it may take none of them, as CameraX does when it takes a still without kept frames.
+     */
+    @Test
+    public void aStillHeldToNoCandidateMayTakeAnyOfThem() {
+        assertEquals(Arrays.asList(new Size(1920, 1080), new Size(1280, 720)),
+                CameraXModule.heldTo(Arrays.asList(new Size(1920, 1080), new Size(1440, 1080),
+                        new Size(1280, 720)), Arrays.asList(new Size(1280, 720),
+                        new Size(1920, 1080))));
+        List<Size> candidates = Arrays.asList(new Size(1280, 720), new Size(640, 480));
+        assertEquals(candidates, CameraXModule.heldTo(candidates,
+                Collections.singletonList(new Size(1856, 1392))));
+    }
+
+    /** A camera on its own reprocesses kept frames at its PRIVATE input sizes. */
+    @Test
+    public void aCameraReprocessesAtItsPrivateInputSizes() {
+        CameraCharacteristics camera = reprocessingCamera(true, ImageFormat.JPEG,
+                new Size(1856, 1392), new Size(1280, 720));
+
+        assertEquals(Arrays.asList(new Size(1856, 1392), new Size(1280, 720)),
+                CameraXModule.reprocessedSizes(camera, Collections.emptyList()));
+        assertEquals(Collections.emptyList(), CameraXModule.reprocessedSizes(
+                reprocessingCamera(false, ImageFormat.JPEG), Collections.emptyList()));
+    }
+
+    /**
+     * Behind a logical camera, a size counts only where every physical camera reprocesses a
+     * PRIVATE frame at it into a JPEG.
+     */
+    @Test
+    public void aLogicalCameraReprocessesOnlyWhereEveryPhysicalCameraDoes() {
+        CameraCharacteristics logical = reprocessingCamera(true, ImageFormat.JPEG,
+                new Size(4000, 3000), new Size(1920, 1080), new Size(1280, 720));
+        CameraCharacteristics wide = reprocessingCamera(true, ImageFormat.JPEG,
+                new Size(4000, 3000), new Size(1920, 1080), new Size(1280, 720));
+        CameraCharacteristics tele = reprocessingCamera(true, ImageFormat.JPEG,
+                new Size(1920, 1080), new Size(1280, 720));
+
+        assertEquals(Arrays.asList(new Size(1920, 1080), new Size(1280, 720)),
+                CameraXModule.reprocessedSizes(logical, Arrays.asList(wide, tele)));
+        assertEquals("a physical camera with no size in common",
+                Collections.emptyList(), CameraXModule.reprocessedSizes(logical, Arrays.asList(
+                        wide, reprocessingCamera(true, ImageFormat.JPEG, new Size(640, 480)))));
+        assertEquals("a physical camera that reprocesses to YUV alone",
+                Collections.emptyList(), CameraXModule.reprocessedSizes(logical, Arrays.asList(
+                        wide, reprocessingCamera(true, ImageFormat.YUV_420_888,
+                                new Size(1920, 1080)))));
+        assertEquals("a physical camera that does not reprocess",
+                Collections.emptyList(), CameraXModule.reprocessedSizes(logical, Arrays.asList(
+                        wide, withoutReprocessing(new Size(1920, 1080)))));
+        assertEquals("a physical camera that could not be read",
+                Collections.emptyList(), CameraXModule.reprocessedSizes(logical,
+                        Arrays.asList(wide, null)));
+    }
+
+    /**
+     * A camera that takes PRIVATE frames as input at some sizes and reprocesses them to one
+     * format. The map is a mock because Robolectric's builds no input-to-output formats.
+     */
+    private static CameraCharacteristics reprocessingCamera(
+            boolean reprocesses, int outputFormat, Size... inputSizes) {
+        StreamConfigurationMap map = mock(StreamConfigurationMap.class);
+        when(map.getInputSizes(ImageFormat.PRIVATE))
+                .thenReturn(inputSizes.length == 0 ? null : inputSizes);
+        when(map.getValidOutputFormatsForInput(ImageFormat.PRIVATE))
+                .thenReturn(new int[] {outputFormat});
+        return camera(map, reprocesses
+                ? new int[] {
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE,
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING}
+                : new int[] {
+                        CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
+    }
+
+    /** A camera that lists PRIVATE input sizes without the capability to reprocess them. */
+    private static CameraCharacteristics withoutReprocessing(Size... inputSizes) {
+        StreamConfigurationMap map = mock(StreamConfigurationMap.class);
+        when(map.getInputSizes(ImageFormat.PRIVATE)).thenReturn(inputSizes);
+        when(map.getValidOutputFormatsForInput(ImageFormat.PRIVATE))
+                .thenReturn(new int[] {ImageFormat.JPEG});
+        return camera(map, new int[] {
+                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_BACKWARD_COMPATIBLE});
+    }
+
+    private static CameraCharacteristics camera(StreamConfigurationMap map, int[] capabilities) {
+        CameraCharacteristics camera = ShadowCameraCharacteristics.newCameraCharacteristics();
+        ShadowCameraCharacteristics shadow = Shadow.extract(camera);
+        shadow.set(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP, map);
+        shadow.set(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES, capabilities);
+        return camera;
     }
 
     @Test
