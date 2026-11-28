@@ -9,6 +9,7 @@ import android.util.Log;
 import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -126,6 +127,10 @@ public final class BackgroundReplacer implements FrameRenderer {
     private int mMaskHeight;
     /** Whether the background texture holds an image, rather than the colour being drawn. */
     private boolean mHasBackgroundImage;
+    /** The width of the background image last uploaded, for fitting it to each frame. */
+    private int mBackgroundWidth;
+    /** The height of the background image last uploaded. */
+    private int mBackgroundHeight;
     /** Whether the mask last uploaded was made from a mirrored frame, and is read mirrored. */
     private boolean mMaskMirrored;
     /** The quad's positions and texture coordinates, or null while the renderer is stopped. */
@@ -144,9 +149,10 @@ public final class BackgroundReplacer implements FrameRenderer {
     }
 
     /**
-     * The image to put behind the subject, or null to go back to the colour. It is read at the
-     * next frame and again whenever the camera reopens, so keep it valid while it is set; it is
-     * never recycled for you.
+     * The image to put behind the subject, or null to go back to the colour. It fills the frame,
+     * cropped to the frame's shape rather than stretched. It is read at the next frame and again
+     * whenever the camera reopens, so keep it valid while it is set; it is never recycled for
+     * you.
      */
     public void setBackgroundImage(@Nullable Bitmap background) {
         mBackground = background;
@@ -239,7 +245,8 @@ public final class BackgroundReplacer implements FrameRenderer {
                 GlMath.topRowFirst(mMaskMirrored), 0);
         // Never mirrored: a background shows the way it was given, whichever lens is in use.
         GLES20.glUniformMatrix4fv(mBackgroundMatrixHandle, 1, false,
-                GlMath.topRowFirst(false), 0);
+                backgroundMatrix(frame.getWidth(), frame.getHeight(), mBackgroundWidth,
+                        mBackgroundHeight), 0);
         GLES20.glUniform4fv(mBackgroundColorHandle, 1, color, 0);
         GLES20.glUniform1f(mHasBackgroundImageHandle, mHasBackgroundImage ? 1f : 0f);
         GLES20.glUniform1f(mHasMaskHandle, mMaskWidth > 0 ? 1f : 0f);
@@ -316,6 +323,36 @@ public final class BackgroundReplacer implements FrameRenderer {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mBackgroundTexture);
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, background, 0);
         mHasBackgroundImage = true;
+        mBackgroundWidth = background.getWidth();
+        mBackgroundHeight = background.getHeight();
+    }
+
+    /**
+     * Where each point of a frame reads the background image: top row first, unmirrored, and
+     * cropped about its centre to the frame's shape, so it fills the frame without stretching
+     * whatever shape the backend's frames are.
+     */
+    @VisibleForTesting
+    @NonNull
+    static float[] backgroundMatrix(int frameWidth, int frameHeight, int imageWidth,
+            int imageHeight) {
+        float[] matrix = GlMath.topRowFirst(false);
+        if (frameWidth <= 0 || frameHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+            return matrix;
+        }
+        float frameShape = (float) frameWidth / frameHeight;
+        float imageShape = (float) imageWidth / imageHeight;
+        // The share of the image's width and height the frame shows.
+        float across = Math.min(1f, frameShape / imageShape);
+        float down = Math.min(1f, imageShape / frameShape);
+        // Scales the coordinate the flip produced about the centre: s' = 0.5 + (s - 0.5) * k.
+        matrix[0] *= across;
+        matrix[4] *= across;
+        matrix[12] = 0.5f + (matrix[12] - 0.5f) * across;
+        matrix[1] *= down;
+        matrix[5] *= down;
+        matrix[13] = 0.5f + (matrix[13] - 0.5f) * down;
+        return matrix;
     }
 
     /** A 2D texture clamped and linear, which is what both of these want. */

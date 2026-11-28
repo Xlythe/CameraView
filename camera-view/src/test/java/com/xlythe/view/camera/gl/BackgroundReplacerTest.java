@@ -259,7 +259,8 @@ public class BackgroundReplacerTest {
     public void theBackgroundImageIsReadTopRowFirstAndUnmirrored() {
         replacer.onRendererStarted();
         replacer.setMask(mirroredMask(1, 1, 0f));
-        replacer.setBackgroundImage(Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888));
+        // The frame's shape, so the whole image is shown.
+        replacer.setBackgroundImage(Bitmap.createBitmap(9, 16, Bitmap.Config.ARGB_8888));
 
         replacer.onDrawFrame(frame);
 
@@ -306,6 +307,49 @@ public class BackgroundReplacerTest {
 
         assertArrayEquals(new float[] {0f},
                 ShadowRecordingGles20.uniform("uHasBackgroundImage"), TOLERANCE);
+    }
+
+    /**
+     * An image of another shape than the frame is cropped about its centre to the frame's shape,
+     * not stretched. A 3:4 image in a 9:20 frame, as CameraX's portrait frames are, shows the
+     * middle 60% of its width and all of its height.
+     */
+    @Test
+    public void anImageIsCroppedToTheFramesShape() {
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 2400, 1_000L, new int[] {0, 0, 1080, 2400});
+        replacer.onRendererStarted();
+        replacer.setBackgroundImage(Bitmap.createBitmap(960, 1280, Bitmap.Config.ARGB_8888));
+
+        replacer.onDrawFrame(frame);
+
+        float[] reads = ShadowRecordingGles20.uniform("uBackgroundMatrix");
+        assertArrayEquals("the top left of the frame reads 20% into the image's top row",
+                new float[] {0.2f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals("and the bottom right 80% into its bottom row",
+                new float[] {0.8f, 1f}, read(reads, 1f, 0f), TOLERANCE);
+    }
+
+    @Test
+    public void aWideImageIsCroppedTopAndBottomInATallerFrame() {
+        float[] reads = BackgroundReplacer.backgroundMatrix(1000, 1000, 2000, 1000);
+        assertArrayEquals(new float[] {0.25f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals(new float[] {0.75f, 1f}, read(reads, 1f, 0f), TOLERANCE);
+
+        reads = BackgroundReplacer.backgroundMatrix(1000, 2000, 1000, 1000);
+        assertArrayEquals("a square in a 1:2 frame shows its middle half across",
+                new float[] {0.25f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+
+        reads = BackgroundReplacer.backgroundMatrix(2000, 1000, 1000, 1000);
+        assertArrayEquals("and in a 2:1 frame its middle half down",
+                new float[] {0f, 0.25f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals(new float[] {1f, 0.75f}, read(reads, 1f, 0f), TOLERANCE);
+    }
+
+    @Test
+    public void anImageOfTheFramesShapeIsShownWhole() {
+        float[] reads = BackgroundReplacer.backgroundMatrix(960, 1280, 480, 640);
+        assertArrayEquals(new float[] {0f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals(new float[] {1f, 1f}, read(reads, 1f, 0f), TOLERANCE);
     }
 
     /** Where a column-major matrix takes a texture coordinate. */
