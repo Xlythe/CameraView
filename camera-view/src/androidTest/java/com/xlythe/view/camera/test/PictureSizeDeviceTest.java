@@ -133,7 +133,7 @@ public final class PictureSizeDeviceTest {
         String cameraId = firstCameraFacing(facing);
         Assume.assumeTrue("no " + facing + " camera", cameraId != null);
         List<Size> listed = backend == CameraView.Backend.LEGACY
-                ? legacyPictureSizes(cameraId) : jpegSizes(cameraId, false /* unbinned */);
+                ? legacyPictureSizes(facing) : jpegSizes(cameraId, false /* unbinned */);
         List<Size> unbinned = backend == CameraView.Backend.CAMERA2
                 ? jpegSizes(cameraId, true /* unbinned */) : new ArrayList<>();
 
@@ -379,10 +379,27 @@ public final class PictureSizeDeviceTest {
         return sizes;
     }
 
-    /** The picture sizes the old camera API lists for the same camera. */
-    private static List<Size> legacyPictureSizes(String cameraId) {
+    /**
+     * The picture sizes the old camera API lists for the camera the view opens on that side.
+     *
+     * <p>Looked up by facing, the way the view picks it, and not by the camera2 id: the old API
+     * numbers its cameras from zero in its own order, so an emulator with no front camera calls
+     * its back camera "1" in one API and 0 in the other.</p>
+     */
+    private static List<Size> legacyPictureSizes(CameraView.LensFacing facing) {
+        int wanted = facing == CameraView.LensFacing.FRONT
+                ? Camera.CameraInfo.CAMERA_FACING_FRONT : Camera.CameraInfo.CAMERA_FACING_BACK;
+        int index = -1;
+        Camera.CameraInfo info = new Camera.CameraInfo();
+        for (int i = 0; i < Camera.getNumberOfCameras() && index == -1; i++) {
+            Camera.getCameraInfo(i, info);
+            if (info.facing == wanted) {
+                index = i;
+            }
+        }
+        Assume.assumeTrue("the old camera API lists no " + facing + " camera", index != -1);
         List<Size> sizes = new ArrayList<>();
-        Camera camera = Camera.open(Integer.parseInt(cameraId));
+        Camera camera = Camera.open(index);
         try {
             for (Camera.Size size : camera.getParameters().getSupportedPictureSizes()) {
                 sizes.add(new Size(size.width, size.height));

@@ -98,13 +98,15 @@ public class FrameEffectTest {
         }
     }
 
-    /** One effect covers the preview, the recording and the still, so a filter is in all three. */
+    /**
+     * The effect draws the preview and the recording. The still is drawn after it is taken, at
+     * its own resolution, rather than from the stream CameraX would share with the preview.
+     */
     @Test
-    public void anEffectReachesEveryOutput() {
+    public void anEffectDrawsThePreviewAndTheRecording() {
         FrameEffect effect = create(new RecordingRenderer(), null);
 
-        assertEquals(CameraEffect.PREVIEW | CameraEffect.VIDEO_CAPTURE
-                | CameraEffect.IMAGE_CAPTURE, effect.getTargets());
+        assertEquals(CameraEffect.PREVIEW | CameraEffect.VIDEO_CAPTURE, effect.getTargets());
     }
 
     /** Where GL will not run there is no effect, and the caller binds without one. */
@@ -113,7 +115,7 @@ public class FrameEffectTest {
     public void whereGlWillNotRunThereIsNoEffect() {
         RecordingRenderer renderer = new RecordingRenderer();
 
-        assertNull(FrameEffect.create(FrameEffect.ALL_TARGETS, directExecutor, renderer, null,
+        assertNull(FrameEffect.create(FrameEffect.TARGETS, directExecutor, renderer, null,
                 error -> {}));
         assertEquals(0, renderer.started.get());
     }
@@ -241,7 +243,7 @@ public class FrameEffectTest {
         Consumer<Throwable> errors = error -> {
             throw new AssertionError("CameraX reported an error", error);
         };
-        FrameEffect effect = FrameEffect.create(FrameEffect.ALL_TARGETS, directExecutor, renderer,
+        FrameEffect effect = FrameEffect.create(FrameEffect.TARGETS, directExecutor, renderer,
                 provider, errors);
         assertNotNull("Robolectric's EGL should give the effect a context", effect);
         effects.add(effect);

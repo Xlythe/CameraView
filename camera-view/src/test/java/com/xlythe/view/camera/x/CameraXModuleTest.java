@@ -11,6 +11,9 @@ import android.graphics.Rect;
 import android.graphics.RectF;
 import android.util.Size;
 
+import androidx.annotation.OptIn;
+import androidx.camera.core.ExperimentalZeroShutterLag;
+import androidx.camera.core.ImageCapture;
 import androidx.camera.core.resolutionselector.AspectRatioStrategy;
 import androidx.camera.core.resolutionselector.ResolutionSelector;
 import androidx.camera.core.resolutionselector.ResolutionStrategy;
@@ -213,6 +216,24 @@ public final class CameraXModuleTest {
             assertEquals(format + " otherwise", format,
                     CameraXModule.boundPictureFormat(format, false));
         }
+    }
+
+    /**
+     * A picture comes from kept frames where the camera keeps them, below MAX and for anything
+     * but RAW. A drawn still is no exception, since it is taken apart from the effect and drawn
+     * after: taken without kept frames, it came out smaller than the undrawn picture.
+     */
+    @OptIn(markerClass = ExperimentalZeroShutterLag.class)
+    @Test
+    public void aStillIsTakenFromKeptFramesWhereTheCameraKeepsThem() {
+        assertEquals(ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, true, CameraView.PictureFormat.JPEG));
+        assertEquals(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, false, CameraView.PictureFormat.JPEG));
+        assertEquals(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY, CameraXModule.captureMode(
+                CameraView.Quality.HIGH, true, CameraView.PictureFormat.RAW));
+        assertEquals(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY, CameraXModule.captureMode(
+                CameraView.Quality.MAX, true, CameraView.PictureFormat.JPEG));
     }
 
     /**
