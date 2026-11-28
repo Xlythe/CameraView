@@ -4,6 +4,7 @@ import android.Manifest;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Matrix;
@@ -520,6 +521,12 @@ public class CameraView extends FrameLayout {
     private boolean mUsingModuleBarcodeScanner;
     /** Whether enterBackgroundReplacement is in force. */
     private boolean mReplacingBackground;
+    /**
+     * The replacer the segmenter's masks go to while {@link #mReplacingBackground}, kept so the
+     * segmenter can be started again when the camera reopens.
+     */
+    @Nullable
+    private BackgroundReplacer mBackgroundReplacer;
 
     /** The caller's own frame analyzer, if one is running. */
     @Nullable
@@ -1281,6 +1288,7 @@ public class CameraView extends FrameLayout {
     protected void onOpen() {
         mCameraModule.loadSounds();
         mCameraModule.open();
+        resumeBackgroundReplacement();
         // After the camera, so that one that throws on opening leaves nothing listening.
         mLocationTracker.start();
     }
@@ -1744,8 +1752,9 @@ public class CameraView extends FrameLayout {
 
     /**
      * Segments the subject out of each frame and draws it over the replacer's background, in the
-     * preview, the recording and the pictures, until {@link #exitBackgroundReplacement()}. The
-     * replacer becomes the frame renderer, in place of any other.
+     * preview, the recording and the pictures, until {@link #exitBackgroundReplacement()} - across
+     * a lens switch and the camera closing and opening again. The replacer becomes the frame
+     * renderer, in place of any other.
      *
      * <p>To use a segmentation model of your own, set a {@link BackgroundReplacer} with
      * {@link #setFrameRenderer} and hand it masks with {@link BackgroundReplacer#setMask}
@@ -1779,7 +1788,32 @@ public class CameraView extends FrameLayout {
             return false;
         }
         mReplacingBackground = true;
+        mBackgroundReplacer = replacer;
         return true;
+    }
+
+    /**
+     * Starts segmenting again for a background replacement the camera closed under.
+     *
+     * <p>Closing the camera stops the segmenter, while the replacer, being the frame renderer,
+     * outlives the close. So the replacement carries on when the camera opens again, as it says
+     * it does, rather than drawing whatever mask it last had.</p>
+     *
+     * <p>Suppressed because we check the camera permission ourselves, and lint cannot follow
+     * that check. Opening the camera needed it, so this turns away only one revoked since.</p>
+     */
+    @SuppressLint("MissingPermission")
+    private void resumeBackgroundReplacement() {
+        BackgroundReplacer replacer = mBackgroundReplacer;
+        if (!mReplacingBackground || replacer == null) {
+            return;
+        }
+        if (!PermissionChecker.hasPermissions(getContext(), Manifest.permission.CAMERA)
+                || !mCameraModule.startSegmentation(replacer::setMask)) {
+            Log.w(TAG, "The segmenter would not start again, so the background is no longer"
+                    + " replaced");
+            exitBackgroundReplacement();
+        }
     }
 
     /** Stops replacing the background, and shows the camera's own frames again. */
@@ -1788,6 +1822,7 @@ public class CameraView extends FrameLayout {
             return;
         }
         mReplacingBackground = false;
+        mBackgroundReplacer = null;
         mCameraModule.stopSegmentation();
         setFrameRenderer(null);
     }

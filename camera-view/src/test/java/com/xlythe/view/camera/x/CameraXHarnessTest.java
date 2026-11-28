@@ -14,7 +14,11 @@ import android.hardware.camera2.CaptureRequest;
 import android.util.Range;
 import android.util.Rational;
 
+import androidx.annotation.NonNull;
+import androidx.camera.core.ImageProxy;
+
 import com.xlythe.view.camera.Barcode;
+import com.xlythe.view.camera.CameraXFrameAnalyzer;
 import androidx.lifecycle.Lifecycle;
 
 import androidx.annotation.NonNull;
@@ -39,6 +43,7 @@ import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.util.ReflectionHelpers;
 
 
 /**
@@ -133,6 +138,7 @@ public class CameraXHarnessTest {
             exerciseQueries(module);
             exerciseFrameEffectFallback(module);
             exerciseAnalysis(module);
+            exerciseStillBesideAnalysis(module);
             exerciseRebinds(module);
             exerciseCapture(module);
             exerciseBurst(module);
@@ -311,6 +317,62 @@ public class CameraXHarnessTest {
         module.stopBarcodeScanner();
         FakeCameraXHost.idle();
         assertTrue("declining must leave the bind alone", module.isCameraBoundForTesting());
+    }
+
+    /**
+     * Analysis is bound beside the still, so a picture can be taken while frames are analyzed -
+     * which is what background replacement and barcode scanning do. The still used to give its
+     * slot up to the analysis, and every picture taken during either failed.
+     */
+    private static void exerciseStillBesideAnalysis(CameraXModule module) {
+        RecordingAnalyzer analyzer = new RecordingAnalyzer();
+        ReflectionHelpers.callInstanceMethod(module, "startFrameAnalyzerOnMainThread",
+                ReflectionHelpers.ClassParameter.from(CameraXFrameAnalyzer.class, analyzer),
+                ReflectionHelpers.ClassParameter.from(String.class, "Harness"));
+        assertTrue("analysis has to rebind", FakeCameraXHost.awaitBind(module));
+        assertNotNull("frames are analyzed",
+                ReflectionHelpers.getField(module, "mImageAnalysis"));
+        assertNotNull("and a picture can be taken beside them",
+                ReflectionHelpers.getField(module, "mImageCapture"));
+        assertEquals("the analyzer is told whether its lens is shown mirrored",
+                Boolean.valueOf(module.isUsingFrontFacingCamera()), analyzer.mirrored);
+
+        // A lens switch rebinds with the same analyzer, which has to hear about the new lens.
+        module.toggleCamera();
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertEquals(Boolean.valueOf(module.isUsingFrontFacingCamera()), analyzer.mirrored);
+        module.toggleCamera();
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertEquals(Boolean.valueOf(module.isUsingFrontFacingCamera()), analyzer.mirrored);
+
+        module.stopSegmentation();
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertTrue("stopping closes the analyzer", analyzer.closed);
+        assertNull(ReflectionHelpers.getField(module, "mImageAnalysis"));
+        assertNotNull(ReflectionHelpers.getField(module, "mImageCapture"));
+    }
+
+    /** An analyzer that drops every frame and remembers what it was told. */
+    private static final class RecordingAnalyzer implements CameraXFrameAnalyzer {
+        /** Whether it has been closed. */
+        volatile boolean closed;
+        /** What it was last told about mirroring, or null before it was told anything. */
+        volatile Boolean mirrored;
+
+        @Override
+        public void setMirrored(boolean mirrored) {
+            this.mirrored = mirrored;
+        }
+
+        @Override
+        public void analyze(@NonNull ImageProxy image) {
+            image.close();
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+        }
     }
 
     /**

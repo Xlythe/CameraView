@@ -9,6 +9,7 @@ import android.graphics.Canvas;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.YuvImage;
@@ -61,6 +62,15 @@ public class LegacyCameraModule extends ICameraModule {
     /** No camera chosen yet, which is not the same as camera zero. */
     private static final int INVALID_CAMERA_ID = -1;
 
+    /**
+     * How much resolution matching the preview's shape may cost, as on Camera2. A real difference
+     * in shape costs about a third at most, 4:3 against 16:9.
+     */
+    private static final double MIN_MATCHED_PIXEL_FRACTION = 0.5;
+
+    /** Orders sizes by how many pixels they hold. */
+    private static final Comparator<Point> BY_AREA = (a, b) -> Long.signum(area(a) - area(b));
+
     /** Which of the device's cameras is selected, as an index into Camera.getNumberOfCameras. */
     private int mActiveCamera = INVALID_CAMERA_ID;
 
@@ -69,12 +79,6 @@ public class LegacyCameraModule extends ICameraModule {
 
     /** The preview size chosen for the open camera, or null when no camera is open. */
     @Nullable private Camera.Size mPreviewSize;
-
-    /**
-     * The picture size the open camera started with, which every quality but MAX keeps, or null
-     * when no camera is open. See {@link #applyPictureSize}.
-     */
-    @Nullable private Camera.Size mDefaultPictureSize;
 
     /**
      * The zoom, as a ratio. While a camera is open it is the entry of its zoom table the camera is
@@ -166,8 +170,8 @@ public class LegacyCameraModule extends ICameraModule {
             parameters.setPreviewSize(getPreviewWidth(), getPreviewHeight());
             parameters.setPictureFormat(ImageFormat.JPEG);
             parameters.setJpegQuality(getPictureQuality());
-            mDefaultPictureSize = parameters.getPictureSize();
             applyPictureSize(parameters);
+            applyFlash(parameters);
             float zoomRatio = applyZoom(parameters, mZoomRatio);
             Integer exposureCompensation = applyExposureCompensation(parameters);
             mCamera.setParameters(parameters);
@@ -196,7 +200,6 @@ public class LegacyCameraModule extends ICameraModule {
             }
             mCamera = null;
             mPreviewSize = null;
-            mDefaultPictureSize = null;
             onCameraError(e);
         }
     }
@@ -245,23 +248,198 @@ public class LegacyCameraModule extends ICameraModule {
         }
     }
 
-    /**
-     * Asks for the largest picture the camera lists when the quality is MAX, and for the size it
-     * started with otherwise.
-     */
+    /** Asks for the picture size the quality allows. */
     private void applyPictureSize(Camera.Parameters parameters) {
-        Camera.Size size = getQuality() == CameraView.Quality.MAX
-                ? largestPictureSize(parameters.getSupportedPictureSizes())
-                : mDefaultPictureSize;
+        List<Point> sizes = toPoints(parameters.getSupportedPictureSizes());
+        Point size = choosePictureSize(sizes, getQuality(),
+                mPreviewSize == null ? null : new Point(mPreviewSize.width, mPreviewSize.height),
+                isMatchPreviewAspectRatioEnabled());
         if (size != null) {
-            parameters.setPictureSize(size.width, size.height);
+            parameters.setPictureSize(size.x, size.y);
         }
     }
 
+    /**
+     * The picture size a quality takes, by the rule Camera2 picks its still size with: the
+     * largest size the camera lists within the quality's bound - 1080p for HIGH, 720p for MEDIUM,
+     * 480p for LOW and none for MAX - and the preview's shape where that costs no more than half
+     * the pixels. A quality with nothing within its bound takes what the next one up would.
+     *
+     * @param preview the preview's size, or null to match no shape
+     * @return the size, or null when the camera lists none
+     */
+    @VisibleForTesting
     @Nullable
-    private static Camera.Size largestPictureSize(@Nullable List<Camera.Size> sizes) {
-        return sizes == null || sizes.isEmpty()
-                ? null : Collections.max(sizes, new CompareSizesByArea());
+    static Point choosePictureSize(@NonNull List<Point> sizes, @NonNull CameraView.Quality quality,
+            @Nullable Point preview, boolean matchPreview) {
+        if (sizes.isEmpty()) {
+            return null;
+        }
+        // From the quality asked for up to MAX, which takes anything.
+        CameraView.Quality[] qualities = {CameraView.Quality.LOW, CameraView.Quality.MEDIUM,
+                CameraView.Quality.HIGH, CameraView.Quality.MAX};
+        int first = 0;
+        while (qualities[first] != quality) {
+            first++;
+        }
+        for (int i = first; i < qualities.length; i++) {
+            List<Point> within = within(sizes, qualities[i]);
+            if (within.isEmpty()) {
+                continue;
+            }
+            Point largest = Collections.max(within, BY_AREA);
+            if (!matchPreview || preview == null) {
+                return largest;
+            }
+            List<Point> matching = new ArrayList<>();
+            for (Point size : within) {
+                if (Math.abs((float) size.x / size.y - (float) preview.x / preview.y) < 0.01f) {
+                    matching.add(size);
+                }
+            }
+            if (matching.isEmpty()) {
+                return largest;
+            }
+            Point largestMatching = Collections.max(matching, BY_AREA);
+            return area(largestMatching) < area(largest) * MIN_MATCHED_PIXEL_FRACTION
+                    ? largest : largestMatching;
+        }
+        return Collections.max(sizes, BY_AREA);
+    }
+
+    /** The sizes no larger, either way, than a quality's bound. MAX has none. */
+    @NonNull
+    private static List<Point> within(@NonNull List<Point> sizes,
+            @NonNull CameraView.Quality quality) {
+        Point bound;
+        switch (quality) {
+            case LOW:
+                bound = new Point(640, 480);
+                break;
+            case MEDIUM:
+                bound = new Point(1280, 720);
+                break;
+            case HIGH:
+                bound = new Point(1920, 1080);
+                break;
+            case MAX:
+            default:
+                return sizes;
+        }
+        List<Point> within = new ArrayList<>();
+        for (Point size : sizes) {
+            if (size.x <= bound.x && size.y <= bound.y) {
+                within.add(size);
+            }
+        }
+        return within;
+    }
+
+    @NonNull
+    private static List<Point> toPoints(@Nullable List<Camera.Size> sizes) {
+        List<Point> points = new ArrayList<>();
+        if (sizes != null) {
+            for (Camera.Size size : sizes) {
+                points.add(new Point(size.width, size.height));
+            }
+        }
+        return points;
+    }
+
+    private static long area(@NonNull Point size) {
+        return (long) size.x * size.y;
+    }
+
+    /**
+     * Lights the flash as the torch asks, or as the strategy does, in a camera's parameters. A
+     * camera with no flash unit lists no flash modes, and is left alone.
+     */
+    private void applyFlash(@NonNull Camera.Parameters parameters) {
+        String mode = flashMode(parameters.getSupportedFlashModes(), getFlash(), isTorchEnabled());
+        if (mode != null) {
+            parameters.setFlashMode(mode);
+        }
+    }
+
+    /**
+     * The flash mode for a strategy and the torch: the torch when it is on and the camera has
+     * one, the strategy where the camera offers it, and off otherwise.
+     *
+     * @return the mode, or null for a camera that lists none
+     */
+    @VisibleForTesting
+    @Nullable
+    static String flashMode(@Nullable List<String> supported, @NonNull CameraView.Flash flash,
+            boolean torch) {
+        if (supported == null || supported.isEmpty()) {
+            return null;
+        }
+        if (torch && supported.contains(Camera.Parameters.FLASH_MODE_TORCH)) {
+            return Camera.Parameters.FLASH_MODE_TORCH;
+        }
+        String wanted;
+        switch (flash) {
+            case ON:
+                wanted = Camera.Parameters.FLASH_MODE_ON;
+                break;
+            case AUTO:
+                wanted = Camera.Parameters.FLASH_MODE_AUTO;
+                break;
+            case OFF:
+            default:
+                wanted = Camera.Parameters.FLASH_MODE_OFF;
+                break;
+        }
+        if (supported.contains(wanted)) {
+            return wanted;
+        }
+        return supported.contains(Camera.Parameters.FLASH_MODE_OFF)
+                ? Camera.Parameters.FLASH_MODE_OFF : null;
+    }
+
+    /** Puts the flash right on the open camera, for a strategy or a torch that changed. */
+    @MainThread
+    private void updateFlash() {
+        if (mCamera == null) {
+            return;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            applyFlash(parameters);
+            mCamera.setParameters(parameters);
+        } catch (RuntimeException e) {
+            // A recording holds the camera unlocked, and the camera takes no parameters then.
+            Log.w(TAG, "Camera would not change its flash", e);
+        }
+    }
+
+    @MainThread
+    @Override
+    public void setFlash(CameraView.Flash flash) {
+        super.setFlash(flash);
+        updateFlash();
+    }
+
+    /** Whether the open camera has a flash unit, which it says by listing a mode that lights it. */
+    @Override
+    public boolean hasFlash() {
+        List<String> modes = flashModes();
+        return modes != null && (modes.contains(Camera.Parameters.FLASH_MODE_ON)
+                || modes.contains(Camera.Parameters.FLASH_MODE_TORCH));
+    }
+
+    /** The open camera's flash modes, or null when it is closed or lists none. */
+    @Nullable
+    private List<String> flashModes() {
+        if (mCamera == null) {
+            return null;
+        }
+        try {
+            return mCamera.getParameters().getSupportedFlashModes();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Camera would not say what its flash can do", e);
+            return null;
+        }
     }
 
     @Override
@@ -291,7 +469,6 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera.release();
             mCamera = null;
             mPreviewSize = null;
-            mDefaultPictureSize = null;
         }
     }
 
@@ -418,9 +595,16 @@ public class LegacyCameraModule extends ICameraModule {
             onImageFailed();
             return;
         }
-        mCamera.takePicture(this::onShutter, null, new LegacyPictureListener(
-                file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(),
-                exifCaptureParameters(), this));
+        try {
+            mCamera.takePicture(this::onShutter, null, new LegacyPictureListener(
+                    file, getRelativeCameraOrientation(false /* isPreview */),
+                    isUsingFrontFacingCamera(), exifCaptureParameters(), this));
+        } catch (RuntimeException e) {
+            // Thrown rather than reported, for a picture asked for while another is being taken
+            // or while the preview is stopped.
+            Log.w(TAG, "The camera refused to take a picture", e);
+            onImageFailed();
+        }
     }
 
     /**
@@ -912,17 +1096,20 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     /**
-     * Refused while a camera without a flash is open, as on the other backends. This backend
-     * drives no flash, so that is every camera it opens; a request made while closed is kept.
+     * Refused while a camera that cannot light its flash continuously is open, as on the other
+     * backends. A request made while closed is kept, and lit once a camera that can opens.
      */
     @MainThread
     @Override
     public void setTorchEnabled(boolean enabled) {
-        if (enabled && mCamera != null && !hasFlash()) {
-            Log.w(TAG, "Ignoring torch request because the active camera has no flash unit");
+        List<String> modes = flashModes();
+        if (enabled && mCamera != null
+                && (modes == null || !modes.contains(Camera.Parameters.FLASH_MODE_TORCH))) {
+            Log.w(TAG, "Ignoring torch request because the active camera has no torch");
             return;
         }
         super.setTorchEnabled(enabled);
+        updateFlash();
     }
 
     /** Refused while a camera that cannot steady the picture is open, as on the other backends. */
