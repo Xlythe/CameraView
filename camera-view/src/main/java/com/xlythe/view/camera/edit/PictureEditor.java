@@ -99,7 +99,10 @@ public class PictureEditor {
     public static final int FORMAT_JPEG = MediaTags.FORMAT_JPEG;
     /** PNG, which is lossless and keeps transparency. */
     public static final int FORMAT_PNG = MediaTags.FORMAT_PNG;
-    /** WebP, lossy below quality 100 and lossless at it, keeping transparency. */
+    /**
+     * WebP, lossy below quality 100 and lossless at it, keeping transparency. Before Android 4.3
+     * it is written without metadata, which only later releases can decode.
+     */
     public static final int FORMAT_WEBP = MediaTags.FORMAT_WEBP;
     /** HEIF, from Android 9 on a device with an HEVC encoder. */
     public static final int FORMAT_HEIF = MediaTags.FORMAT_HEIF;
@@ -692,6 +695,12 @@ public class PictureEditor {
     private void writeMetadata(@Nullable MediaTags source, int format, @NonNull File destination,
             @NonNull PictureGeometry geometry, int width, int height, @Nullable File clip)
             throws IOException {
+        if (format == FORMAT_WEBP && Build.VERSION.SDK_INT < 18) {
+            // Metadata turns a WebP into the extended form, which Android 4.2 and older cannot
+            // decode, so the picture would no longer open on the device that made it.
+            Log.d(TAG, "A WebP is written without metadata before Android 4.3");
+            return;
+        }
         MediaTags tags = MediaTags.open(destination);
         if (source != null && !source.copyTo(tags)) {
             Log.d(TAG, "The edited picture could not keep all of the original's metadata");
