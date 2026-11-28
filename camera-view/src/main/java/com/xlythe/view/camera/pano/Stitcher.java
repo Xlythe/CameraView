@@ -62,6 +62,13 @@ final class Stitcher {
      */
     static final double LOOP_PITCH = Math.sin(Math.toRadians(60));
 
+    /**
+     * How far, in pixels at the matching scale, a link's matches may end up from where the
+     * aligned frames put them before the link is taken for a wrong one. Several times what a
+     * right one is left with, parallax near the floor included.
+     */
+    static final double LINK_OUTLIER_PIXELS = 8;
+
     /** How many frames' pyramids are kept at once while aligning by brightness. */
     static final int PYRAMIDS_KEPT = 8;
 
@@ -244,6 +251,20 @@ final class Stitcher {
             // the matches close a loop.
             alignment = BundleAdjuster.adjust(sensor, times, all, focal / FEATURE_SHRINK,
                     closesOnItself(all));
+            List<PairMatcher.Pair> kept = new ArrayList<>(pairs);
+            for (DirectAligner.Link link : links) {
+                if (BundleAdjuster.rms(link.matches, alignment.toWorld, focal / FEATURE_SHRINK,
+                        alignment.focalScale) <= LINK_OUTLIER_PIXELS) {
+                    kept.add(link.matches);
+                }
+            }
+            if (kept.size() < all.size()) {
+                // A link that disagrees with everything around it has locked onto a repeat of
+                // the pattern, a plank or a tile along, so the frames are aligned again
+                // without it.
+                alignment = BundleAdjuster.adjust(sensor, times, kept, focal / FEATURE_SHRINK,
+                        closesOnItself(kept));
+            }
             focalScale = alignment.focalScale;
             for (int i = 0; i < n; i++) {
                 mFrames[i].toWorld = alignment.toWorld[i];

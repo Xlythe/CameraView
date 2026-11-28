@@ -264,6 +264,28 @@ final class BundleAdjuster {
     }
 
     /**
+     * The root mean square of one pair's ray errors, in pixels, with these rotations and the
+     * focal length scaled by this much.
+     */
+    static double rms(@NonNull PairMatcher.Pair pair, @NonNull double[][] toWorld, double focal,
+            double focalScale) {
+        double logScale = Math.log(focalScale);
+        double[] a = new double[6];
+        double[] b = new double[6];
+        double[] di = new double[3];
+        double[] dj = new double[3];
+        double sum = 0;
+        for (int k = 0; k < pair.count; k++) {
+            scaledRay(pair.firstRays, k, logScale, a);
+            scaledRay(pair.secondRays, k, logScale, b);
+            Rotations.apply(toWorld[pair.first], a[0], a[1], a[2], di);
+            Rotations.apply(toWorld[pair.second], b[0], b[1], b[2], dj);
+            sum += sq(di[0] - dj[0]) + sq(di[1] - dj[1]) + sq(di[2] - dj[2]);
+        }
+        return pair.count == 0 ? 0 : focal * Math.sqrt(sum / pair.count);
+    }
+
+    /**
      * A match's ray made again for the focal length scaled by e to the logScale, and how it
      * moves as that grows: out[0..2] the ray, out[3..5] its derivative.
      */
