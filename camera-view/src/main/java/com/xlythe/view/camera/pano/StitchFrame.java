@@ -17,8 +17,11 @@ final class StitchFrame {
     /** Its height. */
     final int height;
 
-    /** The focal length in the frame's pixels as kept. */
-    final float focal;
+    /**
+     * The focal length in the frame's pixels as kept: as calibrated, then as refined by aligning
+     * the frames.
+     */
+    float focal;
 
     /** The clockwise turn that stands the frame upright. */
     final int sensorRotation;

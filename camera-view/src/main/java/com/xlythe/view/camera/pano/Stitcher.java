@@ -7,9 +7,11 @@ import androidx.annotation.Nullable;
 import androidx.annotation.WorkerThread;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * Stitches the frames kept from a sweep into one equirectangular picture.
@@ -18,7 +20,11 @@ import java.util.Locale;
  *   <li>Corners are found in every frame and matched between frames the sensor says overlap,
  *       keeping only matches one rotation explains ({@link PairMatcher}).</li>
  *   <li>Every frame is turned at once until the matches agree, held to the sensor's rotation
- *       about the horizontal axes ({@link BundleAdjuster}).</li>
+ *       about the horizontal axes and to the turns it measured between one frame and the next
+ *       ({@link BundleAdjuster}).</li>
+ *   <li>Overlaps too plain for corners, as on a ceiling or a floor, are aligned by their
+ *       brightness from there ({@link DirectAligner}), and every frame is turned again with what
+ *       those found as well, refining the focal length too when the matches close a loop.</li>
  *   <li>The frames are drawn onto a small picture, where their exposures are matched
  *       ({@link GainCompensator}) and the seams between them cut around whatever they disagree
  *       on ({@link SeamFinder}).</li>
@@ -48,6 +54,15 @@ final class Stitcher {
 
     /** How far off the sensor may be, in degrees, which sets how far a corner is looked for. */
     static final float SENSOR_ERROR_DEGREES = 6f;
+
+    /**
+     * The sine of the steepest pitch a frame may look along and still count towards a loop round
+     * the horizon: nearer a pole, a small turn is a large change of yaw.
+     */
+    static final double LOOP_PITCH = Math.sin(Math.toRadians(60));
+
+    /** How many frames' pyramids are kept at once while aligning by brightness. */
+    static final int PYRAMIDS_KEPT = 8;
 
     /** Takes the stitched picture, once its size is known. */
     interface Output {
@@ -176,6 +191,7 @@ final class Stitcher {
         long start = System.nanoTime() / 1_000_000;
         int n = mFrames.length;
         Features[] features = new Features[n];
+        byte[][] lumas = new byte[n][];
         ArgbImage[] small = new ArgbImage[n];
         float focal = mFrames[0].focal;
         float pixelsPerDegree = Math.min(focal * (float) Math.PI / 180f, mMaxWidth / 360f);
@@ -192,24 +208,48 @@ final class Stitcher {
             if (image == null) {
                 continue;
             }
-            features[i] = Features.detect(luma(image, FEATURE_SHRINK),
-                    image.width / FEATURE_SHRINK, image.height / FEATURE_SHRINK);
+            lumas[i] = luma(image, FEATURE_SHRINK);
+            features[i] = Features.detect(lumas[i], image.width / FEATURE_SHRINK,
+                    image.height / FEATURE_SHRINK);
             small[i] = shrink(image, smallShrink);
         }
         long detected = System.nanoTime() / 1_000_000;
 
         List<PairMatcher.Pair> pairs = match(features);
         long matched = System.nanoTime() / 1_000_000;
+        double[][] sensor = new double[n][];
+        long[] times = new long[n];
+        for (int i = 0; i < n; i++) {
+            sensor[i] = mFrames[i].sensorToWorld;
+            times[i] = mFrames[i].timeMillis;
+        }
         BundleAdjuster.Result alignment = null;
         if (!pairs.isEmpty()) {
-            double[][] sensor = new double[n][];
-            for (int i = 0; i < n; i++) {
-                sensor[i] = mFrames[i].sensorToWorld;
-            }
-            alignment = BundleAdjuster.adjust(sensor, pairs, focal / FEATURE_SHRINK);
+            // The corners first, for the plain overlaps to start from.
+            alignment = BundleAdjuster.adjust(sensor, times, pairs, focal / FEATURE_SHRINK,
+                    false);
             for (int i = 0; i < n; i++) {
                 mFrames[i].toWorld = alignment.toWorld[i];
             }
+        }
+        List<DirectAligner.Link> links = link(lumas, pairs);
+        List<PairMatcher.Pair> all = new ArrayList<>(pairs);
+        for (DirectAligner.Link link : links) {
+            all.add(link.matches);
+        }
+        double focalScale = 1;
+        if (!all.isEmpty()) {
+            // Then everything, which also says how far off the calibrated focal length is when
+            // the matches close a loop.
+            alignment = BundleAdjuster.adjust(sensor, times, all, focal / FEATURE_SHRINK,
+                    closesOnItself(all));
+            focalScale = alignment.focalScale;
+            for (int i = 0; i < n; i++) {
+                mFrames[i].toWorld = alignment.toWorld[i];
+            }
+        }
+        for (StitchFrame frame : mFrames) {
+            frame.focal = (float) (frame.focal * focalScale);
         }
         long aligned = System.nanoTime() / 1_000_000;
 
@@ -250,10 +290,12 @@ final class Stitcher {
         long blended = System.nanoTime() / 1_000_000;
 
         if (alignment != null) {
-            Log.i(TAG, String.format(Locale.US, "Stitched %d frames, %d pairs, %d rays: "
-                            + "alignment error %.2f px rms (%.2f median, %.2f p95), "
-                            + "%.2f with the sensor alone (%.2f median, %.2f p95)",
-                    n, pairs.size(), alignment.rays, alignment.rmsAfter, alignment.medianAfter,
+            Log.i(TAG, String.format(Locale.US, "Stitched %d frames, %d pairs, %d rays, %d "
+                            + "aligned by brightness, focal length x%.4f: alignment error %.2f "
+                            + "px rms (%.2f median, %.2f p95), %.2f with the sensor alone (%.2f "
+                            + "median, %.2f p95)",
+                    n, pairs.size(), alignment.rays, links.size(), focalScale,
+                    alignment.rmsAfter, alignment.medianAfter,
                     alignment.p95After, alignment.rmsBefore, alignment.medianBefore,
                     alignment.p95Before));
         }
@@ -262,6 +304,39 @@ final class Stitcher {
                 blended - start, detected - start, matched - detected, aligned - matched,
                 seamed - aligned, blended - seamed));
         return new Result(grid, region, alignment, pairs.size(), smallGrid, labels, top);
+    }
+
+    /**
+     * Whether the frames go all the way round, so that the matches close a loop. Only then do
+     * they say what the focal length is: along an open sweep, a lens a percent longer looks just
+     * like turns a percent shorter.
+     */
+    private boolean closesOnItself(@NonNull List<PairMatcher.Pair> pairs) {
+        // Each pair of frames below the caps that share matches covers the turn between them;
+        // the matches close a loop when those turns cover the whole way round.
+        boolean[] covered = new boolean[360];
+        double[] fi = new double[3];
+        double[] fj = new double[3];
+        for (PairMatcher.Pair pair : pairs) {
+            mFrames[pair.first].forward(fi);
+            mFrames[pair.second].forward(fj);
+            if (Math.abs(fi[2]) > LOOP_PITCH || Math.abs(fj[2]) > LOOP_PITCH) {
+                continue;
+            }
+            double from = Math.toDegrees(Math.atan2(fi[0], fi[1]));
+            double turn = Math.toDegrees(Math.atan2(fj[0], fj[1])) - from;
+            turn = turn - 360 * Math.round(turn / 360);
+            double start = turn >= 0 ? from : from + turn;
+            for (int d = 0; d < Math.abs(turn); d++) {
+                covered[(int) (((Math.floor(start) + d) % 360 + 360) % 360)] = true;
+            }
+        }
+        for (boolean c : covered) {
+            if (!c) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** Matches every pair of frames the sensor says overlap. */
@@ -302,6 +377,74 @@ final class Stitcher {
             }
         }
         return pairs;
+    }
+
+    /**
+     * Aligns by brightness every pair of frames that overlap but share too few corners to match,
+     * starting from where the frames are now.
+     */
+    @NonNull
+    private List<DirectAligner.Link> link(@NonNull byte[][] lumas,
+            @NonNull List<PairMatcher.Pair> pairs) {
+        int n = mFrames.length;
+        boolean[] matched = new boolean[n * n];
+        for (PairMatcher.Pair pair : pairs) {
+            matched[pair.first * n + pair.second] = true;
+        }
+        List<DirectAligner.Link> links = new ArrayList<>();
+        // A few frames' pyramids at a time, the least recently used dropped: a pyramid is quick
+        // to make again, and every frame's at once is more memory than a phone may spare.
+        LinkedHashMap<Integer, DirectAligner.Pyramid> pyramids =
+                new LinkedHashMap<Integer, DirectAligner.Pyramid>(16, 0.75f, true) {
+                    @Override
+                    protected boolean removeEldestEntry(
+                            Map.Entry<Integer, DirectAligner.Pyramid> eldest) {
+                        return size() > PYRAMIDS_KEPT;
+                    }
+                };
+        double[] fi = new double[3];
+        double[] fj = new double[3];
+        for (int i = 0; i < n; i++) {
+            if (lumas[i] == null) {
+                continue;
+            }
+            StitchFrame a = mFrames[i];
+            double wider = 2 * Math.atan(Math.max(a.width, a.height) / 2.0 / a.focal);
+            a.forward(fi);
+            for (int j = i + 1; j < n; j++) {
+                if (lumas[j] == null || matched[i * n + j]) {
+                    continue;
+                }
+                StitchFrame b = mFrames[j];
+                b.forward(fj);
+                double angle = Math.acos(Math.max(-1, Math.min(1,
+                        fi[0] * fj[0] + fi[1] * fj[1] + fi[2] * fj[2])));
+                if (angle > PAIR_REACH * wider) {
+                    continue;
+                }
+                DirectAligner.Link link = DirectAligner.align(i, pyramid(pyramids, lumas, i),
+                        j, pyramid(pyramids, lumas, j),
+                        Rotations.multiply(Rotations.transpose(b.toWorld), a.toWorld),
+                        a.focal / FEATURE_SHRINK);
+                if (link != null) {
+                    links.add(link);
+                }
+            }
+        }
+        return links;
+    }
+
+    /** A frame's pyramid, from those kept or made now. */
+    @NonNull
+    private DirectAligner.Pyramid pyramid(@NonNull Map<Integer, DirectAligner.Pyramid> kept,
+            @NonNull byte[][] lumas, int frame) {
+        DirectAligner.Pyramid pyramid = kept.get(frame);
+        if (pyramid == null) {
+            pyramid = new DirectAligner.Pyramid(lumas[frame],
+                    mFrames[frame].width / FEATURE_SHRINK, mFrames[frame].height / FEATURE_SHRINK);
+            kept.put(frame, pyramid);
+        }
+        return pyramid;
     }
 
     /** A frame's brightness, shrunk by a whole number each way by averaging. */
