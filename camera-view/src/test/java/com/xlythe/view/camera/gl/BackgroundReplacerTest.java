@@ -269,6 +269,45 @@ public class BackgroundReplacerTest {
         assertArrayEquals(new float[] {1f, 1f}, read(reads, 1f, 0f), TOLERANCE);
     }
 
+    /**
+     * The image comes back when the renderer restarts, as it does when the camera reopens. The
+     * texture it was in goes with the old renderer, and the image used to go with it, leaving the
+     * background black.
+     */
+    @Test
+    public void theImageIsUploadedAgainWhenTheRendererRestarts() {
+        Bitmap background = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888);
+        replacer.onRendererStarted();
+        replacer.setBackgroundImage(background);
+        replacer.onDrawFrame(frame);
+        int before = ShadowRecordingGles20.draws().get(0).texture2d;
+
+        replacer.onRendererStopped();
+        replacer.onRendererStarted();
+        replacer.onDrawFrame(frame);
+
+        assertArrayEquals(new float[] {1f},
+                ShadowRecordingGles20.uniform("uHasBackgroundImage"), TOLERANCE);
+        int after = ShadowRecordingGles20.draws().get(1).texture2d;
+        assertNotEquals("drawn from the new renderer's texture", before, after);
+    }
+
+    /** An image cleared while the renderer was stopped stays cleared when it starts again. */
+    @Test
+    public void anImageClearedWhileStoppedStaysCleared() {
+        replacer.onRendererStarted();
+        replacer.setBackgroundImage(Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888));
+        replacer.onDrawFrame(frame);
+        replacer.onRendererStopped();
+
+        replacer.setBackgroundImage(null);
+        replacer.onRendererStarted();
+        replacer.onDrawFrame(frame);
+
+        assertArrayEquals(new float[] {0f},
+                ShadowRecordingGles20.uniform("uHasBackgroundImage"), TOLERANCE);
+    }
+
     /** Where a column-major matrix takes a texture coordinate. */
     private static float[] read(float[] matrix, float s, float t) {
         return new float[] {

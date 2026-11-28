@@ -86,6 +86,11 @@ public final class BackgroundReplacer implements FrameRenderer {
     private final AtomicReference<SegmentationMask> mPendingMask = new AtomicReference<>();
     /** The newest background image, waiting to be uploaded at the next frame, or null. */
     private final AtomicReference<Bitmap> mPendingBackground = new AtomicReference<>();
+    /**
+     * The background image set, or null for the colour: kept, so a renderer that stops and
+     * starts again, as it does when the camera reopens, uploads it again into its new texture.
+     */
+    @Nullable private volatile Bitmap mBackground;
     /** The background colour as RGBA from 0 to 1, guarded by itself. */
     private final float[] mBackgroundColor = {0f, 0f, 0f, 1f};
 
@@ -140,9 +145,11 @@ public final class BackgroundReplacer implements FrameRenderer {
 
     /**
      * The image to put behind the subject, or null to go back to the colour. It is read at the
-     * next frame, so keep it valid until then; it is never recycled for you.
+     * next frame and again whenever the camera reopens, so keep it valid while it is set; it is
+     * never recycled for you.
      */
     public void setBackgroundImage(@Nullable Bitmap background) {
+        mBackground = background;
         mPendingBackground.set(background);
         if (background == null) {
             mHasBackgroundImage = false;
@@ -270,6 +277,13 @@ public final class BackgroundReplacer implements FrameRenderer {
         mMaskWidth = 0;
         mMaskHeight = 0;
         mVertices = null;
+        // The image went with its texture; the next renderer uploads it again, unless a newer
+        // one, or none, has been set since.
+        mHasBackgroundImage = false;
+        Bitmap background = mBackground;
+        if (background != null) {
+            mPendingBackground.compareAndSet(null, background);
+        }
     }
 
     /** Uploads the newest mask, if one arrived since the last frame. */
