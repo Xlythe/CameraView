@@ -113,8 +113,9 @@ final class PairMatcher {
             if (predicted[2] <= 0.2) {
                 continue;
             }
-            float px = (float) (cxB + focal * predicted[0] / predicted[2]);
-            float py = (float) (cyB + focal * predicted[1] / predicted[2]);
+            // Where it lands, counted as corners are: from the first pixel's centre.
+            float px = (float) (cxB + focal * predicted[0] / predicted[2]) - 0.5f;
+            float py = (float) (cyB + focal * predicted[1] / predicted[2]) - 0.5f;
             if (px < -searchRadius || py < -searchRadius || px > b.width + searchRadius
                     || py > b.height + searchRadius) {
                 continue;
@@ -184,10 +185,16 @@ final class PairMatcher {
         return new Pair(first, second, count, keptA, keptB, rotation, candidates);
     }
 
-    /** The unit ray, in the camera, through a point of a frame. */
+    /**
+     * The unit ray, in the camera, through a corner of a frame.
+     *
+     * @param x the corner's column, counted from the first pixel's centre as corners are, so
+     *     the frame's own edge is half a pixel before it
+     * @param cx the middle of the frame, counted from its edge
+     */
     static void rayOf(float x, float y, float cx, float cy, float focal, @NonNull double[] out) {
-        double a = (x - cx) / focal;
-        double b = (y - cy) / focal;
+        double a = (x + 0.5 - cx) / focal;
+        double b = (y + 0.5 - cy) / focal;
         double length = Math.sqrt(a * a + b * b + 1);
         out[0] = a / length;
         out[1] = b / length;

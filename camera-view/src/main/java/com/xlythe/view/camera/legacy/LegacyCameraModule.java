@@ -199,6 +199,7 @@ public class LegacyCameraModule extends ICameraModule {
             applyFlash(parameters);
             float zoomRatio = applyZoom(parameters, mZoomRatio);
             Integer exposureCompensation = applyExposureCompensation(parameters);
+            applyExposureLock(parameters);
             mCamera.setParameters(parameters);
             if (exposureCompensation != null) {
                 super.setExposureCompensation(exposureCompensation);
@@ -1243,6 +1244,44 @@ public class LegacyCameraModule extends ICameraModule {
             return;
         }
         super.setLowLightBoostEnabled(enabled);
+    }
+
+    /** Holds auto-exposure and auto white balance, or frees them, on the open camera. */
+    @MainThread
+    @Override
+    public void setExposureLocked(boolean locked) {
+        super.setExposureLocked(locked);
+        if (mCamera == null) {
+            return;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            if (applyExposureLock(parameters)) {
+                mCamera.setParameters(parameters);
+            }
+        } catch (RuntimeException e) {
+            Log.w(TAG, "The camera would not hold its exposure", e);
+        }
+    }
+
+    /**
+     * Writes the exposure lock into a camera's parameters, for whichever of auto-exposure and
+     * auto white balance it can hold.
+     *
+     * @return whether the camera can hold either
+     */
+    private boolean applyExposureLock(@NonNull Camera.Parameters parameters) {
+        boolean locked = isExposureLocked();
+        boolean any = false;
+        if (parameters.isAutoExposureLockSupported()) {
+            parameters.setAutoExposureLock(locked);
+            any = true;
+        }
+        if (parameters.isAutoWhiteBalanceLockSupported()) {
+            parameters.setAutoWhiteBalanceLock(locked);
+            any = true;
+        }
+        return any;
     }
 
     /**

@@ -1845,6 +1845,17 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
+    /** Rebuilds the repeating request with auto-exposure and white balance held or freed. */
+    @AnyThread
+    @Override
+    public void setExposureLocked(boolean locked) {
+        boolean changed = locked != isExposureLocked();
+        super.setExposureLocked(locked);
+        if (changed && mCameraDevice != null) {
+            reissueRepeatingRequest(locked ? "the exposure lock" : "the exposure unlock");
+        }
+    }
+
     /** 0 for a camera that cannot compensate, whatever range it publishes. */
     @Override
     public int getMinExposureCompensation() {

@@ -267,6 +267,25 @@ abstract class SessionImpl implements Camera2Module.Session {
     }
 
     /**
+     * Holds auto-exposure and auto white balance where they have settled, while a sweep asks for
+     * it. A camera that publishes that it cannot lock one is not asked to.
+     */
+    void applyExposureLock(@NonNull CaptureRequest.Builder builder) {
+        if (!mCamera2Module.isExposureLocked()) {
+            return;
+        }
+        CameraCharacteristics characteristics = mCamera2Module.getCameraCharacteristics();
+        if (Build.VERSION.SDK_INT < 23 || !Boolean.FALSE.equals(
+                characteristics.get(CameraCharacteristics.CONTROL_AE_LOCK_AVAILABLE))) {
+            builder.set(CaptureRequest.CONTROL_AE_LOCK, true);
+        }
+        if (Build.VERSION.SDK_INT < 23 || !Boolean.FALSE.equals(
+                characteristics.get(CameraCharacteristics.CONTROL_AWB_LOCK_AVAILABLE))) {
+            builder.set(CaptureRequest.CONTROL_AWB_LOCK, true);
+        }
+    }
+
+    /**
      * Steadies the picture, when stabilization is on.
      *
      * <p>Preview stabilization is preferred wherever the camera has it: it steadies every stream

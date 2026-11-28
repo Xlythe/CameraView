@@ -115,6 +115,7 @@ class VideoSession extends PictureSession {
         builder.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO);
         applyAeMode(builder, false /* withFlashStrategy */);
         applyExposureCompensation(builder);
+        applyExposureLock(builder);
         if (mMeteringRectangle != null) {
             builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{mMeteringRectangle});
             builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{mMeteringRectangle});

@@ -2149,6 +2149,7 @@ public class CameraView extends FrameLayout {
             mPanoramaFrames = null;
         }
         mCameraModule.setPreviewFrameListener(null);
+        mCameraModule.setExposureLocked(false);
     }
 
     @RequiresApi(19)
@@ -2185,6 +2186,14 @@ public class CameraView extends FrameLayout {
         public void onProgress(float progress) {
             if (mSession != null && mSession == mPanoramaSession) {
                 mListener.onPanoramaProgress(progress);
+            }
+        }
+
+        @Override
+        public void onBegun() {
+            if (mSession != null && mSession == mPanoramaSession) {
+                // Every frame from here on is exposed and coloured as this one.
+                mCameraModule.setExposureLocked(true);
             }
         }
 
