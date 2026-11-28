@@ -10,6 +10,7 @@ import android.os.PowerManager;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 
 import org.junit.Assume;
@@ -35,9 +36,15 @@ import java.nio.charset.StandardCharsets;
 public final class DeviceState {
     /** The fake camera HAL in emulator images older than API 29. */
     private static final String CAMERA_HAL_TAG = "EmulatedCamera_FakeCamera3";
-    /** What that HAL logs when it has stopped completing capture requests. */
-    private static final String CAMERA_HAL_STALL =
-            "waitForReadout: Timed out waiting for in-flight queue to shrink";
+    /**
+     * What that HAL logs when it has stopped completing capture requests: its readout falling
+     * behind, or a picture asked for while the last one's JPEG has not come back from its
+     * compressor in five seconds, which also fails the camera device.
+     */
+    private static final String[] CAMERA_HAL_STALLS = {
+            "waitForReadout: Timed out waiting for in-flight queue to shrink",
+            "processCaptureRequest: Timeout waiting for JPEG compression to complete!",
+    };
     /** Room in the log for two tests' worth of camera logging, which is what is searched. */
     private static final String LOG_BUFFER_SIZE = "16M";
 
@@ -143,11 +150,11 @@ public final class DeviceState {
      * Skips a test that failed because the emulator's camera HAL stalled.
      *
      * <p>The fake camera HAL in emulator images older than API 29 stops completing capture requests
-     * at random on a slow host: it logs {@value #CAMERA_HAL_STALL}, fails the camera device, and
-     * cameraserver then takes seconds to close it. Whichever test had the camera fails, and so can
-     * the next one, whose open collides with that close. A failing test is skipped only when the
-     * HAL logged that stall while it or the test before it ran; every other failure still fails,
-     * and on a phone or a newer emulator the rule does nothing.</p>
+     * at random on a slow host: it logs one of {@link #CAMERA_HAL_STALLS}, fails the camera
+     * device, and cameraserver then takes seconds to close it. Whichever test had the camera fails,
+     * and so can the next one, whose open collides with that close. A failing test is skipped only
+     * when the HAL logged that stall while it or the test before it ran; every other failure still
+     * fails, and on a phone or a newer emulator the rule does nothing.</p>
      */
     @NonNull
     public static TestRule skipWhenTheEmulatorCameraHalStalls() {
@@ -167,9 +174,10 @@ public final class DeviceState {
                 } catch (AssumptionViolatedException skipped) {
                     throw skipped;
                 } catch (Throwable failure) {
-                    if (theCameraHalStalledSince(since)) {
+                    String stall = theCameraHalStallSince(since);
+                    if (stall != null) {
                         throw new AssumptionViolatedException("this emulator's camera HAL stopped"
-                                + " completing capture requests: " + CAMERA_HAL_STALL, failure);
+                                + " completing capture requests: " + stall, failure);
                     }
                     throw failure;
                 }
@@ -189,23 +197,36 @@ public final class DeviceState {
         }
     }
 
-    /** Whether the camera HAL logged its stall at or after the given epoch time. */
-    private static boolean theCameraHalStalledSince(long sinceMillis) throws IOException {
+    /** What the camera HAL logged of a stall at or after the given epoch time, or null. */
+    @Nullable
+    private static String theCameraHalStallSince(long sinceMillis) throws IOException {
         for (String line : shell("logcat -d -v epoch -s " + CAMERA_HAL_TAG + ":E").split("\n")) {
-            if (!line.contains(CAMERA_HAL_STALL)) {
+            String stall = stallIn(line);
+            if (stall == null) {
                 continue;
             }
             try {
                 // An epoch-format line starts with the seconds since 1970, to the millisecond.
                 double seconds = Double.parseDouble(line.trim().split("\\s+", 2)[0]);
                 if ((long) (seconds * 1000) >= sinceMillis) {
-                    return true;
+                    return stall;
                 }
             } catch (NumberFormatException notAStamp) {
                 // A line logcat wrapped, which carries no time of its own.
             }
         }
-        return false;
+        return null;
+    }
+
+    /** Which of {@link #CAMERA_HAL_STALLS} a log line reports, or null. */
+    @Nullable
+    private static String stallIn(@NonNull String line) {
+        for (String stall : CAMERA_HAL_STALLS) {
+            if (line.contains(stall)) {
+                return stall;
+            }
+        }
+        return null;
     }
 
     /** Runs a command as the shell user, which may read and size the log, and returns its output. */
