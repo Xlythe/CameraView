@@ -3,8 +3,9 @@ package com.xlythe.view.camera.viewer;
 import androidx.annotation.MainThread;
 
 /**
- * Hears whether a {@link MediaView} could show what it was given. Both are called on the main
- * thread, once for each file.
+ * Hears whether a {@link MediaView} could show what it was given. Each is called on the main
+ * thread, at most once for each file. A video or recording that showed and then cannot play,
+ * because the device's decoder gives up on it, is reported as loaded and then as failed.
  */
 public interface MediaListener {
     /**
@@ -17,7 +18,7 @@ public interface MediaListener {
 
     /**
      * The file could not be shown: it is missing or unreadable, or this device cannot decode
-     * it.
+     * it. MediaView shows its error placeholder in its place.
      */
     @MainThread
     default void onMediaFailed() {}
