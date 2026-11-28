@@ -601,4 +601,15 @@ public final class GlMathTest {
     private static float[] mirror(@NonNull float[] shown) {
         return new float[] {1f - shown[0], shown[1]};
     }
+
+    @Test
+    public void aQuarterTurnIsOneOfTheFourTurns() {
+        assertEquals(0, GlMath.quarterTurn(0));
+        assertEquals(90, GlMath.quarterTurn(90));
+        assertEquals(180, GlMath.quarterTurn(180));
+        assertEquals(270, GlMath.quarterTurn(270));
+        assertEquals("a whole turn more", 90, GlMath.quarterTurn(450));
+        assertEquals("counted the other way", 270, GlMath.quarterTurn(-90));
+        assertEquals("not a quarter turn at all", 0, GlMath.quarterTurn(45));
+    }
 }
