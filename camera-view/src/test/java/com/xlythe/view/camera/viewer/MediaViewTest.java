@@ -300,6 +300,15 @@ public class MediaViewTest {
         mRecorder.failed = false;
         created[0].invokeErrorListener(1, Integer.MIN_VALUE);
         assertFalse(mRecorder.failed);
+
+        // An error once prepared that stops nothing, such as a stream that cannot seek, does not
+        // fail it.
+        show(file(MediaTestFiles.mp3WithCover(null), ".mp3"));
+        ShadowLooper.idleMainLooper();
+        assertTrue(mView.play());
+        created[0].invokeErrorListener(Integer.MIN_VALUE, 0);
+        assertFalse(mRecorder.failed);
+        assertFalse(mView.hasFailed());
         show(file(jpeg(64, 48, null), ".jpg"));
         assertFalse(mView.hasFailed());
     }

@@ -782,7 +782,12 @@ public class MediaView extends FrameLayout {
                 closeQuietly(held);
                 Log.w(TAG, "Unable to play " + location + " (" + what + ", " + extra + ")");
                 if (generation == mGeneration && failed == mPlayer) {
+                    // Once prepared, only the decoder or the media server giving up fails it.
+                    boolean fatal = !mPlayerPrepared || VideoView.isFatal(what);
                     releasePlayer();
+                    if (!fatal) {
+                        return true;
+                    }
                     if (report) {
                         reportFailed();
                     } else {

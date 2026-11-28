@@ -30,6 +30,7 @@ import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.Nullable;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
@@ -73,6 +74,9 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     private boolean mFitsInside;
     /** Hears whether a file or uri is ready to play. */
     @Nullable private PrepareListener mPrepareListener;
+
+    /** Whether the file now playing was prepared, so a later error is told from failing to open. */
+    private boolean mPreparedFile;
 
     // ---------- File ----------
 
@@ -483,12 +487,14 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             } else {
                 mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
             }
+            mPreparedFile = false;
             mMediaPlayer.setOnPreparedListener(mediaPlayer -> {
                 mediaPlayer.setOnPreparedListener(null);
                 closePreparingInputStream();
                 if (generation != mPrepareGeneration) {
                     return;
                 }
+                mPreparedFile = true;
                 seekToFirstFrame();
                 if (mIsPlaying) {
                     playFile();
@@ -502,7 +508,11 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                         + " (what=" + what + ", extra=" + extra + ")");
                 closePreparingInputStream();
                 setPlayingState(false);
-                notifyPrepareFailed();
+                // Once prepared, only the decoder or the media server giving up fails the video:
+                // a stream that cannot seek reports an error of its own, and plays on.
+                if (!mPreparedFile || isFatal(what)) {
+                    notifyPrepareFailed();
+                }
                 return true;
             });
             mMediaPlayer.prepareAsync();
@@ -514,6 +524,14 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         } finally {
             surface.release();
         }
+    }
+
+    /** Whether a player's error means it cannot play what it was given. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @AnyThread
+    public static boolean isFatal(int what) {
+        return what == MediaPlayer.MEDIA_ERROR_UNKNOWN
+                || what == MediaPlayer.MEDIA_ERROR_SERVER_DIED;
     }
 
     private void closePreparingInputStream() {
