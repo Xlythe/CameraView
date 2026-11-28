@@ -114,8 +114,26 @@ final class ImageLocation {
         return uri().toString() + '|' + size;
     }
 
+    /** Whether the picture is a file rather than behind a Uri. */
+    @AnyThread
+    boolean isFile() {
+        return mFile != null;
+    }
+
+    /** The file, which only a location that {@link #isFile()} has. */
+    @AnyThread
     @NonNull
-    private Uri uri() {
+    File file() {
+        if (mFile == null) {
+            throw new IllegalStateException("Not a file");
+        }
+        return mFile;
+    }
+
+    /** The Uri, which only a location that is not a file has. */
+    @AnyThread
+    @NonNull
+    Uri uri() {
         if (mUri == null) {
             throw new IllegalStateException("Not a Uri");
         }

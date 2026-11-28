@@ -204,6 +204,26 @@ public final class TransformMath {
     public static Matrix centerCrop(
             @NonNull RectF crop, int rotationDegrees, boolean mirrored,
             int viewWidth, int viewHeight) {
+        return center(crop, rotationDegrees, mirrored, viewWidth, viewHeight, true);
+    }
+
+    /**
+     * Maps a region of a buffer into a view the way {@link #centerCrop} does, except that it is
+     * scaled by the smaller of the two axis ratios, so all of it shows and the view is
+     * letterboxed instead.
+     *
+     * @return the mapping, or an identity matrix when the crop or the view is empty
+     */
+    @NonNull
+    public static Matrix centerInside(
+            @NonNull RectF crop, int rotationDegrees, boolean mirrored,
+            int viewWidth, int viewHeight) {
+        return center(crop, rotationDegrees, mirrored, viewWidth, viewHeight, false);
+    }
+
+    @NonNull
+    private static Matrix center(@NonNull RectF crop, int rotationDegrees, boolean mirrored,
+            int viewWidth, int viewHeight, boolean cover) {
         Matrix bufferToView = new Matrix();
         if (crop.isEmpty() || viewWidth <= 0 || viewHeight <= 0) {
             return bufferToView;
@@ -221,7 +241,9 @@ public final class TransformMath {
         bufferToView.mapRect(oriented);
         bufferToView.postTranslate(-oriented.left, -oriented.top);
 
-        float scale = Math.max(viewWidth / oriented.width(), viewHeight / oriented.height());
+        float scaleX = viewWidth / oriented.width();
+        float scaleY = viewHeight / oriented.height();
+        float scale = cover ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY);
         bufferToView.postScale(scale, scale);
         bufferToView.postTranslate(
                 (viewWidth - oriented.width() * scale) / 2f,

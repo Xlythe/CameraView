@@ -30,7 +30,9 @@ import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.Nullable;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.UiThread;
 import androidx.annotation.RequiresApi;
 
@@ -68,6 +70,13 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
     private int mVideoOrientation;
     // The last known info about the video being mirrored.
     private boolean mVideoMirrored;
+    /** Whether the video is letterboxed inside the view rather than filling it. */
+    private boolean mFitsInside;
+    /** Hears whether a file or uri is ready to play. */
+    @Nullable private PrepareListener mPrepareListener;
+
+    /** Whether the file now playing was prepared, so a later error is told from failing to open. */
+    private boolean mPreparedFile;
 
     // ---------- File ----------
 
@@ -320,6 +329,42 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         mEventListener = listener;
     }
 
+    /** Hears whether a file or uri the view was given is ready to play, or cannot be played. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public interface PrepareListener {
+        /** The video is ready, showing its first frame. */
+        @UiThread
+        void onPrepared();
+
+        /** The video cannot be played. */
+        @UiThread
+        void onPrepareFailed();
+    }
+
+    /** Hears whether each file or uri is ready to play. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public void setPrepareListener(@Nullable PrepareListener listener) {
+        mPrepareListener = listener;
+    }
+
+    /**
+     * Letterboxes the video inside the view, all of it showing, rather than filling the view and
+     * cropping what overflows, which is the default.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public void setFitsInside(boolean fitsInside) {
+        mFitsInside = fitsInside;
+        if (mVideoWidth > 0 && mVideoHeight > 0) {
+            transformPreview(mVideoWidth, mVideoHeight, mVideoOrientation, mVideoMirrored);
+        }
+    }
+
+    private void notifyPrepareFailed() {
+        if (mPrepareListener != null) {
+            mPrepareListener.onPrepareFailed();
+        }
+    }
+
     protected void prepare() {
         switch (mInputType) {
             case UNKNOWN:
@@ -359,6 +404,7 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                 }
                 if (metadata == null) {
                     setPlayingState(false);
+                    notifyPrepareFailed();
                     return;
                 }
                 startPreparing(file, uri, surfaceTexture, metadata, generation);
@@ -420,12 +466,8 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         closePreparingInputStream();
         Surface surface = new Surface(surfaceTexture);
         try {
-            try {
-                Objects.requireNonNull(mMediaPlayer).stop();
-            } catch (IllegalStateException ignored) {
-                // The newly created player has not entered the started state yet.
-            }
-            mMediaPlayer.reset();
+            // Reset stops whatever played from any state; stop would complain of a new player.
+            Objects.requireNonNull(mMediaPlayer).reset();
 
             if (file != null) {
                 // MediaPlayer reads from the descriptor until it finishes preparing, so unlike
@@ -445,15 +487,20 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             } else {
                 mMediaPlayer.setAudioStreamType(AudioManager.STREAM_MUSIC);
             }
+            mPreparedFile = false;
             mMediaPlayer.setOnPreparedListener(mediaPlayer -> {
                 mediaPlayer.setOnPreparedListener(null);
                 closePreparingInputStream();
                 if (generation != mPrepareGeneration) {
                     return;
                 }
+                mPreparedFile = true;
                 seekToFirstFrame();
                 if (mIsPlaying) {
                     playFile();
+                }
+                if (mPrepareListener != null) {
+                    mPrepareListener.onPrepared();
                 }
             });
             mMediaPlayer.setOnErrorListener((mediaPlayer, what, extra) -> {
@@ -461,6 +508,11 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
                         + " (what=" + what + ", extra=" + extra + ")");
                 closePreparingInputStream();
                 setPlayingState(false);
+                // Once prepared, only the decoder or the media server giving up fails the video:
+                // a stream that cannot seek reports an error of its own, and plays on.
+                if (!mPreparedFile || isFatal(what)) {
+                    notifyPrepareFailed();
+                }
                 return true;
             });
             mMediaPlayer.prepareAsync();
@@ -468,9 +520,18 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
             Log.e(TAG, "Failed to prepare video " + source, e);
             closePreparingInputStream();
             setPlayingState(false);
+            notifyPrepareFailed();
         } finally {
             surface.release();
         }
+    }
+
+    /** Whether a player's error means it cannot play what it was given. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @AnyThread
+    public static boolean isFatal(int what) {
+        return what == MediaPlayer.MEDIA_ERROR_UNKNOWN
+                || what == MediaPlayer.MEDIA_ERROR_SERVER_DIED;
     }
 
     private void closePreparingInputStream() {
@@ -861,11 +922,11 @@ public class VideoView extends FrameLayout implements TextureView.SurfaceTexture
         // Asking for a mirrored view of a mirrored recording shows it the way round it was
         // taken, so the two cancel.
         boolean mirrored = flipped != isMirrored();
-        mTextureView.setTransform(TransformMath.asTextureTransform(
-                TransformMath.centerCrop(
-                        new RectF(0f, 0f, videoWidth, videoHeight),
-                        TransformMath.within360(cameraOrientation),
-                        mirrored, viewWidth, viewHeight),
+        RectF whole = new RectF(0f, 0f, videoWidth, videoHeight);
+        int rotation = TransformMath.within360(cameraOrientation);
+        mTextureView.setTransform(TransformMath.asTextureTransform(mFitsInside
+                ? TransformMath.centerInside(whole, rotation, mirrored, viewWidth, viewHeight)
+                : TransformMath.centerCrop(whole, rotation, mirrored, viewWidth, viewHeight),
                 videoWidth, videoHeight, viewWidth, viewHeight));
     }
 

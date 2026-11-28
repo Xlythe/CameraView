@@ -4,7 +4,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.hardware.Sensor
 import android.hardware.SensorManager
 import android.net.Uri
@@ -20,8 +19,6 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -54,7 +51,6 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -87,16 +83,19 @@ import com.xlythe.view.camera.Barcode
 import com.xlythe.compose.camera.Camera
 import com.xlythe.compose.camera.CameraController
 import com.xlythe.compose.camera.CameraState
-import com.xlythe.compose.camera.LargeImage
-import com.xlythe.compose.camera.Panorama
 import com.xlythe.compose.camera.PanoramaMode
-import com.xlythe.compose.camera.Photosphere
 import com.xlythe.compose.camera.PictureFormat
 import com.xlythe.compose.camera.Permissions
 import com.xlythe.compose.camera.Video
 import com.xlythe.compose.camera.VideoController
 import com.xlythe.sample.camera.ui.theme.CameraViewTheme
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import com.xlythe.compose.camera.Media
+import com.xlythe.view.camera.MediaTags
+import com.xlythe.view.camera.viewer.MediaView
 import java.io.File
 
 /** Where a held burst stops on its own, so a button held by accident does not fill the disk. */
@@ -108,17 +107,7 @@ enum class DemoScreen(val title: String) {
     RESIZING("Resizing Demo"),
     PANORAMA("Panorama Demo"),
     QR_CODE("QR Code Demo"),
-    VIEWER("Viewer Demo")
-}
-
-/** How the viewer demo shows a picture. */
-enum class ViewerMode(val label: String) {
-    /** Flat, to zoom into. */
-    PICTURE("Picture"),
-    /** As a strip to pan along. */
-    PANORAMA("Panorama"),
-    /** From the inside of a sphere. */
-    PHOTOSPHERE("Sphere")
+    VIEWER("Media Demo")
 }
 
 /**
@@ -726,17 +715,17 @@ fun QrCodeDemoScreen() {
 }
 
 /**
- * Shows a picture in whichever of the library's viewers suits it, with a picker to open another
- * and a switch between the three.
+ * Shows any picture, video or recording in the library's [Media], which works out what it is,
+ * with a picker to open another.
  */
 @Composable
 fun ViewerDemoScreen(initialUri: Uri?) {
     val context = LocalContext.current
     var uri by remember(initialUri) { mutableStateOf(initialUri) }
-    var mode by remember(uri) { mutableStateOf(uri?.let { guessViewerMode(context, it) } ?: ViewerMode.PICTURE) }
+    var shown by remember(uri) { mutableStateOf(MediaView.UNKNOWN) }
     var gyroscope by remember { mutableStateOf(false) }
-    var status by remember(uri, mode) {
-        mutableStateOf(if (uri == null) "Take a picture, or open one to view it" else "")
+    var status by remember(uri) {
+        mutableStateOf(if (uri == null) "Take a picture, or open any picture, video or recording" else "")
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
         if (picked != null) {
@@ -744,41 +733,28 @@ fun ViewerDemoScreen(initialUri: Uri?) {
         }
     }
     val hasRotationSensor = remember { hasRotationSensor(context) }
-    val onFailed = { status = "This device cannot show this picture" }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            when (mode) {
-                ViewerMode.PICTURE -> LargeImage(
-                    modifier = Modifier.fillMaxSize(), uri = uri, onFailed = onFailed
-                )
-                ViewerMode.PANORAMA -> Panorama(
-                    modifier = Modifier.fillMaxSize(), uri = uri, onFailed = onFailed
-                )
-                ViewerMode.PHOTOSPHERE -> Photosphere(
-                    modifier = Modifier.fillMaxSize(), uri = uri, gyroscope = gyroscope,
-                    onFailed = onFailed
-                )
-            }
+            Media(
+                modifier = Modifier.fillMaxSize(),
+                uri = uri,
+                gyroscope = gyroscope,
+                onLoaded = { type -> shown = type; status = "" },
+                // Media shows that it failed itself.
+                onFailed = { status = "" }
+            )
             if (status.isNotEmpty()) {
                 Text(status, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp))
             }
         }
-        // Scrolls rather than wraps where the screen is too narrow for every choice.
         Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Button(onClick = { picker.launch(arrayOf("image/*")) }) { Text("Open") }
-            ViewerMode.entries.forEach { option ->
-                FilterChip(
-                    selected = mode == option,
-                    onClick = { mode = option },
-                    label = { Text(option.label) }
-                )
-            }
-            if (mode == ViewerMode.PHOTOSPHERE && hasRotationSensor) {
+            Button(onClick = { picker.launch(arrayOf("image/*", "video/*", "audio/*")) }) { Text("Open") }
+            if ((shown == MediaView.PHOTOSPHERE || shown == MediaView.SPHERICAL_VIDEO) && hasRotationSensor) {
                 Checkbox(checked = gyroscope, onCheckedChange = { gyroscope = it })
                 Text("Gyro", color = Color.White)
             }
@@ -786,32 +762,26 @@ fun ViewerDemoScreen(initialUri: Uri?) {
     }
 }
 
-/**
- * Which viewer suits a picture: a photo sphere is twice as wide as it is tall, a panorama wider
- * still, and a DNG or anything else is a picture to zoom into.
- */
-fun guessViewerMode(type: String?, width: Int, height: Int): ViewerMode {
-    if (type == "image/x-adobe-dng" || width <= 0 || height <= 0) {
-        return ViewerMode.PICTURE
+/** When, where, what and how special a file is, as its metadata says. */
+fun describeMedia(tags: MediaTags): String {
+    val parts = mutableListOf<String>()
+    tags.title?.let { parts += it }
+    listOfNotNull(tags.make, tags.model).joinToString(" ").takeIf { it.isNotEmpty() }?.let { parts += it }
+    if (tags.captureTime != -1L) {
+        parts += SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.US).format(Date(tags.captureTime))
     }
-    val aspect = width.toFloat() / height
-    return when {
-        kotlin.math.abs(aspect - 2f) < 0.02f -> ViewerMode.PHOTOSPHERE
-        aspect > 2.5f -> ViewerMode.PANORAMA
-        else -> ViewerMode.PICTURE
+    tags.location?.let { parts += String.format(Locale.US, "%.5f, %.5f", it.latitude, it.longitude) }
+    if (tags.gainMap != MediaTags.GAIN_MAP_NONE || tags.videoTransfer == MediaTags.TRANSFER_HLG
+        || tags.videoTransfer == MediaTags.TRANSFER_PQ) {
+        parts += "HDR"
     }
-}
-
-private fun guessViewerMode(context: Context, uri: Uri): ViewerMode {
-    val type = context.contentResolver.getType(uri)
-        ?: if (uri.path?.endsWith(".dng", ignoreCase = true) == true) "image/x-adobe-dng" else null
-    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-    try {
-        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
-    } catch (e: Exception) {
-        // A picture whose size cannot be read is shown flat.
+    if (tags.motionPhoto != null) {
+        parts += "Motion photo"
     }
-    return guessViewerMode(type, bounds.outWidth, bounds.outHeight)
+    if (tags.isAnimated) {
+        parts += "Animated"
+    }
+    return if (parts.isEmpty()) "No metadata" else parts.joinToString(" · ")
 }
 
 private fun hasRotationSensor(context: Context): Boolean {

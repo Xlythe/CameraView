@@ -653,6 +653,44 @@ Panorama(uri = uri)
 Photosphere(uri = uri, gyroscope = true)
 ```
 
+Viewing any media
+-----------------
+MediaView shows whatever a file turns out to be, worked out from its contents: a picture to zoom
+into, a panorama to pan along, a photo sphere to look around, a video, a motion photo whose clip
+plays while it is held, a 360° video, a recording, or an animated picture. A tap plays and pauses;
+a thin line along the bottom shows how far it has played. HDR pictures show in HDR
+where the screen can; an HDR video puts the window in HDR mode, but is drawn in standard range.
+```java
+mMediaView.setUri(uri);                  // or setFile(file)
+mMediaView.setMediaListener(new MediaListener() {
+  @Override public void onMediaLoaded(int type) { ... }  // MediaView.PHOTOSPHERE, VIDEO, ...
+  @Override public void onMediaFailed() { ... }
+});
+mMediaView.setMediaType(MediaView.PANORAMA);  // to show it as something else
+```
+```kotlin
+Media(uri = uri, onLoaded = { type -> ... })
+```
+The line and the tap and hold can each be turned off, and the line restyled, with the MediaView
+attributes or setters; it draws no text. A file it can't show calls `onMediaFailed` and shows a
+small struck-out picture in its place: `errorPlaceholder` or `setErrorPlaceholder` swaps it for a
+drawable of your own, `@null` removes it, and in Compose `Media` takes `showError = false`.
+
+What shows depends on what the device decodes:
+
+| | Shows on |
+|---|---|
+| JPEG, PNG, WebP, GIF, BMP | every version |
+| Animated GIF and PNG | every version |
+| Animated WebP, HEIF and HEIC | Android 9 and newer |
+| AVIF, and animated AVIF | Android 12 and newer |
+| DNG | Android 7.0 and newer; before that, the preview it carries, if any |
+| Other camera raws (CR2, CR3, NEF, ARW, RAF, ORF, RW2) | every version, as the largest JPEG the camera embedded, which for some cameras is smaller than the photo |
+| Ultra HDR and other gain maps, in HDR | Android 14 and newer; before that, as an ordinary picture |
+| Videos and sound | the codecs the device has; 10-bit, Dolby Vision and AV1 vary the most. A video none of them decodes fails rather than playing its sound over nothing |
+| H.264 video, as most phones record it | Baseline on every version; High where the device has a decoder for it, which the decoders Android 5.1 and older come with are not |
+| TIFF, JPEG XL, AVI | not shown |
+
 VideoEditor
 -----------------
 VideoEditor changes a video that has already been recorded - trimming it, cropping, scaling and

@@ -53,4 +53,30 @@
     <declare-styleable name="VideoView">
         <attr name="filePath" format="string" />
     </declare-styleable>
+    <declare-styleable name="MediaView">
+        <!-- What to show the file as, rather than what it is found to be. -->
+        <attr name="mediaType" format="enum">
+            <enum name="detect" value="0"/>
+            <enum name="picture" value="1"/>
+            <enum name="panorama" value="2"/>
+            <enum name="photosphere" value="3"/>
+            <enum name="video" value="4"/>
+            <enum name="motionPhoto" value="5"/>
+            <enum name="sphericalVideo" value="6"/>
+            <enum name="audio" value="7"/>
+            <enum name="animation" value="8"/>
+        </attr>
+        <attr name="tapToPlay" format="boolean" />
+        <attr name="holdToPlay" format="boolean" />
+        <attr name="mediaProgressVisible" format="boolean" />
+        <!-- The progress line's colour; the theme's colorControlActivated when unset. -->
+        <attr name="mediaProgressColor" format="color" />
+        <attr name="mediaProgressHeight" format="dimension" />
+        <!-- What shows for sound with no cover; @null for nothing. -->
+        <attr name="audioPlaceholder" format="reference" />
+        <!-- What shows in place of a file that cannot be shown; @null for nothing. -->
+        <attr name="errorPlaceholder" format="reference" />
+        <attr name="hdrEnabled" format="boolean" />
+        <attr name="gyroscopeEnabled" format="boolean" />
+    </declare-styleable>
 </resources>

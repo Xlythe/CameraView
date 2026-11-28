@@ -18,11 +18,10 @@ import android.widget.Toast;
 
 import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.CameraView;
-import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.MediaTags;
 import com.xlythe.view.camera.ZoomPreset;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.util.List;
 
 import androidx.annotation.AnyThread;
@@ -340,12 +339,10 @@ public class MainFragment extends CameraFragment {
             mViewLast.setEnabled(true);
         }
 
-        // Print out metadata (EXIF data) about the picture using the library's Exif helper: its
-        // title, photographer and copyright, the conditions it was taken in, where and when.
-        try (InputStream input = requireContext().getContentResolver().openInputStream(uri)) {
-            if (input != null) {
-                Log.d(TAG, new Exif(input).toString());
-            }
+        // Print out what the library's MediaTags reads from the picture: its format, title,
+        // when and where it was taken, and which way up it goes.
+        try {
+            Log.d(TAG, MediaTags.open(requireContext(), uri).toString());
         } catch (IOException e) {
             Log.w(TAG, "Could not read the metadata of " + uri, e);
         }

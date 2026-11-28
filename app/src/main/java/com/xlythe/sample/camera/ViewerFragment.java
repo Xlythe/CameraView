@@ -1,17 +1,16 @@
 package com.xlythe.sample.camera;
 
-import static com.xlythe.sample.camera.MainActivity.TAG;
-
-import android.graphics.BitmapFactory;
+import android.content.res.Resources;
+import android.location.Location;
 import android.net.Uri;
 import android.os.Bundle;
-import android.util.Log;
+import android.text.TextUtils;
+import android.text.format.DateFormat;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.CheckBox;
 import android.widget.ProgressBar;
-import android.widget.RadioGroup;
 import android.widget.TextView;
 
 import androidx.activity.result.ActivityResultLauncher;
@@ -23,41 +22,27 @@ import androidx.annotation.VisibleForTesting;
 import androidx.core.os.BundleCompat;
 import androidx.fragment.app.Fragment;
 
-import com.xlythe.view.camera.viewer.ImageLoadListener;
-import com.xlythe.view.camera.viewer.LargeImageView;
-import com.xlythe.view.camera.viewer.PanoramaView;
-import com.xlythe.view.camera.viewer.PhotosphereView;
+import com.xlythe.view.camera.MediaTags;
+import com.xlythe.view.camera.viewer.MediaListener;
+import com.xlythe.view.camera.viewer.MediaView;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.util.Locale;
+import java.util.ArrayList;
+import java.util.Date;
+import java.util.List;
 
 /**
- * ViewerFragment shows a picture the camera took in whichever of the library's viewers suits it:
- * a DNG or any other picture zoomed down to its own pixels, a panorama panned along, or a photo
- * sphere looked around from the inside, optionally by turning the phone.
+ * ViewerFragment shows any picture, video or sound file in the library's MediaView, which works
+ * out what the file is: a picture or DNG to zoom into, a panorama, a photo sphere, a video, a
+ * motion photo, a 360° video, a recording or an animated picture.
  *
  * <p>MainFragment opens it on the picture it just filed; the menu opens it empty, to pick a
- * picture from the gallery.</p>
+ * file from the gallery.</p>
  */
 public class ViewerFragment extends Fragment {
-    /** The argument naming the picture to show. */
+    /** The argument naming the file to show. */
     static final String ARG_URI = "uri";
 
-    /** What a DNG is called when it is filed in the gallery. */
-    private static final String DNG_TYPE = "image/x-adobe-dng";
-
-    /** How a picture is shown. */
-    enum Mode {
-        /** Flat, to zoom into. */
-        PICTURE,
-        /** As a strip to pan along. */
-        PANORAMA,
-        /** From the inside of a sphere. */
-        PHOTOSPHERE
-    }
-
-    /** Picks a picture from the gallery or the files app. */
+    /** Picks a file from the gallery or the files app. */
     private final ActivityResultLauncher<String[]> mPicker = registerForActivityResult(
             new ActivityResultContracts.OpenDocument(), uri -> {
                 if (uri != null) {
@@ -65,39 +50,27 @@ public class ViewerFragment extends Fragment {
                 }
             });
 
-    /** The picture being shown, or null before one is picked. */
+    /** The file being shown, or null before one is picked. */
     @Nullable
     private Uri mUri;
 
-    /** The flat viewer, held while the view exists. */
+    /** Shows the file. */
     @Nullable
-    private LargeImageView mPicture;
+    private MediaView mMedia;
 
-    /** The panorama viewer. */
-    @Nullable
-    private PanoramaView mPanorama;
-
-    /** The photo sphere viewer. */
-    @Nullable
-    private PhotosphereView mPhotosphere;
-
-    /** Picks how the picture is shown. */
-    @Nullable
-    private RadioGroup mModes;
-
-    /** Turns the phone's rotation on and off for the photo sphere. */
+    /** Turns the phone's rotation on and off for a sphere. */
     @Nullable
     private CheckBox mGyroscope;
 
-    /** Spins until the picture shows. */
+    /** Spins until the file shows. */
     @Nullable
     private ProgressBar mProgress;
 
-    /** Says what to do, or that the picture cannot be shown. */
+    /** Says what to do, or that the file cannot be shown. */
     @Nullable
     private TextView mMessage;
 
-    /** The arguments that open this on a picture. */
+    /** The arguments that open this on a file. */
     @NonNull
     static Bundle arguments(@NonNull Uri uri) {
         Bundle arguments = new Bundle();
@@ -114,35 +87,38 @@ public class ViewerFragment extends Fragment {
     @Override
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
-        mPicture = view.findViewById(R.id.viewer_picture);
-        mPanorama = view.findViewById(R.id.viewer_panorama);
-        mPhotosphere = view.findViewById(R.id.viewer_photosphere);
-        mModes = view.findViewById(R.id.viewer_mode);
+        mMedia = view.findViewById(R.id.viewer_media);
         mGyroscope = view.findViewById(R.id.viewer_gyroscope);
         mProgress = view.findViewById(R.id.viewer_progress);
         mMessage = view.findViewById(R.id.viewer_message);
 
-        ImageLoadListener listener = new ImageLoadListener() {
+        mMedia.setMediaListener(new MediaListener() {
             @Override
-            public void onImageLoaded() {
+            public void onMediaLoaded(int type) {
+                setBusy(false, null);
+                if (mGyroscope != null) {
+                    mGyroscope.setVisibility(type == MediaView.PHOTOSPHERE
+                            || type == MediaView.SPHERICAL_VIDEO ? View.VISIBLE : View.GONE);
+                }
+                // Plays videos and recordings as soon as they are ready; a tap pauses them.
+                if (mMedia != null && (type == MediaView.VIDEO
+                        || type == MediaView.SPHERICAL_VIDEO || type == MediaView.AUDIO)) {
+                    mMedia.play();
+                }
+            }
+
+            @Override
+            public void onMediaFailed() {
+                // MediaView shows that it failed itself.
                 setBusy(false, null);
             }
-
-            @Override
-            public void onImageFailed() {
-                setBusy(false, getString(R.string.viewer_failed));
-            }
-        };
-        mPicture.setImageLoadListener(listener);
-        mPanorama.setImageLoadListener(listener);
-        mPhotosphere.setImageLoadListener(listener);
+        });
 
         view.findViewById(R.id.viewer_open).setOnClickListener(
-                v -> mPicker.launch(new String[] {"image/*"}));
-        mModes.setOnCheckedChangeListener((group, id) -> display(modeOf(id)));
+                v -> mPicker.launch(new String[] {"image/*", "video/*", "audio/*"}));
         mGyroscope.setOnCheckedChangeListener((button, checked) -> {
-            if (mPhotosphere != null) {
-                mPhotosphere.setGyroscopeEnabled(checked);
+            if (mMedia != null) {
+                mMedia.setGyroscopeEnabled(checked);
             }
         });
 
@@ -160,6 +136,14 @@ public class ViewerFragment extends Fragment {
     }
 
     @Override
+    public void onPause() {
+        super.onPause();
+        if (mMedia != null && mMedia.isPlaying()) {
+            mMedia.pause();
+        }
+    }
+
+    @Override
     public void onSaveInstanceState(@NonNull Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putParcelable(ARG_URI, mUri);
@@ -167,48 +151,59 @@ public class ViewerFragment extends Fragment {
 
     @Override
     public void onDestroyView() {
-        mPicture = null;
-        mPanorama = null;
-        mPhotosphere = null;
-        mModes = null;
+        mMedia = null;
         mGyroscope = null;
         mProgress = null;
         mMessage = null;
         super.onDestroyView();
     }
 
-    /** Shows a picture in the viewer that suits it. */
+    /** Shows a file, as whatever it is found to be. */
     @MainThread
     private void show(@NonNull Uri uri) {
         mUri = uri;
-        Mode mode = guess(uri);
-        int id = idOf(mode);
-        if (mModes != null && mModes.getCheckedRadioButtonId() != id) {
-            // Displays it, through the listener.
-            mModes.check(id);
-        } else {
-            display(mode);
+        if (mMedia != null) {
+            mMedia.setUri(uri);
         }
+        setBusy(true, null);
     }
 
-    /** Puts the picture in one viewer, and empties the others. */
-    @MainThread
-    private void display(@NonNull Mode mode) {
-        if (mPicture == null || mPanorama == null || mPhotosphere == null || mGyroscope == null) {
-            return;
+    /** What metadata says that is worth showing: when, where, what, and how it is special. */
+    @VisibleForTesting
+    @NonNull
+    static String summary(@NonNull Resources resources, @NonNull MediaTags tags) {
+        List<String> parts = new ArrayList<>();
+        if (tags.getTitle() != null) {
+            parts.add(tags.getTitle());
         }
-        Uri uri = mUri;
-        mPicture.setUri(mode == Mode.PICTURE ? uri : null);
-        mPanorama.setUri(mode == Mode.PANORAMA ? uri : null);
-        mPhotosphere.setUri(mode == Mode.PHOTOSPHERE ? uri : null);
-        mPicture.setVisibility(mode == Mode.PICTURE ? View.VISIBLE : View.GONE);
-        mPanorama.setVisibility(mode == Mode.PANORAMA ? View.VISIBLE : View.GONE);
-        mPhotosphere.setVisibility(mode == Mode.PHOTOSPHERE ? View.VISIBLE : View.GONE);
-        mGyroscope.setVisibility(mode == Mode.PHOTOSPHERE && mPhotosphere.isGyroscopeAvailable()
-                ? View.VISIBLE : View.GONE);
-        if (uri != null) {
-            setBusy(true, null);
+        if (tags.getMake() != null || tags.getModel() != null) {
+            parts.add(((tags.getMake() == null ? "" : tags.getMake() + " ")
+                    + (tags.getModel() == null ? "" : tags.getModel())).trim());
         }
+        if (tags.getCaptureTime() != -1) {
+            parts.add(DateFormat.format("yyyy-MM-dd HH:mm", new Date(tags.getCaptureTime()))
+                    .toString());
+        }
+        Location location = tags.getLocation();
+        if (location != null) {
+            parts.add(resources.getString(R.string.viewer_location, location.getLatitude(),
+                    location.getLongitude()));
+        }
+        if (tags.getGainMap() != MediaTags.GAIN_MAP_NONE
+                || tags.getVideoTransfer() == MediaTags.TRANSFER_HLG
+                || tags.getVideoTransfer() == MediaTags.TRANSFER_PQ) {
+            parts.add(resources.getString(R.string.viewer_hdr));
+        }
+        if (tags.getMotionPhoto() != null) {
+            parts.add(resources.getString(R.string.viewer_motion_photo));
+        }
+        if (tags.isAnimated()) {
+            parts.add(resources.getString(R.string.viewer_animated));
+        }
+        if (parts.isEmpty()) {
+            return resources.getString(R.string.viewer_no_metadata);
+        }
+        return TextUtils.join(" · ", parts);
     }
 
     @MainThread
@@ -220,63 +215,5 @@ public class ViewerFragment extends Fragment {
             mMessage.setText(message);
             mMessage.setVisibility(message == null ? View.GONE : View.VISIBLE);
         }
-    }
-
-    /** Which viewer suits a picture, from its type and shape. */
-    @NonNull
-    private Mode guess(@NonNull Uri uri) {
-        String type = requireContext().getContentResolver().getType(uri);
-        if (type == null && uri.getPath() != null
-                && uri.getPath().toLowerCase(Locale.ROOT).endsWith(".dng")) {
-            type = DNG_TYPE;
-        }
-        BitmapFactory.Options bounds = new BitmapFactory.Options();
-        bounds.inJustDecodeBounds = true;
-        try (InputStream input = requireContext().getContentResolver().openInputStream(uri)) {
-            BitmapFactory.decodeStream(input, null, bounds);
-        } catch (IOException | SecurityException e) {
-            Log.w(TAG, "Unable to read the size of " + uri, e);
-        }
-        return guess(type, bounds.outWidth, bounds.outHeight);
-    }
-
-    /**
-     * Which viewer suits a picture: a photo sphere is twice as wide as it is tall, a panorama
-     * wider still, and a DNG or anything else is a picture to zoom into. The camera's own
-     * panoramas and photo spheres come out that shape; one from elsewhere can be switched.
-     */
-    @VisibleForTesting
-    @NonNull
-    static Mode guess(@Nullable String type, int width, int height) {
-        if (DNG_TYPE.equals(type) || width <= 0 || height <= 0) {
-            return Mode.PICTURE;
-        }
-        float aspect = (float) width / height;
-        if (Math.abs(aspect - 2f) < 0.02f) {
-            return Mode.PHOTOSPHERE;
-        }
-        return aspect > 2.5f ? Mode.PANORAMA : Mode.PICTURE;
-    }
-
-    private static int idOf(@NonNull Mode mode) {
-        switch (mode) {
-            case PANORAMA:
-                return R.id.viewer_mode_panorama;
-            case PHOTOSPHERE:
-                return R.id.viewer_mode_photosphere;
-            default:
-                return R.id.viewer_mode_picture;
-        }
-    }
-
-    @NonNull
-    private static Mode modeOf(int id) {
-        if (id == R.id.viewer_mode_panorama) {
-            return Mode.PANORAMA;
-        }
-        if (id == R.id.viewer_mode_photosphere) {
-            return Mode.PHOTOSPHERE;
-        }
-        return Mode.PICTURE;
     }
 }
