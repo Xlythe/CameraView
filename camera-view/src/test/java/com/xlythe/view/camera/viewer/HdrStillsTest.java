@@ -19,6 +19,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 /** Pictures whose own pixels are HDR: which colour space each names, and what it decodes into. */
@@ -81,6 +82,34 @@ public class HdrStillsTest {
         truncated[png.length + 6] = 'X';
         truncated[png.length + 7] = 't';
         assertNull(HdrStills.declaredHdrColorSpace(stream(truncated)));
+    }
+
+    /** Skia's test PNG: cICP after cHRM, then cLLI and mDCV, before the pixels. */
+    @Test
+    public void skiasPqPngNamesBt2020Pq() throws IOException {
+        try (InputStream png = resource("skia_cicp_pq.png")) {
+            assertEquals(ColorSpace.get(ColorSpace.Named.BT2020_PQ),
+                    HdrStills.declaredHdrColorSpace(png));
+        }
+    }
+
+    /** The web platform's test PNG names Display P3 in cICP, which is not HDR. */
+    @Test
+    public void aDisplayP3PngNamesNone() throws IOException {
+        try (InputStream png = resource("wpt_cICP-and-iCCP.png")) {
+            assertArrayEquals(new int[] {12, 13}, HdrStills.readPngCicp(png));
+        }
+        try (InputStream png = resource("wpt_cICP-and-iCCP.png")) {
+            assertNull(HdrStills.declaredHdrColorSpace(png));
+        }
+    }
+
+    /** An HLG ICC profile is the decoder's to apply; nothing is declared beside it. */
+    @Test
+    public void anIccProfileIsLeftToTheDecoder() throws IOException {
+        try (InputStream png = resource("skia_red-hlg-profile.png")) {
+            assertNull(HdrStills.readPngCicp(png));
+        }
     }
 
     // ---------- The colour space it names ----------
@@ -168,6 +197,14 @@ public class HdrStillsTest {
         options.outColorSpace = colorSpace;
         options.outConfig = config;
         return options;
+    }
+
+    private static InputStream resource(String name) {
+        InputStream in = HdrStillsTest.class.getResourceAsStream("/media/" + name);
+        if (in == null) {
+            throw new AssertionError(name + " is not among the test resources");
+        }
+        return in;
     }
 
     private static ByteArrayInputStream stream(byte[] bytes) {

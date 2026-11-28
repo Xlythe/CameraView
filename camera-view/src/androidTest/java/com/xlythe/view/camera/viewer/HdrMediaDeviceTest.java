@@ -68,16 +68,32 @@ public class HdrMediaDeviceTest {
         assertTrue(mDirectory.isDirectory() || mDirectory.mkdirs());
     }
 
-    /** An HLG video and a PQ video play on the HDR surface, and only there are they HDR. */
+    /**
+     * An HLG video and a PQ video play on the HDR surface, and only there are they HDR. On a
+     * display without HDR they play on the TextureView, as before.
+     */
     @Test
     public void hdrVideosReachTheDisplayAsHdr() throws Exception {
-        assumeHdrDisplay();
+        boolean hdrDisplay = isHdrDisplay();
         for (String name : new String[] {"hlg.mp4", "hdr10.mp4"}) {
             File file = pushed(name);
             MediaView view = show(file);
             assertTrue(name + " did not load", waitFor(() -> view.getContentView() instanceof VideoView
                     && view.getMediaType() == MediaView.VIDEO));
             VideoView video = (VideoView) view.getContentView();
+            if (!hdrDisplay) {
+                onMain(view::play);
+                Thread.sleep(1_500);
+                onMain(() -> {
+                    assertFalse(name + " left the TextureView on a display without HDR",
+                            VideoViewAccess.isShowingHdr(video));
+                    logWindow(name + "-sdr-display");
+                });
+                HdrDeviceEvidence.compositor(TAG, name + "-sdr-display");
+                HdrDeviceEvidence.screenshot("video-" + name + "-sdr-display");
+                remove(view);
+                continue;
+            }
             assertTrue(name + " did not move onto the HDR surface",
                     waitFor(() -> VideoViewAccess.isShowingHdr(video)));
             onMain(view::play);
@@ -174,12 +190,16 @@ public class HdrMediaDeviceTest {
     }
 
     private void assumeHdrDisplay() {
+        assumeTrue("this display cannot show HDR", isHdrDisplay());
+    }
+
+    private boolean isHdrDisplay() {
         AtomicBoolean hdr = new AtomicBoolean();
         onMain(() -> {
             Display display = activity().getWindow().getDecorView().getDisplay();
             hdr.set(display != null && display.isHdr());
         });
-        assumeTrue("this display cannot show HDR", hdr.get());
+        return hdr.get();
     }
 
     /** Copies a pushed file into the cache, or returns null if it was not pushed. */

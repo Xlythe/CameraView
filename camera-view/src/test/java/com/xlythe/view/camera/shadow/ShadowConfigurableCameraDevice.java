@@ -33,7 +33,9 @@ import java.util.List;
 public class ShadowConfigurableCameraDevice extends ShadowCameraDeviceImpl {
     private static boolean sSupported = false;
     private static final List<SessionConfiguration> sProbed = new ArrayList<>();
+    /** Every configuration a session was built from, oldest first. */
     private static final List<SessionConfiguration> sCreated = new ArrayList<>();
+    /** Every session built, by either form of createCaptureSession, oldest first. */
     private static final List<Session> sSessions = new ArrayList<>();
 
     /** One session the code under test built: its surfaces, and the profile each streams in. */

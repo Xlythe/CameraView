@@ -26,7 +26,6 @@ import com.xlythe.view.camera.test.CameraTestActivity;
 
 import org.junit.After;
 import org.junit.Assume;
-import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -61,12 +60,6 @@ public final class HdrPreviewDeviceTest {
     @Rule
     public final GrantPermissionRule permissions = GrantPermissionRule.grant(
             Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO);
-
-    @Before
-    public void requireTenBitCameras() {
-        Assume.assumeTrue("no camera produces a 10-bit stream below API 33",
-                Build.VERSION.SDK_INT >= 33);
-    }
 
     @After
     public void restoreTheDefaultBackend() {
@@ -324,7 +317,7 @@ public final class HdrPreviewDeviceTest {
      * without HDR, or a camera without a 10-bit stream.
      */
     private static void assumeHdr(ActivityScenario<CameraTestActivity> scenario, String name,
-            boolean needsHdrVideo) {
+            boolean needsHdrVideo) throws InterruptedException, IOException {
         AtomicBoolean hdrDisplay = new AtomicBoolean();
         AtomicBoolean hdrCamera = new AtomicBoolean();
         AtomicBoolean hdrPreview = new AtomicBoolean();
@@ -334,20 +327,59 @@ public final class HdrPreviewDeviceTest {
             hdrDisplay.set(display.isHdr());
             hdrCamera.set(camera.isDynamicRangeSupported(CameraView.DynamicRange.HDR));
             hdrPreview.set(camera.isHdrPreviewSupported());
-            Log.i(TAG, name + ": display isHdr=" + display.isHdr() + " hdrTypes="
+            Log.i(TAG, name + ": API " + Build.VERSION.SDK_INT + " display isHdr="
+                    + display.isHdr() + " hdrTypes="
                     + Arrays.toString(display.getHdrCapabilities().getSupportedHdrTypes())
-                    + " hdrSdrRatio=" + display.getHdrSdrRatio()
+                    + " hdrSdrRatio=" + (Build.VERSION.SDK_INT >= 34 ? display.getHdrSdrRatio() : -1f)
                     + " cameraHdr=" + hdrCamera.get() + " hdrPreviewSupported=" + hdrPreview.get()
                     + " backend=" + camera.getBackend());
         });
-        if (!hdrDisplay.get()) {
-            assertFalse("a display without HDR reported HDR preview supported", hdrPreview.get());
+        if (!hdrDisplay.get() || Build.VERSION.SDK_INT < 33) {
+            // No camera streams 10-bit before Android 13, and an SDR display shows none of it.
+            assertFalse("HDR preview reported supported where it cannot show", hdrPreview.get());
+            staysSdr(scenario, name);
         }
         Assume.assumeTrue("this display cannot show HDR", hdrDisplay.get());
+        Assume.assumeTrue("no camera streams 10-bit before Android 13",
+                Build.VERSION.SDK_INT >= 33);
         Assume.assumeTrue("this camera has no HDR preview", hdrPreview.get());
         if (needsHdrVideo) {
             Assume.assumeTrue("this camera records no HDR", hdrCamera.get());
         }
+    }
+
+    /**
+     * Where HDR preview is unsupported, asking for HDR framing leaves the preview on the
+     * TextureView, the window alone and the camera working.
+     */
+    private static void staysSdr(ActivityScenario<CameraTestActivity> scenario, String name)
+            throws InterruptedException, IOException {
+        scenario.onActivity(activity -> {
+            CameraView camera = activity.getCameraView();
+            camera.setHdrPreviewEnabled(false);
+            camera.setHdrPreviewEnabled(true);
+            if (camera.isDynamicRangeSupported(CameraView.DynamicRange.HDR)) {
+                camera.setDynamicRange(CameraView.DynamicRange.HDR);
+            }
+            if (camera.isPictureFormatSupported(CameraView.PictureFormat.ULTRA_HDR)) {
+                camera.setPictureFormat(CameraView.PictureFormat.ULTRA_HDR);
+            }
+        });
+        Thread.sleep(2_000);
+        scenario.onActivity(activity -> {
+            CameraView camera = activity.getCameraView();
+            assertTrue("the camera closed", camera.isOpen());
+            assertFalse("the preview left the TextureView", camera.getHdrSurface().isShowing());
+            assertEquals(View.VISIBLE, camera.asTextureView().getVisibility());
+            if (Build.VERSION.SDK_INT >= 26) {
+                assertEquals(ActivityInfo.COLOR_MODE_DEFAULT, activity.getWindow().getColorMode());
+            }
+            Log.i(TAG, name + ": HDR preview unsupported; the preview stayed on the TextureView"
+                    + " and the camera stayed open");
+        });
+        assertTrue("no picture with HDR preview unsupported",
+                takePicture(scenario, name + "-unsupported.jpg") != null);
+        HdrDeviceEvidence.screenshot(name + "-unsupported");
     }
 
     /** Takes a picture into the cache, returning it, or null if it failed. */
