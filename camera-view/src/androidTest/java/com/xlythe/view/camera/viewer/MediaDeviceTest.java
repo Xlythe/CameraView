@@ -284,7 +284,8 @@ public class MediaDeviceTest {
     public void aHeicIsTurnedByItsOwnTransformsExactlyOnce() throws Exception {
         File heic = new File(mDirectory, "turned.heic");
         try (FileOutputStream out = new FileOutputStream(heic)) {
-            out.write(shell("cat /data/local/tmp/media-corpus/stills/androidx_sample_still_photo.heic"));
+            out.write(shell(
+                    "cat /data/local/tmp/media-corpus/stills/androidx_sample_still_photo.heic"));
         }
         assumeTrue("the corpus was not pushed", heic.length() > 0);
         float[][] upright = grid(heic, 0, false);

@@ -56,8 +56,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * <p>The corpus is pushed to /data/local/tmp/media-corpus, with an expected.tsv beside it; without
  * it the test skips. Before Android 6.0, whose shell commands never say they have finished, it is
- * pushed to media-corpus under the test's external files instead. Pass {@code -e dir <folder>} to check one folder of it; files not pushed are
- * passed over.</p>
+ * pushed to media-corpus under the test's external files instead. Pass {@code -e dir <folder>}
+ * to check one folder of it; files not pushed are passed over.</p>
  */
 @RunWith(AndroidJUnit4.class)
 public class MediaCompatDeviceTest {
