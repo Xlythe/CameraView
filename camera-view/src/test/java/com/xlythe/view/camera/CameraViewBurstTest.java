@@ -92,6 +92,8 @@ public class CameraViewBurstTest {
     public void setUp() {
         ShadowCallbackCameraCaptureSession.reset();
         ShadowInjectableImageReader.reset();
+        CameraSoundsTest.resetSounds();
+        BurstSoundRecorder.install();
         context = RuntimeEnvironment.getApplication();
         // Cameras that write RAW, so that a RAW format can be set for a burst to refuse.
         FakeCamera2.addBackAndFrontCameras(context, FakeCamera2.RawSupport.FULL);
@@ -113,6 +115,7 @@ public class CameraViewBurstTest {
         cameraView.close();
         idle();
         cameraView.release();
+        BurstSoundRecorder.uninstall();
     }
 
     /** A button pressed before the camera opens has to hear that nothing was taken. */
@@ -291,6 +294,54 @@ public class CameraViewBurstTest {
         }
         cameraView.stopRecording();
         idle();
+    }
+
+    /** Letting go stops the loop and plays the end tone at once, with pictures on their way. */
+    @Test
+    public void stoppingEndsTheSoundAtOnce() {
+        open();
+        cameraView.startBurst(directory, 10, heard);
+        idle();
+        assertEquals(1, BurstSoundRecorder.EVENTS.size());
+        assertTrue(BurstSoundRecorder.EVENTS.get(0).startsWith("loop "));
+
+        cameraView.stopBurst();
+
+        assertEquals(List.of("stop", BurstSoundRecorder.END),
+                BurstSoundRecorder.EVENTS.subList(1, BurstSoundRecorder.EVENTS.size()));
+        assertEquals("the pictures on their way have not landed", 0, heard.finishes.size());
+        deliverFrames(IN_FLIGHT);
+        assertEquals(List.of(IN_FLIGHT), heard.finishes);
+        assertEquals("and play nothing more", 3, BurstSoundRecorder.EVENTS.size());
+    }
+
+    /** Let go before the first picture is exposed, a burst plays the click once. */
+    @Test
+    public void aQuickReleasePlaysTheClickOnce() {
+        open();
+        ShadowCallbackCameraCaptureSession.setHoldCaptures(true);
+        cameraView.startBurst(directory, 10, heard);
+        idle();
+
+        cameraView.stopBurst();
+        assertEquals(List.of(), BurstSoundRecorder.EVENTS);
+        ShadowCallbackCameraCaptureSession.setHoldCaptures(false);
+        ShadowCallbackCameraCaptureSession.releaseHeldCaptures();
+        idle();
+        deliverFrames(IN_FLIGHT);
+
+        assertEquals(List.of(IN_FLIGHT), heard.finishes);
+        assertEquals(1, BurstSoundRecorder.EVENTS.size());
+        assertTrue(BurstSoundRecorder.EVENTS.get(0).startsWith("once "));
+    }
+
+    /** A burst that is refused makes no sound. */
+    @Test
+    public void aRefusedBurstMakesNoSound() {
+        cameraView.startBurst(directory, 5, heard);
+
+        assertEquals(List.of(0), heard.finishes);
+        assertEquals(List.of(), BurstSoundRecorder.PLAYERS);
     }
 
     /** A picture awaiting confirmation holds the preview, so a burst waits for it. */

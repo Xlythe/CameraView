@@ -17,6 +17,8 @@ import android.location.LocationManager;
 import androidx.annotation.NonNull;
 
 import com.xlythe.view.camera.Burst;
+import com.xlythe.view.camera.BurstSoundRecorder;
+import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.FakeLocation;
@@ -98,6 +100,8 @@ public class LegacyBurstTest {
     @Before
     public void setUp() {
         ShadowJpegCamera.reset();
+        CameraSoundsTest.resetSounds();
+        BurstSoundRecorder.install();
         context = RuntimeEnvironment.getApplication();
         Shadows.shadowOf((android.app.Application) context).grantPermissions(
                 Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO);
@@ -124,6 +128,7 @@ public class LegacyBurstTest {
         cameraView.release();
         CameraView.setDefaultBackend(CameraView.Backend.AUTO);
         ShadowCamera.clearCameraInfo();
+        BurstSoundRecorder.uninstall();
     }
 
     @Test
@@ -266,6 +271,68 @@ public class LegacyBurstTest {
         ShadowJpegCamera.releasePictures();
         runUntilFinished(burst);
         assertTrue(shadow().isShutterSoundEnabled());
+    }
+
+    /** Where the click can be silenced, the burst loops its own click and ends with a tone. */
+    @Test
+    public void aSilencedClickLetsTheBurstLoop() {
+        module.open();
+        Burst burst = new Burst(directory, "loop", 3, heard);
+
+        module.takeBurst(burst);
+        assertFalse(shadow().isShutterSoundEnabled());
+        runUntilFinished(burst);
+
+        assertEquals(List.of("loop 100", "stop", BurstSoundRecorder.END),
+                BurstSoundRecorder.EVENTS);
+    }
+
+    /**
+     * Where the platform clicks for every picture and cannot be silenced, its clicks stand in
+     * for the loop, and only the end tone is added.
+     */
+    @Test
+    public void aClickThatCannotBeSilencedGetsOnlyTheEndTone() {
+        ShadowCamera.clearCameraInfo();
+        CameraSoundsTest.requireSounds();
+        module.setShutterSoundEnabled(false);
+        module.open();
+        Burst burst = new Burst(directory, "forced", 3, heard);
+
+        module.takeBurst(burst);
+        assertTrue("the platform still clicks", shadow().isShutterSoundEnabled());
+        runUntilFinished(burst);
+
+        assertEquals(List.of(BurstSoundRecorder.END), BurstSoundRecorder.EVENTS);
+        assertEquals(List.of(true), BurstSoundRecorder.PLAYERS);
+    }
+
+    /** Closing the camera mid-burst stops the loop and plays the end tone. */
+    @Test
+    public void closingEndsTheLoopWithTheTone() {
+        module.open();
+        Burst burst = new Burst(directory, "closed", 10, heard);
+        module.takeBurst(burst);
+        idle();
+        assertEquals(List.of("loop 100"), BurstSoundRecorder.EVENTS);
+
+        module.close();
+
+        assertEquals(List.of("loop 100", "stop", BurstSoundRecorder.END),
+                BurstSoundRecorder.EVENTS);
+    }
+
+    /** With the sound off and not required, a burst on the old API is silent too. */
+    @Test
+    public void aBurstWithTheSoundOffIsSilent() {
+        module.setShutterSoundEnabled(false);
+        module.open();
+        Burst burst = new Burst(directory, "silent", 2, heard);
+
+        module.takeBurst(burst);
+        runUntilFinished(burst);
+
+        assertEquals(List.of(), BurstSoundRecorder.PLAYERS);
     }
 
     /** No picture of a burst reports its shutter, so no sound of the app's own plays for one. */

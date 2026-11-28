@@ -1370,9 +1370,9 @@ public class CameraView extends FrameLayout {
      * <p>Each picture is the one {@link #takePicture()} would take with the same settings: the
      * same size, quality and format, mirrored as the preview is, with the same Exif, including
      * where it was taken when the location is known, and drawn through the renderer, filter or
-     * mask when one is drawing. Two things differ: the flash never fires, and the shutter sound
-     * does not play, except on a device that requires it, where every picture clicks. Image
-     * confirmation does not apply. While something is drawing, each picture is drawn and written
+     * mask when one is drawing. Two things differ: the flash never fires, and no picture clicks.
+     * Where the shutter sound is on, or the device requires it, the burst plays a click looped at
+     * its rate while it runs, and a tone once it ends. Image confirmation does not apply. While something is drawing, each picture is drawn and written
      * before the next is taken, so the burst is slower.</p>
      *
      * <p>A burst that can't start finishes at once with a count of 0. Below API 29, filing needs
@@ -1424,7 +1424,7 @@ public class CameraView extends FrameLayout {
         Burst burst = new Burst(directory, name, count, delivery);
         delivery.mBurst = burst;
         mBurst = burst;
-        mCameraModule.startBurst(burst);
+        mCameraModule.takeBurst(burst);
     }
 
     /** Ends a burst before it reaches its count. Pictures already being taken still arrive. */
@@ -2215,7 +2215,8 @@ public class CameraView extends FrameLayout {
 
     /**
      * Plays the platform's camera sounds: a click as a picture is taken, and a tone as a
-     * recording starts and stops. On by default, as in the platform's own camera app.
+     * recording starts and stops. A burst plays its own: a click looped while it runs, and a tone
+     * once it ends. On by default, as in the platform's own camera app.
      *
      * <p>Some countries require these sounds, and there they play whatever this is set to.</p>
      */

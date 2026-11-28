@@ -77,6 +77,12 @@ public final class Burst {
     /** What the backend undoes once the burst finishes, such as a flash it turned off. */
     private final List<Runnable> mOnFinished = new ArrayList<>();
 
+    /** What runs once the burst is stopped short of its count, or finishes. */
+    private final List<Runnable> mOnStopped = new ArrayList<>();
+
+    /** Whether the burst has been stopped short of its count, or has finished. */
+    private boolean mStopped;
+
     /** How many files have been handed out, which also numbers the next one. */
     private int mRequested;
 
@@ -149,6 +155,7 @@ public final class Burst {
         }
         mPending--;
         mEnded = true;
+        stop();
         restartStallTimeout();
         finishIfDone();
     }
@@ -156,6 +163,7 @@ public final class Burst {
     /** Hands out no more files. Pictures already asked for still land. */
     public void end() {
         mEnded = true;
+        stop();
         finishIfDone();
     }
 
@@ -167,6 +175,31 @@ public final class Burst {
     /** Whether every picture has been reported and the burst is over. */
     public boolean isFinished() {
         return mFinished;
+    }
+
+    /**
+     * Whether the burst was stopped short of its count, by {@link #end}, a picture that failed or
+     * a camera that stopped answering, or has finished.
+     */
+    public boolean isStopped() {
+        return mStopped;
+    }
+
+    /** How many files have been handed out so far. */
+    public int getRequestedCount() {
+        return mRequested;
+    }
+
+    /**
+     * Runs something once the burst is stopped short of its count or finishes, or now if it
+     * already has. A burst stopped short still lands the pictures already asked for.
+     */
+    public void whenStopped(@NonNull Runnable action) {
+        if (mStopped) {
+            action.run();
+        } else {
+            mOnStopped.add(action);
+        }
     }
 
     /** Runs something once the burst finishes, or now if it already has. */
@@ -193,11 +226,23 @@ public final class Burst {
         }
         mFinished = true;
         mHandler.removeCallbacks(mStallTimeout);
+        stop();
         for (Runnable action : mOnFinished) {
             action.run();
         }
         mOnFinished.clear();
         mCallback.onBurstFinished();
+    }
+
+    private void stop() {
+        if (mStopped) {
+            return;
+        }
+        mStopped = true;
+        for (Runnable action : mOnStopped) {
+            action.run();
+        }
+        mOnStopped.clear();
     }
 
     private void restartStallTimeout() {
@@ -211,6 +256,7 @@ public final class Burst {
         Log.w(TAG, "The camera stopped answering partway through a burst");
         mEnded = true;
         mPending = 0;
+        stop();
         finishIfDone();
     }
 

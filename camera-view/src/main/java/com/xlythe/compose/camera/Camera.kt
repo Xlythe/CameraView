@@ -186,8 +186,9 @@ interface CameraController {
      * each picture as it is filed, and [onFinished] then how many there were.
      *
      * Each picture is the one takePicture() would take with the same settings, drawn through
-     * [Camera]'s frameRenderer when one is set, except that the flash never fires and the shutter
-     * sound plays only on a device that requires it. Image confirmation does not apply. While
+     * [Camera]'s frameRenderer when one is set, except that the flash never fires and no picture
+     * clicks: where the shutter sound is on or required, the burst plays a click looped at its rate
+     * while it runs, and a tone once it ends. Image confirmation does not apply. While
      * frames are drawn, each picture is drawn and written before the next is taken, so the burst
      * is slower.
      *

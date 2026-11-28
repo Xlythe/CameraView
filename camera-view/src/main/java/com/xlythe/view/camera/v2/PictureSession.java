@@ -598,6 +598,31 @@ class PictureSession extends PreviewSession {
         }
     }
 
+    /**
+     * How many JPEGs a second the camera says it can write at the still's size, from its minimum
+     * frame duration and its stall duration there, or 0 when it does not say.
+     */
+    float getReportedBurstRate(@Nullable StreamConfigurationMap map) {
+        if (map == null || !mPictureSurface.hasSize()) {
+            return 0f;
+        }
+        Size size = new Size(mPictureSurface.getWidth(), mPictureSurface.getHeight());
+        try {
+            return burstRate(map.getOutputMinFrameDuration(ImageFormat.JPEG, size),
+                    map.getOutputStallDuration(ImageFormat.JPEG, size));
+        } catch (IllegalArgumentException error) {
+            // Not a JPEG size, as a still of another format can be.
+            return 0f;
+        }
+    }
+
+    /** Pictures a second from a frame's minimum duration and its stall, in nanoseconds. */
+    @VisibleForTesting
+    static float burstRate(long minFrameNanos, long stallNanos) {
+        long nanos = minFrameNanos + stallNanos;
+        return nanos > 0 ? 1e9f / nanos : 0f;
+    }
+
     /** A burst on its way, and the camera and session its pictures are asked of. */
     private final class BurstCapture {
         /** Hands out each picture's file, and hears how each turned out. */

@@ -367,9 +367,10 @@ Burst
 startBurst takes pictures in quick succession, as fast as the camera allows, until the count is
 reached or stopBurst is called. Like takePicture, it files each picture in the gallery, or writes
 it into a directory you pass first. The listener hears each one as it lands, then how many there
-were. Each picture is the one takePicture would take, except that the flash stays off and the
-shutter sound plays only where the device requires it. Confirmation does not apply, and a burst
-does not start while the picture format is RAW or RAW_JPEG.
+were. Each picture is the one takePicture would take, except that the flash stays off and no
+picture clicks: where the shutter sound is on or required, the burst plays a click looped at its
+rate while it runs, and a tone when it ends. Confirmation does not apply, and a burst does not
+start while the picture format is RAW or RAW_JPEG.
 ```java
 mCameraView.startBurst(50, new CameraView.OnBurstListener() {
   @Override public void onBurstImageSaved(Uri uri) { ... }

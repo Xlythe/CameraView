@@ -19,6 +19,7 @@ import android.media.MediaActionSound;
 import androidx.annotation.NonNull;
 
 import com.xlythe.view.camera.Burst;
+import com.xlythe.view.camera.BurstSoundRecorder;
 import com.xlythe.view.camera.CameraSoundsTest;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
@@ -93,6 +94,7 @@ public class BurstCaptureTest {
         ShadowCallbackCameraCaptureSession.reset();
         ShadowInjectableImageReader.reset();
         CameraSoundsTest.resetSounds();
+        BurstSoundRecorder.install();
         context = RuntimeEnvironment.getApplication();
         // Cameras that write RAW, so that a format change has a session of its own to wait for.
         FakeCamera2.addBackAndFrontCameras(context, FakeCamera2.RawSupport.FULL);
@@ -116,6 +118,7 @@ public class BurstCaptureTest {
         FakeCamera2.idleMainLooper();
         cameraView.release();
         ShadowCamera.clearCameraInfo();
+        BurstSoundRecorder.uninstall();
     }
 
     @Test
@@ -237,16 +240,70 @@ public class BurstCaptureTest {
         assertEquals("the picture listener hears of single pictures only", 0, shutters);
     }
 
-    /** Where the click is required, every picture of a burst plays it, as each single one does. */
+    /**
+     * A burst loops one click from its first picture and ends with a tone, at the rate the camera
+     * reports for its still. No picture clicks on its own.
+     */
     @Test
-    public void aRequiredClickPlaysForEveryPicture() {
+    public void aBurstLoopsOneClickThenPlaysTheEndTone() {
+        openAndStart(PictureSession.BURST_PICTURES_IN_FLIGHT);
+
+        assertEquals("the last picture is exposed with the requests, so the loop ends then",
+                List.of(BurstSoundRecorder.loopAt(module.getReportedBurstRate()), "stop",
+                        BurstSoundRecorder.END),
+                BurstSoundRecorder.EVENTS);
+        deliverFrames(PictureSession.BURST_PICTURES_IN_FLIGHT);
+        assertEquals(3, BurstSoundRecorder.EVENTS.size());
+        assertEquals(List.of(false), BurstSoundRecorder.PLAYERS);
+        assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+    }
+
+    /** Where the sound is required, the burst's sound plays enforced, and still no click. */
+    @Test
+    public void aRequiredSoundIsEnforcedAndNoPictureClicks() {
         CameraSoundsTest.requireSounds();
+        module.setShutterSoundEnabled(false);
         openAndStart(2);
 
         deliverFrames(2);
 
-        assertEquals(2, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
+        assertEquals(List.of(true), BurstSoundRecorder.PLAYERS);
+        assertTrue(BurstSoundRecorder.EVENTS.get(0).startsWith("loop "));
+        assertEquals(0, ShadowMediaActionSound.getPlayCount(MediaActionSound.SHUTTER_CLICK));
         assertEquals(0, shutters);
+    }
+
+    /** The rate a camera reports is one picture per frame plus stall. */
+    @Test
+    public void theReportedRateIsOnePicturePerFrameAndStall() {
+        assertEquals(10f, PictureSession.burstRate(33_333_333L, 66_666_667L), 0.01f);
+        assertEquals(30f, PictureSession.burstRate(33_333_333L, 0L), 0.01f);
+        assertEquals("a camera that says nothing", 0f, PictureSession.burstRate(0L, 0L), 0f);
+    }
+
+    /** With the sound off and not required, a burst is silent. */
+    @Test
+    public void aBurstWithTheSoundOffIsSilent() {
+        module.setShutterSoundEnabled(false);
+        openAndStart(2);
+
+        deliverFrames(2);
+
+        assertEquals(List.of(), BurstSoundRecorder.PLAYERS);
+        assertEquals(List.of(), BurstSoundRecorder.EVENTS);
+    }
+
+    /** Closing the camera mid-burst stops the loop and plays the end tone. */
+    @Test
+    public void closingEndsTheLoopWithTheTone() {
+        openAndStart(10);
+        assertEquals(1, BurstSoundRecorder.EVENTS.size());
+
+        module.close();
+        FakeCamera2.idleMainLooper();
+
+        assertEquals(List.of("stop", BurstSoundRecorder.END),
+                BurstSoundRecorder.EVENTS.subList(1, BurstSoundRecorder.EVENTS.size()));
     }
 
     @Test
@@ -351,7 +408,7 @@ public class BurstCaptureTest {
         module.open();
         FakeCamera2.idleMainLooper();
         Burst burst = new Burst(directory, "burst", count, heard);
-        module.startBurst(burst);
+        module.takeBurst(burst);
         FakeCamera2.idleMainLooper();
         assertFalse("the camera should have taken the burst on", burst.isFinished());
         return burst;

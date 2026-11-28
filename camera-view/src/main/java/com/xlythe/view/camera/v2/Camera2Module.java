@@ -2502,6 +2502,17 @@ public class Camera2Module extends ICameraModule {
         ((PictureSession) mActiveSession).startBurst(burst, mCameraDevice, mCaptureSession);
     }
 
+    /** What the camera says it can write at the still's size, one picture after another. */
+    @Override
+    protected float getReportedBurstRate() {
+        CameraCharacteristics characteristics = getCameraCharacteristics();
+        if (!(mActiveSession instanceof PictureSession) || characteristics == null) {
+            return 0f;
+        }
+        return ((PictureSession) mActiveSession).getReportedBurstRate(
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP));
+    }
+
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
     public void startRecording(File file) {

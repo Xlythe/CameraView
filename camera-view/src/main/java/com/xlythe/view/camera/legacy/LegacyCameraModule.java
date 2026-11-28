@@ -88,6 +88,12 @@ public class LegacyCameraModule extends ICameraModule {
     /** Whether the platform's click is silenced so the library can play the app's sound. */
     private volatile boolean mPlaysOwnClick;
 
+    /**
+     * Whether the platform clicks for every picture of the running burst, its click not silenced,
+     * which then stands in for the burst's loop.
+     */
+    private boolean mBurstClicks;
+
     /** Where the recording in progress is being written. */
     private File mVideoFile;
 
@@ -369,23 +375,32 @@ public class LegacyCameraModule extends ICameraModule {
     private void applyShutterSound() {
         if (mCamera == null) {
             mPlaysOwnClick = false;
+            mBurstClicks = false;
             return;
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
             // The click cannot be silenced before API 17, so it plays in place of the app's own.
             mPlaysOwnClick = false;
+            mBurstClicks = mBurst != null;
             return;
         }
         boolean custom = getShutterSound() != 0;
         try {
-            // A burst is silent, where the platform lets the click be silenced.
+            // A burst plays its own sound in place of the click, where the click can be silenced.
             boolean applied = mCamera.enableShutterSound(
                     mBurst == null && isShutterSoundEnabled() && !custom);
             mPlaysOwnClick = custom && applied;
+            mBurstClicks = mBurst != null && !applied;
         } catch (RuntimeException e) {
             Log.w(TAG, "Failed to set the shutter sound", e);
             mPlaysOwnClick = false;
+            mBurstClicks = mBurst != null;
         }
+    }
+
+    @Override
+    protected boolean platformClicksBurstPictures() {
+        return mBurstClicks;
     }
 
     @Override
@@ -467,9 +482,9 @@ public class LegacyCameraModule extends ICameraModule {
         }
         mBurstFile = file;
         try {
-            // No shutter callback: the platform plays the click where it cannot be silenced, and
-            // a burst plays none of the app's own.
-            camera.takePicture(null, null, new LegacyPictureListener(
+            // The shutter callback plays nothing: the burst's sound starts with the first
+            // picture, and the platform clicks for each only where it cannot be silenced.
+            camera.takePicture(this::onBurstShutter, null, new LegacyPictureListener(
                     file, getRelativeCameraOrientation(false /* isPreview */),
                     isUsingFrontFacingCamera(), exifCaptureParameters(), this,
                     burst.getExecutor(),

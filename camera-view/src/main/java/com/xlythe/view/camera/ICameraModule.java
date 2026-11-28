@@ -73,6 +73,10 @@ public abstract class ICameraModule {
     private volatile boolean mShutterSoundEnabled = true;
     /** The click and recording tones, for a backend the platform plays none for. */
     private final CameraSounds mSounds = new CameraSounds();
+    /** The sound of the burst being taken, or null while none is or it is silent. */
+    @Nullable private BurstSound mBurstSound;
+    /** How many pictures a second the last burst took, or 0 before one has taken two. */
+    private float mMeasuredBurstRate;
     /** Listener receiving still-image terminal callbacks. */
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;
     /** Listener receiving video terminal callbacks. */
@@ -247,14 +251,57 @@ public abstract class ICameraModule {
     }
 
     /**
-     * Called as each picture of a burst is exposed. A burst is silent, so the click plays only
-     * where it is required, and the image listener is not told: the burst reports its own.
+     * Called as each picture of a burst is exposed. No picture clicks: the burst's own sound
+     * starts with the first, and the image listener is not told, since the burst reports its own.
      */
     @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
     public void onBurstShutter() {
-        if (playsOwnClick()) {
-            mSounds.play(getContext(), MediaActionSound.SHUTTER_CLICK, false /* wanted */);
+        BurstSound sound = mBurstSound;
+        if (sound != null) {
+            sound.onPictureExposed();
         }
+    }
+
+    /**
+     * Takes a burst, with its sound where the shutter sound is on or required: a click looped at
+     * the burst's rate while it runs, and a tone once it ends. The rate is the last burst's, or
+     * what the camera reports, or 10 a second.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    public final void takeBurst(@NonNull Burst burst) {
+        boolean required = CameraSounds.isRequired();
+        if (mShutterSoundEnabled || required) {
+            float rate = mMeasuredBurstRate > 0 ? mMeasuredBurstRate : getReportedBurstRate();
+            BurstSound sound = new BurstSound(burst, required, this::platformClicksBurstPictures,
+                    BurstSound.framePeriodMillis(rate), measured -> mMeasuredBurstRate = measured);
+            mBurstSound = sound;
+            burst.whenFinished(() -> {
+                if (mBurstSound == sound) {
+                    mBurstSound = null;
+                }
+            });
+        }
+        startBurst(burst);
+    }
+
+    /**
+     * How many pictures a second the camera says a burst can take, or 0 when it does not say.
+     * Asked as a burst starts.
+     */
+    @MainThread
+    protected float getReportedBurstRate() {
+        return 0f;
+    }
+
+    /**
+     * Whether the platform clicks for every picture of the running burst itself, as the old
+     * camera API does where the click cannot be silenced. Asked as its first picture is exposed.
+     */
+    @MainThread
+    protected boolean platformClicksBurstPictures() {
+        return false;
     }
 
     /**
@@ -324,8 +371,8 @@ public abstract class ICameraModule {
      * one right now ends it.
      *
      * <p>Every picture is saved and tagged like one from {@link #takePicture}, but without the
-     * flash. Each calls {@link #onBurstShutter} rather than {@link #onShutter}, unless the
-     * platform plays the click itself.</p>
+     * flash. Each calls {@link #onBurstShutter} as it is exposed, rather than
+     * {@link #onShutter}.</p>
      */
     @RestrictTo(RestrictTo.Scope.LIBRARY)
     protected abstract void startBurst(@NonNull Burst burst);
