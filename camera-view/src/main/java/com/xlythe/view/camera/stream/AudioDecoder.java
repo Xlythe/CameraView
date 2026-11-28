@@ -79,7 +79,11 @@ final class AudioDecoder {
         mDefaultChannelCount = channelCount;
         byte[] csd = config.length > 0
                 ? config : AudioCodec.defaultConfig(codec, sampleRate, channelCount);
-        MediaFormat format = MediaFormat.createAudioFormat(mimeType, sampleRate, channelCount);
+        // Opus is described at the rate it decodes at, whatever it was recorded at, as every
+        // extractor describes it: the decoders before API 29 take any other rate as the rate of
+        // their output and never produce any.
+        MediaFormat format = MediaFormat.createAudioFormat(mimeType, mDefaultSampleRate,
+                channelCount);
         ByteBuffer[] buffers = AudioCodec.decoderConfig(codec, csd);
         for (int i = 0; i < buffers.length; i++) {
             format.setByteBuffer("csd-" + i, buffers[i]);
