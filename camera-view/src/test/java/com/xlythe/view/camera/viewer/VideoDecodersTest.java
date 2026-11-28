@@ -258,10 +258,24 @@ public class VideoDecodersTest {
 
     @Test
     @Config(minSdk = 29)
-    public void aFileWithoutVideoOrThatCannotBeReadIsLeftToThePlayer() {
+    public void aFileThatCannotBeReadIsLeftToThePlayer() {
         Context context = ApplicationProvider.getApplicationContext();
         assertTrue(VideoDecoders.canDecode(context,
                 ImageLocation.of(new File("/nowhere/at/all.mp4")), -1, -1));
+    }
+
+    /** A video the platform reads no video track from, as Android 9 an AV1 MP4, fails. */
+    @Test
+    @Config(minSdk = 29)
+    public void aVideoThePlatformFindsNoVideoInFails() throws IOException {
+        File file = File.createTempFile("video-decoders", ".mp4");
+        file.deleteOnExit();
+        Files.write(file.toPath(), new byte[] {0, 0, 0, 8});
+        ShadowMediaExtractor.addTrack(DataSource.toDataSource(SOURCE),
+                MediaFormat.createAudioFormat("audio/mp4a-latm", 44100, 2), new byte[0]);
+        addDecoder("video/avc", CodecProfileLevel.AVCProfileHigh, false);
+        assertFalse(VideoDecoders.canDecode(ApplicationProvider.getApplicationContext(),
+                ImageLocation.of(file), -1, -1));
     }
 
     private static void addDecoder(String mime, int profile, boolean encoder) {

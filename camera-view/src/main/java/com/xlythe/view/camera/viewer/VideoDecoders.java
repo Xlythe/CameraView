@@ -88,8 +88,9 @@ final class VideoDecoders {
     private VideoDecoders() {}
 
     /**
-     * Whether a decoder here takes the file's video, or part of a file's; true for a file with
-     * no video, and wherever it cannot be told.
+     * Whether a decoder here takes the video in a file, or in part of a file, that holds one:
+     * false where no decoder takes any of its video tracks, or where the platform finds no video
+     * track in it at all, as Android 9 finds none in an AV1 MP4; true wherever it cannot be told.
      *
      * @param offset where the part starts, or -1 for the whole file
      * @param length how long the part is, or -1
@@ -131,7 +132,10 @@ final class VideoDecoders {
                 Log.w(TAG, "No decoder here for " + describe(mime, profileLevel) + " in "
                         + location);
             }
-            return !video;
+            if (!video) {
+                Log.w(TAG, "The platform reads no video track in " + location);
+            }
+            return false;
         } catch (IOException | RuntimeException e) {
             Log.d(TAG, "Unable to read the tracks of " + location, e);
             return true;

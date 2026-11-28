@@ -18,7 +18,9 @@ import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
+import android.media.MediaCodecInfo;
 import android.media.MediaFormat;
+import android.os.Build;
 import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
@@ -42,6 +44,7 @@ import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.GraphicsMode;
+import org.robolectric.shadows.MediaCodecInfoBuilder;
 import org.robolectric.shadows.ShadowLooper;
 import org.robolectric.shadows.ShadowMediaCodecList;
 import org.robolectric.shadows.ShadowMediaExtractor;
@@ -87,8 +90,23 @@ public class MediaViewTest {
         ShadowMediaExtractor.reset();
         ShadowMediaPlayer.resetStaticState();
         // Robolectric's extractor knows a file by a name; every file here is the one source.
-        // Set after the player's reset, which clears it.
+        // Set after the player's reset, which clears it. Every video here has a track an H.264
+        // decoder takes, unless a test says otherwise.
         DataSource.setFileDescriptorTransform((descriptor, offset) -> SOURCE);
+        ShadowMediaExtractor.addTrack(DataSource.toDataSource(SOURCE),
+                MediaFormat.createVideoFormat("video/avc", 64, 48), new byte[0]);
+        if (Build.VERSION.SDK_INT >= 29) {
+            // Robolectric builds a codec list from Android 10.
+            ShadowMediaCodecList.addCodec(MediaCodecInfoBuilder.newBuilder()
+                    .setName("test.avc.decoder")
+                    .setCapabilities(MediaCodecInfoBuilder.CodecCapabilitiesBuilder.newBuilder()
+                            .setMediaFormat(MediaFormat.createVideoFormat("video/avc", 64, 48))
+                            .setProfileLevels(new MediaCodecInfo.CodecProfileLevel[0])
+                            .setColorFormats(new int[] {
+                                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible})
+                            .build())
+                    .build());
+        }
         ShadowMediaPlayer.setMediaInfoProvider(
                 source -> new ShadowMediaPlayer.MediaInfo(4000, 0));
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
@@ -111,8 +129,9 @@ public class MediaViewTest {
     /** What Robolectric's extractor knows every file here as. */
     private static final String SOURCE = "media-view-test";
 
-    /** Gives every file a video track of a format, which no decoder here takes. */
+    /** Gives every file a video track of a format, which no decoder here takes, alone. */
     private static void videoTrackWithoutADecoder(String mime) {
+        ShadowMediaExtractor.reset();
         ShadowMediaExtractor.addTrack(DataSource.toDataSource(SOURCE),
                 MediaFormat.createVideoFormat(mime, 64, 48), new byte[0]);
     }
