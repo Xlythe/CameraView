@@ -142,6 +142,10 @@ public final class MotionPhotoDeviceTest {
     @Before
     public void chooseTheBackend() {
         DeviceState.assumeATestableCamera();
+        if (backend == CameraView.Backend.LEGACY) {
+            // The old API's clips come from its preview callback, which fills YUV_420_888 buffers.
+            DeviceState.assumeYuvBuffersWork();
+        }
         CameraView.setDefaultBackend(backend);
     }
 
