@@ -6,6 +6,7 @@ import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertTrue;
 
 import android.app.Instrumentation;
+import android.app.UiAutomation;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
@@ -59,6 +60,10 @@ import java.util.concurrent.atomic.AtomicReference;
  * delete zone; one undo across the drawing and the stickers; and the result flattened over the
  * picture by PictureEditor. Paced for a screen recording; what the screen shows is written to
  * editor-proof.
+ *
+ * <p>Once a sticker animates, the main thread is never idle, so work on it goes through
+ * {@link Instrumentation#runOnMainSync} rather than {@link ActivityScenario#onActivity}, which
+ * waits for idle first.</p>
  */
 @RunWith(AndroidJUnit4.class)
 public final class OverlayDeviceTest {
@@ -127,7 +132,7 @@ public final class OverlayDeviceTest {
             float originX = at[0] + (view.getWidth() - 800 * scale) / 2f;
             float originY = at[1] + (view.getHeight() - 600 * scale) / 2f;
 
-            scenario.onActivity(activity -> holder.get().addImage(Uri.fromFile(star),
+            onMain(() -> holder.get().addImage(Uri.fromFile(star),
                     "image/gif", new PointF(250, 250)));
             waitFor(scenario, holder, 1);
             SystemClock.sleep(500);
@@ -191,7 +196,7 @@ public final class OverlayDeviceTest {
             screenshot(instrumentation, "overlay-4-heart-dropped");
 
             // Some text on a block, then the star brought above it and sent back.
-            scenario.onActivity(activity -> {
+            onMain(() -> {
                 OverlayView overlays = holder.get();
                 Overlay text = overlays.addText("CameraView", Color.WHITE);
                 overlays.updateOverlay(new Overlay.Builder(text)
@@ -202,7 +207,7 @@ public final class OverlayDeviceTest {
             SystemClock.sleep(600);
             assertEquals("the star is on top", flipped.getId(),
                     overlays(scenario, holder).get(2).getId());
-            scenario.onActivity(activity -> holder.get().sendToBack(flipped.getId()));
+            onMain(() -> holder.get().sendToBack(flipped.getId()));
             assertEquals("and at the bottom", flipped.getId(),
                     overlays(scenario, holder).get(0).getId());
             screenshot(instrumentation, "overlay-5-text-order");
@@ -222,7 +227,7 @@ public final class OverlayDeviceTest {
 
             // One undo across both views, newest first: the heart comes back before the stroke
             // drawn before it went.
-            scenario.onActivity(activity -> history.undo());
+            onMain(() -> history.undo());
             assertEquals("undo brought the heart back", 3, overlays(scenario, holder).size());
             SystemClock.sleep(500);
             screenshot(instrumentation, "overlay-7-undone");
@@ -231,14 +236,14 @@ public final class OverlayDeviceTest {
                     > 0) {
                 assertTrue(onMain(scenario, history::canUndo));
                 int before = overlays(scenario, holder).size();
-                scenario.onActivity(activity -> history.undo());
+                onMain(() -> history.undo());
                 undos++;
                 Log.i(TAG, "Undo " + undos + ": " + before + " -> "
                         + overlays(scenario, holder).size() + " items");
             }
             assertEquals("the stroke went only once the heart dropped after it went", 1,
                     overlays(scenario, holder).size());
-            scenario.onActivity(activity -> {
+            onMain(() -> {
                 while (history.canRedo()) {
                     history.redo();
                 }
@@ -251,7 +256,7 @@ public final class OverlayDeviceTest {
 
             // Flattened over the picture, at a moment of the star's turn.
             AtomicReference<Bitmap> flattened = new AtomicReference<>();
-            scenario.onActivity(activity -> flattened.set(holder.get().toBitmap(800, 600, 0)));
+            onMain(() -> flattened.set(holder.get().toBitmap(800, 600, 0)));
             File source = new File(context.getCacheDir(), "overlay-source.jpg");
             try (OutputStream out = new FileOutputStream(source)) {
                 picture.compress(Bitmap.CompressFormat.JPEG, 95, out);
@@ -289,11 +294,16 @@ public final class OverlayDeviceTest {
         assertTrue(output.isFile());
     }
 
+    /** Runs something on the main thread, without waiting for it to be idle. */
+    private static void onMain(@NonNull Runnable runnable) {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(runnable);
+    }
+
     /** Runs something on the main thread and hands back what it answers. */
     private static <T> T onMain(@NonNull ActivityScenario<ViewerTestActivity> scenario,
             @NonNull Callable<T> question) {
         AtomicReference<T> answer = new AtomicReference<>();
-        scenario.onActivity(activity -> {
+        onMain(() -> {
             try {
                 answer.set(question.call());
             } catch (Exception e) {
@@ -307,14 +317,14 @@ public final class OverlayDeviceTest {
     private static List<Overlay> overlays(@NonNull ActivityScenario<ViewerTestActivity> scenario,
             @NonNull AtomicReference<OverlayView> holder) {
         AtomicReference<List<Overlay>> items = new AtomicReference<>();
-        scenario.onActivity(activity -> items.set(holder.get().getOverlays()));
+        onMain(() -> items.set(holder.get().getOverlays()));
         return items.get();
     }
 
     private static boolean onMainAnimated(@NonNull ActivityScenario<ViewerTestActivity> scenario,
             @NonNull AtomicReference<OverlayView> holder) {
         AtomicReference<Boolean> animated = new AtomicReference<>();
-        scenario.onActivity(activity -> animated.set(holder.get().isAnimated()));
+        onMain(() -> animated.set(holder.get().isAnimated()));
         return animated.get();
     }
 
@@ -332,7 +342,7 @@ public final class OverlayDeviceTest {
     private static boolean decoded(@NonNull ActivityScenario<ViewerTestActivity> scenario,
             @NonNull AtomicReference<OverlayView> holder) {
         AtomicReference<Boolean> done = new AtomicReference<>();
-        scenario.onActivity(activity -> done.set(holder.get().isDecoded()));
+        onMain(() -> done.set(holder.get().isDecoded()));
         return done.get();
     }
 
@@ -368,13 +378,18 @@ public final class OverlayDeviceTest {
         SystemClock.sleep(500);
     }
 
-    /** Holds a finger down long enough to start a drag, then carries it somewhere and lets go. */
+    /**
+     * Holds a finger down long enough to start a drag, then carries it somewhere and lets go.
+     * Injected through UiAutomation: once the drag starts, the events go to the system's drag
+     * window, which Android 9 refuses this app's own injection into.
+     */
     private static void longPressDrag(@NonNull Instrumentation instrumentation, float x0, float y0,
             float x1, float y1) {
+        UiAutomation automation = instrumentation.getUiAutomation();
         long down = SystemClock.uptimeMillis();
         MotionEvent press = MotionEvent.obtain(down, down, MotionEvent.ACTION_DOWN, x0, y0, 0);
         press.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-        instrumentation.sendPointerSync(press);
+        assertTrue(automation.injectInputEvent(press, true));
         press.recycle();
         SystemClock.sleep(ViewConfiguration.getLongPressTimeout() + 400L);
         int steps = 40;
@@ -384,7 +399,7 @@ public final class OverlayDeviceTest {
             MotionEvent event = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action,
                     x0 + (x1 - x0) * t, y0 + (y1 - y0) * t, 0);
             event.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-            instrumentation.sendPointerSync(event);
+            automation.injectInputEvent(event, true);
             event.recycle();
             SystemClock.sleep(25);
         }
