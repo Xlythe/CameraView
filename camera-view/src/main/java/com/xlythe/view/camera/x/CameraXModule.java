@@ -39,6 +39,7 @@ import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
@@ -3044,8 +3045,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     @NonNull private List<Size> sizesBesideAnalysis(
             @NonNull CameraInfo cameraInfo, @NonNull CameraView.PictureFormat format) {
-        if (getCaptureMode(cameraInfo, format, false)
-                != ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG) {
+        // Frames are reprocessed from API 23, which is where CameraX starts keeping them.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || getCaptureMode(cameraInfo, format, false)
+                        != ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG) {
             return Collections.emptyList();
         }
         CameraCharacteristics camera = cameraCharacteristics(cameraInfo);
@@ -3077,6 +3080,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * @return empty where there are none, which leaves a still to its selector
      */
     @AnyThread
+    @RequiresApi(Build.VERSION_CODES.M)
     @NonNull static List<Size> reprocessedSizes(@NonNull CameraCharacteristics camera,
             @NonNull List<CameraCharacteristics> physicalCameras) {
         if (physicalCameras.isEmpty()) {
@@ -3102,6 +3106,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     /** Whether a camera reprocesses a PRIVATE frame, and can write the result as a JPEG. */
+    @RequiresApi(Build.VERSION_CODES.M)
     private static boolean reprocessesToJpeg(@NonNull CameraCharacteristics camera) {
         int[] capabilities = camera.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
         StreamConfigurationMap map =
@@ -3119,6 +3124,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     /** The PRIVATE input sizes a map lists, or none. */
+    @RequiresApi(Build.VERSION_CODES.M)
     @NonNull private static List<Size> privateInputSizes(@Nullable StreamConfigurationMap map) {
         Size[] sizes = map == null ? null : map.getInputSizes(ImageFormat.PRIVATE);
         return sizes == null ? Collections.emptyList() : Arrays.asList(sizes);
