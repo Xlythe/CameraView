@@ -89,14 +89,15 @@ public final class CameraXSegmentationAnalyzer implements CameraXFrameAnalyzer {
         // Read as the frame arrives, since a lens switch can tell this analyzer about the next
         // camera while the model is still working on a frame from the last.
         boolean mirrored = mMirrored;
+        long timestampNanos = imageProxy.getImageInfo().getTimestamp();
         InputImage image = InputImage.fromMediaImage(
                 mediaImage, imageProxy.getImageInfo().getRotationDegrees());
         try {
             mSegmenter.process(image)
                     .addOnSuccessListener(mCallbackExecutor, mask -> {
                         if (mClosed.get()) return;
-                        mListener.onSegmentation(new SegmentationMask(
-                                mask.getBuffer(), mask.getWidth(), mask.getHeight(), mirrored));
+                        mListener.onSegmentation(new SegmentationMask(mask.getBuffer(),
+                                mask.getWidth(), mask.getHeight(), mirrored, timestampNanos));
                     })
                     .addOnFailureListener(mCallbackExecutor,
                             error -> Log.w(TAG, "CameraX segmentation failed", error))

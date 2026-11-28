@@ -259,7 +259,8 @@ public class BackgroundReplacerTest {
     public void theBackgroundImageIsReadTopRowFirstAndUnmirrored() {
         replacer.onRendererStarted();
         replacer.setMask(mirroredMask(1, 1, 0f));
-        replacer.setBackgroundImage(Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888));
+        // The frame's shape, so the whole image is shown.
+        replacer.setBackgroundImage(Bitmap.createBitmap(9, 16, Bitmap.Config.ARGB_8888));
 
         replacer.onDrawFrame(frame);
 
@@ -267,6 +268,193 @@ public class BackgroundReplacerTest {
         assertArrayEquals("the top left of the output reads the image's top left",
                 new float[] {0f, 0f}, read(reads, 0f, 1f), TOLERANCE);
         assertArrayEquals(new float[] {1f, 1f}, read(reads, 1f, 0f), TOLERANCE);
+    }
+
+    /**
+     * The image comes back when the renderer restarts, as it does when the camera reopens. The
+     * texture it was in goes with the old renderer, and the image used to go with it, leaving the
+     * background black.
+     */
+    @Test
+    public void theImageIsUploadedAgainWhenTheRendererRestarts() {
+        Bitmap background = Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888);
+        replacer.onRendererStarted();
+        replacer.setBackgroundImage(background);
+        replacer.onDrawFrame(frame);
+        int before = ShadowRecordingGles20.draws().get(0).texture2d;
+
+        replacer.onRendererStopped();
+        replacer.onRendererStarted();
+        replacer.onDrawFrame(frame);
+
+        assertArrayEquals(new float[] {1f},
+                ShadowRecordingGles20.uniform("uHasBackgroundImage"), TOLERANCE);
+        int after = ShadowRecordingGles20.draws().get(1).texture2d;
+        assertNotEquals("drawn from the new renderer's texture", before, after);
+    }
+
+    /** An image cleared while the renderer was stopped stays cleared when it starts again. */
+    @Test
+    public void anImageClearedWhileStoppedStaysCleared() {
+        replacer.onRendererStarted();
+        replacer.setBackgroundImage(Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888));
+        replacer.onDrawFrame(frame);
+        replacer.onRendererStopped();
+
+        replacer.setBackgroundImage(null);
+        replacer.onRendererStarted();
+        replacer.onDrawFrame(frame);
+
+        assertArrayEquals(new float[] {0f},
+                ShadowRecordingGles20.uniform("uHasBackgroundImage"), TOLERANCE);
+    }
+
+    /**
+     * An image of another shape than the frame is cropped about its centre to the frame's shape,
+     * not stretched. A 3:4 image in a 9:20 frame, as CameraX's portrait frames are, shows the
+     * middle 60% of its width and all of its height.
+     */
+    @Test
+    public void anImageIsCroppedToTheFramesShape() {
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 2400, 1_000L, new int[] {0, 0, 1080, 2400});
+        replacer.onRendererStarted();
+        replacer.setBackgroundImage(Bitmap.createBitmap(960, 1280, Bitmap.Config.ARGB_8888));
+
+        replacer.onDrawFrame(frame);
+
+        float[] reads = ShadowRecordingGles20.uniform("uBackgroundMatrix");
+        assertArrayEquals("the top left of the frame reads 20% into the image's top row",
+                new float[] {0.2f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals("and the bottom right 80% into its bottom row",
+                new float[] {0.8f, 1f}, read(reads, 1f, 0f), TOLERANCE);
+    }
+
+    @Test
+    public void aWideImageIsCroppedTopAndBottomInATallerFrame() {
+        float[] reads = BackgroundReplacer.backgroundMatrix(1000, 1000, 2000, 1000);
+        assertArrayEquals(new float[] {0.25f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals(new float[] {0.75f, 1f}, read(reads, 1f, 0f), TOLERANCE);
+
+        reads = BackgroundReplacer.backgroundMatrix(1000, 2000, 1000, 1000);
+        assertArrayEquals("a square in a 1:2 frame shows its middle half across",
+                new float[] {0.25f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+
+        reads = BackgroundReplacer.backgroundMatrix(2000, 1000, 1000, 1000);
+        assertArrayEquals("and in a 2:1 frame its middle half down",
+                new float[] {0f, 0.25f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals(new float[] {1f, 0.75f}, read(reads, 1f, 0f), TOLERANCE);
+    }
+
+    @Test
+    public void anImageOfTheFramesShapeIsShownWhole() {
+        float[] reads = BackgroundReplacer.backgroundMatrix(960, 1280, 480, 640);
+        assertArrayEquals(new float[] {0f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals(new float[] {1f, 1f}, read(reads, 1f, 0f), TOLERANCE);
+    }
+
+    /**
+     * A picture is drawn with the mask made nearest to it, though a newer one has arrived since.
+     * Drawn with whichever came last, a picture taken just after a move kept the subject where
+     * it had been.
+     */
+    @Test
+    public void aPictureIsDrawnWithTheMaskMadeNearestToIt() {
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(3, 1, 100));
+        replacer.setMask(timedMask(1, 2, 200));
+        replacer.setMask(timedMask(2, 2, 300));
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 190, new int[] {0, 0, 1080, 1920});
+
+        replacer.onDrawFrame(frame);
+
+        List<ShadowRecordingGles20.TextureUpload> uploads = ShadowRecordingGles20.uploads();
+        assertEquals(1, uploads.size());
+        assertEquals("the mask made at 200", 1, uploads.get(0).width);
+        assertEquals(2, uploads.get(0).height);
+    }
+
+    /** A preview frame comes after every mask made so far, so it is drawn with the newest. */
+    @Test
+    public void aPreviewFrameIsDrawnWithTheNewestMask() {
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(3, 1, 100));
+        replacer.setMask(timedMask(2, 2, 300));
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 400, new int[] {0, 0, 1080, 1920});
+
+        replacer.onDrawFrame(frame);
+
+        assertEquals(2, ShadowRecordingGles20.uploads().get(0).width);
+    }
+
+    /**
+     * A frame further than a second from every mask keeps another clock than the masks, and is
+     * drawn with the newest rather than with whichever the numbers put nearest.
+     */
+    @Test
+    public void aFrameFromAnotherClockIsDrawnWithTheNewestMask() {
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(3, 1, 5_000_000_000L));
+        replacer.setMask(timedMask(2, 2, 5_100_000_000L));
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 1_000L, new int[] {0, 0, 1080, 1920});
+
+        replacer.onDrawFrame(frame);
+
+        assertEquals(2, ShadowRecordingGles20.uploads().get(0).width);
+    }
+
+    /** The mask drawn last is not uploaded again for the next frame that wants it. */
+    @Test
+    public void aMaskAlreadyInTheTextureIsNotUploadedAgain() {
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(3, 1, 100));
+        replacer.setMask(timedMask(2, 2, 300));
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 120, new int[] {0, 0, 1080, 1920});
+        replacer.onDrawFrame(frame);
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 400, new int[] {0, 0, 1080, 1920});
+        replacer.onDrawFrame(frame);
+        replacer.onDrawFrame(frame);
+
+        List<ShadowRecordingGles20.TextureUpload> uploads = ShadowRecordingGles20.uploads();
+        assertEquals("the picture's mask, then the newest once", 2, uploads.size());
+        assertEquals(3, uploads.get(0).width);
+        assertEquals(2, uploads.get(1).width);
+    }
+
+    /**
+     * A picture waits for a mask made at its moment or after, when the camera segments for the
+     * replacer; with none expected, or masks that say nothing of time, it never waits.
+     */
+    @Test
+    public void aPictureWaitsOnlyForTheCamerasMaskFromItsOwnMoment() {
+        assertTrue("nothing segments for it", replacer.hasMaskFor(1_000));
+
+        replacer.setSegmentedByCamera(true);
+        assertFalse("no mask yet", replacer.hasMaskFor(1_000));
+        replacer.setMask(timedMask(1, 1, 900));
+        assertFalse("only one made before it", replacer.hasMaskFor(1_000));
+        replacer.setMask(timedMask(1, 1, 1_000));
+        assertTrue("one made at its moment", replacer.hasMaskFor(1_000));
+        assertTrue("a frame with no time of its own", replacer.hasMaskFor(0));
+
+        replacer.setMask(mask(1, 1, 1f));
+        assertTrue("a mask that says nothing of time", replacer.hasMaskFor(5_000));
+
+        replacer.setSegmentedByCamera(false);
+        replacer.setMask(timedMask(1, 1, 100));
+        assertTrue(replacer.hasMaskFor(5_000));
+    }
+
+    /** Stopping forgets the masks kept for pictures, which belong to the frames before it. */
+    @Test
+    public void stoppingForgetsTheKeptMasks() {
+        replacer.setSegmentedByCamera(true);
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(1, 1, 1_000));
+        assertTrue(replacer.hasMaskFor(1_000));
+
+        replacer.onRendererStopped();
+
+        assertFalse(replacer.hasMaskFor(1_000));
     }
 
     /** Where a column-major matrix takes a texture coordinate. */
@@ -280,6 +468,13 @@ public class BackgroundReplacerTest {
     /** A mask of these confidences, row major, in the native-order floats a model hands over. */
     private static SegmentationMask mask(int width, int height, float... confidences) {
         return new SegmentationMask(floats(confidences), width, height, false);
+    }
+
+    /** A mask of this size, all subject, made from a frame taken at this time. */
+    private static SegmentationMask timedMask(int width, int height, long timestampNanos) {
+        float[] confidences = new float[width * height];
+        java.util.Arrays.fill(confidences, 1f);
+        return new SegmentationMask(floats(confidences), width, height, false, timestampNanos);
     }
 
     /** {@link #mask}, made from a mirrored frame. */

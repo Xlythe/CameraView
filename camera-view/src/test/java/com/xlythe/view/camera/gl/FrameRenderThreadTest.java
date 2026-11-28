@@ -12,6 +12,7 @@ import static org.junit.Assume.assumeTrue;
 
 import android.graphics.SurfaceTexture;
 import android.opengl.GLES20;
+import android.os.HandlerThread;
 import android.os.SystemClock;
 import android.util.Size;
 import android.view.Surface;
@@ -28,8 +29,13 @@ import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
+import org.robolectric.util.ReflectionHelpers;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -515,6 +521,112 @@ public class FrameRenderThreadTest {
                 2, ShadowFrameSurfaceTexture.updatesOf(still));
     }
 
+    /**
+     * A still waits, while the camera segments for the replacer, until a mask made at its moment
+     * or after has arrived; drawn on landing, it took whichever mask came last.
+     */
+    @Test
+    public void aStillWaitsForTheMaskMadeAtItsOwnMoment() {
+        BackgroundReplacer replacer = new BackgroundReplacer();
+        replacer.setSegmentedByCamera(true);
+        replacer.setMask(timedMask(500L));
+        FrameRenderThread thread = started(replacer);
+        thread.createStillInput(new Size(4000, 3000));
+        AtomicInteger drawn = armTimedStill(thread, 1_000L);
+
+        ShadowFrameSurfaceTexture.deliverFrame(stillTexture(thread));
+        assertEquals("only a mask from before it", 0, drawn.get());
+
+        replacer.setMask(timedMask(1_100L));
+        idleRenderThread(thread, 20);
+        assertEquals(1, drawn.get());
+    }
+
+    /**
+     * A still whose mask has come in is drawn ahead of the next preview frame, rather than when
+     * its next look for the mask comes round behind the frames queued meanwhile.
+     */
+    @Test
+    public void aStillIsDrawnAheadOfThePreviewOnceItsMaskIsIn() {
+        BackgroundReplacer replacer = new BackgroundReplacer();
+        replacer.setSegmentedByCamera(true);
+        FrameRenderThread thread = started(replacer);
+        thread.addOutput("preview", newSurface(), PORTRAIT, PORTRAIT,
+                GlMath.ScaleType.FILL_CENTER, copying(MIRROR));
+        thread.createStillInput(new Size(4000, 3000));
+        AtomicInteger drawn = armTimedStill(thread, 1_000L);
+        ShadowFrameSurfaceTexture.deliverFrame(stillTexture(thread));
+        assertEquals(0, drawn.get());
+
+        replacer.setMask(timedMask(1_000L));
+        ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+
+        assertEquals(1, drawn.get());
+    }
+
+    /** A still whose mask never comes is drawn once the wait is up, with the nearest there is. */
+    @Test
+    public void aStillIsDrawnOnceItsWaitIsUp() {
+        BackgroundReplacer replacer = new BackgroundReplacer();
+        replacer.setSegmentedByCamera(true);
+        FrameRenderThread thread = started(replacer);
+        thread.createStillInput(new Size(4000, 3000));
+        AtomicInteger drawn = armTimedStill(thread, 1_000L);
+        ShadowFrameSurfaceTexture.deliverFrame(stillTexture(thread));
+
+        idleRenderThread(thread, 1_000);
+        assertEquals("still within its wait", 0, drawn.get());
+        idleRenderThread(thread, 600);
+        assertEquals(1, drawn.get());
+    }
+
+    /** With nothing segmenting for the replacer, a still is drawn as it lands. */
+    @Test
+    public void aStillIsDrawnAtOnceWhenNothingSegments() {
+        FrameRenderThread thread = started(new BackgroundReplacer());
+        thread.createStillInput(new Size(4000, 3000));
+        AtomicInteger drawn = armTimedStill(thread, 1_000L);
+
+        ShadowFrameSurfaceTexture.deliverFrame(stillTexture(thread));
+
+        assertEquals(1, drawn.get());
+    }
+
+    /** A still waiting on its mask is drawn when the renderer stops, not lost with it. */
+    @Test
+    public void aStillWaitingOnItsMaskIsDrawnWhenTheRendererStops() {
+        BackgroundReplacer replacer = new BackgroundReplacer();
+        replacer.setSegmentedByCamera(true);
+        FrameRenderThread thread = started(replacer);
+        thread.createStillInput(new Size(4000, 3000));
+        AtomicInteger drawn = armTimedStill(thread, 1_000L);
+        ShadowFrameSurfaceTexture.deliverFrame(stillTexture(thread));
+        assertEquals(0, drawn.get());
+
+        thread.stop();
+
+        assertEquals(1, drawn.get());
+    }
+
+    /** The next still to land draws the one still waiting first, from the frame it waits on. */
+    @Test
+    public void aWaitingStillIsDrawnBeforeTheNextOneLands() {
+        BackgroundReplacer replacer = new BackgroundReplacer();
+        replacer.setSegmentedByCamera(true);
+        FrameRenderThread thread = started(replacer);
+        thread.createStillInput(new Size(4000, 3000));
+        AtomicInteger first = armTimedStill(thread, 1_000L);
+        SurfaceTexture still = stillTexture(thread);
+        ShadowFrameSurfaceTexture.deliverFrame(still);
+
+        AtomicInteger second = armTimedStill(thread, 2_000L);
+        ShadowFrameSurfaceTexture.deliverFrame(still);
+
+        assertEquals(1, first.get());
+        assertEquals("the second waits on its own mask", 0, second.get());
+        assertEquals(2, ShadowFrameSurfaceTexture.updatesOf(still));
+    }
+
     /** With no renderer a still is the camera frame, filling the picture. */
     @Test
     public void aStillWithNoRendererIsTheCameraFrame() {
@@ -645,6 +757,28 @@ public class FrameRenderThreadTest {
         assertFalse(thread.drawStillInto(newSurface(), LANDSCAPE, GlMath.ScaleType.FILL_CENTER,
                 copying(MIRROR), () -> {}));
         assertTrue("nothing was drawn into anything", ShadowRecordingGles20.draws().isEmpty());
+    }
+
+    /** Arms a still the camera took at a time, counting its draws. */
+    private static AtomicInteger armTimedStill(FrameRenderThread thread, long timestampNanos) {
+        AtomicInteger drawn = new AtomicInteger();
+        assertTrue(thread.drawStillInto(newSurface(), new Size(3000, 4000),
+                GlMath.ScaleType.FILL_CENTER, copying(QUARTER_TURN), drawn::incrementAndGet,
+                timestampNanos));
+        return drawn;
+    }
+
+    /** Lets the render thread's clock run on, running what falls due. */
+    private static void idleRenderThread(FrameRenderThread thread, long millis) {
+        HandlerThread render = ReflectionHelpers.getField(thread, "mThread");
+        Shadows.shadowOf(render.getLooper()).idleFor(Duration.ofMillis(millis));
+    }
+
+    /** An all-subject mask of one sample, made from a frame taken at this time. */
+    private static SegmentationMask timedMask(long timestampNanos) {
+        ByteBuffer buffer = ByteBuffer.allocateDirect(Float.BYTES).order(ByteOrder.nativeOrder());
+        buffer.putFloat(1f).rewind();
+        return new SegmentationMask(buffer, 1, 1, false, timestampNanos);
     }
 
     private FrameRenderThread newThread(FrameRenderer renderer) {

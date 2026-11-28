@@ -79,6 +79,9 @@ final class DrawnStill implements Runnable {
     /** Whether the picture is shown mirrored, as a front lens's preview is. */
     private final boolean mMirrored;
 
+    /** When the camera took the picture, on the clock its preview frames carry. */
+    private final long mTimestampNanos;
+
     /** What draws the still. */
     @NonNull
     private final FrameEffect mEffect;
@@ -118,6 +121,7 @@ final class DrawnStill implements Runnable {
             buffer.get(mBytes);
             mCrop = new Rect(image.getCropRect());
             mRotation = toRotation(image.getImageInfo().getRotationDegrees());
+            mTimestampNanos = image.getImageInfo().getTimestamp();
         } finally {
             image.close();
         }
@@ -173,7 +177,7 @@ final class DrawnStill implements Runnable {
             boolean started;
             try {
                 started = mEffect.drawStill(frame, mRotation, mMirrored, reader.getSurface(),
-                        drawnLatch::countDown);
+                        drawnLatch::countDown, mTimestampNanos);
             } finally {
                 // In the renderer's input now, or never going there.
                 frame.recycle();

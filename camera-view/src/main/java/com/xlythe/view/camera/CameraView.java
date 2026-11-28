@@ -1832,6 +1832,8 @@ public class CameraView extends FrameLayout {
         }
         mReplacingBackground = true;
         mBackgroundReplacer = replacer;
+        // A picture then waits, within a bound, for the mask made at its own moment.
+        replacer.setSegmentedByCamera(true);
         return true;
     }
 
@@ -1865,6 +1867,10 @@ public class CameraView extends FrameLayout {
             return;
         }
         mReplacingBackground = false;
+        BackgroundReplacer replacer = mBackgroundReplacer;
+        if (replacer != null) {
+            replacer.setSegmentedByCamera(false);
+        }
         mBackgroundReplacer = null;
         mCameraModule.stopSegmentation();
         setFrameRenderer(null);

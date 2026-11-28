@@ -1,6 +1,7 @@
 package com.xlythe.view.camera.gl;
 
 import androidx.annotation.NonNull;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
 
 import java.nio.ByteBuffer;
@@ -25,6 +26,11 @@ public final class SegmentationMask {
     private final int mHeight;
     /** Whether the mask came from a mirrored frame, so a view lookup is flipped to find it. */
     private final boolean mMirrored;
+    /**
+     * When the frame the mask was made from was taken, on the camera's clock in nanoseconds, or
+     * 0 when that is not known.
+     */
+    private final long mTimestampNanos;
 
     /**
      * @param confidence one float per sample, row major, each between nought and one
@@ -35,10 +41,24 @@ public final class SegmentationMask {
      */
     public SegmentationMask(@NonNull ByteBuffer confidence, int width, int height,
             boolean mirrored) {
+        this(confidence, width, height, mirrored, 0);
+    }
+
+    /**
+     * A mask that says when its frame was taken, so a picture is drawn with the mask made nearest
+     * to it rather than whichever arrived last.
+     *
+     * @param timestampNanos when the frame was taken, on the camera's clock in nanoseconds
+     * @hide
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public SegmentationMask(@NonNull ByteBuffer confidence, int width, int height,
+            boolean mirrored, long timestampNanos) {
         mConfidence = confidence.duplicate().order(ByteOrder.nativeOrder()).asFloatBuffer();
         mWidth = width;
         mHeight = height;
         mMirrored = mirrored;
+        mTimestampNanos = timestampNanos;
     }
 
     /** The mask's width in samples, which is not the view's. */
@@ -54,6 +74,11 @@ public final class SegmentationMask {
     /** Whether the mask was made from a mirrored frame, so it is read flipped left to right. */
     boolean isMirrored() {
         return mMirrored;
+    }
+
+    /** When the frame the mask was made from was taken, in nanoseconds, or 0 if not known. */
+    long getTimestampNanos() {
+        return mTimestampNanos;
     }
 
     /**

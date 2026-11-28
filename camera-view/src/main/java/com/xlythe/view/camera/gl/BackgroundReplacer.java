@@ -9,10 +9,13 @@ import android.util.Log;
 import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -22,12 +25,22 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link #setMask}.
  *
  * <p>Masks arrive slower than frames, so the newest mask is drawn with the newest frame, and the
- * edge trails a subject that moves quickly. Until the first mask arrives, frames are drawn
- * unchanged.</p>
+ * edge trails a subject that moves quickly. A picture is drawn with the mask made nearest to it
+ * instead. Until the first mask arrives, frames are drawn unchanged.</p>
  */
 public final class BackgroundReplacer implements FrameRenderer {
     /** The tag this logs under. */
     private static final String TAG = "BackgroundReplacer";
+    /**
+     * How many masks are kept for a picture to be drawn with the nearest: a second's worth at the
+     * rate a model on a phone keeps up with.
+     */
+    private static final int RECENT_MASKS = 8;
+    /**
+     * The furthest a mask may be from a frame and still be drawn with it as the nearest; beyond,
+     * the newest is.
+     */
+    private static final long MAX_MASK_GAP_NANOS = 1_000_000_000L;
 
     /** The bytes in one float of the vertex buffer. */
     private static final int BYTES_PER_FLOAT = 4;
@@ -82,10 +95,22 @@ public final class BackgroundReplacer implements FrameRenderer {
             + "  gl_FragColor = mix(background, camera, subject);\n"
             + "}\n";
 
-    /** The newest mask, waiting to be uploaded at the next frame, or null. */
-    private final AtomicReference<SegmentationMask> mPendingMask = new AtomicReference<>();
+    /**
+     * The newest masks, oldest first, guarded by itself: the newest is drawn with each preview
+     * frame, and a picture with whichever was made nearest to it.
+     */
+    private final ArrayDeque<SegmentationMask> mRecentMasks = new ArrayDeque<>();
+    /** The mask in the mask texture, or null before one is uploaded. Render thread only. */
+    @Nullable private SegmentationMask mUploadedMask;
+    /** Whether the camera segments its frames for this replacer, which pictures then wait on. */
+    private volatile boolean mSegmentedByCamera;
     /** The newest background image, waiting to be uploaded at the next frame, or null. */
     private final AtomicReference<Bitmap> mPendingBackground = new AtomicReference<>();
+    /**
+     * The background image set, or null for the colour: kept, so a renderer that stops and
+     * starts again, as it does when the camera reopens, uploads it again into its new texture.
+     */
+    @Nullable private volatile Bitmap mBackground;
     /** The background colour as RGBA from 0 to 1, guarded by itself. */
     private final float[] mBackgroundColor = {0f, 0f, 0f, 1f};
 
@@ -121,6 +146,10 @@ public final class BackgroundReplacer implements FrameRenderer {
     private int mMaskHeight;
     /** Whether the background texture holds an image, rather than the colour being drawn. */
     private boolean mHasBackgroundImage;
+    /** The width of the background image last uploaded, for fitting it to each frame. */
+    private int mBackgroundWidth;
+    /** The height of the background image last uploaded. */
+    private int mBackgroundHeight;
     /** Whether the mask last uploaded was made from a mirrored frame, and is read mirrored. */
     private boolean mMaskMirrored;
     /** The quad's positions and texture coordinates, or null while the renderer is stopped. */
@@ -139,10 +168,13 @@ public final class BackgroundReplacer implements FrameRenderer {
     }
 
     /**
-     * The image to put behind the subject, or null to go back to the colour. It is read at the
-     * next frame, so keep it valid until then; it is never recycled for you.
+     * The image to put behind the subject, or null to go back to the colour. It fills the frame,
+     * cropped to the frame's shape rather than stretched. It is read at the next frame and again
+     * whenever the camera reopens, so keep it valid while it is set; it is never recycled for
+     * you.
      */
     public void setBackgroundImage(@Nullable Bitmap background) {
+        mBackground = background;
         mPendingBackground.set(background);
         if (background == null) {
             mHasBackgroundImage = false;
@@ -151,7 +183,15 @@ public final class BackgroundReplacer implements FrameRenderer {
 
     /** The newest mask, from any thread. It replaces any mask not yet drawn. */
     public void setMask(@Nullable SegmentationMask mask) {
-        mPendingMask.set(mask);
+        if (mask == null) {
+            return;
+        }
+        synchronized (mRecentMasks) {
+            mRecentMasks.addLast(mask);
+            while (mRecentMasks.size() > RECENT_MASKS) {
+                mRecentMasks.removeFirst();
+            }
+        }
     }
 
     @Override
@@ -204,7 +244,7 @@ public final class BackgroundReplacer implements FrameRenderer {
         if (mFailed || mVertices == null) {
             return false;
         }
-        uploadPendingMask();
+        uploadMask(maskFor(frame.getTimestampNanos()));
         uploadPendingBackground();
 
         float[] color = new float[4];
@@ -232,7 +272,8 @@ public final class BackgroundReplacer implements FrameRenderer {
                 GlMath.topRowFirst(mMaskMirrored), 0);
         // Never mirrored: a background shows the way it was given, whichever lens is in use.
         GLES20.glUniformMatrix4fv(mBackgroundMatrixHandle, 1, false,
-                GlMath.topRowFirst(false), 0);
+                backgroundMatrix(frame.getWidth(), frame.getHeight(), mBackgroundWidth,
+                        mBackgroundHeight), 0);
         GLES20.glUniform4fv(mBackgroundColorHandle, 1, color, 0);
         GLES20.glUniform1f(mHasBackgroundImageHandle, mHasBackgroundImage ? 1f : 0f);
         GLES20.glUniform1f(mHasMaskHandle, mMaskWidth > 0 ? 1f : 0f);
@@ -269,15 +310,81 @@ public final class BackgroundReplacer implements FrameRenderer {
         mBackgroundTexture = 0;
         mMaskWidth = 0;
         mMaskHeight = 0;
+        mUploadedMask = null;
+        synchronized (mRecentMasks) {
+            mRecentMasks.clear();
+        }
         mVertices = null;
+        // The image went with its texture; the next renderer uploads it again, unless a newer
+        // one, or none, has been set since.
+        mHasBackgroundImage = false;
+        Bitmap background = mBackground;
+        if (background != null) {
+            mPendingBackground.compareAndSet(null, background);
+        }
     }
 
-    /** Uploads the newest mask, if one arrived since the last frame. */
-    private void uploadPendingMask() {
-        SegmentationMask mask = mPendingMask.getAndSet(null);
-        if (mask == null) {
+    /**
+     * Whether the camera segments its frames for this replacer, so a picture waits, within a
+     * bound, for a mask made at its own moment. The camera sets this; a model of an app's own
+     * hands over masks that say nothing of time, and pictures never wait on those.
+     *
+     * @hide
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public void setSegmentedByCamera(boolean segmented) {
+        mSegmentedByCamera = segmented;
+    }
+
+    /**
+     * Whether a picture taken at a time can be drawn: once a mask from that moment or after has
+     * arrived, since the mask nearest to it is then known; straight away when the camera is not
+     * segmenting for this replacer or its masks say nothing of time.
+     */
+    boolean hasMaskFor(long timestampNanos) {
+        if (!mSegmentedByCamera || timestampNanos <= 0) {
+            return true;
+        }
+        synchronized (mRecentMasks) {
+            SegmentationMask newest = mRecentMasks.peekLast();
+            return newest != null && (newest.getTimestampNanos() == 0
+                    || newest.getTimestampNanos() >= timestampNanos);
+        }
+    }
+
+    /**
+     * The mask to draw a frame with: the one made nearest to it. For a preview frame that is the
+     * newest, since masks arrive after their frames; for a picture, the one either side of it.
+     * Masks that say nothing of time give the newest.
+     */
+    @Nullable
+    private SegmentationMask maskFor(long timestampNanos) {
+        synchronized (mRecentMasks) {
+            SegmentationMask nearest = mRecentMasks.peekLast();
+            if (nearest == null || timestampNanos <= 0 || nearest.getTimestampNanos() == 0) {
+                return nearest;
+            }
+            SegmentationMask newest = nearest;
+            long distance = Math.abs(nearest.getTimestampNanos() - timestampNanos);
+            for (SegmentationMask mask : mRecentMasks) {
+                long from = Math.abs(mask.getTimestampNanos() - timestampNanos);
+                if (from < distance) {
+                    nearest = mask;
+                    distance = from;
+                }
+            }
+            // So far from every mask that the frame and the masks keep different clocks, and
+            // the nearest by the numbers could be the oldest.
+            return distance <= MAX_MASK_GAP_NANOS ? nearest : newest;
+        }
+    }
+
+    /** Uploads a mask into the mask texture, unless it is already there. */
+    private void uploadMask(@Nullable SegmentationMask mask) {
+        if (mask == null || mask == mUploadedMask) {
             return;
         }
+        mUploadedMask = mask;
         byte[] alpha = mask.toAlpha();
         ByteBuffer buffer = ByteBuffer.allocateDirect(alpha.length);
         buffer.put(alpha).position(0);
@@ -302,6 +409,36 @@ public final class BackgroundReplacer implements FrameRenderer {
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, mBackgroundTexture);
         GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, background, 0);
         mHasBackgroundImage = true;
+        mBackgroundWidth = background.getWidth();
+        mBackgroundHeight = background.getHeight();
+    }
+
+    /**
+     * Where each point of a frame reads the background image: top row first, unmirrored, and
+     * cropped about its centre to the frame's shape, so it fills the frame without stretching
+     * whatever shape the backend's frames are.
+     */
+    @VisibleForTesting
+    @NonNull
+    static float[] backgroundMatrix(int frameWidth, int frameHeight, int imageWidth,
+            int imageHeight) {
+        float[] matrix = GlMath.topRowFirst(false);
+        if (frameWidth <= 0 || frameHeight <= 0 || imageWidth <= 0 || imageHeight <= 0) {
+            return matrix;
+        }
+        float frameShape = (float) frameWidth / frameHeight;
+        float imageShape = (float) imageWidth / imageHeight;
+        // The share of the image's width and height the frame shows.
+        float across = Math.min(1f, frameShape / imageShape);
+        float down = Math.min(1f, imageShape / frameShape);
+        // Scales the coordinate the flip produced about the centre: s' = 0.5 + (s - 0.5) * k.
+        matrix[0] *= across;
+        matrix[4] *= across;
+        matrix[12] = 0.5f + (matrix[12] - 0.5f) * across;
+        matrix[1] *= down;
+        matrix[5] *= down;
+        matrix[13] = 0.5f + (matrix[13] - 0.5f) * down;
+        return matrix;
     }
 
     /** A 2D texture clamped and linear, which is what both of these want. */
