@@ -52,6 +52,19 @@
             android:textColor="#FFFFFF"
             android:visibility="gone" />
 
+        <!-- HDR video, shown by MainFragment where the camera can record it -->
+        <CheckBox
+            android:id="@+id/hdr"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_below="@+id/raw"
+            android:layout_alignParentEnd="true"
+            android:layout_marginEnd="16dp"
+            android:buttonTint="#FFFFFF"
+            android:text="@string/hdr"
+            android:textColor="#FFFFFF"
+            android:visibility="gone" />
+
         <!-- Exposure compensation, shown by MainFragment where the camera can compensate -->
         <LinearLayout
             android:id="@+id/exposure_control"

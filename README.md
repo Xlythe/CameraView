@@ -72,8 +72,17 @@ pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [minExposureC
 maxExposureCompensation, in steps of exposureCompensationStep EV], torchEnabled [boolean],
 dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
 stabilizationEnabled [boolean], lowLightBoostEnabled [boolean], frameRenderer [FrameRenderer, see
-Filters and masks below] and cameraTextureProvider [CameraTextureProvider]. Not every camera can
-do all of these, so CameraState below says which this one supports.
+Filters and masks below], cameraTextureProvider [CameraTextureProvider] and hdrPreviewEnabled
+[boolean]. Not every camera can do all of these, so CameraState below says which this one
+supports.
+
+While the camera frames HDR, with dynamicRange set to hdr or pictureFormat set to ultraHdr, the
+preview shows in HDR too, on a display that can show it and with a camera that can stream it
+(CameraState.isHdrPreviewSupported). The window is put into HDR colour mode meanwhile, and the
+mode it had before comes back when the HDR preview ends, the camera closes or the Camera leaves
+the composition. An HDR preview follows the scaling and translation of the modifiers around it,
+and is clipped to its bounds, but not to a rounded shape, and takes no alpha, rotation or mirror;
+set hdrPreviewEnabled to false for a preview that needs those, and it shows tone-mapped instead.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
 opens, and is republished when the camera reconfigures, so ask it before offering a control: a
@@ -300,6 +309,14 @@ unsupported request is logged and dropped rather than applied.
 exposureCompensation is an index rather than a number of stops, from
 getMinExposureCompensation() to getMaxExposureCompensation(). Each step is worth
 getExposureCompensationStep() EV, so with a step of 1/6, index 6 brightens by 1 EV.
+
+While the camera frames HDR, with dynamicRange set to HDR or the picture format set to
+ULTRA_HDR, the preview shows in HDR too, where isHdrPreviewSupported() says the camera and the
+display can. CameraView puts its window into HDR colour mode meanwhile, and the mode the window
+had before comes back when the HDR preview ends, the camera closes or the view is removed from the
+window. An HDR preview follows this view's scaling and translation and is clipped to its bounds,
+but takes no alpha, rotation or mirror; for a preview that needs those,
+setHdrPreviewEnabled(false) keeps it tone-mapped instead.
 
 CameraView's methods are rather straight forward. Again, if you're using CameraFragment, it will
 handle binding the Views to the appropriate methods on CameraView.
@@ -593,6 +610,10 @@ mVideoView.setStream(new VideoStream.Builder().withAudioStream(...).withVideoStr
 mVideoView.play();
 mVideoView.pause();
 ```
+
+An HDR video, one whose frames are HLG or PQ, plays in HDR on a display that can show it, and the
+window is in HDR colour mode while it does. It then follows the view's scaling and translation
+but not a mirror (setShouldMirror), alpha or rotation; a mirrored HDR video plays tone-mapped.
 
 Viewing pictures
 -----------------

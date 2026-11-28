@@ -253,6 +253,11 @@ fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
     // A DNG beside each JPEG, where the camera can write one.
     var raw by remember { mutableStateOf(false) }
     val rawSupported = cameraState.value?.supportedPictureFormats?.contains(PictureFormat.RAW_JPEG) == true
+    // Ultra HDR pictures, framed in HDR where the display can show it. The rounded corners go
+    // meanwhile, because an HDR preview follows no clip but its bounds.
+    var hdr by remember { mutableStateOf(false) }
+    val hdrSupported = cameraState.value?.supportedPictureFormats?.contains(PictureFormat.ULTRA_HDR) == true
+    val hdrPreview = hdr && hdrSupported && cameraState.value?.isHdrPreviewSupported == true
     // The last picture filed; with RAW on, the DNG, which is filed after the JPEG.
     var lastSaved by remember { mutableStateOf<Uri?>(null) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
@@ -292,12 +297,17 @@ fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
-                    .clip(RoundedCornerShape(24.dp))
+                    .then(if (hdrPreview) Modifier else Modifier.clip(RoundedCornerShape(24.dp)))
             ) {
                 Camera(
                     modifier = Modifier.fillMaxSize(),
                     controller = cameraController,
-                    pictureFormat = if (raw && rawSupported) PictureFormat.RAW_JPEG else PictureFormat.JPEG,
+                    pictureFormat = when {
+                        hdr && hdrSupported -> PictureFormat.ULTRA_HDR
+                        raw && rawSupported -> PictureFormat.RAW_JPEG
+                        else -> PictureFormat.JPEG
+                    },
+                    hdrPreviewEnabled = hdrPreview,
                     state = cameraState,
                     onImageConfirmation = { uiStatusText = "Confirm Image?" },
                     onImageSaved = { uri ->
@@ -352,8 +362,14 @@ fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
             ) {
                 if (rawSupported) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = raw, onCheckedChange = { raw = it })
+                        Checkbox(checked = raw, onCheckedChange = { raw = it; if (it) hdr = false })
                         Text("RAW", color = Color.White)
+                    }
+                }
+                if (hdrSupported) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = hdr, onCheckedChange = { hdr = it; if (it) raw = false })
+                        Text("HDR", color = Color.White)
                     }
                 }
                 Button(
