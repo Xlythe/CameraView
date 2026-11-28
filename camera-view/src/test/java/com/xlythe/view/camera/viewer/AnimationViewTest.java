@@ -1,6 +1,8 @@
 package com.xlythe.view.camera.viewer;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
@@ -11,6 +13,9 @@ import android.graphics.PixelFormat;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.drawable.Drawable;
+import android.view.View;
+
+import androidx.test.core.app.ApplicationProvider;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -18,7 +23,14 @@ import androidx.annotation.Nullable;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
+import org.robolectric.annotation.Config;
 import org.robolectric.annotation.GraphicsMode;
+import org.robolectric.shadows.ShadowLooper;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.util.concurrent.TimeUnit;
 
 /** How AnimationView draws the platform's animated drawables. */
 @RunWith(RobolectricTestRunner.class)
@@ -54,6 +66,84 @@ public class AnimationViewTest {
         draw(picture);
 
         assertEquals(new Rect(0, 0, Picture.WIDTH, Picture.HEIGHT), picture.getBounds());
+    }
+
+    /**
+     * Before Android 9 an animated GIF plays through the library's own decoder, a frame at a
+     * time: the band along the top of its first frame, then the block its second frame adds.
+     */
+    @Test
+    @Config(sdk = 27)
+    public void aGifPlaysThroughTheLibrarysDecoderBeforeAndroid9() throws IOException {
+        AnimationView view = gifView(GifTestFiles.everyDisposal());
+        assertTrue(view.isAnimated());
+        assertTrue(view.isPlaying());
+
+        // 16x12 fitted into 160x120: each pixel of the GIF is 10 of the view.
+        Bitmap first = drawView(view);
+        assertEquals(0xFF1EC83C, first.getPixel(5, 5));
+        assertEquals(0xFFE01E1E, first.getPixel(5, 115));
+        assertEquals(0xFFE01E1E, first.getPixel(45, 35));
+
+        // The first frame shows for 50 ms; the next is composed off the main thread.
+        ShadowLooper.idleMainLooper(60, TimeUnit.MILLISECONDS);
+        drawView(view);
+        ShadowLooper.idleMainLooper();
+        Bitmap second = drawView(view);
+        assertEquals(0xFF1E5AFA, second.getPixel(45, 35));
+        assertEquals(0xFF1EC83C, second.getPixel(5, 5));
+
+        // Paused, it stays on its frame.
+        assertTrue(view.pause());
+        ShadowLooper.idleMainLooper(2, TimeUnit.SECONDS);
+        drawView(view);
+        ShadowLooper.idleMainLooper();
+        assertEquals(0xFF1E5AFA, drawView(view).getPixel(45, 35));
+        view.release();
+        assertFalse(view.isAnimated());
+    }
+
+    /** A GIF of one frame shows still. */
+    @Test
+    @Config(sdk = 27)
+    public void aGifOfOneFrameShowsStill() throws IOException {
+        AnimationView view = gifView(GifTestFiles.gif(2, 2, new int[] {0xFF0000, 0x00FF00},
+                GifTestFiles.fill(0, 0, 2, 2, 1)));
+        assertFalse(view.isAnimated());
+        assertFalse(view.isPlaying());
+    }
+
+    /** An AnimationView on a GIF, laid out at 160x120, decoded on the calling thread. */
+    private static AnimationView gifView(byte[] gif) throws IOException {
+        File file = File.createTempFile("animation", ".gif");
+        file.deleteOnExit();
+        Files.write(file.toPath(), gif);
+        AnimationView view = new AnimationView(ApplicationProvider.getApplicationContext(),
+                Runnable::run);
+        boolean[] loaded = new boolean[1];
+        view.setImageLoadListener(new ImageLoadListener() {
+            @Override
+            public void onImageLoaded() {
+                loaded[0] = true;
+            }
+
+            @Override
+            public void onImageFailed() {}
+        });
+        view.measure(View.MeasureSpec.makeMeasureSpec(160, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(120, View.MeasureSpec.EXACTLY));
+        view.layout(0, 0, 160, 120);
+        view.setLocation(ImageLocation.of(file));
+        ShadowLooper.idleMainLooper();
+        assertTrue(loaded[0]);
+        return view;
+    }
+
+    private static Bitmap drawView(View view) {
+        Bitmap bitmap = Bitmap.createBitmap(view.getWidth(), view.getHeight(),
+                Bitmap.Config.ARGB_8888);
+        view.draw(new Canvas(bitmap));
+        return bitmap;
     }
 
     private static Bitmap draw(Drawable drawable) {

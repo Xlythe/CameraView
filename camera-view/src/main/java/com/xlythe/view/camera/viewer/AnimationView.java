@@ -7,7 +7,6 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Canvas;
 import android.graphics.ImageDecoder;
-import android.graphics.Movie;
 import android.graphics.Paint;
 import android.graphics.RectF;
 import android.graphics.drawable.Animatable;
@@ -35,8 +34,9 @@ import java.util.concurrent.Executor;
 /**
  * Plays an animated picture, fitted inside the view and looping: an animated PNG on every
  * release, through {@link ApngDecoder}; an animated GIF, WebP, AVIF or HEIF sequence through the
- * platform's own decoder from Android 9; and an animated GIF before that through
- * {@link Movie}. A picture that does not animate on this release shows still.
+ * platform's own decoder from Android 9; and an animated GIF before that, or one the platform
+ * cannot read, through {@link GifDecoder}, a frame at a time. A picture that does not animate on
+ * this release shows still.
  */
 final class AnimationView extends View {
     /** The most bytes of a file read into memory to decode it: 64 MB. */
@@ -77,9 +77,9 @@ final class AnimationView extends View {
     @Nullable
     private Drawable mDrawable;
 
-    /** An animated GIF before Android 9, or null. */
+    /** An animated GIF played through the library's own decoder, or null. */
     @Nullable
-    private Movie mMovie;
+    private GifFrames mGif;
 
     /** An animated PNG's frames, or null. */
     @Nullable
@@ -100,9 +100,6 @@ final class AnimationView extends View {
 
     /** Whether it was playing when it was taken off the screen, to play again when put back. */
     private boolean mResumeOnAttach;
-
-    /** How often a GIF played through {@link Movie}, which says nothing of its frames, redraws. */
-    private static final long MOVIE_FRAME_MILLIS = 16;
 
     /** Gives up on a decode that has taken too long. */
     private final Runnable mTimeout = new Runnable() {
@@ -178,10 +175,11 @@ final class AnimationView extends View {
             } catch (IOException | RuntimeException e) {
                 Log.d(TAG, location + " is not something the platform animates", e);
             }
-        } else if (isGif(bytes)) {
-            Movie movie = decodeMovie(bytes);
-            if (movie != null && movie.duration() > 0) {
-                return movie;
+        }
+        if (isGif(bytes)) {
+            GifFrames gif = decodeGif(bytes);
+            if (gif != null) {
+                return gif;
             }
         }
         Bitmap still = decodeStill(bytes);
@@ -204,11 +202,34 @@ final class AnimationView extends View {
         return ImageDecoder.decodeDrawable(source);
     }
 
-    @SuppressWarnings("deprecation")
+    /**
+     * An animated GIF with its first frame composed, or null if it has one frame, cannot be
+     * read, or is too large to hold a frame of in memory.
+     */
     @WorkerThread
     @Nullable
-    private static Movie decodeMovie(@NonNull byte[] bytes) {
-        return Movie.decodeByteArray(bytes, 0, bytes.length);
+    private static GifFrames decodeGif(@NonNull byte[] bytes) {
+        GifDecoder decoder;
+        try {
+            decoder = GifDecoder.parse(bytes);
+        } catch (IOException e) {
+            Log.d(TAG, "Unable to read a GIF's frames", e);
+            return null;
+        }
+        if (decoder.getFrameCount() < 2) {
+            return null;
+        }
+        int width = decoder.getWidth();
+        int height = decoder.getHeight();
+        // The decoder's screen and what it puts back, and the frame showing.
+        long needs = (long) width * height * 4 * 3;
+        if (needs > Runtime.getRuntime().maxMemory() / 4) {
+            Log.w(TAG, "A " + width + "x" + height + " GIF is too large to animate here");
+            return null;
+        }
+        Bitmap frame = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        frame.setPixels(decoder.advance(), 0, width, 0, 0, width, height);
+        return new GifFrames(decoder, frame);
     }
 
     /** The picture still, at no more than a bounded size. */
@@ -276,10 +297,8 @@ final class AnimationView extends View {
         }
         if (decoded instanceof ApngDecoder.Animation) {
             mFrames = (ApngDecoder.Animation) decoded;
-        } else if (decoded instanceof Movie) {
-            mMovie = (Movie) decoded;
-            // Movie draws only in software.
-            setLayerType(LAYER_TYPE_SOFTWARE, null);
+        } else if (decoded instanceof GifFrames) {
+            mGif = (GifFrames) decoded;
         } else if (decoded instanceof Drawable) {
             mDrawable = (Drawable) decoded;
             mDrawable.setCallback(this);
@@ -297,7 +316,7 @@ final class AnimationView extends View {
     /** Whether the picture animates here at all. */
     @MainThread
     boolean isAnimated() {
-        return mFrames != null || mMovie != null || mDrawable instanceof Animatable;
+        return mFrames != null || mGif != null || mDrawable instanceof Animatable;
     }
 
     /** Whether it is playing. */
@@ -335,9 +354,9 @@ final class AnimationView extends View {
         if (!mPlaying) {
             return;
         }
-        long delay = mFrames != null
-                ? untilNextFrame(mFrames, SystemClock.uptimeMillis() - mStartedAt)
-                : MOVIE_FRAME_MILLIS;
+        long played = SystemClock.uptimeMillis() - mStartedAt;
+        long delay = mFrames != null ? untilNextFrame(mFrames, played)
+                : mGif != null ? untilNextFrame(mGif.delays, 0, played) : 0;
         if (delay > 0) {
             postDelayed(mTick, delay);
         }
@@ -383,7 +402,10 @@ final class AnimationView extends View {
             mDrawable.setCallback(null);
             mDrawable = null;
         }
-        mMovie = null;
+        if (mGif != null) {
+            mGif.frame.recycle();
+            mGif = null;
+        }
         if (mFrames != null) {
             for (Bitmap frame : mFrames.frames) {
                 frame.recycle();
@@ -426,8 +448,11 @@ final class AnimationView extends View {
             if (fit(frame.getWidth(), frame.getHeight())) {
                 canvas.drawBitmap(frame, null, mBounds, mPaint);
             }
-        } else if (mMovie != null) {
-            drawMovie(canvas, mMovie, played);
+        } else if (mGif != null) {
+            showGifFrame(mGif, frameAt(mGif.delays, 0, played));
+            if (fit(mGif.frame.getWidth(), mGif.frame.getHeight())) {
+                canvas.drawBitmap(mGif.frame, null, mBounds, mPaint);
+            }
         } else if (mDrawable != null) {
             if (fit(mDrawable.getIntrinsicWidth(), mDrawable.getIntrinsicHeight())) {
                 drawFitted(canvas, mDrawable, mBounds);
@@ -459,19 +484,47 @@ final class AnimationView extends View {
         canvas.restoreToCount(saved);
     }
 
-    @SuppressWarnings("deprecation")
+    /**
+     * Has a GIF's frame composed, off the main thread, unless it shows already or one is being
+     * composed. The view redraws once it is ready.
+     */
     @MainThread
-    private void drawMovie(@NonNull Canvas canvas, @NonNull Movie movie, long played) {
-        if (!fit(movie.width(), movie.height())) {
+    private void showGifFrame(@NonNull GifFrames gif, int index) {
+        if (index == gif.shown || gif.composing || gif.broken) {
             return;
         }
-        movie.setTime((int) (played % Math.max(1, movie.duration())));
-        float scale = mBounds.width() / movie.width();
-        canvas.save();
-        canvas.translate(mBounds.left, mBounds.top);
-        canvas.scale(scale, scale);
-        movie.draw(canvas, 0, 0);
-        canvas.restore();
+        gif.composing = true;
+        final int generation = mGeneration;
+        mExecutor.execute(() -> {
+            int[] pixels;
+            try {
+                pixels = gif.decoder.seek(index);
+            } catch (RuntimeException | OutOfMemoryError e) {
+                Log.w(TAG, "Unable to compose frame " + index + " of a GIF", e);
+                pixels = null;
+            }
+            final int[] composed = pixels;
+            mHandler.post(() -> onGifFrame(gif, generation, index, composed));
+        });
+    }
+
+    /** Shows a GIF's frame once it is composed, unless the GIF has since been let go of. */
+    @MainThread
+    private void onGifFrame(@NonNull GifFrames gif, int generation, int index,
+            @Nullable int[] pixels) {
+        gif.composing = false;
+        if (gif != mGif || generation != mGeneration) {
+            return;
+        }
+        if (pixels == null) {
+            // It stays on the frame it shows rather than trying again and again.
+            gif.broken = true;
+            return;
+        }
+        int width = gif.frame.getWidth();
+        gif.frame.setPixels(pixels, 0, width, 0, 0, width, gif.frame.getHeight());
+        gif.shown = index;
+        invalidate();
     }
 
     /**
@@ -480,16 +533,25 @@ final class AnimationView extends View {
      */
     @VisibleForTesting
     static long untilNextFrame(@NonNull ApngDecoder.Animation animation, long played) {
+        return untilNextFrame(animation.delays, animation.plays, played);
+    }
+
+    /**
+     * How long until the frame showing gives way to the next, for frames of these delays that
+     * play a number of times, or 0 for forever; 0 once they have played that many times.
+     */
+    @VisibleForTesting
+    static long untilNextFrame(@NonNull int[] delays, int plays, long played) {
         long total = 0;
-        for (int delay : animation.delays) {
+        for (int delay : delays) {
             total += delay;
         }
-        if (total <= 0 || (animation.plays > 0 && played >= total * animation.plays)) {
+        if (total <= 0 || (plays > 0 && played >= total * plays)) {
             return 0;
         }
         long into = played % total;
         long end = 0;
-        for (int delay : animation.delays) {
+        for (int delay : delays) {
             end += delay;
             if (into < end) {
                 return end - into;
@@ -501,24 +563,30 @@ final class AnimationView extends View {
     /** Which frame shows after playing for a time, looping as many times as the file says. */
     @VisibleForTesting
     static int frameAt(@NonNull ApngDecoder.Animation animation, long played) {
+        return frameAt(animation.delays, animation.plays, played);
+    }
+
+    /** Which of the frames of these delays shows after playing for a time, as above. */
+    @VisibleForTesting
+    static int frameAt(@NonNull int[] delays, int plays, long played) {
         long total = 0;
-        for (int delay : animation.delays) {
+        for (int delay : delays) {
             total += delay;
         }
         if (total <= 0) {
             return 0;
         }
-        if (animation.plays > 0 && played >= total * animation.plays) {
-            return animation.frames.length - 1;
+        if (plays > 0 && played >= total * plays) {
+            return delays.length - 1;
         }
         long into = played % total;
-        for (int i = 0; i < animation.delays.length; i++) {
-            into -= animation.delays[i];
+        for (int i = 0; i < delays.length; i++) {
+            into -= delays[i];
             if (into < 0) {
                 return i;
             }
         }
-        return animation.frames.length - 1;
+        return delays.length - 1;
     }
 
     /** Fits a picture of a size inside the view, keeping its shape; false if either is empty. */
@@ -532,5 +600,38 @@ final class AnimationView extends View {
         float top = (getHeight() - height * scale) / 2;
         mBounds.set(left, top, left + width * scale, top + height * scale);
         return true;
+    }
+
+    /**
+     * An animated GIF played a frame at a time: its decoder, used off the main thread by one
+     * frame's composition at a time, and the frame showing, used on the main thread.
+     */
+    private static final class GifFrames {
+        /** Composes each frame; touched only while {@link #composing}, off the main thread. */
+        @NonNull
+        final GifDecoder decoder;
+
+        /** The frame showing. */
+        @NonNull
+        final Bitmap frame;
+
+        /** How long each frame shows, in milliseconds. A GIF loops forever, as from Android 9. */
+        @NonNull
+        final int[] delays;
+
+        /** Which frame {@link #frame} holds. */
+        int shown;
+
+        /** Whether a frame is being composed. */
+        boolean composing;
+
+        /** Whether a frame failed to compose, so no more are tried. */
+        boolean broken;
+
+        GifFrames(@NonNull GifDecoder decoder, @NonNull Bitmap frame) {
+            this.decoder = decoder;
+            this.frame = frame;
+            this.delays = decoder.getDelays();
+        }
     }
 }
