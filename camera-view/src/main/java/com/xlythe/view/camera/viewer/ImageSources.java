@@ -5,6 +5,8 @@ import static com.xlythe.view.camera.ICameraModule.TAG;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.ColorSpace;
+import android.os.Build;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -115,12 +117,31 @@ final class ImageSources {
         }
         RegionSource source;
         try {
-            source = DecoderRegionSource.open(location.openDescriptor(context));
+            source = DecoderRegionSource.open(location.openDescriptor(context),
+                    HdrStills.config(bounds), declaredHdrColorSpace(context, location, bounds));
         } catch (IOException e) {
             Log.d(TAG, location + " cannot be decoded in pieces, so it is copied", e);
             source = copy(context, location, bounds.outWidth, bounds.outHeight, MAX_COPY_PIXELS);
         }
         return new Opened(source, orientation, gpano);
+    }
+
+    /**
+     * The HDR colour space a picture names that the platform does not decode it into, or null.
+     */
+    @WorkerThread
+    @Nullable
+    private static ColorSpace declaredHdrColorSpace(@NonNull Context context,
+            @NonNull ImageLocation location, @NonNull BitmapFactory.Options bounds) {
+        if (Build.VERSION.SDK_INT < 34 || HdrStills.isHdr(bounds)) {
+            return null;
+        }
+        try (InputStream input = location.open(context)) {
+            return HdrStills.declaredHdrColorSpace(input);
+        } catch (IOException | RuntimeException e) {
+            Log.d(TAG, "Unable to read the colour of " + location, e);
+            return null;
+        }
     }
 
     /**

@@ -103,8 +103,10 @@ final class MediaDetector {
         switch (kind) {
             case MediaTags.KIND_IMAGE: {
                 // Bitmaps carry a gain map from Android 14; before it one is only extra bytes.
-                boolean hdr = Build.VERSION.SDK_INT >= 34 && tags != null
-                        && tags.getGainMap() != MediaTags.GAIN_MAP_NONE;
+                // A picture whose own pixels are HDR decodes in an HDR colour space from then too.
+                boolean hdr = (Build.VERSION.SDK_INT >= 34 && tags != null
+                        && tags.getGainMap() != MediaTags.GAIN_MAP_NONE)
+                        || (bounds != null && bounds[2] != 0);
                 MediaTags.MotionPhoto motion = tags == null ? null : tags.getMotionPhoto();
                 if (motion != null) {
                     return new Detection(MediaView.MOTION_PHOTO, hdr, motion, null, wholeFrame,
@@ -196,7 +198,10 @@ final class MediaDetector {
         return transfer == MediaTags.TRANSFER_HLG || transfer == MediaTags.TRANSFER_PQ;
     }
 
-    /** The stored picture's size, from its header alone, or null if it will not decode. */
+    /**
+     * The stored picture's size from its header alone, and then 1 if it decodes into an HDR
+     * colour space or 0 if not; or null if it will not decode.
+     */
     @WorkerThread
     @Nullable
     private static int[] bounds(@NonNull Context context, @NonNull ImageLocation location) {
@@ -207,8 +212,18 @@ final class MediaDetector {
         } catch (IOException | RuntimeException e) {
             return null;
         }
-        return options.outWidth > 0 && options.outHeight > 0
-                ? new int[] {options.outWidth, options.outHeight} : null;
+        if (options.outWidth <= 0 || options.outHeight <= 0) {
+            return null;
+        }
+        boolean hdr = HdrStills.isHdr(options);
+        if (!hdr && Build.VERSION.SDK_INT >= 34) {
+            try (InputStream input = location.open(context)) {
+                hdr = HdrStills.declaredHdrColorSpace(input) != null;
+            } catch (IOException | RuntimeException e) {
+                Log.d(TAG, "Unable to read the colour of " + location, e);
+            }
+        }
+        return new int[] {options.outWidth, options.outHeight, hdr ? 1 : 0};
     }
 
     /** What the platform makes of a file nothing else recognised: video, sound or neither. */

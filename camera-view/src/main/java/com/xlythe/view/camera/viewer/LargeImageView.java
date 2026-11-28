@@ -304,6 +304,23 @@ public class LargeImageView extends View {
         return mBase != null && mBase.hasGainmap();
     }
 
+    /** The low-resolution copy, for tests that check what it was decoded into. */
+    @VisibleForTesting
+    @Nullable
+    Bitmap getBase() {
+        return mBase;
+    }
+
+    /** A decoded tile, or null while there is none, for tests that check what it was decoded into. */
+    @VisibleForTesting
+    @Nullable
+    Bitmap getAnyTile() {
+        for (Tile tile : mTiles.values()) {
+            return tile.bitmap;
+        }
+        return null;
+    }
+
     /** How many decoded tiles carry a gain map, for tests. */
     @VisibleForTesting
     @RequiresApi(34)
