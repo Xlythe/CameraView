@@ -107,9 +107,9 @@ import java.util.concurrent.TimeUnit;
  *   <li>Videos and sound in whichever codecs the device decodes. From Android 4.1 a video's
  *       format, profile and level are checked against the device's decoders before it plays,
  *       and one none of them takes fails. Android 4.0 lists no decoders, so there a video fails
- *       when its decoder gives up on it. The software decoders of Android 5 and older take
- *       H.264's Baseline profile and not its Main or High, which most cameras record in; phones
- *       of those years often decode High in hardware. QuickTime movies that open without a file
+ *       when its decoder gives up on it. The decoders Android 5.1 and older come with take
+ *       H.264's Baseline profile and not its High, which most cameras record in; phones of those
+ *       years often decode High in hardware. QuickTime movies that open without a file
  *       type, as older ones and some Live Photos do, play from a copy the platform recognises,
  *       kept in the app's cache.</li>
  *   <li>TIFF, JPEG XL and AVI files fail on every release so far.</li>
