@@ -2,7 +2,11 @@ package com.xlythe.sample.camera
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
+import android.hardware.Sensor
+import android.hardware.SensorManager
 import android.net.Uri
 import android.os.Bundle
 import android.widget.Toast
@@ -16,6 +20,8 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -35,6 +41,7 @@ import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material.icons.filled.Panorama
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Transform
@@ -44,8 +51,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -78,7 +87,11 @@ import com.xlythe.view.camera.Barcode
 import com.xlythe.compose.camera.Camera
 import com.xlythe.compose.camera.CameraController
 import com.xlythe.compose.camera.CameraState
+import com.xlythe.compose.camera.LargeImage
+import com.xlythe.compose.camera.Panorama
 import com.xlythe.compose.camera.PanoramaMode
+import com.xlythe.compose.camera.Photosphere
+import com.xlythe.compose.camera.PictureFormat
 import com.xlythe.compose.camera.Permissions
 import com.xlythe.compose.camera.Video
 import com.xlythe.compose.camera.VideoController
@@ -94,7 +107,18 @@ enum class DemoScreen(val title: String) {
     STREAM("Stream Demo"),
     RESIZING("Resizing Demo"),
     PANORAMA("Panorama Demo"),
-    QR_CODE("QR Code Demo")
+    QR_CODE("QR Code Demo"),
+    VIEWER("Viewer Demo")
+}
+
+/** How the viewer demo shows a picture. */
+enum class ViewerMode(val label: String) {
+    /** Flat, to zoom into. */
+    PICTURE("Picture"),
+    /** As a strip to pan along. */
+    PANORAMA("Panorama"),
+    /** From the inside of a sphere. */
+    PHOTOSPHERE("Sphere")
 }
 
 /**
@@ -112,6 +136,8 @@ class MainActivity : ComponentActivity() {
                 val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
                 val scope = rememberCoroutineScope()
                 var currentScreen by remember { mutableStateOf(DemoScreen.SIMPLE) }
+                // The picture the viewer opens on, from the simple demo's last capture.
+                var viewerUri by remember { mutableStateOf<Uri?>(null) }
 
                 ModalNavigationDrawer(
                     drawerState = drawerState,
@@ -143,6 +169,7 @@ class MainActivity : ComponentActivity() {
                                             DemoScreen.RESIZING -> Icon(Icons.Default.Transform, contentDescription = null)
                                             DemoScreen.PANORAMA -> Icon(Icons.Default.Panorama, contentDescription = null)
                                             DemoScreen.QR_CODE -> Icon(Icons.Default.QrCode, contentDescription = null)
+                                            DemoScreen.VIEWER -> Icon(Icons.Default.PhotoLibrary, contentDescription = null)
                                         }
                                     },
                                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
@@ -186,11 +213,15 @@ class MainActivity : ComponentActivity() {
                                 .padding(innerPadding)
                         ) {
                             when (currentScreen) {
-                                DemoScreen.SIMPLE -> SimpleDemoScreen()
+                                DemoScreen.SIMPLE -> SimpleDemoScreen(onView = { uri ->
+                                    viewerUri = uri
+                                    currentScreen = DemoScreen.VIEWER
+                                })
                                 DemoScreen.STREAM -> StreamDemoScreen()
                                 DemoScreen.RESIZING -> ResizingDemoScreen()
                                 DemoScreen.PANORAMA -> PanoramaDemoScreen()
                                 DemoScreen.QR_CODE -> QrCodeDemoScreen()
+                                DemoScreen.VIEWER -> ViewerDemoScreen(initialUri = viewerUri)
                             }
                         }
                     }
@@ -202,9 +233,15 @@ class MainActivity : ComponentActivity() {
 
 @RequiresPermission(Manifest.permission.CAMERA)
 @Composable
-fun SimpleDemoScreen() {
+fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
     val context = LocalContext.current
     val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    val cameraState = remember { mutableStateOf<CameraState?>(null) }
+    // A DNG beside each JPEG, where the camera can write one.
+    var raw by remember { mutableStateOf(false) }
+    val rawSupported = cameraState.value?.supportedPictureFormats?.contains(PictureFormat.RAW_JPEG) == true
+    // The last picture filed; with RAW on, the DNG, which is filed after the JPEG.
+    var lastSaved by remember { mutableStateOf<Uri?>(null) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
     var uiStatusText by remember { mutableStateOf("") }
 
@@ -268,9 +305,12 @@ fun SimpleDemoScreen() {
                 Camera(
                     modifier = Modifier.fillMaxSize(),
                     controller = cameraController,
+                    pictureFormat = if (raw && rawSupported) PictureFormat.RAW_JPEG else PictureFormat.JPEG,
+                    state = cameraState,
                     onImageConfirmation = { uiStatusText = "Confirm Image?" },
                     onImageSaved = { uri ->
                         uiStatusText = "Saved: $uri"
+                        lastSaved = uri
                         Toast.makeText(context, "Saved", Toast.LENGTH_SHORT).show()
                     },
                     onImageCaptureFailed = { uiStatusText = "Capture Failed" }
@@ -317,6 +357,30 @@ fun SimpleDemoScreen() {
                     Icon(Icons.Default.CameraAlt, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Take Picture", fontWeight = FontWeight.SemiBold)
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (rawSupported) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = raw, onCheckedChange = { raw = it })
+                        Text("RAW", color = Color.White)
+                    }
+                }
+                Button(
+                    onClick = { lastSaved?.let(onView) },
+                    enabled = lastSaved != null,
+                    shape = RoundedCornerShape(20.dp)
+                ) {
+                    Icon(Icons.Default.PhotoLibrary, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text("View", fontWeight = FontWeight.SemiBold)
                 }
             }
         } else {
@@ -659,4 +723,99 @@ fun QrCodeDemoScreen() {
             }
         }
     }
+}
+
+/**
+ * Shows a picture in whichever of the library's viewers suits it, with a picker to open another
+ * and a switch between the three.
+ */
+@Composable
+fun ViewerDemoScreen(initialUri: Uri?) {
+    val context = LocalContext.current
+    var uri by remember(initialUri) { mutableStateOf(initialUri) }
+    var mode by remember(uri) { mutableStateOf(uri?.let { guessViewerMode(context, it) } ?: ViewerMode.PICTURE) }
+    var gyroscope by remember { mutableStateOf(false) }
+    var status by remember(uri, mode) {
+        mutableStateOf(if (uri == null) "Take a picture, or open one to view it" else "")
+    }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
+        if (picked != null) {
+            uri = picked
+        }
+    }
+    val hasRotationSensor = remember { hasRotationSensor(context) }
+    val onFailed = { status = "This device cannot show this picture" }
+
+    Column(modifier = Modifier.fillMaxSize()) {
+        Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+            when (mode) {
+                ViewerMode.PICTURE -> LargeImage(
+                    modifier = Modifier.fillMaxSize(), uri = uri, onFailed = onFailed
+                )
+                ViewerMode.PANORAMA -> Panorama(
+                    modifier = Modifier.fillMaxSize(), uri = uri, onFailed = onFailed
+                )
+                ViewerMode.PHOTOSPHERE -> Photosphere(
+                    modifier = Modifier.fillMaxSize(), uri = uri, gyroscope = gyroscope,
+                    onFailed = onFailed
+                )
+            }
+            if (status.isNotEmpty()) {
+                Text(status, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp))
+            }
+        }
+        // Scrolls rather than wraps where the screen is too narrow for every choice.
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Button(onClick = { picker.launch(arrayOf("image/*")) }) { Text("Open") }
+            ViewerMode.entries.forEach { option ->
+                FilterChip(
+                    selected = mode == option,
+                    onClick = { mode = option },
+                    label = { Text(option.label) }
+                )
+            }
+            if (mode == ViewerMode.PHOTOSPHERE && hasRotationSensor) {
+                Checkbox(checked = gyroscope, onCheckedChange = { gyroscope = it })
+                Text("Gyro", color = Color.White)
+            }
+        }
+    }
+}
+
+/**
+ * Which viewer suits a picture: a photo sphere is twice as wide as it is tall, a panorama wider
+ * still, and a DNG or anything else is a picture to zoom into.
+ */
+fun guessViewerMode(type: String?, width: Int, height: Int): ViewerMode {
+    if (type == "image/x-adobe-dng" || width <= 0 || height <= 0) {
+        return ViewerMode.PICTURE
+    }
+    val aspect = width.toFloat() / height
+    return when {
+        kotlin.math.abs(aspect - 2f) < 0.02f -> ViewerMode.PHOTOSPHERE
+        aspect > 2.5f -> ViewerMode.PANORAMA
+        else -> ViewerMode.PICTURE
+    }
+}
+
+private fun guessViewerMode(context: Context, uri: Uri): ViewerMode {
+    val type = context.contentResolver.getType(uri)
+        ?: if (uri.path?.endsWith(".dng", ignoreCase = true) == true) "image/x-adobe-dng" else null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    try {
+        context.contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    } catch (e: Exception) {
+        // A picture whose size cannot be read is shown flat.
+    }
+    return guessViewerMode(type, bounds.outWidth, bounds.outHeight)
+}
+
+private fun hasRotationSensor(context: Context): Boolean {
+    val sensors = context.getSystemService(SensorManager::class.java) ?: return false
+    return sensors.getDefaultSensor(Sensor.TYPE_GAME_ROTATION_VECTOR) != null
+        || sensors.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR) != null
 }

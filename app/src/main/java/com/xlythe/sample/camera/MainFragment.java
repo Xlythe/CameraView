@@ -10,6 +10,7 @@ import android.view.LayoutInflater;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
+import android.widget.CheckBox;
 import android.widget.Button;
 import android.widget.SeekBar;
 import android.widget.TextView;
@@ -29,6 +30,7 @@ import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
+import androidx.navigation.fragment.NavHostFragment;
 
 /**
  * MainFragment demonstrates the standard usage of the CameraView library.
@@ -62,6 +64,18 @@ public class MainFragment extends CameraFragment {
     @Nullable
     private TextView mExposureValue;
 
+    /** Takes a DNG beside each JPEG, shown only where the camera can. */
+    @Nullable
+    private CheckBox mRaw;
+
+    /** Opens the last picture filed in the viewer. */
+    @Nullable
+    private View mViewLast;
+
+    /** The last picture filed, or null before one is. */
+    @Nullable
+    private Uri mLastPicture;
+
     @Override
     public View onCreateView(@NonNull LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         // The layout contains a CameraView and control buttons (capture, confirm, cancel).
@@ -77,6 +91,23 @@ public class MainFragment extends CameraFragment {
         mExposureControl = view.findViewById(R.id.exposure_control);
         mExposureSlider = view.findViewById(R.id.exposure_slider);
         mExposureValue = view.findViewById(R.id.exposure_value);
+        mRaw = view.findViewById(R.id.raw);
+        mViewLast = view.findViewById(R.id.view_last);
+        mRaw.setOnCheckedChangeListener((button, checked) -> {
+            CameraView cameraView = mCameraView;
+            if (cameraView != null) {
+                cameraView.setPictureFormat(checked
+                        ? CameraView.PictureFormat.RAW_JPEG : CameraView.PictureFormat.JPEG);
+            }
+        });
+        // The DNG of a RAW capture is filed last, so it is the one the viewer opens.
+        mViewLast.setOnClickListener(v -> {
+            if (mLastPicture != null) {
+                NavHostFragment.findNavController(this).navigate(R.id.viewer_fragment,
+                        ViewerFragment.arguments(mLastPicture));
+            }
+        });
+        mViewLast.setEnabled(mLastPicture != null);
         // Heard for a pinch as well as for a tap on a preset, so the highlight follows the zoom
         // however it got there.
         mCameraView.setOnZoomChangedListener(this::highlightZoomPreset);
@@ -157,6 +188,8 @@ public class MainFragment extends CameraFragment {
         mExposureControl = null;
         mExposureSlider = null;
         mExposureValue = null;
+        mRaw = null;
+        mViewLast = null;
         super.onDestroyView();
     }
 
@@ -165,6 +198,7 @@ public class MainFragment extends CameraFragment {
         super.onCameraOpened();
         showZoomPresets();
         showExposureControl();
+        showRaw();
     }
 
     @Override
@@ -174,6 +208,21 @@ public class MainFragment extends CameraFragment {
         // exposure range and step.
         showZoomPresets();
         showExposureControl();
+        showRaw();
+    }
+
+    /** Offers RAW where this lens can write it, and turns it off where it cannot. */
+    @MainThread
+    private void showRaw() {
+        CameraView cameraView = mCameraView;
+        if (cameraView == null || mRaw == null) {
+            return;
+        }
+        boolean supported = cameraView.isPictureFormatSupported(CameraView.PictureFormat.RAW_JPEG);
+        if (!supported) {
+            mRaw.setChecked(false);
+        }
+        mRaw.setVisibility(supported ? View.VISIBLE : View.GONE);
     }
 
     /**
@@ -286,6 +335,10 @@ public class MainFragment extends CameraFragment {
     @Override
     public void onImageSaved(@NonNull Uri uri) {
         report("Picture saved to " + uri);
+        mLastPicture = uri;
+        if (mViewLast != null) {
+            mViewLast.setEnabled(true);
+        }
 
         // Print out metadata (EXIF data) about the picture using the library's Exif helper: its
         // title, photographer and copyright, the conditions it was taken in, where and when.

@@ -14,6 +14,9 @@
             android:name="com.xlythe.view.camera.test.CameraTestActivity"
             android:exported="false"
             android:screenOrientation="fullSensor" />
+        <activity
+            android:name="com.xlythe.view.camera.viewer.ViewerTestActivity"
+            android:exported="false" />
         <!--
           In a process of its own, so the camera service weighs it against the test's process
           as another app.
