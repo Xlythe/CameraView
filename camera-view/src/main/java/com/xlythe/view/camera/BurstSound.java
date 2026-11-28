@@ -242,6 +242,7 @@ final class BurstSound {
      * Adds one transient: a burst of noise that dies away within a couple of milliseconds, over a
      * ring at 1.8 kHz that lasts a little longer.
      */
+    @AnyThread
     private static void addTransient(@NonNull float[] samples, int start, float amplitude,
             @NonNull Random noise) {
         int length = Math.min(millisToSamples(12), samples.length - start);
@@ -272,6 +273,7 @@ final class BurstSound {
     }
 
     /** Adds a note with a little of its octave, faded in over 5 ms and away over its length. */
+    @AnyThread
     private static void addNote(@NonNull float[] samples, int start, int length, float frequency) {
         int attack = millisToSamples(5);
         for (int i = 0; i < length && start + i < samples.length; i++) {
@@ -285,12 +287,14 @@ final class BurstSound {
         }
     }
 
+    @AnyThread
     private static int millisToSamples(int millis) {
         return SAMPLE_RATE * millis / 1000;
     }
 
     /** Scales the samples so the loudest reaches the given fraction of full scale. */
     @NonNull
+    @AnyThread
     private static short[] toPcm(@NonNull float[] samples, float peak) {
         float loudest = 0f;
         for (float sample : samples) {
