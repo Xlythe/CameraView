@@ -17,6 +17,7 @@ import android.widget.TextView;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
+import androidx.navigation.fragment.NavHostFragment;
 
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.button.MaterialButtonToggleGroup;
@@ -177,6 +178,9 @@ public class PanoramaFragment extends CameraFragment implements CameraView.Panor
             return;
         }
         mResultImage.setImageBitmap(bitmap);
+        // The library's MediaView shows it whole: a panorama to pan along, a sphere to look round.
+        mResultImage.setOnClickListener(v -> NavHostFragment.findNavController(this)
+                .navigate(R.id.viewer_fragment, ViewerFragment.arguments(uri)));
         mResultText.setText(getString(R.string.panorama_result, bounds.outWidth, bounds.outHeight));
         mResultText.append("\n" + getString(R.string.panorama_saved));
         mResult.setVisibility(View.VISIBLE);

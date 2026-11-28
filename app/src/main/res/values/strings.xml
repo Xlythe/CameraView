@@ -15,7 +15,7 @@
     <string name="panorama_failed">Nothing was captured</string>
     <string name="panorama_unsupported">This device cannot report which way it is pointing</string>
     <string name="panorama_result">%1$d × %2$d</string>
-    <string name="panorama_saved">Saved to the gallery</string>
+    <string name="panorama_saved">Saved to the gallery. Tap it to look around.</string>
     <string name="panorama_image_description">The saved panorama</string>
     <string name="app_name_effect">Effect Demo</string>
     <string name="app_name_viewer">Media Demo</string>
