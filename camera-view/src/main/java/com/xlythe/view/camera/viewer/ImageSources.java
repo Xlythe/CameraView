@@ -6,6 +6,7 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Rect;
+import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
@@ -127,7 +128,7 @@ final class ImageSources {
         RegionSource source;
         try {
             source = DecoderRegionSource.open(location.openDescriptor(context));
-            if (!decodesAPiece(source)) {
+            if (Build.VERSION.SDK_INT < 24 && !decodesAPiece(source)) {
                 source.close();
                 throw new IOException("The region decoder opened it but decodes nothing");
             }
@@ -140,7 +141,9 @@ final class ImageSources {
 
     /**
      * Whether a region decoder decodes anything at all, tried on the picture's corner. Android
-     * 5's opens some small PNGs and then decodes none of them.
+     * 5's opens some small PNGs and then decodes none of them. Asked only before Android 7.0:
+     * Android 9's HEIF decoder crashes the app on some small regions, so later releases are
+     * trusted as they are.
      */
     @WorkerThread
     private static boolean decodesAPiece(@NonNull RegionSource source) {
