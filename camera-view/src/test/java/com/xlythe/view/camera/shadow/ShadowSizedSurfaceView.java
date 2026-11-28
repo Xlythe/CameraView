@@ -1,5 +1,7 @@
 package com.xlythe.view.camera.shadow;
 
+import static org.robolectric.util.reflector.Reflector.reflector;
+
 import android.graphics.PixelFormat;
 import android.graphics.SurfaceTexture;
 import android.os.Handler;
@@ -7,17 +9,23 @@ import android.os.Looper;
 import android.view.Surface;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
+import android.view.View;
 
 import androidx.annotation.Nullable;
 
 import org.robolectric.annotation.Implementation;
 import org.robolectric.annotation.Implements;
+import org.robolectric.annotation.RealObject;
 import org.robolectric.annotation.Resetter;
 import org.robolectric.shadows.ShadowSurfaceView;
+import org.robolectric.util.reflector.Direct;
+import org.robolectric.util.reflector.ForType;
 
 /**
  * Gives a {@link SurfaceView} a surface the way a device does: once it has been given a size, on
  * a later pass of the main looper, and taken away again when the test says the window was hidden.
+ * Hiding the view destroys its surface and showing it again creates one, both at once, inside the
+ * call to setVisibility, as SurfaceView itself does.
  *
  * <p>Robolectric's own shadow hands out a holder whose surface is always null and which never
  * reports one, so nothing that waits for a SurfaceView's surface can be reached.</p>
@@ -27,10 +35,35 @@ public class ShadowSizedSurfaceView extends ShadowSurfaceView {
     /** The holder this view hands out, which owns the surface. */
     private final SizedHolder mHolder = new SizedHolder();
 
+    /** The view this shadows. */
+    @RealObject
+    private SurfaceView mRealView;
+
     @Implementation
     @Override
     protected SurfaceHolder getHolder() {
         return mHolder;
+    }
+
+    @Implementation
+    protected void setVisibility(int visibility) {
+        reflector(SurfaceViewReflector.class, mRealView).setVisibility(visibility);
+        if (visibility == View.VISIBLE) {
+            // A view not laid out yet gets its surface on its first traversal instead.
+            if (mHolder.mSurface == null && mHolder.mWidth > 0 && mHolder.mHeight > 0
+                    && mRealView.getWidth() > 0) {
+                mHolder.report();
+            }
+        } else {
+            mHolder.destroy();
+        }
+    }
+
+    /** Reaches SurfaceView's own setVisibility. */
+    @ForType(SurfaceView.class)
+    private interface SurfaceViewReflector {
+        @Direct
+        void setVisibility(int visibility);
     }
 
     /** Destroys the surface, as hiding the window the view is in does. */

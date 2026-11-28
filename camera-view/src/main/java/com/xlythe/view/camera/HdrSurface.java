@@ -159,7 +159,9 @@ public final class HdrSurface {
                 @NonNull SurfaceHolder holder, int format, int width, int height) {
             mSurfaceWidth = width;
             mSurfaceHeight = height;
-            deliverIfReady();
+            // Posted: showing a hidden SurfaceView creates its surface at once, inside acquire,
+            // before the stream asking for it has been handed its lease.
+            postDelivery();
         }
 
         @Override
@@ -253,7 +255,7 @@ public final class HdrSurface {
             }
         }
         // Posted, so that a listener hears about the surface only once it holds its lease.
-        mHandler.post(mDeliver);
+        postDelivery();
         return lease;
     }
 
@@ -299,6 +301,13 @@ public final class HdrSurface {
     @Nullable
     public SurfaceView getSurfaceView() {
         return mSurfaceView;
+    }
+
+    /** Hands the surface to the newest lease on the next pass, if it is ready for it then. */
+    @MainThread
+    private void postDelivery() {
+        mHandler.removeCallbacks(mDeliver);
+        mHandler.post(mDeliver);
     }
 
     @MainThread

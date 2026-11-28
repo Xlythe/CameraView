@@ -316,6 +316,39 @@ public class HdrSurfaceTest {
         assertTrue(listener.surface != first && listener.surface.isValid());
     }
 
+    /**
+     * Showing the SurfaceView again creates its surface at once, inside acquire. The stream is
+     * still handed it only once acquire has returned its lease, as a camera's preview, which
+     * keeps the lease to tell its own surface apart, needs.
+     */
+    @Test
+    public void aSurfaceShownAgainIsHandedOverOnceTheLeaseIsHeld() {
+        hdrSurface.acquire(STREAM_WIDTH, STREAM_HEIGHT, new RecordingListener()).release();
+        idle();
+        settle();
+        assertEquals(View.GONE, hdrSurface.getSurfaceView().getVisibility());
+        assertNull(hdrSurface.getSurfaceView().getHolder().getSurface());
+
+        HdrSurface.Lease[] held = new HdrSurface.Lease[1];
+        List<HdrSurface.Lease> heldWhenReady = new ArrayList<>();
+        held[0] = hdrSurface.acquire(STREAM_WIDTH, STREAM_HEIGHT, new HdrSurface.Listener() {
+            @Override
+            public void onSurfaceReady(@NonNull Surface surface) {
+                heldWhenReady.add(held[0]);
+            }
+
+            @Override
+            public void onSurfaceLost() {}
+        });
+        assertNotNull("showing it again created the surface at once",
+                hdrSurface.getSurfaceView().getHolder().getSurface());
+        assertTrue("handed over inside acquire", heldWhenReady.isEmpty());
+        idle();
+        assertEquals(1, heldWhenReady.size());
+        assertSame(held[0], heldWhenReady.get(0));
+        assertTrue(hdrSurface.isShowing());
+    }
+
     /** Hiding the SurfaceView once nothing holds it is not a loss anyone is told about. */
     @Test
     public void aSurfaceGivenBackIsNotReportedLost() {

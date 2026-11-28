@@ -181,7 +181,10 @@ public final class HdrPreviewDeviceTest {
                 activity.getCameraView().setLayoutParams(params);
             });
             Thread.sleep(2_500);
+            assertTrue("the resized preview left the HDR surface", waitFor(scenario,
+                    activity -> activity.getCameraView().getHdrSurface().isShowing()));
             scenario.onActivity(activity -> assertCovers(activity.getCameraView()));
+            assertHdrLayer(name + "-hdr-half");
             HdrDeviceEvidence.screenshot(name + "-hdr-half");
             scenario.onActivity(activity -> {
                 ViewGroup.LayoutParams params = activity.getCameraView().getLayoutParams();
@@ -428,6 +431,7 @@ public final class HdrPreviewDeviceTest {
 
     /** The preview, as scaled onto the SurfaceView, covers the whole of CameraView. */
     private static void assertCovers(CameraView camera) {
+        assertTrue("the preview is not on the HDR surface", camera.getHdrSurface().isShowing());
         SurfaceView surfaceView = camera.getHdrSurface().getSurfaceView();
         RectF shown = new RectF(
                 surfaceView.getTranslationX(), surfaceView.getTranslationY(),
