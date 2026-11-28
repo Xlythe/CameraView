@@ -77,6 +77,12 @@ public class LegacyCameraModule extends ICameraModule {
     /** Where the recording in progress is being written. */
     private File mVideoFile;
 
+    /** What a stream does with each preview frame, or null while nothing is streamed. */
+    @Nullable private Camera.PreviewCallback mStreamCallback;
+
+    /** Where preview frames go for a sweep, or null while none is running. */
+    @Nullable private PreviewFrameListener mPreviewFrameListener;
+
     /** The surfaces handed out for streaming, each with the holder that feeds it. */
     private final Map<VideoRecorder.SurfaceProvider, LegacySurfaceHolder> mSurfaceProviders = new ArrayMap<>();
 
@@ -118,6 +124,8 @@ public class LegacyCameraModule extends ICameraModule {
 
             mCamera.startPreview();
             onZoomRatioApplied(zoomRatio);
+            // A camera reopened for a lens switch is a new camera, with no callback on it.
+            installPreviewCallback();
         } catch (IOException | RuntimeException e) {
             // A camera opened but never started is worse than no camera: close() would release
             // it, but takePicture() and startRecording() would both act on one configured by
@@ -926,11 +934,12 @@ public class LegacyCameraModule extends ICameraModule {
         if (mCamera != null && mPreviewSize != null) {
             LegacySurfaceHolder surfaceHolder = new LegacySurfaceHolder(getContext(), surfaceProvider, mPreviewSize.width, mPreviewSize.height, getSensorOrientation(), isUsingFrontFacingCamera());
             mSurfaceProviders.put(surfaceProvider, surfaceHolder);
-            mCamera.setPreviewCallback((data, camera) -> {
+            mStreamCallback = (data, camera) -> {
                 Canvas canvas = surfaceHolder.lockCanvas();
                 canvas.drawBitmap(toBitmap(data, camera), new Matrix(), new Paint());
                 surfaceHolder.unlockCanvasAndPost(canvas);
-            });
+            };
+            installPreviewCallback();
         }
     }
 
@@ -940,8 +949,50 @@ public class LegacyCameraModule extends ICameraModule {
         LegacySurfaceHolder surfaceHolder = mSurfaceProviders.remove(surfaceProvider);
         if (surfaceHolder != null) {
             surfaceHolder.close();
-            mCamera.setPreviewCallback(null);
+            mStreamCallback = null;
+            installPreviewCallback();
         }
+    }
+
+    /**
+     * Delivers preview frames to a sweep. The camera's own callback is the only way to read its
+     * frames, and a stream may want them at the same time, so both are fed from one callback.
+     */
+    @Override
+    protected boolean setPreviewFrameListener(@Nullable PreviewFrameListener listener) {
+        mPreviewFrameListener = listener;
+        installPreviewCallback();
+        return true;
+    }
+
+    /**
+     * Puts the one preview callback the camera allows on it, feeding whichever of the stream and
+     * the sweep want frames, or takes it off when neither does.
+     */
+    private void installPreviewCallback() {
+        Camera camera = mCamera;
+        Camera.Size size = mPreviewSize;
+        if (camera == null) {
+            return;
+        }
+        Camera.PreviewCallback stream = mStreamCallback;
+        PreviewFrameListener frames = mPreviewFrameListener;
+        if (stream == null && (frames == null || size == null)) {
+            camera.setPreviewCallback(null);
+            return;
+        }
+        int rotation = getSensorOrientation();
+        boolean frontFacing = isUsingFrontFacingCamera();
+        camera.setPreviewCallback((data, source) -> {
+            if (frames != null && size != null && data != null) {
+                // NV21 is what every camera produces unless told otherwise, and nothing here
+                // tells it otherwise.
+                frames.onPreviewFrame(data, size.width, size.height, rotation, frontFacing);
+            }
+            if (stream != null) {
+                stream.onPreviewFrame(data, source);
+            }
+        });
     }
 
     private Bitmap toBitmap(byte[] data, Camera camera) {

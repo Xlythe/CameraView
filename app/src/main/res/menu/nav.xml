@@ -16,6 +16,10 @@
         android:icon="@drawable/ic_stream"
         android:title="@string/app_name_wear" />
     <item
+        android:id="@+id/panorama_fragment"
+        android:icon="@drawable/ic_panorama"
+        android:title="@string/app_name_panorama" />
+    <item
         android:id="@+id/qr_code_fragment"
         android:icon="@drawable/ic_qr_code"
         android:title="@string/app_name_qr_code" />
