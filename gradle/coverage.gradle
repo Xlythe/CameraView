@@ -32,10 +32,10 @@ def allProductionClasses = classTrees(javaClassDirectories + kotlinClassDirector
 }
 
 // These classes are deterministic production logic and must remain thoroughly unit tested: the
-// coordinate maths, the metadata, the stream framing and the small value types. They have no
-// camera, codec or surface in them, so there is no reason for any of them to be less than fully
-// covered, and each has been the home of a real bug - a preview rotated twice, an orientation
-// table with one wrong cell, a GPS speed truncated by the rational it was written as.
+// coordinate maths, the metadata, the stream framing, the panorama stitching and the small value
+// types. They have no camera, codec or surface in them, so there is no reason for any of them to be
+// less than fully covered, and each has been the home of a real bug - a preview rotated twice, an
+// orientation table with one wrong cell, a GPS speed truncated by the rational it was written as.
 //
 // Everything that drives a camera, a codec or a view lifecycle stays out of this gate and in the
 // full report. Robolectric can reach a surprising amount of it with the right shadows, but not
@@ -73,7 +73,19 @@ def coreCoverageIncludes = [
         'com/xlythe/view/camera/viewer/SphereTiling.class',
         'com/xlythe/view/camera/viewer/SphereTiling$*.class',
         'com/xlythe/view/camera/viewer/Tiles.class',
-        'com/xlythe/view/camera/viewer/Viewport.class'
+        'com/xlythe/view/camera/viewer/Viewport.class',
+        'com/xlythe/view/camera/pano/ArgbImage.class',
+        'com/xlythe/view/camera/pano/CameraPose.class',
+        'com/xlythe/view/camera/pano/Footprint.class',
+        'com/xlythe/view/camera/pano/GPanoMetadata.class',
+        'com/xlythe/view/camera/pano/GyroscopeHistory.class',
+        'com/xlythe/view/camera/pano/LensCalibration.class',
+        'com/xlythe/view/camera/pano/LensCalibration$*.class',
+        'com/xlythe/view/camera/pano/OrientationHistory.class',
+        'com/xlythe/view/camera/pano/SphereCanvas.class',
+        'com/xlythe/view/camera/pano/SphereMath.class',
+        'com/xlythe/view/camera/pano/SweepCoverage.class',
+        'com/xlythe/view/camera/pano/TimeBase.class'
 ]
 
 // And a floor under the library as a whole, so the parts that are not in the gate above cannot

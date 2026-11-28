@@ -42,6 +42,7 @@ import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.PhotoLibrary
+import androidx.compose.material.icons.filled.Panorama
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.Transform
 import androidx.compose.material.icons.filled.Videocam
@@ -79,6 +80,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.xlythe.view.camera.Barcode
@@ -87,6 +89,7 @@ import com.xlythe.compose.camera.CameraController
 import com.xlythe.compose.camera.CameraState
 import com.xlythe.compose.camera.LargeImage
 import com.xlythe.compose.camera.Panorama
+import com.xlythe.compose.camera.PanoramaMode
 import com.xlythe.compose.camera.Photosphere
 import com.xlythe.compose.camera.PictureFormat
 import com.xlythe.compose.camera.Permissions
@@ -103,6 +106,7 @@ enum class DemoScreen(val title: String) {
     SIMPLE("Simple Demo"),
     STREAM("Stream Demo"),
     RESIZING("Resizing Demo"),
+    PANORAMA("Panorama Demo"),
     QR_CODE("QR Code Demo"),
     VIEWER("Viewer Demo")
 }
@@ -163,6 +167,7 @@ class MainActivity : ComponentActivity() {
                                             DemoScreen.SIMPLE -> Icon(Icons.Default.CameraAlt, contentDescription = null)
                                             DemoScreen.STREAM -> Icon(Icons.Default.Videocam, contentDescription = null)
                                             DemoScreen.RESIZING -> Icon(Icons.Default.Transform, contentDescription = null)
+                                            DemoScreen.PANORAMA -> Icon(Icons.Default.Panorama, contentDescription = null)
                                             DemoScreen.QR_CODE -> Icon(Icons.Default.QrCode, contentDescription = null)
                                             DemoScreen.VIEWER -> Icon(Icons.Default.PhotoLibrary, contentDescription = null)
                                         }
@@ -214,6 +219,7 @@ class MainActivity : ComponentActivity() {
                                 })
                                 DemoScreen.STREAM -> StreamDemoScreen()
                                 DemoScreen.RESIZING -> ResizingDemoScreen()
+                                DemoScreen.PANORAMA -> PanoramaDemoScreen()
                                 DemoScreen.QR_CODE -> QrCodeDemoScreen()
                                 DemoScreen.VIEWER -> ViewerDemoScreen(initialUri = viewerUri)
                             }
@@ -496,6 +502,107 @@ fun ResizingDemoScreen() {
                 onClick = { permissionLauncher.launch(allPermissions) },
                 modifier = Modifier.align(Alignment.Center)
             ) {
+                Text("Request Permission")
+            }
+        }
+    }
+}
+
+/**
+ * Sweeps a panorama or a photosphere. The camera draws the guide over its own preview, so this is
+ * only the controls and the result.
+ */
+@RequiresPermission(Manifest.permission.CAMERA)
+@Composable
+fun PanoramaDemoScreen() {
+    val cameraController = remember { mutableStateOf<CameraController?>(null) }
+    val cameraState = remember { mutableStateOf<CameraState?>(null) }
+    var hasRequiredPermissions by remember { mutableStateOf(false) }
+    var mode by remember { mutableStateOf(PanoramaMode.PANORAMA) }
+    var status by remember { mutableStateOf("Turn on the spot; for a photosphere, hold the circle on each dot") }
+
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissionsMap ->
+        hasRequiredPermissions = Permissions.REQUIRED_PERMISSIONS.all { permissionsMap[it] == true }
+    }
+
+    LaunchedEffect(Unit) { permissionLauncher.launch(Permissions.REQUIRED_PERMISSIONS) }
+
+    val sweeping = cameraState.value?.isCapturingPanorama == true
+    // Aiming straight up lays the phone face down, which turns the screen off on a phone that
+    // watches for it, and with it the camera.
+    val view = LocalView.current
+    DisposableEffect(sweeping) {
+        view.keepScreenOn = sweeping
+        onDispose { view.keepScreenOn = false }
+    }
+    Column(modifier = Modifier.fillMaxSize().padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Card(
+            colors = CardDefaults.cardColors(containerColor = Color(0xFF1E1E1E)),
+            shape = RoundedCornerShape(16.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(
+                text = status,
+                modifier = Modifier.padding(16.dp).align(Alignment.CenterHorizontally),
+                style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium, color = Color.White)
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        if (hasRequiredPermissions) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f).clip(RoundedCornerShape(24.dp))) {
+                Camera(
+                    modifier = Modifier.fillMaxSize(),
+                    controller = cameraController,
+                    state = cameraState
+                )
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
+
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                Button(
+                    onClick = {
+                        mode = if (mode == PanoramaMode.PANORAMA) PanoramaMode.PHOTOSPHERE else PanoramaMode.PANORAMA
+                    },
+                    enabled = !sweeping,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.secondaryContainer,
+                        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+                    )
+                ) {
+                    Text(if (mode == PanoramaMode.PANORAMA) "Panorama" else "Photosphere", fontWeight = FontWeight.SemiBold)
+                }
+
+                Button(
+                    onClick = {
+                        val controller = cameraController.value ?: return@Button
+                        if (sweeping) {
+                            controller.stopPanorama()
+                            return@Button
+                        }
+                        val started = controller.startPanorama(
+                            mode,
+                            onProgress = { status = "${Math.round(it * 100)}% covered" },
+                            onSaved = { uri -> status = "Saved to $uri" },
+                            onFailed = { status = "Nothing was captured" })
+                        if (!started) {
+                            status = "This device cannot report which way it is pointing"
+                        }
+                    },
+                    enabled = cameraState.value != null,
+                    shape = RoundedCornerShape(20.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                ) {
+                    Icon(Icons.Default.Panorama, contentDescription = null, modifier = Modifier.size(18.dp))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(if (sweeping) "Done" else "Start", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        } else {
+            Button(onClick = { permissionLauncher.launch(Permissions.REQUIRED_PERMISSIONS) }) {
                 Text("Request Permission")
             }
         }
