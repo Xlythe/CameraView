@@ -19,6 +19,12 @@
     <string name="btn_request_permissions">Request Permissions</string>
 
     <string name="btn_capture">Capture</string>
+    <string name="btn_burst">Burst</string>
+    <string name="btn_burst_count">Burst (%1$d)</string>
+    <plurals name="burst_saved">
+        <item quantity="one">Burst saved %1$d picture</item>
+        <item quantity="other">Burst saved %1$d pictures</item>
+    </plurals>
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_resize">Resize</string>

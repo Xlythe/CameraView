@@ -3,6 +3,7 @@ package com.xlythe.compose.camera
 import android.content.Context
 import android.graphics.Matrix
 import android.graphics.Rect
+import android.net.Uri
 import androidx.compose.runtime.mutableStateOf
 import com.xlythe.view.camera.Barcode
 import com.xlythe.view.camera.CameraView
@@ -66,6 +67,23 @@ class ComposeControllersTest {
 
             override fun takePicture(file: File) {
                 cameraView.takePicture(file)
+            }
+
+            override fun startBurst(
+                count: Int,
+                onImageSaved: (uri: Uri) -> Unit,
+                onFinished: (count: Int) -> Unit
+            ) {}
+
+            override fun startBurst(
+                directory: File,
+                count: Int,
+                onImageCaptured: (file: File) -> Unit,
+                onFinished: (count: Int) -> Unit
+            ) {}
+
+            override fun stopBurst() {
+                cameraView.stopBurst()
             }
 
             override fun startRecording() {

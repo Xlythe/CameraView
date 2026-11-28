@@ -22,6 +22,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.BusyCameraRetry;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ExifCaptureParameters;
@@ -51,6 +52,13 @@ import androidx.collection.ArrayMap;
 
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LegacyCameraModule extends ICameraModule {
+    /**
+     * How long a burst waits for the restarted preview to show a frame before it asks for the
+     * next picture anyway, for a view that is not drawing.
+     */
+    @VisibleForTesting
+    static final long PREVIEW_FRAME_TIMEOUT_MILLIS = 300;
+
     /** No camera chosen yet, which is not the same as camera zero. */
     private static final int INVALID_CAMERA_ID = -1;
 
@@ -84,14 +92,41 @@ public class LegacyCameraModule extends ICameraModule {
     /** Whether the platform's click is silenced so the library can play the app's sound. */
     private volatile boolean mPlaysOwnClick;
 
+    /**
+     * Whether the platform clicks for every picture of the running burst, its click not silenced,
+     * which then stands in for the burst's loop.
+     */
+    private boolean mBurstClicks;
+
     /** Where the recording in progress is being written. */
     private File mVideoFile;
 
     /** The surfaces handed out for streaming, each with the holder that feeds it. */
     private final Map<VideoRecorder.SurfaceProvider, LegacySurfaceHolder> mSurfaceProviders = new ArrayMap<>();
 
+    /**
+     * Runs work on the main thread: the wait for a burst's next preview frame, and each retry of a
+     * busy camera.
+     */
+    private final Handler mHandler = new Handler(Looper.getMainLooper());
+
+    /** The burst being taken, or null when none is. */
+    @Nullable private Burst mBurst;
+
+    /**
+     * Where the burst picture the camera is taking goes, or null between pictures. A camera that
+     * closes with one outstanding never delivers it.
+     */
+    @Nullable private File mBurstFile;
+
+    /** What runs once the preview shows its next frame, or null when nothing waits for one. */
+    @Nullable private Runnable mOnPreviewFrame;
+
+    /** Runs {@link #mOnPreviewFrame} when no frame is shown in time. */
+    private final Runnable mPreviewFrameTimeout = this::onPreviewFrameShown;
+
     /** Tries the open again while the camera is busy, on the main thread the open runs on. */
-    private final BusyCameraRetry mBusyRetry = new BusyCameraRetry(new Handler(Looper.getMainLooper()));
+    private final BusyCameraRetry mBusyRetry = new BusyCameraRetry(mHandler);
 
     public LegacyCameraModule(CameraView view) {
         super(view);
@@ -411,6 +446,18 @@ public class LegacyCameraModule extends ICameraModule {
     public void close() {
         Log.d(TAG, "onClose() activeCamera="+getActiveCamera());
         mBusyRetry.cancel();
+        mOnPreviewFrame = null;
+        mHandler.removeCallbacks(mPreviewFrameTimeout);
+        if (mBurst != null) {
+            Burst burst = mBurst;
+            File outstanding = mBurstFile;
+            mBurstFile = null;
+            if (outstanding != null) {
+                burst.onPictureFailed(outstanding);
+            } else {
+                burst.end();
+            }
+        }
         if (isRecording()) {
             // The recorder holds the camera, so releasing the camera under a running recording
             // leaves an encoder writing to a file nothing will ever finish, and isRecording()
@@ -505,21 +552,32 @@ public class LegacyCameraModule extends ICameraModule {
     private void applyShutterSound() {
         if (mCamera == null) {
             mPlaysOwnClick = false;
+            mBurstClicks = false;
             return;
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
             // The click cannot be silenced before API 17, so it plays in place of the app's own.
             mPlaysOwnClick = false;
+            mBurstClicks = mBurst != null;
             return;
         }
         boolean custom = getShutterSound() != 0;
         try {
-            boolean applied = mCamera.enableShutterSound(isShutterSoundEnabled() && !custom);
+            // A burst plays its own sound in place of the click, where the click can be silenced.
+            boolean applied = mCamera.enableShutterSound(
+                    mBurst == null && isShutterSoundEnabled() && !custom);
             mPlaysOwnClick = custom && applied;
+            mBurstClicks = mBurst != null && !applied;
         } catch (RuntimeException e) {
             Log.w(TAG, "Failed to set the shutter sound", e);
             mPlaysOwnClick = false;
+            mBurstClicks = mBurst != null;
         }
+    }
+
+    @Override
+    protected boolean platformClicksBurstPictures() {
+        return mBurstClicks;
     }
 
     @Override
@@ -529,6 +587,11 @@ public class LegacyCameraModule extends ICameraModule {
             // is pressed - so this is a state an app reaches rather than a programming error, and
             // the answer is the failure callback it is already listening to.
             Log.w(TAG, "Cannot take a picture before the camera is open");
+            onImageFailed();
+            return;
+        }
+        if (mBurst != null) {
+            Log.w(TAG, "Cannot take a picture while a burst is running");
             onImageFailed();
             return;
         }
@@ -555,6 +618,146 @@ public class LegacyCameraModule extends ICameraModule {
         } catch (RuntimeException error) {
             Log.w(TAG, "Unable to read the camera's parameters for a picture's Exif", error);
             return new ExifCaptureParameters();
+        }
+    }
+
+    /**
+     * Takes a burst one picture at a time, since the camera stops its preview for each and has to
+     * be restarted before the next. The next is asked for as soon as the preview restarts, while
+     * the last is still being saved.
+     */
+    @Override
+    protected void startBurst(@NonNull Burst burst) {
+        Camera camera = mCamera;
+        if (camera == null || isRecording() || mBurst != null) {
+            Log.w(TAG, "Cannot take a burst in the camera's current state");
+            burst.end();
+            return;
+        }
+        mBurst = burst;
+        applyShutterSound();
+        String flashMode = turnFlashOff(camera);
+        burst.whenFinished(() -> {
+            if (mBurst != burst) {
+                return;
+            }
+            mBurst = null;
+            mBurstFile = null;
+            applyShutterSound();
+            if (flashMode != null) {
+                setFlashMode(camera, flashMode);
+            }
+        });
+        takeBurstPicture(burst);
+    }
+
+    private void takeBurstPicture(@NonNull Burst burst) {
+        Camera camera = mCamera;
+        if (mBurst != burst) {
+            return;
+        }
+        if (camera == null) {
+            burst.end();
+            return;
+        }
+        File file = burst.nextFile();
+        if (file == null) {
+            return;
+        }
+        mBurstFile = file;
+        try {
+            // The shutter callback plays nothing: the burst's sound starts with the first
+            // picture, and the platform clicks for each only where it cannot be silenced.
+            camera.takePicture(this::onBurstShutter, null, new LegacyPictureListener(
+                    file, getRelativeCameraOrientation(false /* isPreview */),
+                    isUsingFrontFacingCamera(), exifCaptureParameters(), this,
+                    burst.getExecutor(),
+                    new LegacyPictureListener.Callback() {
+                        @Override
+                        public void onPreviewRestarted(boolean restarted) {
+                            mBurstFile = null;
+                            if (!restarted) {
+                                burst.end();
+                                return;
+                            }
+                            awaitPreviewFrame(() -> takeBurstPicture(burst));
+                        }
+
+                        @Override
+                        public void onPictureSaved(@NonNull File saved) {
+                            burst.onPictureTaken(saved);
+                        }
+
+                        @Override
+                        public void onPictureFailed(@NonNull File failed) {
+                            burst.onPictureFailed(failed);
+                        }
+                    }));
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Failed to take a burst picture", e);
+            mBurstFile = null;
+            burst.onPictureFailed(file);
+        }
+    }
+
+    /**
+     * Runs an action once the restarted preview shows a frame, or after
+     * {@link #PREVIEW_FRAME_TIMEOUT_MILLIS} if none is shown. A camera asked for a picture before
+     * its preview is running again can fail the request and stay broken until it is reopened, as
+     * the API 15 emulator's does; a frame on screen says the preview is running.
+     */
+    @MainThread
+    private void awaitPreviewFrame(@NonNull Runnable action) {
+        mOnPreviewFrame = action;
+        mHandler.removeCallbacks(mPreviewFrameTimeout);
+        mHandler.postDelayed(mPreviewFrameTimeout, PREVIEW_FRAME_TIMEOUT_MILLIS);
+    }
+
+    @MainThread
+    @Override
+    public void onPreviewFrameShown() {
+        Runnable action = mOnPreviewFrame;
+        if (action == null) {
+            return;
+        }
+        mOnPreviewFrame = null;
+        mHandler.removeCallbacks(mPreviewFrameTimeout);
+        action.run();
+    }
+
+    /**
+     * Turns off a flash that would fire for a picture, leaving a torch alone.
+     *
+     * @return the mode to put back afterwards, or null if nothing changed
+     */
+    @Nullable
+    private static String turnFlashOff(@NonNull Camera camera) {
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            String mode = parameters.getFlashMode();
+            List<String> modes = parameters.getSupportedFlashModes();
+            boolean fires = Camera.Parameters.FLASH_MODE_ON.equals(mode)
+                    || Camera.Parameters.FLASH_MODE_AUTO.equals(mode)
+                    || Camera.Parameters.FLASH_MODE_RED_EYE.equals(mode);
+            if (!fires || modes == null || !modes.contains(Camera.Parameters.FLASH_MODE_OFF)) {
+                return null;
+            }
+            parameters.setFlashMode(Camera.Parameters.FLASH_MODE_OFF);
+            camera.setParameters(parameters);
+            return mode;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to turn the flash off", e);
+            return null;
+        }
+    }
+
+    private static void setFlashMode(@NonNull Camera camera, @NonNull String mode) {
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            parameters.setFlashMode(mode);
+            camera.setParameters(parameters);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to put the flash back", e);
         }
     }
 

@@ -7,11 +7,15 @@ import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.content.pm.PackageManager;
+import android.graphics.BitmapFactory;
 import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
 import android.view.ViewGroup;
+
+import androidx.annotation.NonNull;
+import androidx.exifinterface.media.ExifInterface;
 
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
@@ -37,10 +41,11 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -91,6 +96,44 @@ public final class BackendMatrixDeviceTest {
      * inside it was metered rather than timed out.
      */
     private static final long MAX_FLASH_PICTURE_MILLIS = 2_500;
+
+    /** Logs each backend's burst rate, for {@code adb logcat -s BurstRate}. */
+    private static final String BURST_TAG = "BurstRate";
+
+    /** How many pictures the burst test takes: enough for a steady rate to show. */
+    private static final int BURST_COUNT = 20;
+
+    /** The instrumentation argument that moves the burst test to the front lens. */
+    private static final String BURST_LENS_ARGUMENT = "burstLens";
+
+    /** Tags a burst picture and a single one taken just after it share the value of. */
+    private static final String[] BURST_SHARED_TAGS = {
+            ExifInterface.TAG_ORIENTATION,
+            ExifInterface.TAG_MAKE,
+            ExifInterface.TAG_MODEL,
+            ExifInterface.TAG_SOFTWARE,
+            ExifInterface.TAG_FLASH,
+            ExifInterface.TAG_FOCAL_LENGTH,
+            ExifInterface.TAG_F_NUMBER,
+            ExifInterface.TAG_FOCAL_LENGTH_IN_35MM_FILM,
+            ExifInterface.TAG_DIGITAL_ZOOM_RATIO,
+            ExifInterface.TAG_EXPOSURE_BIAS_VALUE,
+    };
+
+    /**
+     * Tags the scene decides, which a burst picture has wherever a single one does. The location
+     * is among them: it is there whenever the app may know it, and the fix moves between the two.
+     */
+    private static final String[] BURST_PRESENT_TAGS = {
+            ExifInterface.TAG_DATETIME_ORIGINAL,
+            ExifInterface.TAG_OFFSET_TIME_ORIGINAL,
+            ExifInterface.TAG_SUBSEC_TIME_ORIGINAL,
+            ExifInterface.TAG_EXPOSURE_TIME,
+            ExifInterface.TAG_PHOTOGRAPHIC_SENSITIVITY,
+            ExifInterface.TAG_WHITE_BALANCE,
+            ExifInterface.TAG_SUBJECT_DISTANCE,
+            ExifInterface.TAG_GPS_LATITUDE,
+    };
 
     @Parameterized.Parameters(name = "{0}")
     public static Collection<CameraView.Backend> backends() {
@@ -446,6 +489,222 @@ public final class BackendMatrixDeviceTest {
     }
 
     /**
+     * A burst takes every picture it asked for, on every backend, and says so once, and each is
+     * the picture a single press takes with the same settings.
+     *
+     * <p>Also where each backend's burst rate is measured, between the first picture landing and
+     * the last, so the time to the first picture does not count against the rate. Logged rather
+     * than asserted: the rate is the camera's as much as the library's. The back lens is used
+     * unless the run passes {@code -e burstLens front}.</p>
+     */
+    @Test
+    public void aBurstTakesEveryPicture() throws Exception {
+        boolean front = "front".equals(
+                InstrumentationRegistry.getArguments().getString(BURST_LENS_ARGUMENT));
+        File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                "burst-" + backend);
+        File[] stale = directory.listFiles();
+        if (stale != null) {
+            for (File file : stale) {
+                assertTrue(file.delete());
+            }
+        }
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicInteger count = new AtomicInteger(-1);
+        List<Long> landed = new ArrayList<>();
+        long[] started = {0};
+        AtomicReference<File> single = new AtomicReference<>();
+
+        withOpenCamera(camera -> {
+            if (front) {
+                Assume.assumeTrue("this device has no front camera", camera.hasFrontFacingCamera());
+                switchToTheFrontCamera(camera, backend);
+            }
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                camera.setShutterSoundEnabled(false);
+                started[0] = SystemClock.elapsedRealtime();
+                camera.startBurst(directory, BURST_COUNT, new CameraView.OnBurstListener() {
+                    @Override public void onBurstImageCaptured(@NonNull File file) {
+                        landed.add(SystemClock.elapsedRealtime());
+                    }
+
+                    @Override public void onBurstFinished(int pictures) {
+                        count.set(pictures);
+                        finished.countDown();
+                    }
+                });
+            });
+            assertTrue("the burst never finished on " + backend,
+                    finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            single.set(takePicture(camera, temporaryFile(".jpg")));
+        });
+
+        assertEquals("the burst lost pictures on " + backend, BURST_COUNT, count.get());
+        assertEquals(BURST_COUNT, landed.size());
+        File[] pictures = directory.listFiles();
+        assertNotNull(pictures);
+        assertEquals(BURST_COUNT, pictures.length);
+        for (File picture : pictures) {
+            assertTrue(picture.getName() + " is empty", picture.length() > 0);
+        }
+        assertNotNull("a single picture after the burst failed on " + backend, single.get());
+        assertSamePicture(pictures[0], single.get());
+        long first = landed.get(0) - started[0];
+        double seconds = (landed.get(landed.size() - 1) - landed.get(0)) / 1000.0;
+        Log.i(BURST_TAG, String.format(Locale.US,
+                "%s API %d %s %s: %d pictures, first after %d ms, then %.1f per second",
+                Build.MODEL, Build.VERSION.SDK_INT, backend, front ? "front" : "back",
+                BURST_COUNT, first, (BURST_COUNT - 1) / seconds));
+    }
+
+    /**
+     * A burst asked for during another burst, during a recording, or while the format is RAW
+     * finishes before startBurst returns, with a count of 0, and leaves what was running alone.
+     * Each state the camera can be put in is checked; RAW only where the camera writes it.
+     */
+    @Test
+    public void aBurstThatCannotStartFinishesAtOnceWithNothing() throws Exception {
+        File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                "refused-" + backend);
+        Map<String, Integer> refusals = new LinkedHashMap<>();
+        CountDownLatch firstFinished = new CountDownLatch(1);
+        AtomicInteger firstCount = new AtomicInteger(-1);
+
+        withOpenCamera(camera -> {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                camera.setShutterSoundEnabled(false);
+                camera.startBurst(directory, 5, new CameraView.OnBurstListener() {
+                    @Override public void onBurstFinished(int pictures) {
+                        firstCount.set(pictures);
+                        firstFinished.countDown();
+                    }
+                });
+                refusals.put("during a burst", refusedCount(camera, directory));
+            });
+            assertTrue("the first burst never finished on " + backend,
+                    firstFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            assertEquals("a refused burst cost the running one pictures on " + backend,
+                    5, firstCount.get());
+
+            if (DeviceState.canRecord(backend)) {
+                CountDownLatch recorded = new CountDownLatch(1);
+                camera.setOnVideoCapturedListener(new CameraView.OnVideoCapturedListener() {
+                    @Override public void onVideoConfirmation() {}
+
+                    @Override public void onVideoCaptured(File saved) {
+                        recorded.countDown();
+                    }
+
+                    @Override public void onFailure() {
+                        recorded.countDown();
+                    }
+                });
+                File video = temporaryFile(".mp4");
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(
+                        () -> camera.startRecording(video));
+                sleep(2_000);
+                AtomicBoolean stillRecording = new AtomicBoolean();
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                    if (camera.isRecording()) {
+                        refusals.put("during a recording", refusedCount(camera, directory));
+                        stillRecording.set(camera.isRecording());
+                    }
+                });
+                camera.stopRecording();
+                assertTrue("the recording never reported on " + backend,
+                        recorded.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                if (refusals.containsKey("during a recording")) {
+                    assertTrue("a refused burst stopped the recording on " + backend,
+                            stillRecording.get());
+                }
+            }
+
+            for (CameraView.PictureFormat raw : new CameraView.PictureFormat[] {
+                    CameraView.PictureFormat.RAW, CameraView.PictureFormat.RAW_JPEG}) {
+                AtomicBoolean offered = new AtomicBoolean();
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                    offered.set(camera.isPictureFormatSupported(raw));
+                    if (offered.get()) {
+                        camera.setPictureFormat(raw);
+                        refusals.put("as " + raw, refusedCount(camera, directory));
+                        camera.setPictureFormat(CameraView.PictureFormat.JPEG);
+                    }
+                });
+            }
+        });
+
+        Log.i(BURST_TAG, backend + " refused bursts: " + refusals);
+        assertTrue("no refusal was checked on " + backend, refusals.containsKey("during a burst"));
+        for (Map.Entry<String, Integer> refusal : refusals.entrySet()) {
+            assertEquals("a burst " + refusal.getKey() + " has to finish at once with 0 on "
+                    + backend, Integer.valueOf(0), refusal.getValue());
+        }
+    }
+
+    /**
+     * Asks for a burst, on the main thread, and gives the count it finished with before
+     * startBurst returned, or null if it had not finished by then.
+     */
+    private static Integer refusedCount(CameraView camera, File directory) {
+        List<Integer> heard = new ArrayList<>();
+        camera.startBurst(directory, 3, new CameraView.OnBurstListener() {
+            @Override public void onBurstFinished(int pictures) {
+                heard.add(pictures);
+            }
+        });
+        return heard.isEmpty() ? null : heard.get(0);
+    }
+
+    /**
+     * Fails unless a burst picture matches a single picture taken just after it: the same size
+     * and orientation, the same values for what the settings decide, and the same tags present
+     * for what the scene decides.
+     */
+    private void assertSamePicture(File burst, File single) throws Exception {
+        BitmapFactory.Options burstBounds = bounds(burst);
+        BitmapFactory.Options singleBounds = bounds(single);
+        assertEquals("a burst picture is as wide as a single one on " + backend,
+                singleBounds.outWidth, burstBounds.outWidth);
+        assertEquals("a burst picture is as tall as a single one on " + backend,
+                singleBounds.outHeight, burstBounds.outHeight);
+        ExifInterface burstExif = new ExifInterface(burst.getAbsolutePath());
+        ExifInterface singleExif = new ExifInterface(single.getAbsolutePath());
+        for (String tag : BURST_SHARED_TAGS) {
+            assertEquals(tag + " differs between a burst picture and a single one on " + backend,
+                    singleExif.getAttribute(tag), burstExif.getAttribute(tag));
+        }
+        for (String tag : BURST_PRESENT_TAGS) {
+            assertEquals(tag + " is in only one of a burst picture and a single one on " + backend,
+                    singleExif.getAttribute(tag) != null, burstExif.getAttribute(tag) != null);
+        }
+        assertEquals("a burst picture has a thumbnail where a single one does on " + backend,
+                singleExif.hasThumbnail(), burstExif.hasThumbnail());
+    }
+
+    private static BitmapFactory.Options bounds(File picture) {
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(picture.getAbsolutePath(), bounds);
+        assertTrue(picture.getName() + " is not an image", bounds.outWidth > 0);
+        return bounds;
+    }
+
+    /** Switches an open camera to its front lens and waits for it to be configured. */
+    private static void switchToTheFrontCamera(CameraView camera, CameraView.Backend which)
+            throws InterruptedException {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync(
+                () -> camera.setLensFacing(CameraView.LensFacing.FRONT));
+        long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS);
+        while (!(camera.isUsingFrontFacingCamera() && camera.isOpen())
+                && System.currentTimeMillis() < deadline) {
+            sleep(100);
+        }
+        assertTrue(which + " never reached the front camera", camera.isUsingFrontFacingCamera());
+        // What a camera reports is read once it is configured, not as soon as it is chosen.
+        sleep(2_000);
+    }
+
+    /**
      * Camera2 offers the same controls as CameraX on the same camera.
      *
      * <p>An app is not meant to know which backend it has, so a control one of them offers and the
@@ -555,17 +814,7 @@ public final class BackendMatrixDeviceTest {
             if (!camera.hasFrontFacingCamera()) {
                 return;
             }
-            InstrumentationRegistry.getInstrumentation().runOnMainSync(
-                    () -> camera.setLensFacing(CameraView.LensFacing.FRONT));
-            long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS);
-            while (!(camera.isUsingFrontFacingCamera() && camera.isOpen())
-                    && System.currentTimeMillis() < deadline) {
-                sleep(100);
-            }
-            assertTrue(which + " never reached the front camera",
-                    camera.isUsingFrontFacingCamera());
-            // What a camera reports is read once it is configured, not as soon as it is chosen.
-            sleep(2_000);
+            switchToTheFrontCamera(camera, which);
             controls.put(CameraView.LensFacing.FRONT, describeControls(which, camera));
         });
         return controls;
