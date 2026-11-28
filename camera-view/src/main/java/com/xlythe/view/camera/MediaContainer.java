@@ -46,6 +46,13 @@ abstract class MediaContainer {
     /** Whether staged changes are waiting for {@link #save}. */
     private boolean mDirty;
 
+    /**
+     * The folder of the file being written, for temporary copies where java.io.tmpdir cannot be
+     * written, or null.
+     */
+    @Nullable
+    private File mFolder;
+
     /** What the file is, as one of {@link MediaTags}'s formats. */
     @MediaTags.Format
     abstract int format();
@@ -155,6 +162,17 @@ abstract class MediaContainer {
     /** Whether the file's Exif can be written. */
     boolean canWriteExif() {
         return false;
+    }
+
+    /** Names the folder of the file being written, for temporary copies. */
+    void setFolder(@Nullable File folder) {
+        mFolder = folder;
+    }
+
+    /** The folder for a temporary copy: java.io.tmpdir where it can be written, or null. */
+    @Nullable
+    File tempDirectory() {
+        return TempFiles.directory(mFolder);
     }
 
     /** The file's Exif, if the format keeps Exif, or null. */
