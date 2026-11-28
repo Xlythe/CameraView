@@ -27,4 +27,8 @@
         android:id="@+id/effect_fragment"
         android:icon="@drawable/ic_effect"
         android:title="@string/app_name_effect" />
+    <item
+        android:id="@+id/viewer_fragment"
+        android:icon="@drawable/ic_viewer"
+        android:title="@string/app_name_viewer" />
 </menu>

@@ -4,6 +4,7 @@ import android.Manifest;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.res.TypedArray;
 import android.graphics.Matrix;
@@ -441,7 +442,9 @@ public class CameraView extends FrameLayout {
         }
 
         @Override
-        public void onSurfaceTextureUpdated(SurfaceTexture texture) {}
+        public void onSurfaceTextureUpdated(SurfaceTexture texture) {
+            mCameraModule.onPreviewFrameShown();
+        }
     };
 
     /** The current internal camera lifecycle status. Guarded by this CameraView monitor. */
@@ -515,6 +518,10 @@ public class CameraView extends FrameLayout {
     @Nullable
     private OnCameraStateChangedListener mOnCameraStateChangedListener;
 
+    /** The burst being taken, or null when none is. Only one runs at a time. */
+    @Nullable
+    private Burst mBurst;
+
     private TextureView mCameraView;
     private ImageView mImagePreview;
     private VideoView mVideoPreview;
@@ -536,6 +543,12 @@ public class CameraView extends FrameLayout {
     private boolean mUsingModuleBarcodeScanner;
     /** Whether enterBackgroundReplacement is in force. */
     private boolean mReplacingBackground;
+    /**
+     * The replacer the segmenter's masks go to while {@link #mReplacingBackground}, kept so the
+     * segmenter can be started again when the camera reopens.
+     */
+    @Nullable
+    private BackgroundReplacer mBackgroundReplacer;
 
     /** The caller's own frame analyzer, if one is running. */
     @Nullable
@@ -1313,6 +1326,7 @@ public class CameraView extends FrameLayout {
     protected void onOpen() {
         mCameraModule.loadSounds();
         mCameraModule.open();
+        resumeBackgroundReplacement();
         // After the camera, so that one that throws on opening leaves nothing listening.
         mLocationTracker.start();
     }
@@ -1332,6 +1346,7 @@ public class CameraView extends FrameLayout {
     protected void onClose() {
         // A camera being closed is no reason to lose the half of a room already swept.
         stopPanorama();
+        stopBurst();
         exitBarcodeScanner();
         stopFrameAnalysis();
         mLocationTracker.stop();
@@ -1377,6 +1392,13 @@ public class CameraView extends FrameLayout {
      */
     public void takePicture(File file) {
         Log.v(TAG, "Taking a picture");
+        if (mBurst != null) {
+            Log.w(TAG, "Cannot take a picture while a burst is running");
+            if (getOnImageCapturedListener() != null) {
+                getOnImageCapturedListener().onFailure();
+            }
+            return;
+        }
         // Freezing the preview to show the picture is right for a still, and wrong in the middle
         // of a recording: the recording would freeze with it.
         if (isImageConfirmationEnabled() && !isRecording()) {
@@ -1384,6 +1406,150 @@ public class CameraView extends FrameLayout {
         }
 
         mCameraModule.takePicture(file);
+    }
+
+    /**
+     * Takes up to {@code count} pictures in quick succession and files each where the gallery
+     * looks, as {@link #takePicture()} does, calling
+     * {@link OnBurstListener#onBurstImageSaved(Uri)} as each one is filed. The burst ends at
+     * {@code count} pictures or at {@link #stopBurst()}, whichever comes first, and
+     * {@link OnBurstListener#onBurstFinished(int)} then says how many there were.
+     *
+     * <p>Each picture is the one {@link #takePicture()} would take with the same settings: the
+     * same size, quality and format, mirrored as the preview is, with the same Exif, including
+     * where it was taken when the location is known, and drawn through the renderer, filter or
+     * mask when one is drawing. Two things differ: the flash never fires, and no picture clicks.
+     * Where the shutter sound is on, or the device requires it, the burst plays a click looped at
+     * its rate while it runs, and a tone once it ends. Image confirmation does not apply. While something is drawing, each picture is drawn and written
+     * before the next is taken, so the burst is slower.</p>
+     *
+     * <p>A burst that can't start finishes at once with a count of 0. Below API 29, filing needs
+     * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}, as it does for {@link #takePicture()}.</p>
+     *
+     * @throws IllegalArgumentException if count is less than 1
+     */
+    @UiThread
+    public void startBurst(int count, @NonNull OnBurstListener listener) {
+        startBurst(captureDirectory(getContext()), count, listener, true /* fileInGallery */);
+    }
+
+    /**
+     * Takes up to {@code count} pictures in quick succession into {@code directory}, calling
+     * {@link OnBurstListener#onBurstImageCaptured(File)} as each one lands. Each file is named for
+     * when the burst started and its place in it. Otherwise this is
+     * {@link #startBurst(int, OnBurstListener)}.
+     *
+     * @throws IllegalArgumentException if count is less than 1
+     */
+    @UiThread
+    public void startBurst(@NonNull File directory, int count, @NonNull OnBurstListener listener) {
+        startBurst(directory, count, listener, false /* fileInGallery */);
+    }
+
+    @UiThread
+    private void startBurst(@NonNull File directory, int count,
+            @NonNull OnBurstListener listener, boolean fileInGallery) {
+        if (count < 1) {
+            throw new IllegalArgumentException("A burst takes at least one picture");
+        }
+        // A burst writes JPEGs. Writing them where DNGs were asked for would leave the caller no
+        // way to tell, so a RAW format refuses the burst instead.
+        PictureFormat format = getPictureFormat();
+        if (mBurst != null || !isOpen() || isRecording() || isImageConfirmationPending()
+                || format == PictureFormat.RAW || format == PictureFormat.RAW_JPEG) {
+            Log.w(TAG, "Cannot start a burst in the camera's current state");
+            listener.onBurstFinished(0);
+            return;
+        }
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            Log.w(TAG, "Could not create " + directory);
+            listener.onBurstFinished(0);
+            return;
+        }
+        Log.v(TAG, "Starting a burst");
+        String name = new SimpleDateFormat(CAPTURE_NAME, Locale.US).format(new Date());
+        BurstDelivery delivery = new BurstDelivery(listener, fileInGallery);
+        Burst burst = new Burst(directory, name, count, delivery);
+        delivery.mBurst = burst;
+        mBurst = burst;
+        mCameraModule.takeBurst(burst);
+    }
+
+    /** Ends a burst before it reaches its count. Pictures already being taken still arrive. */
+    @UiThread
+    public void stopBurst() {
+        if (mBurst != null) {
+            Log.v(TAG, "Stopping a burst");
+            mBurst.end();
+        }
+    }
+
+    /** Hands a burst's pictures to the app, filing each in the gallery first where asked to. */
+    private final class BurstDelivery implements Burst.Callback {
+        /** Hears each picture and the end. */
+        private final OnBurstListener mListener;
+
+        /** Whether pictures are filed in the gallery rather than left where they were written. */
+        private final boolean mFileInGallery;
+
+        /** The burst being delivered, which a picture that cannot be filed ends. */
+        private Burst mBurst;
+
+        /** How many pictures the listener has heard of, which is the count it is given. */
+        private int mDelivered;
+
+        /** How many pictures are still being filed. The end is reported after them. */
+        private int mFiling;
+
+        /** Whether the burst has reported its last picture. */
+        private boolean mBurstFinished;
+
+        BurstDelivery(@NonNull OnBurstListener listener, boolean fileInGallery) {
+            mListener = listener;
+            mFileInGallery = fileInGallery;
+        }
+
+        @Override
+        public void onPictureTaken(@NonNull File file) {
+            if (!mFileInGallery) {
+                mDelivered++;
+                mListener.onBurstImageCaptured(file);
+                return;
+            }
+            mFiling++;
+            MediaStoreSaver.save(getContext(), Collections.singletonList(file),
+                    false /* isVideo */, this::onFiled);
+        }
+
+        /** Hears where a picture was filed, or that it could not be. */
+        @UiThread
+        private void onFiled(@Nullable List<Uri> uris) {
+            mFiling--;
+            if (uris != null) {
+                mDelivered++;
+                mListener.onBurstImageSaved(uris.get(0));
+            } else {
+                // Whatever kept this one out of the gallery keeps the rest out too.
+                mBurst.end();
+            }
+            reportIfDone();
+        }
+
+        @Override
+        public void onBurstFinished() {
+            if (CameraView.this.mBurst == mBurst) {
+                CameraView.this.mBurst = null;
+            }
+            mBurstFinished = true;
+            reportIfDone();
+        }
+
+        private void reportIfDone() {
+            if (mBurstFinished && mFiling == 0) {
+                Log.v(TAG, "Finished a burst of " + mDelivered);
+                mListener.onBurstFinished(mDelivered);
+            }
+        }
     }
 
     /**
@@ -1471,6 +1637,13 @@ public class CameraView extends FrameLayout {
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     public void startRecording(File file) {
         Log.v(TAG, "Recording a video");
+        if (mBurst != null) {
+            Log.w(TAG, "Cannot record while a burst is running");
+            if (getOnVideoCapturedListener() != null) {
+                getOnVideoCapturedListener().onFailure();
+            }
+            return;
+        }
         mCameraModule.startRecording(file);
     }
 
@@ -1622,8 +1795,9 @@ public class CameraView extends FrameLayout {
 
     /**
      * Segments the subject out of each frame and draws it over the replacer's background, in the
-     * preview, the recording and the pictures, until {@link #exitBackgroundReplacement()}. The
-     * replacer becomes the frame renderer, in place of any other.
+     * preview, the recording and the pictures, until {@link #exitBackgroundReplacement()} - across
+     * a lens switch and the camera closing and opening again. The replacer becomes the frame
+     * renderer, in place of any other.
      *
      * <p>To use a segmentation model of your own, set a {@link BackgroundReplacer} with
      * {@link #setFrameRenderer} and hand it masks with {@link BackgroundReplacer#setMask}
@@ -1657,7 +1831,32 @@ public class CameraView extends FrameLayout {
             return false;
         }
         mReplacingBackground = true;
+        mBackgroundReplacer = replacer;
         return true;
+    }
+
+    /**
+     * Starts segmenting again for a background replacement the camera closed under.
+     *
+     * <p>Closing the camera stops the segmenter, while the replacer, being the frame renderer,
+     * outlives the close. So the replacement carries on when the camera opens again, as it says
+     * it does, rather than drawing whatever mask it last had.</p>
+     *
+     * <p>Suppressed because we check the camera permission ourselves, and lint cannot follow
+     * that check. Opening the camera needed it, so this turns away only one revoked since.</p>
+     */
+    @SuppressLint("MissingPermission")
+    private void resumeBackgroundReplacement() {
+        BackgroundReplacer replacer = mBackgroundReplacer;
+        if (!mReplacingBackground || replacer == null) {
+            return;
+        }
+        if (!PermissionChecker.hasPermissions(getContext(), Manifest.permission.CAMERA)
+                || !mCameraModule.startSegmentation(replacer::setMask)) {
+            Log.w(TAG, "The segmenter would not start again, so the background is no longer"
+                    + " replaced");
+            exitBackgroundReplacement();
+        }
     }
 
     /** Stops replacing the background, and shows the camera's own frames again. */
@@ -1666,6 +1865,7 @@ public class CameraView extends FrameLayout {
             return;
         }
         mReplacingBackground = false;
+        mBackgroundReplacer = null;
         mCameraModule.stopSegmentation();
         setFrameRenderer(null);
     }
@@ -2359,7 +2559,8 @@ public class CameraView extends FrameLayout {
 
     /**
      * Plays the platform's camera sounds: a click as a picture is taken, and a tone as a
-     * recording starts and stops. On by default, as in the platform's own camera app.
+     * recording starts and stops. A burst plays its own: a click looped while it runs, and a tone
+     * once it ends. On by default, as in the platform's own camera app.
      *
      * <p>Some countries require these sounds, and there they play whatever this is set to.</p>
      */
@@ -3003,6 +3204,26 @@ public class CameraView extends FrameLayout {
          * loses either is filed as neither.
          */
         void onFailure();
+    }
+
+    /**
+     * Hears the pictures of a burst as they land, on the main thread. A burst started with
+     * {@link CameraView#startBurst(File, int, OnBurstListener)} reports each picture to
+     * {@link #onBurstImageCaptured(File)}, and one started with
+     * {@link CameraView#startBurst(int, OnBurstListener)} to {@link #onBurstImageSaved(Uri)}.
+     */
+    public interface OnBurstListener {
+        /** A picture has been written into the directory the burst was given. */
+        @UiThread
+        default void onBurstImageCaptured(@NonNull File file) {}
+
+        /** A picture has been filed in the gallery. */
+        @UiThread
+        default void onBurstImageSaved(@NonNull Uri uri) {}
+
+        /** The burst is over, and count pictures arrived. Nothing more arrives after this. */
+        @UiThread
+        void onBurstFinished(int count);
     }
 
     /**

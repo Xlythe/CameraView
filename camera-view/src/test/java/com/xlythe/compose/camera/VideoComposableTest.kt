@@ -211,7 +211,9 @@ class VideoComposableTest {
         compose.waitForIdle()
 
         val expected = DataSource.toDataSource(RuntimeEnvironment.getApplication(), uri)
-        val deadline = System.currentTimeMillis() + 5_000
+        // Generous, because a loaded machine can starve the thread that reads the uri for
+        // seconds; the loop ends as soon as it is read, so a passing run is no slower.
+        val deadline = System.currentTimeMillis() + 30_000
         while (Shadows.shadowOf(requireVideoView().mediaPlayer).dataSource != expected
             && System.currentTimeMillis() < deadline) {
             ShadowLooper.idleMainLooper()

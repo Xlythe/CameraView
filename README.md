@@ -34,7 +34,7 @@ The following permissions are required in your AndroidManfiest.xml
 ```xml
 <uses-permission android:name="android.permission.CAMERA" />
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
-<!-- Below API 29, takePicture(), startRecording() and startPanorama() need this to file captures in the gallery -->
+<!-- Below API 29, takePicture(), startBurst(), startRecording() and startPanorama() need this to file captures in the gallery -->
 <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
 <!-- Optional camera permissions -->
@@ -146,6 +146,12 @@ Camera(
 Stops recording
 ```kotlin
 cameraController.stopRecording()
+```
+Takes up to 50 pictures in quick succession, until stopBurst is called, filing each in the gallery.
+Given a directory first, startBurst writes the pictures there and reports each file instead.
+```kotlin
+cameraController.startBurst(50, onImageSaved = { uri -> ... }, onFinished = { count -> ... })
+cameraController.stopBurst()
 ```
 Returns a stream of bytes for both audio and video channels. These bytes can then be played with Video.
 ```kotlin
@@ -363,6 +369,23 @@ mCameraView.exitBarcodeScanner();
 ```
 
 
+Burst
+-----------------
+startBurst takes pictures in quick succession, as fast as the camera allows, until the count is
+reached or stopBurst is called. Like takePicture, it files each picture in the gallery, or writes
+it into a directory you pass first. The listener hears each one as it lands, then how many there
+were. Each picture is the one takePicture would take, except that the flash stays off and no
+picture clicks: where the shutter sound is on or required, the burst plays a click looped at its
+rate while it runs, and a tone when it ends. Confirmation does not apply, and a burst does not
+start while the picture format is RAW or RAW_JPEG.
+```java
+mCameraView.startBurst(50, new CameraView.OnBurstListener() {
+  @Override public void onBurstImageSaved(Uri uri) { ... }
+  @Override public void onBurstFinished(int count) { ... }
+});
+mCameraView.stopBurst();
+```
+
 Video snapshot
 -----------------
 takePicture works during a recording, where the camera can hold a preview, a recording and a still
@@ -555,29 +578,38 @@ the background the video stops, since another app may want the camera, but the a
 running, so a call carries on.
 
 
-Exif
+Metadata
 -----------------
-CameraView encodes metadata into pictures via Exif. By default, there's nothing more you need to do.
-Exif metadata will be read by most Android image libraries (we recommend Glide), as well as most
-computers (Windows, Mac, Linux). However, if needed, Exif gives you the option to be more privacy
-sensitive (via Exif.removeLocation(), Exif.removeTimestamp()) as well as the information needed to
-manually rotate/flip images if you cannot use another library.
+CameraView writes the usual metadata into every picture and video it saves, so there is nothing
+more to do. MediaTags reads and writes it afterwards, the same way for pictures, videos and sound:
+JPEG, PNG, WebP, HEIF and AVIF, MP4 and QuickTime, MP3, FLAC, Ogg and WAV, and reads it from DNG
+and other camera raws, Matroska and WebM. It works out the format from the file's own bytes.
 ```java
-Exif exif = new Exif(file);
-exif.removeLocation();
-exif.setTitle("Harbour at dawn");
-exif.setPhotographer("A. Photographer");
-exif.attachAmbientConditions(new AmbientConditions.Builder().setTemperature(21.5).build());
-exif.save();
+MediaTags tags = MediaTags.open(file);    // or MediaTags.open(context, uri)
+tags.setTitle("Harbour at dawn");
+tags.setAuthor("A. Photographer");
+tags.setLocation(null);                   // removes it
+tags.setAmbientConditions(new AmbientConditions.Builder().setTemperature(21.5).build());
+tags.save();
 ```
-Any other tag can be read and written by its standard name, or by its number for one newer than
-the library.
+Each setter returns false when the file cannot keep that field. A field the format has no place
+of its own for is kept in the file's XMP. A Uri can be written where the app may write it: a
+document it was granted write access to, or, from Android 10, a gallery item it saved itself.
+
+It also says what the file is: a photo sphere or panorama, a motion photo and where its clip is,
+an HDR picture's gain map or an HDR video's transfer, a 360° video, an animation, and the cover of
+a recording. copyTo() carries what one file says onto another, whatever their formats.
 ```java
-exif.setAttribute("ImageEditor", "A. Editor");
-exif.setTag(0xA4F0, Exif.TYPE_ASCII, "A tag from a later standard");
+MediaTags.Panorama sphere = tags.getPanorama();
+MediaTags.MotionPhoto motion = tags.getMotionPhoto();
+boolean hdr = tags.getGainMap() != MediaTags.GAIN_MAP_NONE;
+original.copyTo(MediaTags.open(edited));
 ```
-If the file has no room for some of its tags, save() writes everything else and throws an
-ExifNoRoomException naming them.
+Any other Exif tag, MP4 tag or XMP property is there by name or number.
+```java
+tags.setExifTag(0xA4F0, Exif.TYPE_ASCII, "A tag from a later standard");
+tags.setXmp("http://purl.org/dc/elements/1.1/", "source", "Scanned print");
+```
 
 VideoView
 -----------------
@@ -592,6 +624,33 @@ mVideoView.pause();
 mVideoView.setStream(new VideoStream.Builder().withAudioStream(...).withVideoStream(...).build());
 mVideoView.play();
 mVideoView.pause();
+```
+
+Viewing pictures
+-----------------
+Three views show the pictures the camera takes, from a file or from a uri such as the one
+onImageSaved(Uri) reports. None of them ever decodes a picture whole: each holds a bounded amount
+of memory however large the picture is. In Compose they are LargeImage, Panorama and Photosphere.
+
+LargeImageView shows any picture, a DNG included, and zooms in until its own pixels show: pinch or
+double-tap to zoom, drag or fling to pan. PanoramaView shows a panorama as a strip filling the
+view's height, and one that goes all the way round has no ends. PhotosphereView shows a photo
+sphere from the inside, to drag, fling and pinch around; a partial sphere is shown where it was
+taken and the rest left black.
+```java
+mLargeImageView.setUri(uri);     // or setFile(file)
+mPanoramaView.setUri(uri);
+mPhotosphereView.setUri(uri);
+mPhotosphereView.setGyroscopeEnabled(true); // where isGyroscopeAvailable()
+mPhotosphereView.setImageLoadListener(new ImageLoadListener() {
+  @Override public void onImageLoaded() { ... }
+  @Override public void onImageFailed() { ... }
+});
+```
+```kotlin
+LargeImage(uri = uri, onFailed = { ... })
+Panorama(uri = uri)
+Photosphere(uri = uri, gyroscope = true)
 ```
 
 VideoEditor

@@ -24,14 +24,30 @@ import java.util.List;
 import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import static com.xlythe.view.camera.ICameraModule.TAG;
 
+/**
+ * The preview with a caller's stream beside it - frames for analysis, or an encoder for a live
+ * stream - and a still output, so a picture can be taken while either runs.
+ *
+ * <p>The still is the same picture a {@link PictureSession} takes, less what a camera promises
+ * only beside a preview alone: RAW, Ultra HDR and an unbinned readout, which also stalls the
+ * frames the stream is waiting on. A camera that will not configure the three outputs together
+ * gets this session again without the still, which is how it was before a stream could have
+ * one.</p>
+ */
 @RequiresApi(21)
-class StreamSession extends PreviewSession {
+class StreamSession extends PictureSession {
 
+    /** The caller's stream, sized once the preview has a size. */
     private final StreamSurface mStreamSurface;
 
-    StreamSession(Camera2Module camera2Module, VideoRecorder.SurfaceProvider surfaceProvider) {
+    /** Whether this session carries a still output beside the stream. */
+    private final boolean mWithStill;
+
+    StreamSession(Camera2Module camera2Module, VideoRecorder.SurfaceProvider surfaceProvider,
+            boolean withStill) {
         super(camera2Module);
         mStreamSurface = new StreamSurface(camera2Module, surfaceProvider, getPreviewSurface());
+        mWithStill = withStill;
     }
 
     public VideoRecorder.SurfaceProvider getSurfaceProvider() {
@@ -39,9 +55,37 @@ class StreamSession extends PreviewSession {
     }
 
     @Override
-    public void initialize(@NonNull StreamConfigurationMap map) throws CameraAccessException {
-        super.initialize(map);
+    protected void onPreviewInitialized(@NonNull StreamConfigurationMap map) {
         mStreamSurface.initialize(map);
+    }
+
+    @Override
+    protected boolean hasStillCapture() {
+        return mWithStill;
+    }
+
+    @Override
+    protected boolean allowsUltraHdr() {
+        return false;
+    }
+
+    @Override
+    protected boolean allowsRaw() {
+        return false;
+    }
+
+    @Override
+    protected boolean allowsMaximumResolution() {
+        return false;
+    }
+
+    /**
+     * A still is taken as the moment stands, as a recording's snapshot is: the stream's
+     * repeating request runs without the flash strategy a pre-flash would be metered against.
+     */
+    @Override
+    protected boolean metersForFlash() {
+        return false;
     }
 
     private CaptureRequest createCaptureRequest(@NonNull CameraDevice device) throws CameraAccessException {

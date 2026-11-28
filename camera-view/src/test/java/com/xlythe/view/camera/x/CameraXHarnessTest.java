@@ -14,9 +14,17 @@ import android.hardware.camera2.CaptureRequest;
 import android.util.Range;
 import android.util.Rational;
 
+import androidx.annotation.NonNull;
+import androidx.camera.core.ImageProxy;
+
 import com.xlythe.view.camera.Barcode;
+import com.xlythe.view.camera.CameraXFrameAnalyzer;
 import androidx.lifecycle.Lifecycle;
 
+import androidx.annotation.NonNull;
+import androidx.camera.core.ImageCapture;
+
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.FakeLocation;
 import com.xlythe.view.camera.shadow.ShadowAnnouncingCameraManager;
@@ -27,12 +35,15 @@ import com.xlythe.view.camera.v2.FakeCamera2;
 import org.junit.Test;
 
 import java.io.File;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.List;
 import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.util.ReflectionHelpers;
 
 
 /**
@@ -127,8 +138,10 @@ public class CameraXHarnessTest {
             exerciseQueries(module);
             exerciseFrameEffectFallback(module);
             exerciseAnalysis(module);
+            exerciseStillBesideAnalysis(module);
             exerciseRebinds(module);
             exerciseCapture(module);
+            exerciseBurst(module);
             exerciseLensToggle(module);
             exercisePausedOperations(module);
 
@@ -308,6 +321,62 @@ public class CameraXHarnessTest {
     }
 
     /**
+     * Analysis is bound beside the still, so a picture can be taken while frames are analyzed -
+     * which is what background replacement and barcode scanning do. The still used to give its
+     * slot up to the analysis, and every picture taken during either failed.
+     */
+    private static void exerciseStillBesideAnalysis(CameraXModule module) {
+        RecordingAnalyzer analyzer = new RecordingAnalyzer();
+        ReflectionHelpers.callInstanceMethod(module, "startFrameAnalyzerOnMainThread",
+                ReflectionHelpers.ClassParameter.from(CameraXFrameAnalyzer.class, analyzer),
+                ReflectionHelpers.ClassParameter.from(String.class, "Harness"));
+        assertTrue("analysis has to rebind", FakeCameraXHost.awaitBind(module));
+        assertNotNull("frames are analyzed",
+                ReflectionHelpers.getField(module, "mImageAnalysis"));
+        assertNotNull("and a picture can be taken beside them",
+                ReflectionHelpers.getField(module, "mImageCapture"));
+        assertEquals("the analyzer is told whether its lens is shown mirrored",
+                Boolean.valueOf(module.isUsingFrontFacingCamera()), analyzer.mirrored);
+
+        // A lens switch rebinds with the same analyzer, which has to hear about the new lens.
+        module.toggleCamera();
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertEquals(Boolean.valueOf(module.isUsingFrontFacingCamera()), analyzer.mirrored);
+        module.toggleCamera();
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertEquals(Boolean.valueOf(module.isUsingFrontFacingCamera()), analyzer.mirrored);
+
+        module.stopSegmentation();
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertTrue("stopping closes the analyzer", analyzer.closed);
+        assertNull(ReflectionHelpers.getField(module, "mImageAnalysis"));
+        assertNotNull(ReflectionHelpers.getField(module, "mImageCapture"));
+    }
+
+    /** An analyzer that drops every frame and remembers what it was told. */
+    private static final class RecordingAnalyzer implements CameraXFrameAnalyzer {
+        /** Whether it has been closed. */
+        volatile boolean closed;
+        /** What it was last told about mirroring, or null before it was told anything. */
+        volatile Boolean mirrored;
+
+        @Override
+        public void setMirrored(boolean mirrored) {
+            this.mirrored = mirrored;
+        }
+
+        @Override
+        public void analyze(@NonNull ImageProxy image) {
+            image.close();
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+        }
+    }
+
+    /**
      * A capture that cannot succeed is reported, not dropped.
      *
      * <p>There is no pipeline behind this camera to produce a JPEG, so the capture fails - which
@@ -334,6 +403,58 @@ public class CameraXHarnessTest {
     }
 
 
+
+    /**
+     * A burst against a camera with no pipeline behind it. The pictures fail, and what is checked
+     * is that the burst still finishes, with the flash given back and the camera still bound.
+     */
+    private static void exerciseBurst(CameraXModule module) throws Exception {
+        File directory = File.createTempFile("harness", "");
+        assertTrue(directory.delete() && directory.mkdirs());
+        int[] finishes = {0};
+        Burst burst = new Burst(directory, "harness", 10, new Burst.Callback() {
+            @Override public void onPictureTaken(@NonNull File file) {}
+            @Override public void onBurstFinished() { finishes[0]++; }
+        });
+        module.setFlash(CameraView.Flash.ON);
+        // The picture from exerciseCapture may still be in flight, and a burst waits for it, so
+        // it is given the time this camera allows a picture before it is failed.
+        ShadowLooper.idleMainLooper(20, TimeUnit.SECONDS);
+        assertTrue(FakeCameraXHost.awaitBind(module));
+
+        module.startBurst(burst);
+        assertFalse("the camera should take the burst on", burst.isFinished());
+        assertEquals("a burst never fires the flash",
+                ImageCapture.FLASH_MODE_OFF, module.imageCaptureFlashModeForTesting());
+        module.setFlash(CameraView.Flash.AUTO);
+        assertEquals("a flash asked for during a burst waits for it to finish",
+                ImageCapture.FLASH_MODE_OFF, module.imageCaptureFlashModeForTesting());
+        FakeCameraXHost.idle();
+        Burst second = new Burst(directory, "second", 3, new Burst.Callback() {
+            @Override public void onPictureTaken(@NonNull File file) {}
+            @Override public void onBurstFinished() {}
+        });
+        module.startBurst(second);
+        FakeCameraXHost.idle();
+        assertTrue("only one burst runs at a time", second.isFinished());
+
+        burst.end();
+        for (int attempt = 0; attempt < 100 && !burst.isFinished(); attempt++) {
+            FakeCameraXHost.idle();
+            Thread.sleep(20);
+        }
+        if (!burst.isFinished()) {
+            // A capture this camera never answers is what the burst's own timeout is for.
+            ShadowLooper.idleMainLooper(30, TimeUnit.SECONDS);
+        }
+
+        assertTrue("a burst has to finish", burst.isFinished());
+        assertEquals(1, finishes[0]);
+        assertEquals("and the flash last asked for comes back once it is over",
+                ImageCapture.FLASH_MODE_AUTO, module.imageCaptureFlashModeForTesting());
+        module.setFlash(CameraView.Flash.OFF);
+        assertTrue("a burst must not cost the binding", FakeCameraXHost.awaitBind(module));
+    }
 
     /**
      * Everything the backend can be asked about the camera it bound.

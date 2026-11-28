@@ -68,7 +68,6 @@ def coreCoverageIncludes = [
         'com/xlythe/view/camera/pano/ArgbImage.class',
         'com/xlythe/view/camera/pano/CameraPose.class',
         'com/xlythe/view/camera/pano/Footprint.class',
-        'com/xlythe/view/camera/pano/GPanoMetadata.class',
         'com/xlythe/view/camera/pano/GyroscopeHistory.class',
         'com/xlythe/view/camera/pano/LensCalibration.class',
         'com/xlythe/view/camera/pano/LensCalibration$*.class',
@@ -76,8 +75,69 @@ def coreCoverageIncludes = [
         'com/xlythe/view/camera/pano/SphereCanvas.class',
         'com/xlythe/view/camera/pano/SphereMath.class',
         'com/xlythe/view/camera/pano/SweepCoverage.class',
-        'com/xlythe/view/camera/pano/TimeBase.class'
+        'com/xlythe/view/camera/pano/TimeBase.class',
+        'com/xlythe/view/camera/viewer/GPano.class',
+        'com/xlythe/view/camera/viewer/Orientation.class',
+        'com/xlythe/view/camera/viewer/ScaledRegionSource.class',
+        'com/xlythe/view/camera/viewer/SphereMath.class',
+        'com/xlythe/view/camera/viewer/SphereMesh.class',
+        'com/xlythe/view/camera/viewer/SphereTiling.class',
+        'com/xlythe/view/camera/viewer/SphereTiling$*.class',
+        'com/xlythe/view/camera/viewer/Tiles.class',
+        'com/xlythe/view/camera/viewer/Viewport.class'
 ]
+
+// The metadata readers and writers: every format MediaTags knows, parsed from bytes with no camera,
+// codec or view in them. Their lines are held to the same 90% as the core classes. Their branches
+// are held where they stand rather than in the core gate, whose 90% is over the core classes
+// together: most of what is left is a malformed file's every way of being cut short, which a
+// corpus of real files and hand-built fixtures has not yet reached. Raising it is the ratchet.
+def metadataCoverageIncludes = [
+        'com/xlythe/view/camera/AvcParameters.class',
+        'com/xlythe/view/camera/BitReader.class',
+        'com/xlythe/view/camera/ByteSource.class',
+        'com/xlythe/view/camera/ByteSource$*.class',
+        'com/xlythe/view/camera/Bytes.class',
+        'com/xlythe/view/camera/ExifImageContainer.class',
+        'com/xlythe/view/camera/ExifImageContainer$*.class',
+        'com/xlythe/view/camera/FlacContainer.class',
+        'com/xlythe/view/camera/FlacContainer$*.class',
+        'com/xlythe/view/camera/GifContainer.class',
+        'com/xlythe/view/camera/HeifContainer.class',
+        'com/xlythe/view/camera/HeifContainer$*.class',
+        'com/xlythe/view/camera/HevcParameters.class',
+        'com/xlythe/view/camera/Id3Container.class',
+        'com/xlythe/view/camera/Id3Container$*.class',
+        'com/xlythe/view/camera/IsoBoxes.class',
+        'com/xlythe/view/camera/IsoBoxes$*.class',
+        'com/xlythe/view/camera/JpegContainer.class',
+        'com/xlythe/view/camera/JpegContainer$*.class',
+        'com/xlythe/view/camera/MatroskaContainer.class',
+        'com/xlythe/view/camera/MatroskaContainer$*.class',
+        'com/xlythe/view/camera/MediaContainer.class',
+        'com/xlythe/view/camera/MediaFiles.class',
+        'com/xlythe/view/camera/MediaTags.class',
+        'com/xlythe/view/camera/MediaTags$*.class',
+        'com/xlythe/view/camera/Mp4Container.class',
+        'com/xlythe/view/camera/Mp4Container$*.class',
+        'com/xlythe/view/camera/OggContainer.class',
+        'com/xlythe/view/camera/OggContainer$*.class',
+        'com/xlythe/view/camera/PlainContainer.class',
+        'com/xlythe/view/camera/PngContainer.class',
+        'com/xlythe/view/camera/PngContainer$*.class',
+        'com/xlythe/view/camera/TiffContainer.class',
+        'com/xlythe/view/camera/VorbisComments.class',
+        'com/xlythe/view/camera/WavContainer.class',
+        'com/xlythe/view/camera/WavContainer$*.class',
+        'com/xlythe/view/camera/WebpContainer.class',
+        'com/xlythe/view/camera/WebpContainer$*.class',
+        'com/xlythe/view/camera/Xmp.class',
+        'com/xlythe/view/camera/Xmp$*.class'
+]
+
+def metadataLineMinimum = 0.90
+
+def metadataBranchMinimum = 0.78
 
 // And a floor under the library as a whole, so the parts that are not in the gate above cannot
 // quietly rot. Set just under where the suite actually stands rather than at an aspiration: a
@@ -98,6 +158,10 @@ def wholeLibraryBranchMinimum = 0.51
 
 def coreProductionClasses = classTrees(javaClassDirectories + kotlinClassDirectories) {
     include coreCoverageIncludes
+}
+
+def metadataProductionClasses = classTrees(javaClassDirectories) {
+    include metadataCoverageIncludes
 }
 
 def unitCoverageData = layout.buildDirectory.file('jacoco/testDebugUnitTest.exec')
@@ -194,6 +258,35 @@ tasks.register('jacocoCoreCoverageVerification', JacocoCoverageVerification) {
     }
 }
 
+tasks.register('jacocoMetadataCoverageVerification', JacocoCoverageVerification) {
+    group = 'verification'
+    description = 'Holds the metadata readers and writers to 90% of lines and a branch floor.'
+    dependsOn tasks.named('jacocoTestReport')
+
+    classDirectories.setFrom(metadataProductionClasses)
+    sourceDirectories.setFrom(files('src/main/java'))
+    executionData.setFrom(allCoverageData)
+
+    violationRules {
+        rule {
+            limit {
+                counter = 'LINE'
+                value = 'COVEREDRATIO'
+                minimum = metadataLineMinimum
+            }
+            limit {
+                counter = 'BRANCH'
+                value = 'COVEREDRATIO'
+                minimum = metadataBranchMinimum
+            }
+        }
+    }
+}
+
+tasks.named('jacocoCoreCoverageVerification') {
+    finalizedBy tasks.named('jacocoMetadataCoverageVerification')
+}
+
 tasks.register('jacocoLibraryCoverageVerification', JacocoCoverageVerification) {
     group = 'verification'
     description = 'Holds a floor under the library as a whole, so untested code cannot grow.'
@@ -221,6 +314,7 @@ tasks.register('jacocoLibraryCoverageVerification', JacocoCoverageVerification) 
 
 tasks.named('check') {
     dependsOn tasks.named('jacocoCoreCoverageVerification')
+    dependsOn tasks.named('jacocoMetadataCoverageVerification')
     dependsOn tasks.named('jacocoLibraryCoverageVerification')
 }
 

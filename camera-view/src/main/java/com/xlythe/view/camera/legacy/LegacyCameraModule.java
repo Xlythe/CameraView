@@ -9,6 +9,7 @@ import android.graphics.Canvas;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Paint;
+import android.graphics.Point;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.YuvImage;
@@ -21,6 +22,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
 
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.BusyCameraRetry;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ExifCaptureParameters;
@@ -40,17 +42,46 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
 import androidx.collection.ArrayMap;
 
 @RestrictTo(RestrictTo.Scope.LIBRARY)
 public class LegacyCameraModule extends ICameraModule {
+    /**
+     * How long a burst waits for the restarted preview to show a frame before it asks for the
+     * next picture anyway, for a view that is not drawing.
+     */
+    @VisibleForTesting
+    static final long PREVIEW_FRAME_TIMEOUT_MILLIS = 300;
+
     /** No camera chosen yet, which is not the same as camera zero. */
     private static final int INVALID_CAMERA_ID = -1;
+
+    /**
+     * How much resolution matching the preview's shape may cost, as on Camera2. A real difference
+     * in shape costs about a third at most, 4:3 against 16:9.
+     */
+    private static final double MIN_MATCHED_PIXEL_FRACTION = 0.5;
+
+    /**
+     * The slowest the preview may run, in frames per second times 1000 as the old API counts
+     * them: frames no longer than 1/15 s, which a dim scene may still use to gather light.
+     */
+    @VisibleForTesting
+    static final int MIN_PREVIEW_FPS = 15_000;
+
+    /** The fastest preview chosen: 30 fps, as phones preview, not a high-speed range. */
+    @VisibleForTesting
+    static final int MAX_PREVIEW_FPS = 30_000;
+
+    /** Orders sizes by how many pixels they hold. */
+    private static final Comparator<Point> BY_AREA = (a, b) -> Long.signum(area(a) - area(b));
 
     /** Which of the device's cameras is selected, as an index into Camera.getNumberOfCameras. */
     private int mActiveCamera = INVALID_CAMERA_ID;
@@ -62,10 +93,11 @@ public class LegacyCameraModule extends ICameraModule {
     @Nullable private Camera.Size mPreviewSize;
 
     /**
-     * The picture size the open camera started with, which every quality but MAX keeps, or null
-     * when no camera is open. See {@link #applyPictureSize}.
+     * Whether the open camera is taking a picture, from the call until its JPEG arrives. The
+     * camera keeps one picture callback, which every call replaces, even one it then refuses: a
+     * second picture asked for meanwhile takes the first one's JPEG, or leaves neither answered.
      */
-    @Nullable private Camera.Size mDefaultPictureSize;
+    private boolean mTakingPicture;
 
     /**
      * The zoom, as a ratio. While a camera is open it is the entry of its zoom table the camera is
@@ -79,6 +111,12 @@ public class LegacyCameraModule extends ICameraModule {
     /** Whether the platform's click is silenced so the library can play the app's sound. */
     private volatile boolean mPlaysOwnClick;
 
+    /**
+     * Whether the platform clicks for every picture of the running burst, its click not silenced,
+     * which then stands in for the burst's loop.
+     */
+    private boolean mBurstClicks;
+
     /** Where the recording in progress is being written. */
     private File mVideoFile;
 
@@ -91,8 +129,29 @@ public class LegacyCameraModule extends ICameraModule {
     /** The surfaces handed out for streaming, each with the holder that feeds it. */
     private final Map<VideoRecorder.SurfaceProvider, LegacySurfaceHolder> mSurfaceProviders = new ArrayMap<>();
 
+    /**
+     * Runs work on the main thread: the wait for a burst's next preview frame, and each retry of a
+     * busy camera.
+     */
+    private final Handler mHandler = new Handler(Looper.getMainLooper());
+
+    /** The burst being taken, or null when none is. */
+    @Nullable private Burst mBurst;
+
+    /**
+     * Where the burst picture the camera is taking goes, or null between pictures. A camera that
+     * closes with one outstanding never delivers it.
+     */
+    @Nullable private File mBurstFile;
+
+    /** What runs once the preview shows its next frame, or null when nothing waits for one. */
+    @Nullable private Runnable mOnPreviewFrame;
+
+    /** Runs {@link #mOnPreviewFrame} when no frame is shown in time. */
+    private final Runnable mPreviewFrameTimeout = this::onPreviewFrameShown;
+
     /** Tries the open again while the camera is busy, on the main thread the open runs on. */
-    private final BusyCameraRetry mBusyRetry = new BusyCameraRetry(new Handler(Looper.getMainLooper()));
+    private final BusyCameraRetry mBusyRetry = new BusyCameraRetry(mHandler);
 
     public LegacyCameraModule(CameraView view) {
         super(view);
@@ -136,8 +195,8 @@ public class LegacyCameraModule extends ICameraModule {
             parameters.setPreviewSize(getPreviewWidth(), getPreviewHeight());
             parameters.setPictureFormat(ImageFormat.JPEG);
             parameters.setJpegQuality(getPictureQuality());
-            mDefaultPictureSize = parameters.getPictureSize();
             applyPictureSize(parameters);
+            applyFlash(parameters);
             float zoomRatio = applyZoom(parameters, mZoomRatio);
             Integer exposureCompensation = applyExposureCompensation(parameters);
             applyExposureLock(parameters);
@@ -145,6 +204,7 @@ public class LegacyCameraModule extends ICameraModule {
             if (exposureCompensation != null) {
                 super.setExposureCompensation(exposureCompensation);
             }
+            applyPreviewFpsRange(mCamera);
             applyShutterSound();
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
@@ -169,7 +229,6 @@ public class LegacyCameraModule extends ICameraModule {
             }
             mCamera = null;
             mPreviewSize = null;
-            mDefaultPictureSize = null;
             onCameraError(e);
         }
     }
@@ -218,29 +277,286 @@ public class LegacyCameraModule extends ICameraModule {
         }
     }
 
-    /**
-     * Asks for the largest picture the camera lists when the quality is MAX, and for the size it
-     * started with otherwise.
-     */
+    /** Asks for the picture size the quality allows. */
     private void applyPictureSize(Camera.Parameters parameters) {
-        Camera.Size size = getQuality() == CameraView.Quality.MAX
-                ? largestPictureSize(parameters.getSupportedPictureSizes())
-                : mDefaultPictureSize;
+        List<Point> sizes = toPoints(parameters.getSupportedPictureSizes());
+        Point size = choosePictureSize(sizes, getQuality(),
+                mPreviewSize == null ? null : new Point(mPreviewSize.width, mPreviewSize.height),
+                isMatchPreviewAspectRatioEnabled());
         if (size != null) {
-            parameters.setPictureSize(size.width, size.height);
+            parameters.setPictureSize(size.x, size.y);
         }
     }
 
+    /**
+     * The picture size a quality takes, by the rule Camera2 picks its still size with: the
+     * largest size the camera lists within the quality's bound - 1080p for HIGH, 720p for MEDIUM,
+     * 480p for LOW and none for MAX - and the preview's shape where that costs no more than half
+     * the pixels. A quality with nothing within its bound takes what the next one up would.
+     *
+     * @param preview the preview's size, or null to match no shape
+     * @return the size, or null when the camera lists none
+     */
+    @VisibleForTesting
     @Nullable
-    private static Camera.Size largestPictureSize(@Nullable List<Camera.Size> sizes) {
-        return sizes == null || sizes.isEmpty()
-                ? null : Collections.max(sizes, new CompareSizesByArea());
+    static Point choosePictureSize(@NonNull List<Point> sizes, @NonNull CameraView.Quality quality,
+            @Nullable Point preview, boolean matchPreview) {
+        if (sizes.isEmpty()) {
+            return null;
+        }
+        // From the quality asked for up to MAX, which takes anything.
+        CameraView.Quality[] qualities = {CameraView.Quality.LOW, CameraView.Quality.MEDIUM,
+                CameraView.Quality.HIGH, CameraView.Quality.MAX};
+        int first = 0;
+        while (qualities[first] != quality) {
+            first++;
+        }
+        for (int i = first; i < qualities.length; i++) {
+            List<Point> within = within(sizes, qualities[i]);
+            if (within.isEmpty()) {
+                continue;
+            }
+            Point largest = Collections.max(within, BY_AREA);
+            if (!matchPreview || preview == null) {
+                return largest;
+            }
+            List<Point> matching = new ArrayList<>();
+            for (Point size : within) {
+                if (Math.abs((float) size.x / size.y - (float) preview.x / preview.y) < 0.01f) {
+                    matching.add(size);
+                }
+            }
+            if (matching.isEmpty()) {
+                return largest;
+            }
+            Point largestMatching = Collections.max(matching, BY_AREA);
+            return area(largestMatching) < area(largest) * MIN_MATCHED_PIXEL_FRACTION
+                    ? largest : largestMatching;
+        }
+        return Collections.max(sizes, BY_AREA);
+    }
+
+    /** The sizes no larger, either way, than a quality's bound. MAX has none. */
+    @NonNull
+    private static List<Point> within(@NonNull List<Point> sizes,
+            @NonNull CameraView.Quality quality) {
+        Point bound;
+        switch (quality) {
+            case LOW:
+                bound = new Point(640, 480);
+                break;
+            case MEDIUM:
+                bound = new Point(1280, 720);
+                break;
+            case HIGH:
+                bound = new Point(1920, 1080);
+                break;
+            case MAX:
+            default:
+                return sizes;
+        }
+        List<Point> within = new ArrayList<>();
+        for (Point size : sizes) {
+            if (size.x <= bound.x && size.y <= bound.y) {
+                within.add(size);
+            }
+        }
+        return within;
+    }
+
+    @NonNull
+    private static List<Point> toPoints(@Nullable List<Camera.Size> sizes) {
+        List<Point> points = new ArrayList<>();
+        if (sizes != null) {
+            for (Camera.Size size : sizes) {
+                points.add(new Point(size.width, size.height));
+            }
+        }
+        return points;
+    }
+
+    private static long area(@NonNull Point size) {
+        return (long) size.x * size.y;
+    }
+
+    /**
+     * Lights the flash as the torch asks, or as the strategy does, in a camera's parameters. A
+     * camera with no flash unit lists no flash modes, and is left alone.
+     */
+    private void applyFlash(@NonNull Camera.Parameters parameters) {
+        String mode = flashMode(parameters.getSupportedFlashModes(), getFlash(), isTorchEnabled());
+        if (mode != null) {
+            parameters.setFlashMode(mode);
+        }
+    }
+
+    /**
+     * Keeps the preview as quick as on the other backends. Left alone, the camera service gives
+     * the old API the widest range a camera lists, which can let a dim scene run at 5 fps; the
+     * metering before a flash picture counts frames, so it then takes three times as long.
+     *
+     * <p>Set apart from the other parameters, so a camera that will not take the range it lists
+     * keeps its own and still opens.</p>
+     */
+    @MainThread
+    private static void applyPreviewFpsRange(@NonNull Camera camera) {
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            int[] range = previewFpsRange(parameters.getSupportedPreviewFpsRange());
+            if (range == null) {
+                return;
+            }
+            parameters.setPreviewFpsRange(range[Camera.Parameters.PREVIEW_FPS_MIN_INDEX],
+                    range[Camera.Parameters.PREVIEW_FPS_MAX_INDEX]);
+            camera.setParameters(parameters);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Camera would not take a preview frame rate range", e);
+        }
+    }
+
+    /**
+     * The preview frame rate range to use: the fastest top rate up to {@link #MAX_PREVIEW_FPS},
+     * and with it the lowest floor of at least {@link #MIN_PREVIEW_FPS}, so a dim scene gets the
+     * longest exposures that still keep the preview smooth. A camera whose every range is faster
+     * gets its slowest, and one whose every floor is lower gets its highest floor.
+     *
+     * @return the range, or null for a camera that lists none
+     */
+    @AnyThread
+    @VisibleForTesting
+    @Nullable
+    static int[] previewFpsRange(@Nullable List<int[]> supported) {
+        if (supported == null) {
+            return null;
+        }
+        int[] best = null;
+        for (int[] range : supported) {
+            if (range != null && range.length > Camera.Parameters.PREVIEW_FPS_MAX_INDEX
+                    && (best == null || isBetterPreviewFpsRange(range, best))) {
+                best = range;
+            }
+        }
+        return best;
+    }
+
+    /** Whether one preview frame rate range suits {@link #previewFpsRange} better than another. */
+    @AnyThread
+    private static boolean isBetterPreviewFpsRange(@NonNull int[] range, @NonNull int[] than) {
+        int max = range[Camera.Parameters.PREVIEW_FPS_MAX_INDEX];
+        int thanMax = than[Camera.Parameters.PREVIEW_FPS_MAX_INDEX];
+        if (max != thanMax) {
+            boolean capped = max <= MAX_PREVIEW_FPS;
+            if (capped != (thanMax <= MAX_PREVIEW_FPS)) {
+                return capped;
+            }
+            return capped ? max > thanMax : max < thanMax;
+        }
+        int min = range[Camera.Parameters.PREVIEW_FPS_MIN_INDEX];
+        int thanMin = than[Camera.Parameters.PREVIEW_FPS_MIN_INDEX];
+        boolean floored = min >= MIN_PREVIEW_FPS;
+        if (floored != (thanMin >= MIN_PREVIEW_FPS)) {
+            return floored;
+        }
+        return floored ? min < thanMin : min > thanMin;
+    }
+
+    /**
+     * The flash mode for a strategy and the torch: the torch when it is on and the camera has
+     * one, the strategy where the camera offers it, and off otherwise.
+     *
+     * @return the mode, or null for a camera that lists none
+     */
+    @VisibleForTesting
+    @Nullable
+    static String flashMode(@Nullable List<String> supported, @NonNull CameraView.Flash flash,
+            boolean torch) {
+        if (supported == null || supported.isEmpty()) {
+            return null;
+        }
+        if (torch && supported.contains(Camera.Parameters.FLASH_MODE_TORCH)) {
+            return Camera.Parameters.FLASH_MODE_TORCH;
+        }
+        String wanted;
+        switch (flash) {
+            case ON:
+                wanted = Camera.Parameters.FLASH_MODE_ON;
+                break;
+            case AUTO:
+                wanted = Camera.Parameters.FLASH_MODE_AUTO;
+                break;
+            case OFF:
+            default:
+                wanted = Camera.Parameters.FLASH_MODE_OFF;
+                break;
+        }
+        if (supported.contains(wanted)) {
+            return wanted;
+        }
+        return supported.contains(Camera.Parameters.FLASH_MODE_OFF)
+                ? Camera.Parameters.FLASH_MODE_OFF : null;
+    }
+
+    /** Puts the flash right on the open camera, for a strategy or a torch that changed. */
+    @MainThread
+    private void updateFlash() {
+        if (mCamera == null) {
+            return;
+        }
+        try {
+            Camera.Parameters parameters = mCamera.getParameters();
+            applyFlash(parameters);
+            mCamera.setParameters(parameters);
+        } catch (RuntimeException e) {
+            // A recording holds the camera unlocked, and the camera takes no parameters then.
+            Log.w(TAG, "Camera would not change its flash", e);
+        }
+    }
+
+    @MainThread
+    @Override
+    public void setFlash(CameraView.Flash flash) {
+        super.setFlash(flash);
+        updateFlash();
+    }
+
+    /** Whether the open camera has a flash unit, which it says by listing a mode that lights it. */
+    @Override
+    public boolean hasFlash() {
+        List<String> modes = flashModes();
+        return modes != null && (modes.contains(Camera.Parameters.FLASH_MODE_ON)
+                || modes.contains(Camera.Parameters.FLASH_MODE_TORCH));
+    }
+
+    /** The open camera's flash modes, or null when it is closed or lists none. */
+    @Nullable
+    private List<String> flashModes() {
+        if (mCamera == null) {
+            return null;
+        }
+        try {
+            return mCamera.getParameters().getSupportedFlashModes();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Camera would not say what its flash can do", e);
+            return null;
+        }
     }
 
     @Override
     public void close() {
         Log.d(TAG, "onClose() activeCamera="+getActiveCamera());
         mBusyRetry.cancel();
+        mOnPreviewFrame = null;
+        mHandler.removeCallbacks(mPreviewFrameTimeout);
+        if (mBurst != null) {
+            Burst burst = mBurst;
+            File outstanding = mBurstFile;
+            mBurstFile = null;
+            if (outstanding != null) {
+                burst.onPictureFailed(outstanding);
+            } else {
+                burst.end();
+            }
+        }
         if (isRecording()) {
             // The recorder holds the camera, so releasing the camera under a running recording
             // leaves an encoder writing to a file nothing will ever finish, and isRecording()
@@ -252,7 +568,8 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera.release();
             mCamera = null;
             mPreviewSize = null;
-            mDefaultPictureSize = null;
+            // A released camera delivers no picture still being taken.
+            mTakingPicture = false;
         }
     }
 
@@ -336,21 +653,32 @@ public class LegacyCameraModule extends ICameraModule {
     private void applyShutterSound() {
         if (mCamera == null) {
             mPlaysOwnClick = false;
+            mBurstClicks = false;
             return;
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.JELLY_BEAN_MR1) {
             // The click cannot be silenced before API 17, so it plays in place of the app's own.
             mPlaysOwnClick = false;
+            mBurstClicks = mBurst != null;
             return;
         }
         boolean custom = getShutterSound() != 0;
         try {
-            boolean applied = mCamera.enableShutterSound(isShutterSoundEnabled() && !custom);
+            // A burst plays its own sound in place of the click, where the click can be silenced.
+            boolean applied = mCamera.enableShutterSound(
+                    mBurst == null && isShutterSoundEnabled() && !custom);
             mPlaysOwnClick = custom && applied;
+            mBurstClicks = mBurst != null && !applied;
         } catch (RuntimeException e) {
             Log.w(TAG, "Failed to set the shutter sound", e);
             mPlaysOwnClick = false;
+            mBurstClicks = mBurst != null;
         }
+    }
+
+    @Override
+    protected boolean platformClicksBurstPictures() {
+        return mBurstClicks;
     }
 
     @Override
@@ -363,9 +691,32 @@ public class LegacyCameraModule extends ICameraModule {
             onImageFailed();
             return;
         }
-        mCamera.takePicture(this::onShutter, null, new LegacyPictureListener(
-                file, getRelativeCameraOrientation(false /* isPreview */), isUsingFrontFacingCamera(),
-                exifCaptureParameters(), this));
+        if (mBurst != null) {
+            Log.w(TAG, "Cannot take a picture while a burst is running");
+            onImageFailed();
+            return;
+        }
+        if (mTakingPicture) {
+            Log.w(TAG, "Ignoring a picture asked for while another is being taken");
+            onImageFailed();
+            return;
+        }
+        LegacyPictureListener listener = new LegacyPictureListener(
+                file, getRelativeCameraOrientation(false /* isPreview */),
+                isUsingFrontFacingCamera(), exifCaptureParameters(), this);
+        mTakingPicture = true;
+        try {
+            mCamera.takePicture(this::onShutter, null, (data, camera) -> {
+                mTakingPicture = false;
+                listener.onPictureTaken(data, camera);
+            });
+        } catch (RuntimeException e) {
+            // Thrown rather than reported, as for a picture asked for while the preview is
+            // stopped.
+            mTakingPicture = false;
+            Log.w(TAG, "The camera refused to take a picture", e);
+            onImageFailed();
+        }
     }
 
     /**
@@ -379,6 +730,146 @@ public class LegacyCameraModule extends ICameraModule {
         } catch (RuntimeException error) {
             Log.w(TAG, "Unable to read the camera's parameters for a picture's Exif", error);
             return new ExifCaptureParameters();
+        }
+    }
+
+    /**
+     * Takes a burst one picture at a time, since the camera stops its preview for each and has to
+     * be restarted before the next. The next is asked for as soon as the preview restarts, while
+     * the last is still being saved.
+     */
+    @Override
+    protected void startBurst(@NonNull Burst burst) {
+        Camera camera = mCamera;
+        if (camera == null || isRecording() || mBurst != null || mTakingPicture) {
+            Log.w(TAG, "Cannot take a burst in the camera's current state");
+            burst.end();
+            return;
+        }
+        mBurst = burst;
+        applyShutterSound();
+        String flashMode = turnFlashOff(camera);
+        burst.whenFinished(() -> {
+            if (mBurst != burst) {
+                return;
+            }
+            mBurst = null;
+            mBurstFile = null;
+            applyShutterSound();
+            if (flashMode != null) {
+                setFlashMode(camera, flashMode);
+            }
+        });
+        takeBurstPicture(burst);
+    }
+
+    private void takeBurstPicture(@NonNull Burst burst) {
+        Camera camera = mCamera;
+        if (mBurst != burst) {
+            return;
+        }
+        if (camera == null) {
+            burst.end();
+            return;
+        }
+        File file = burst.nextFile();
+        if (file == null) {
+            return;
+        }
+        mBurstFile = file;
+        try {
+            // The shutter callback plays nothing: the burst's sound starts with the first
+            // picture, and the platform clicks for each only where it cannot be silenced.
+            camera.takePicture(this::onBurstShutter, null, new LegacyPictureListener(
+                    file, getRelativeCameraOrientation(false /* isPreview */),
+                    isUsingFrontFacingCamera(), exifCaptureParameters(), this,
+                    burst.getExecutor(),
+                    new LegacyPictureListener.Callback() {
+                        @Override
+                        public void onPreviewRestarted(boolean restarted) {
+                            mBurstFile = null;
+                            if (!restarted) {
+                                burst.end();
+                                return;
+                            }
+                            awaitPreviewFrame(() -> takeBurstPicture(burst));
+                        }
+
+                        @Override
+                        public void onPictureSaved(@NonNull File saved) {
+                            burst.onPictureTaken(saved);
+                        }
+
+                        @Override
+                        public void onPictureFailed(@NonNull File failed) {
+                            burst.onPictureFailed(failed);
+                        }
+                    }));
+        } catch (RuntimeException e) {
+            Log.e(TAG, "Failed to take a burst picture", e);
+            mBurstFile = null;
+            burst.onPictureFailed(file);
+        }
+    }
+
+    /**
+     * Runs an action once the restarted preview shows a frame, or after
+     * {@link #PREVIEW_FRAME_TIMEOUT_MILLIS} if none is shown. A camera asked for a picture before
+     * its preview is running again can fail the request and stay broken until it is reopened, as
+     * the API 15 emulator's does; a frame on screen says the preview is running.
+     */
+    @MainThread
+    private void awaitPreviewFrame(@NonNull Runnable action) {
+        mOnPreviewFrame = action;
+        mHandler.removeCallbacks(mPreviewFrameTimeout);
+        mHandler.postDelayed(mPreviewFrameTimeout, PREVIEW_FRAME_TIMEOUT_MILLIS);
+    }
+
+    @MainThread
+    @Override
+    public void onPreviewFrameShown() {
+        Runnable action = mOnPreviewFrame;
+        if (action == null) {
+            return;
+        }
+        mOnPreviewFrame = null;
+        mHandler.removeCallbacks(mPreviewFrameTimeout);
+        action.run();
+    }
+
+    /**
+     * Turns off a flash that would fire for a picture, leaving a torch alone.
+     *
+     * @return the mode to put back afterwards, or null if nothing changed
+     */
+    @Nullable
+    private static String turnFlashOff(@NonNull Camera camera) {
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            String mode = parameters.getFlashMode();
+            List<String> modes = parameters.getSupportedFlashModes();
+            boolean fires = Camera.Parameters.FLASH_MODE_ON.equals(mode)
+                    || Camera.Parameters.FLASH_MODE_AUTO.equals(mode)
+                    || Camera.Parameters.FLASH_MODE_RED_EYE.equals(mode);
+            if (!fires || modes == null || !modes.contains(Camera.Parameters.FLASH_MODE_OFF)) {
+                return null;
+            }
+            parameters.setFlashMode(Camera.Parameters.FLASH_MODE_OFF);
+            camera.setParameters(parameters);
+            return mode;
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to turn the flash off", e);
+            return null;
+        }
+    }
+
+    private static void setFlashMode(@NonNull Camera camera, @NonNull String mode) {
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            parameters.setFlashMode(mode);
+            camera.setParameters(parameters);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Failed to put the flash back", e);
         }
     }
 
@@ -717,17 +1208,20 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     /**
-     * Refused while a camera without a flash is open, as on the other backends. This backend
-     * drives no flash, so that is every camera it opens; a request made while closed is kept.
+     * Refused while a camera that cannot light its flash continuously is open, as on the other
+     * backends. A request made while closed is kept, and lit once a camera that can opens.
      */
     @MainThread
     @Override
     public void setTorchEnabled(boolean enabled) {
-        if (enabled && mCamera != null && !hasFlash()) {
-            Log.w(TAG, "Ignoring torch request because the active camera has no flash unit");
+        List<String> modes = flashModes();
+        if (enabled && mCamera != null
+                && (modes == null || !modes.contains(Camera.Parameters.FLASH_MODE_TORCH))) {
+            Log.w(TAG, "Ignoring torch request because the active camera has no torch");
             return;
         }
         super.setTorchEnabled(enabled);
+        updateFlash();
     }
 
     /** Refused while a camera that cannot steady the picture is open, as on the other backends. */

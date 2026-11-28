@@ -40,19 +40,24 @@ public final class BackgroundReplacer implements FrameRenderer {
     /** The largest value of an 8-bit colour channel. */
     private static final float BYTE_MAX = 255f;
 
-    /** Positions the quad and passes on both the camera and the mask coordinates. */
+    /** Positions the quad and passes on the camera, mask and background coordinates. */
     private static final String VERTEX_SHADER =
             "uniform mat4 uTextureMatrix;\n"
+            + "uniform mat4 uMaskMatrix;\n"
+            + "uniform mat4 uBackgroundMatrix;\n"
             + "attribute vec4 aPosition;\n"
             + "attribute vec4 aTextureCoordinate;\n"
             + "varying vec2 vTextureCoordinate;\n"
             + "varying vec2 vMaskCoordinate;\n"
+            + "varying vec2 vBackgroundCoordinate;\n"
             + "void main() {\n"
             + "  gl_Position = aPosition;\n"
             + "  vTextureCoordinate = (uTextureMatrix * aTextureCoordinate).xy;\n"
-            // The mask is in the frame's own orientation, not the camera texture's, so it is
-            // sampled with the untransformed coordinate rather than the rotated one.
-            + "  vMaskCoordinate = aTextureCoordinate.xy;\n"
+            // The mask and the image are in the frame's orientation as it is shown, not the
+            // camera texture's, so they are read from the untransformed coordinate: through a
+            // matrix only because each was uploaded top row first, and the mask may be mirrored.
+            + "  vMaskCoordinate = (uMaskMatrix * aTextureCoordinate).xy;\n"
+            + "  vBackgroundCoordinate = (uBackgroundMatrix * aTextureCoordinate).xy;\n"
             + "}\n";
 
     /** Mixes the camera frame over the background colour or image by the mask. */
@@ -67,10 +72,11 @@ public final class BackgroundReplacer implements FrameRenderer {
             + "uniform float uHasMask;\n"
             + "varying vec2 vTextureCoordinate;\n"
             + "varying vec2 vMaskCoordinate;\n"
+            + "varying vec2 vBackgroundCoordinate;\n"
             + "void main() {\n"
             + "  vec4 camera = texture2D(uTexture, vTextureCoordinate);\n"
             + "  vec4 background = mix(uBackgroundColor,\n"
-            + "      texture2D(uBackground, vMaskCoordinate), uHasBackgroundImage);\n"
+            + "      texture2D(uBackground, vBackgroundCoordinate), uHasBackgroundImage);\n"
             // Without a mask every pixel is subject, so the camera frame comes through whole.
             + "  float subject = mix(1.0, texture2D(uMask, vMaskCoordinate).a, uHasMask);\n"
             + "  gl_FragColor = mix(background, camera, subject);\n"
@@ -91,6 +97,10 @@ public final class BackgroundReplacer implements FrameRenderer {
     private int mTextureCoordinateHandle;
     /** The location of the camera texture's transform matrix. */
     private int mTextureMatrixHandle;
+    /** The location of the matrix that reads the mask. */
+    private int mMaskMatrixHandle;
+    /** The location of the matrix that reads the background image. */
+    private int mBackgroundMatrixHandle;
     /** The location of the mask sampler. */
     private int mMaskHandle;
     /** The location of the background image sampler. */
@@ -111,6 +121,8 @@ public final class BackgroundReplacer implements FrameRenderer {
     private int mMaskHeight;
     /** Whether the background texture holds an image, rather than the colour being drawn. */
     private boolean mHasBackgroundImage;
+    /** Whether the mask last uploaded was made from a mirrored frame, and is read mirrored. */
+    private boolean mMaskMirrored;
     /** The quad's positions and texture coordinates, or null while the renderer is stopped. */
     @Nullable private FloatBuffer mVertices;
     /** Whether the program failed to build, after which frames go through unchanged. */
@@ -163,6 +175,8 @@ public final class BackgroundReplacer implements FrameRenderer {
             mPositionHandle = GLES20.glGetAttribLocation(mProgram, "aPosition");
             mTextureCoordinateHandle = GLES20.glGetAttribLocation(mProgram, "aTextureCoordinate");
             mTextureMatrixHandle = GLES20.glGetUniformLocation(mProgram, "uTextureMatrix");
+            mMaskMatrixHandle = GLES20.glGetUniformLocation(mProgram, "uMaskMatrix");
+            mBackgroundMatrixHandle = GLES20.glGetUniformLocation(mProgram, "uBackgroundMatrix");
             mMaskHandle = GLES20.glGetUniformLocation(mProgram, "uMask");
             mBackgroundHandle = GLES20.glGetUniformLocation(mProgram, "uBackground");
             mBackgroundColorHandle = GLES20.glGetUniformLocation(mProgram, "uBackgroundColor");
@@ -214,6 +228,11 @@ public final class BackgroundReplacer implements FrameRenderer {
         GLES20.glUniform1i(mBackgroundHandle, 2);
 
         GLES20.glUniformMatrix4fv(mTextureMatrixHandle, 1, false, frame.getTextureMatrix(), 0);
+        GLES20.glUniformMatrix4fv(mMaskMatrixHandle, 1, false,
+                GlMath.topRowFirst(mMaskMirrored), 0);
+        // Never mirrored: a background shows the way it was given, whichever lens is in use.
+        GLES20.glUniformMatrix4fv(mBackgroundMatrixHandle, 1, false,
+                GlMath.topRowFirst(false), 0);
         GLES20.glUniform4fv(mBackgroundColorHandle, 1, color, 0);
         GLES20.glUniform1f(mHasBackgroundImageHandle, mHasBackgroundImage ? 1f : 0f);
         GLES20.glUniform1f(mHasMaskHandle, mMaskWidth > 0 ? 1f : 0f);
@@ -270,6 +289,7 @@ public final class BackgroundReplacer implements FrameRenderer {
                 mask.getHeight(), 0, GLES20.GL_ALPHA, GLES20.GL_UNSIGNED_BYTE, buffer);
         mMaskWidth = mask.getWidth();
         mMaskHeight = mask.getHeight();
+        mMaskMirrored = mask.isMirrored();
     }
 
     /** Uploads the newest background image, if one arrived since the last frame. */

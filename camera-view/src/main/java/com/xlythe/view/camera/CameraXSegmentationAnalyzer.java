@@ -3,8 +3,10 @@ package com.xlythe.view.camera;
 import android.media.Image;
 import android.util.Log;
 
+import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.RestrictTo;
+import androidx.annotation.VisibleForTesting;
 import androidx.camera.core.ExperimentalGetImage;
 import androidx.camera.core.ImageAnalysis;
 import androidx.camera.core.ImageProxy;
@@ -44,21 +46,33 @@ public final class CameraXSegmentationAnalyzer implements CameraXFrameAnalyzer {
     private final Executor mCallbackExecutor;
     /** Whether {@link #close} has been called, after which no mask is reported. */
     private final AtomicBoolean mClosed = new AtomicBoolean();
-    /** Whether the frames are mirrored, as a front camera's are, so the mask is read flipped. */
-    private final boolean mMirrored;
-
     /**
-     * @param mirrored true when these frames come from a front camera the library mirrors, so
-     *     the mask has to be read back the other way round
+     * Whether the frames come from a lens shown mirrored, as a front camera is, so the mask is
+     * read flipped. Set on the main thread before each bind and read on the analysis thread.
      */
+    private volatile boolean mMirrored;
+
     public CameraXSegmentationAnalyzer(@NonNull CameraView.SegmentationListener listener,
-            @NonNull Executor callbackExecutor, boolean mirrored) {
+            @NonNull Executor callbackExecutor) {
+        this(listener, callbackExecutor,
+                Segmentation.getClient(new SelfieSegmenterOptions.Builder()
+                        .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE)
+                        .build()));
+    }
+
+    /** Runs frames through the given segmenter, which a test supplies in ML Kit's place. */
+    @VisibleForTesting
+    CameraXSegmentationAnalyzer(@NonNull CameraView.SegmentationListener listener,
+            @NonNull Executor callbackExecutor, @NonNull Segmenter segmenter) {
         mListener = listener;
         mCallbackExecutor = callbackExecutor;
+        mSegmenter = segmenter;
+    }
+
+    @MainThread
+    @Override
+    public void setMirrored(boolean mirrored) {
         mMirrored = mirrored;
-        mSegmenter = Segmentation.getClient(new SelfieSegmenterOptions.Builder()
-                .setDetectorMode(SelfieSegmenterOptions.STREAM_MODE)
-                .build());
     }
 
     @ExperimentalGetImage
@@ -72,6 +86,9 @@ public final class CameraXSegmentationAnalyzer implements CameraXFrameAnalyzer {
             imageProxy.close();
             return;
         }
+        // Read as the frame arrives, since a lens switch can tell this analyzer about the next
+        // camera while the model is still working on a frame from the last.
+        boolean mirrored = mMirrored;
         InputImage image = InputImage.fromMediaImage(
                 mediaImage, imageProxy.getImageInfo().getRotationDegrees());
         try {
@@ -79,7 +96,7 @@ public final class CameraXSegmentationAnalyzer implements CameraXFrameAnalyzer {
                     .addOnSuccessListener(mCallbackExecutor, mask -> {
                         if (mClosed.get()) return;
                         mListener.onSegmentation(new SegmentationMask(
-                                mask.getBuffer(), mask.getWidth(), mask.getHeight(), mMirrored));
+                                mask.getBuffer(), mask.getWidth(), mask.getHeight(), mirrored));
                     })
                     .addOnFailureListener(mCallbackExecutor,
                             error -> Log.w(TAG, "CameraX segmentation failed", error))

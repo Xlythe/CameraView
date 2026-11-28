@@ -43,6 +43,18 @@
                 android:layout_height="match_parent"
                 camera:quality="high" />
 
+            <!-- RAW, shown by MainFragment where the camera can write a DNG beside the JPEG -->
+            <CheckBox
+                android:id="@+id/raw"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|end"
+                android:layout_margin="16dp"
+                android:buttonTint="#FFFFFF"
+                android:text="@string/raw"
+                android:textColor="#FFFFFF"
+                android:visibility="gone" />
+
             <!-- Exposure compensation, shown by MainFragment where the camera can compensate -->
             <LinearLayout
                 android:id="@+id/exposure_control"
@@ -113,6 +125,29 @@
                 android:textColor="#FFFFFF"
                 app:backgroundTint="#D32F2F"
                 app:cornerRadius="20dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/view_last"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginBottom="8dp"
+                android:layout_weight="1"
+                android:enabled="false"
+                android:text="@string/btn_view"
+                android:textColor="#FFFFFF"
+                app:cornerRadius="20dp" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/burst"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginBottom="8dp"
+                android:layout_weight="1"
+                android:text="@string/btn_burst"
+                android:textColor="#FFFFFF"
+                app:backgroundTint="#455A64"
+                app:cornerRadius="24dp"
+                app:elevation="4dp" />
 
             <com.google.android.material.button.MaterialButton
                 android:id="@id/capture"
