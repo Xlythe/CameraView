@@ -386,6 +386,13 @@ public class OverlayView extends View {
         }
     }
 
+    /** The steps, for an {@link EditHistory} to keep in order with other views' steps. */
+    @MainThread
+    @NonNull
+    History<List<Overlay>> history() {
+        return mHistory;
+    }
+
     @MainThread
     public boolean canUndo() {
         return mHistory.canUndo();
