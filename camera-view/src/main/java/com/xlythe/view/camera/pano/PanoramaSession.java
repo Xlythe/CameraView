@@ -57,6 +57,14 @@ public final class PanoramaSession implements GuideState.Source {
         @UiThread
         void onProgress(float progress);
 
+        /**
+         * The rotation has settled and the sweep has begun placing frames. The exposure and white
+         * balance the camera has settled on by now, held still on the first dot, are the ones to
+         * keep for the whole sweep.
+         */
+        @UiThread
+        default void onBegun() {}
+
         /** The sweep is over, so frames can stop. The picture is being written. */
         @UiThread
         void onFinishing();
@@ -76,6 +84,9 @@ public final class PanoramaSession implements GuideState.Source {
     }
 
     private static final String TAG = "CameraView";
+
+    /** Whether the callback has heard that the sweep began. Read and written on the worker. */
+    private boolean mBegun;
 
     /** Above this, a frame is smeared by the turn and the rotation is least certain. */
     static final float MAX_TURN_DEGREES_PER_SECOND = 45f;
@@ -569,6 +580,10 @@ public final class PanoramaSession implements GuideState.Source {
 
     /** Sets the sweep up around the first frame: it is the middle of the picture. */
     private void begin(@NonNull CameraPose pose) {
+        if (!mBegun) {
+            mBegun = true;
+            mMainExecutor.execute(mCallback::onBegun);
+        }
         float pixelsPerDegree = Math.min(pose.focal * (float) Math.PI / 180f,
                 (mPhotosphere ? PHOTOSPHERE_MAX_WIDTH : PANORAMA_MAX_WIDTH) / 360f);
         int width = 2 * Math.max(1, Math.round(180f * pixelsPerDegree));

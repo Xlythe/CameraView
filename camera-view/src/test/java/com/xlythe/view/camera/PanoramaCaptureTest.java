@@ -158,20 +158,27 @@ public class PanoramaCaptureTest {
         openCamera2();
         assertTrue(cameraView.startPanorama(file, CameraView.PanoramaMode.PANORAMA, recorder));
         ImageReader reader = awaitReader();
+        ICameraModule module = (ICameraModule) field(cameraView, CameraView.class,
+                "mCameraModule");
+        assertFalse("exposure runs free until the sweep begins", module.isExposureLocked());
         long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
-        // Frames until one has been painted, each with the rotation it was captured at.
-        while (!hasPainted() && System.currentTimeMillis() < deadline) {
+        // Frames until one has been painted and the sweep has begun, each with the rotation it
+        // was captured at.
+        while ((!hasPainted() || !module.isExposureLocked())
+                && System.currentTimeMillis() < deadline) {
             holdStill();
             ShadowInjectableImageReader.offerImage(reader, FakeImage.yuv420(64, 48, 0, 2));
             Thread.sleep(50);
             idle();
         }
         assertTrue("no frame was painted", hasPainted());
+        assertTrue("exposure is held once the sweep begins", module.isExposureLocked());
         cameraView.stopPanorama();
         awaitResult();
         assertEquals(file, recorder.saved);
         assertFalse(cameraView.isCapturingPanorama());
         assertEquals(View.GONE, guide().getVisibility());
+        assertFalse("and let go when it ends", module.isExposureLocked());
     }
 
     /**
@@ -294,22 +301,29 @@ public class PanoramaCaptureTest {
         Camera.Parameters parameters = camera.getParameters();
         parameters.set("horizontal-view-angle", "60");
         parameters.set("vertical-view-angle", "46.8");
+        parameters.set("auto-exposure-lock-supported", "true");
+        parameters.set("auto-whitebalance-lock-supported", "true");
         camera.setParameters(parameters);
 
         assertTrue(cameraView.startPanorama(file, CameraView.PanoramaMode.PANORAMA, recorder));
         Camera.Size size = camera.getParameters().getPreviewSize();
         ShadowCamera shadowCamera = Shadow.extract(camera);
         long deadline = System.currentTimeMillis() + TIMEOUT_MILLIS;
-        while (!hasPainted() && System.currentTimeMillis() < deadline) {
+        while ((!hasPainted() || !camera.getParameters().getAutoExposureLock())
+                && System.currentTimeMillis() < deadline) {
             holdStill();
             shadowCamera.invokePreviewCallback(new byte[size.width * size.height * 3 / 2]);
             Thread.sleep(50);
             idle();
         }
         assertTrue("no frame was painted", hasPainted());
+        assertTrue("exposure is held while sweeping", camera.getParameters().getAutoExposureLock());
+        assertTrue("and white balance", camera.getParameters().getAutoWhiteBalanceLock());
         cameraView.stopPanorama();
         awaitResult();
         assertEquals(file, recorder.saved);
+        assertFalse("let go once it ends", camera.getParameters().getAutoExposureLock());
+        assertFalse(camera.getParameters().getAutoWhiteBalanceLock());
     }
 
     private void openCamera2() {

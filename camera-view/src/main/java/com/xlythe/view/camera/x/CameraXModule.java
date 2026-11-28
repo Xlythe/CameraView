@@ -43,8 +43,10 @@ import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
 import androidx.camera.core.Camera;
 import androidx.camera.core.CameraControl;
+import androidx.camera.camera2.interop.Camera2CameraControl;
 import androidx.camera.camera2.interop.Camera2CameraInfo;
 import androidx.camera.camera2.interop.Camera2Interop;
+import androidx.camera.camera2.interop.CaptureRequestOptions;
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop;
 import androidx.camera.core.CameraEffect;
 import androidx.camera.core.CameraInfo;
@@ -1189,6 +1191,47 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         }, mMainExecutor);
     }
 
+    @AnyThread
+    @Override public void setExposureLocked(boolean locked) {
+        super.setExposureLocked(locked);
+        runOnMainThread(this::applyExposureLockOnMainThread);
+    }
+
+    /**
+     * Holds or frees auto-exposure and auto white balance on the bound camera. CameraX has no
+     * lock of its own, so it goes through Camera2 interop as request options, which CameraX adds
+     * to every repeating request; a rebind applies it again.
+     */
+    @MainThread
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    private void applyExposureLockOnMainThread() {
+        Camera camera = mActiveCamera;
+        if (camera == null) {
+            return;
+        }
+        boolean locked = isExposureLocked();
+        CaptureRequestOptions options = new CaptureRequestOptions.Builder()
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, locked)
+                .setCaptureRequestOption(CaptureRequest.CONTROL_AWB_LOCK, locked)
+                .build();
+        try {
+            ListenableFuture<Void> result = Camera2CameraControl.from(camera.getCameraControl())
+                    .addCaptureRequestOptions(options);
+            result.addListener(() -> {
+                try {
+                    result.get();
+                } catch (CancellationException | ExecutionException error) {
+                    // A rebind cancels it, and applies it again once bound.
+                    if (DEBUG) Log.d(TAG, "Exposure lock not applied", error);
+                } catch (InterruptedException error) {
+                    Thread.currentThread().interrupt();
+                }
+            }, mMainExecutor);
+        } catch (IllegalArgumentException error) {
+            Log.w(TAG, "This camera cannot hold its exposure", error);
+        }
+    }
+
     @Override public int getMinExposureCompensation() {
         synchronized (mSnapshotLock) {
             return mSnapshotMinExposure;
@@ -2303,6 +2346,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             if (mRequestedExposureCompensation != 0) {
                 setExposureCompensationOnMainThread(mRequestedExposureCompensation);
             }
+            if (isExposureLocked()) applyExposureLockOnMainThread();
             if (isTorchEnabled()) setTorchEnabledOnMainThread(true);
             if (isLowLightBoostEnabled()) setLowLightBoostEnabledOnMainThread(true);
             return true;

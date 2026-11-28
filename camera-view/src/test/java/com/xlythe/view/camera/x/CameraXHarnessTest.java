@@ -134,6 +134,7 @@ public class CameraXHarnessTest {
 
             exerciseResize(module, host);
             exerciseExposureAcrossARebind(module);
+            exerciseExposureLock(module);
 
             module.close();
             FakeCameraXHost.idle();
@@ -474,6 +475,42 @@ public class CameraXHarnessTest {
                     .get(CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION);
         }
         assertEquals("the rebind lost the exposure index", Integer.valueOf(3), applied);
+    }
+
+    /**
+     * Holding exposure and white balance reaches every repeating request, through Camera2
+     * interop, survives a rebind, and lets go again.
+     */
+    private static void exerciseExposureLock(CameraXModule module) throws Exception {
+        module.setExposureLocked(true);
+        assertTrue(module.isExposureLocked());
+        assertEquals("held", Boolean.TRUE, awaitLock(module, Boolean.TRUE));
+        module.setQuality(module.getQuality() == CameraView.Quality.LOW
+                ? CameraView.Quality.HIGH : CameraView.Quality.LOW);
+        assertTrue(FakeCameraXHost.awaitBind(module));
+        assertEquals("held across a rebind", Boolean.TRUE, awaitLock(module, Boolean.TRUE));
+        module.setExposureLocked(false);
+        assertFalse(module.isExposureLocked());
+        assertEquals("let go", Boolean.FALSE, awaitLock(module, Boolean.FALSE));
+    }
+
+    /** Waits for the newest repeating request to hold, or free, both locks as wanted. */
+    private static Boolean awaitLock(CameraXModule module, Boolean wanted) throws Exception {
+        Boolean seen = null;
+        for (int attempt = 0; attempt < 100; attempt++) {
+            settle();
+            List<CaptureRequest> requests =
+                    ShadowCallbackCameraCaptureSession.getRepeatingRequests();
+            if (requests.isEmpty()) {
+                continue;
+            }
+            CaptureRequest last = requests.get(requests.size() - 1);
+            seen = last.get(CaptureRequest.CONTROL_AE_LOCK);
+            if (wanted.equals(seen) && wanted.equals(last.get(CaptureRequest.CONTROL_AWB_LOCK))) {
+                return seen;
+            }
+        }
+        return seen;
     }
 
     /** Lets CameraX's own threads catch up, since idling the main looper alone does not. */

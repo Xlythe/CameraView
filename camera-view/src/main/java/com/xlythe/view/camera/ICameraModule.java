@@ -15,6 +15,7 @@ import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
 import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
@@ -67,6 +68,8 @@ public abstract class ICameraModule {
     private boolean mStabilizationEnabled;
     /** Requested exposure compensation index. */
     private int mExposureCompensation;
+    /** Whether auto-exposure and auto white balance are held where they settled. */
+    private boolean mExposureLocked;
     /** Whether continuous torch illumination is requested. */
     private boolean mTorchEnabled;
     /** Whether low-light boost is requested. */
@@ -614,6 +617,27 @@ public abstract class ICameraModule {
 
     public synchronized boolean isExposureCompensationSupported() {
         return false;
+    }
+
+    /**
+     * Holds auto-exposure and auto white balance where they have settled, or lets them run again.
+     *
+     * <p>A sweep holds them, so every frame of it is exposed and coloured alike. Left running,
+     * they follow each part of the room as the phone turns, and the frames' outlines show
+     * wherever the stitcher's gain compensation cannot quite undo it. Each backend applies it to
+     * every repeating request, and again to a camera it reopens.</p>
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    public synchronized void setExposureLocked(boolean locked) {
+        mExposureLocked = locked;
+    }
+
+    /** Whether auto-exposure and auto white balance are being held. */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @AnyThread
+    public synchronized boolean isExposureLocked() {
+        return mExposureLocked;
     }
 
     /**

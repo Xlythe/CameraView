@@ -3,6 +3,7 @@ package com.xlythe.view.camera.legacy;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.content.Context;
@@ -279,6 +280,28 @@ public class LegacyCameraModuleTest {
         assertEquals(-6, module.getMinExposureCompensation());
         assertEquals(6, module.getMaxExposureCompensation());
         assertEquals(0.5f, module.getExposureCompensationStep(), 0f);
+    }
+
+    /**
+     * Holding exposure for a sweep reaches the camera's parameters, for whichever of the two
+     * locks the camera has, and so does letting go.
+     */
+    @Test
+    public void exposureLockReachesTheCamera_whereItCanHold() throws Exception {
+        module.open();
+        Camera.Parameters parameters = openCamera().getParameters();
+        parameters.set("auto-exposure-lock-supported", "true");
+        parameters.set("auto-whitebalance-lock-supported", "false");
+        openCamera().setParameters(parameters);
+
+        module.setExposureLocked(true);
+        assertTrue(module.isExposureLocked());
+        assertTrue(openCamera().getParameters().getAutoExposureLock());
+        assertNull("not asked of a camera that cannot",
+                openCamera().getParameters().get("auto-whitebalance-lock"));
+
+        module.setExposureLocked(false);
+        assertFalse(openCamera().getParameters().getAutoExposureLock());
     }
 
     /** An index lands on the camera's parameters, held to its range. */
