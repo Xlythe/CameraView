@@ -44,8 +44,8 @@ import java.util.concurrent.Executors;
 /**
  * ViewerFragment shows any picture, video or sound file in the library's MediaView, which works
  * out what the file is: a picture or DNG to zoom into, a panorama, a photo sphere, a video, a
- * motion photo, a 360° video, a recording or an animated picture. The choices along the bottom show it as something
- * else instead, and the line at the top says what MediaTags reads from it.
+ * motion photo, a 360° video, a recording or an animated picture. The choices along the bottom
+ * show it as something else instead, and the line at the top says what MediaTags reads from it.
  *
  * <p>MainFragment opens it on the picture it just filed; the menu opens it empty, to pick a
  * file from the gallery.</p>
