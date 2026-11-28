@@ -105,6 +105,11 @@ public class MediaShotsDeviceTest {
         }
         File probe = copy(instrumentation, SHOTS[0][1].toString(), directory);
         assumeTrue("the corpus was not pushed", probe.length() > 0);
+        // Taken once: ActivityScenario waits for the main thread to idle on every call, which an
+        // animation drawn in software can keep it from ever doing on Android 5.
+        AtomicReference<ViewerTestActivity> host = new AtomicReference<>();
+        mActivity.getScenario().onActivity(host::set);
+        ViewerTestActivity activity = host.get();
         for (Object[] shot : SHOTS) {
             String name = (String) shot[0];
             int action = (Integer) shot[2];
@@ -112,7 +117,7 @@ public class MediaShotsDeviceTest {
             CountDownLatch done = new CountDownLatch(1);
             int[] type = {-1};
             AtomicReference<MediaView> made = new AtomicReference<>();
-            mActivity.getScenario().onActivity(activity -> {
+            instrumentation.runOnMainSync(() -> {
                 MediaView view = new MediaView(activity);
                 view.setHdrEnabled(action != NO_HDR);
                 view.setMediaListener(new MediaListener() {
@@ -151,8 +156,7 @@ public class MediaShotsDeviceTest {
             }
             int[] mode = new int[1];
             if (Build.VERSION.SDK_INT >= 26) {
-                mActivity.getScenario().onActivity(activity ->
-                        mode[0] = activity.getWindow().getColorMode());
+                instrumentation.runOnMainSync(() -> mode[0] = activity.getWindow().getColorMode());
             }
             boolean playing = isPlaying(instrumentation, view);
             save(screenshot(instrumentation, view), new File(shots,
@@ -167,7 +171,7 @@ public class MediaShotsDeviceTest {
                     up.recycle();
                 });
             }
-            mActivity.getScenario().onActivity(activity -> activity.getRoot().removeAllViews());
+            instrumentation.runOnMainSync(() -> activity.getRoot().removeAllViews());
         }
     }
 
