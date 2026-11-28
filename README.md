@@ -658,8 +658,8 @@ Viewing any media
 MediaView shows whatever a file turns out to be, worked out from its contents: a picture to zoom
 into, a panorama to pan along, a photo sphere to look around, a video, a motion photo whose clip
 plays while it is held, a 360° video, a recording, or an animated picture. A tap plays and pauses;
-a thin line along the bottom shows how far it has played. HDR pictures show in HDR
-where the screen can; an HDR video puts the window in HDR mode, but is drawn in standard range.
+a thin line along the bottom shows how far it has played. HDR pictures and videos show in HDR
+where the screen can, except a 360° video, which is drawn in standard range.
 ```java
 mMediaView.setUri(uri);                  // or setFile(file)
 mMediaView.setMediaListener(new MediaListener() {
@@ -685,6 +685,8 @@ What shows depends on what the device decodes:
 | DNG | Android 7.0 and newer; before that, the preview it carries, if any |
 | Other camera raws (CR2, CR3, NEF, ARW, RAF, ORF, RW2) | every version, as the largest JPEG the camera embedded, which for some cameras is smaller than the photo |
 | Ultra HDR and other gain maps, in HDR | Android 14 and newer; before that, as an ordinary picture |
+| HDR pictures without a gain map (10-bit HEIF and AVIF in HLG or PQ, PNG with cICP), in HDR | Android 14 and newer; before that, tone-mapped |
+| HLG and PQ videos, in HDR | Android 8.0 and newer, on a screen that shows HDR; 360° videos are tone-mapped |
 | Videos and sound | the codecs the device has; 10-bit, Dolby Vision and AV1 vary the most |
 | TIFF, JPEG XL, AVI | not shown |
 
