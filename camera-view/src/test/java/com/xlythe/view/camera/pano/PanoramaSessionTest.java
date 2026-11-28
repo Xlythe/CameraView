@@ -23,6 +23,7 @@ import androidx.annotation.Nullable;
 import androidx.exifinterface.media.ExifInterface;
 
 import com.xlythe.view.camera.Exif;
+import com.xlythe.view.camera.MediaTags;
 
 import org.junit.Before;
 import org.junit.Rule;
@@ -124,21 +125,21 @@ public class PanoramaSessionTest {
 
         BitmapFactory.Options bounds = decodeBounds(file);
         assertEquals(2 * bounds.outHeight, bounds.outWidth);
-        GPanoMetadata metadata = GPanoMetadata.readFrom(file);
+        MediaTags.Panorama metadata = MediaTags.open(file).getPanorama();
         assertNotNull(metadata);
-        assertEquals(bounds.outWidth, metadata.fullPanoWidthPixels);
-        assertEquals(bounds.outHeight, metadata.fullPanoHeightPixels);
-        assertEquals(bounds.outWidth, metadata.croppedAreaImageWidthPixels);
-        assertEquals(0, metadata.croppedAreaLeftPixels);
-        assertEquals(0, metadata.croppedAreaTopPixels);
-        assertEquals("equirectangular", metadata.projectionType);
-        assertTrue(metadata.sourcePhotosCount > 40);
-        assertNotNull(metadata.firstPhotoDate);
-        assertTrue(metadata.lastPhotoDate >= metadata.firstPhotoDate);
-        assertEquals(46.8f, metadata.initialHorizontalFovDegrees, 0.1f);
-        assertEquals(60f, metadata.initialVerticalFovDegrees, 0.1f);
+        assertEquals(bounds.outWidth, (int) metadata.getFullPanoWidthPixels());
+        assertEquals(bounds.outHeight, (int) metadata.getFullPanoHeightPixels());
+        assertEquals(bounds.outWidth, (int) metadata.getCroppedAreaImageWidthPixels());
+        assertEquals(0, (int) metadata.getCroppedAreaLeftPixels());
+        assertEquals(0, (int) metadata.getCroppedAreaTopPixels());
+        assertEquals("equirectangular", metadata.getProjectionType());
+        assertTrue((int) metadata.getSourcePhotosCount() > 40);
+        assertTrue(metadata.getFirstPhotoDate() > 0);
+        assertTrue(metadata.getLastPhotoDate() >= metadata.getFirstPhotoDate());
+        assertEquals(46.8f, metadata.getInitialHorizontalFovDegrees(), 0.1f);
+        assertEquals(60f, metadata.getInitialVerticalFovDegrees(), 0.1f);
         // Without a compass the heading is not known, and is not made up.
-        assertNull(metadata.poseHeadingDegrees);
+        assertTrue(Float.isNaN(metadata.getPoseHeadingDegrees()));
         // The Exif every picture carries, which the photo sphere packet written after it keeps.
         ExifInterface exif = new ExifInterface(file.getPath());
         assertNotNull(exif.getAttribute(ExifInterface.TAG_DATETIME_ORIGINAL));
@@ -166,18 +167,18 @@ public class PanoramaSessionTest {
         assertEquals(file, recorder.saved);
 
         BitmapFactory.Options bounds = decodeBounds(file);
-        GPanoMetadata metadata = GPanoMetadata.readFrom(file);
+        MediaTags.Panorama metadata = MediaTags.open(file).getPanorama();
         assertNotNull(metadata);
-        assertEquals(metadata.fullPanoWidthPixels, bounds.outWidth);
-        assertEquals(metadata.croppedAreaImageWidthPixels, bounds.outWidth);
+        assertEquals((int) metadata.getFullPanoWidthPixels(), bounds.outWidth);
+        assertEquals((int) metadata.getCroppedAreaImageWidthPixels(), bounds.outWidth);
         // A band round the horizon: a little under the frame's sixty degrees tall.
-        float tall = 180f * bounds.outHeight / metadata.fullPanoHeightPixels;
+        float tall = 180f * bounds.outHeight / (int) metadata.getFullPanoHeightPixels();
         assertTrue("the band is " + tall + " degrees", tall > 45f && tall < 61f);
-        assertEquals(bounds.outHeight, metadata.croppedAreaImageHeightPixels);
-        assertEquals(0, metadata.initialViewPitchDegrees, 2);
+        assertEquals(bounds.outHeight, (int) metadata.getCroppedAreaImageHeightPixels());
+        assertEquals(0, (int) metadata.getInitialViewPitchDegrees(), 2);
         // The sweep started at 30 by the gyroscope, which is 55 by the compass.
-        assertEquals(55f, metadata.poseHeadingDegrees, 1f);
-        assertEquals(55f, metadata.initialViewHeadingDegrees, 1f);
+        assertEquals(55f, metadata.getPoseHeadingDegrees(), 1f);
+        assertEquals(55f, (int) metadata.getInitialViewHeadingDegrees(), 1f);
     }
 
     @Test
@@ -194,14 +195,14 @@ public class PanoramaSessionTest {
         assertFalse(session.isRunning());
         assertEquals(GuideState.SAVING, session.getGuideState().status);
         awaitResult();
-        GPanoMetadata metadata = GPanoMetadata.readFrom(file);
+        MediaTags.Panorama metadata = MediaTags.open(file).getPanorama();
         assertNotNull(metadata);
-        float wide = 360f * metadata.croppedAreaImageWidthPixels / metadata.fullPanoWidthPixels;
+        float wide = 360f * (int) metadata.getCroppedAreaImageWidthPixels() / (int) metadata.getFullPanoWidthPixels();
         // Ninety degrees of sweep, and as much of the first and last frames as was painted.
         assertTrue("the panorama is " + wide + " degrees wide", wide > 110f && wide < 137f);
         // Placed in the middle of the full panorama, so it never runs off the edge.
-        assertEquals((metadata.fullPanoWidthPixels - metadata.croppedAreaImageWidthPixels) / 2,
-                metadata.croppedAreaLeftPixels);
+        assertEquals(((int) metadata.getFullPanoWidthPixels() - (int) metadata.getCroppedAreaImageWidthPixels()) / 2,
+                (int) metadata.getCroppedAreaLeftPixels());
     }
 
     @Test
@@ -226,12 +227,12 @@ public class PanoramaSessionTest {
         assertEquals(TRUE_FOCAL, session.getGuideState().focal, TRUE_FOCAL * 0.05f);
         session.finish();
         awaitResult();
-        GPanoMetadata metadata = GPanoMetadata.readFrom(file);
+        MediaTags.Panorama metadata = MediaTags.open(file).getPanorama();
         assertNotNull(metadata);
-        assertEquals(46.8f, metadata.initialHorizontalFovDegrees, 2.5f);
+        assertEquals(46.8f, metadata.getInitialHorizontalFovDegrees(), 2.5f);
         assertTrue("the first photo is dated when it was painted again",
-                metadata.firstPhotoDate <= firstPainted);
-        float wide = 360f * metadata.croppedAreaImageWidthPixels / metadata.fullPanoWidthPixels;
+                metadata.getFirstPhotoDate() <= firstPainted);
+        float wide = 360f * (int) metadata.getCroppedAreaImageWidthPixels() / (int) metadata.getFullPanoWidthPixels();
         assertTrue("the panorama is " + wide + " degrees wide", wide > 140f && wide < 168f);
     }
 

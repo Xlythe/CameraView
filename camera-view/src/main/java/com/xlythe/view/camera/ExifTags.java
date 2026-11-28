@@ -293,7 +293,7 @@ final class ExifTags {
     }
 
     /**
-     * Reads every entry of a JPEG's Exif private directory.
+     * Reads every entry of the Exif private directory of a JPEG or a bare TIFF block.
      *
      * @return the values by tag, in ascending order, which is empty when there are none or the
      *     file carries no Exif
@@ -301,7 +301,7 @@ final class ExifTags {
     @NonNull
     static Map<Integer, Value> readAll(@NonNull byte[] jpeg) {
         Map<Integer, Value> values = new TreeMap<>();
-        ExifSegment.Segment segment = ExifSegment.find(jpeg);
+        ExifSegment.Segment segment = ExifSegment.findForReading(jpeg);
         if (segment == null) {
             return values;
         }

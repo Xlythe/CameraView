@@ -162,7 +162,7 @@ public class PhotosphereViewTest {
     public void aPartialSphereLeavesTheRestEmpty() {
         // Headings -90 to 90 and pitches 30 to -30 of a 2560 x 1280 sphere.
         Bitmap band = BitmapRegionSource.compass(1280, 427, 2560, 1280, 640, 427);
-        GPano gpano = GPano.parse(GPanoTest.xmp("CroppedAreaImageWidthPixels=\"1280\" "
+        GPano gpano = GPanoTest.parse(GPanoTest.xmp("CroppedAreaImageWidthPixels=\"1280\" "
                 + "CroppedAreaImageHeightPixels=\"427\" FullPanoWidthPixels=\"2560\" "
                 + "FullPanoHeightPixels=\"1280\" CroppedAreaLeftPixels=\"640\" "
                 + "CroppedAreaTopPixels=\"427\""), 1280, 427);
@@ -186,7 +186,7 @@ public class PhotosphereViewTest {
     @Test
     public void thePoseTurnsThePicture() {
         Bitmap picture = BitmapRegionSource.compass(2560, 1280, 2560, 1280, 0, 0);
-        GPano gpano = GPano.parse(GPanoTest.xmp("PoseHeadingDegrees=\"90\""), 2560, 1280);
+        GPano gpano = GPanoTest.parse(GPanoTest.xmp("PoseHeadingDegrees=\"90\""), 2560, 1280);
         PhotosphereView view = show(new BitmapRegionSource(picture), gpano);
 
         assertEquals(90, view.getHeading(), 1e-3);
@@ -200,7 +200,7 @@ public class PhotosphereViewTest {
     @Test
     public void opensWhereTheMetadataSays() {
         Bitmap picture = BitmapRegionSource.compass(2560, 1280, 2560, 1280, 0, 0);
-        GPano gpano = GPano.parse(GPanoTest.xmp("InitialViewHeadingDegrees=\"100\" "
+        GPano gpano = GPanoTest.parse(GPanoTest.xmp("InitialViewHeadingDegrees=\"100\" "
                 + "InitialViewPitchDegrees=\"-20\" InitialHorizontalFOVDegrees=\"60\""),
                 2560, 1280);
         PhotosphereView view = show(new BitmapRegionSource(picture), gpano);

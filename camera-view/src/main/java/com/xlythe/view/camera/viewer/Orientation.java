@@ -82,6 +82,28 @@ final class Orientation {
         }
     }
 
+    /**
+     * The Exif orientation for a clockwise turn, after mirroring left to right if it says, as
+     * {@link com.xlythe.view.camera.MediaTags} describes a picture.
+     */
+    @AnyThread
+    static int exifOrientation(int rotation, boolean mirrored) {
+        switch (rotation) {
+            case 90:
+                return mirrored ? ExifInterface.ORIENTATION_TRANSVERSE
+                        : ExifInterface.ORIENTATION_ROTATE_90;
+            case 180:
+                return mirrored ? ExifInterface.ORIENTATION_FLIP_VERTICAL
+                        : ExifInterface.ORIENTATION_ROTATE_180;
+            case 270:
+                return mirrored ? ExifInterface.ORIENTATION_TRANSPOSE
+                        : ExifInterface.ORIENTATION_ROTATE_270;
+            default:
+                return mirrored ? ExifInterface.ORIENTATION_FLIP_HORIZONTAL
+                        : ExifInterface.ORIENTATION_NORMAL;
+        }
+    }
+
     /** The upright picture's width. */
     @AnyThread
     int getWidth() {

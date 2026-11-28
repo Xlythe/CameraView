@@ -578,29 +578,38 @@ the background the video stops, since another app may want the camera, but the a
 running, so a call carries on.
 
 
-Exif
+Metadata
 -----------------
-CameraView encodes metadata into pictures via Exif. By default, there's nothing more you need to do.
-Exif metadata will be read by most Android image libraries (we recommend Glide), as well as most
-computers (Windows, Mac, Linux). However, if needed, Exif gives you the option to be more privacy
-sensitive (via Exif.removeLocation(), Exif.removeTimestamp()) as well as the information needed to
-manually rotate/flip images if you cannot use another library.
+CameraView writes the usual metadata into every picture and video it saves, so there is nothing
+more to do. MediaTags reads and writes it afterwards, the same way for pictures, videos and sound:
+JPEG, PNG, WebP, HEIF and AVIF, MP4 and QuickTime, MP3, FLAC, Ogg and WAV, and reads it from DNG
+and other camera raws, Matroska and WebM. It works out the format from the file's own bytes.
 ```java
-Exif exif = new Exif(file);
-exif.removeLocation();
-exif.setTitle("Harbour at dawn");
-exif.setPhotographer("A. Photographer");
-exif.attachAmbientConditions(new AmbientConditions.Builder().setTemperature(21.5).build());
-exif.save();
+MediaTags tags = MediaTags.open(file);    // or MediaTags.open(context, uri)
+tags.setTitle("Harbour at dawn");
+tags.setAuthor("A. Photographer");
+tags.setLocation(null);                   // removes it
+tags.setAmbientConditions(new AmbientConditions.Builder().setTemperature(21.5).build());
+tags.save();
 ```
-Any other tag can be read and written by its standard name, or by its number for one newer than
-the library.
+Each setter returns false when the file cannot keep that field. A field the format has no place
+of its own for is kept in the file's XMP. A Uri can be written where the app may write it: a
+document it was granted write access to, or, from Android 10, a gallery item it saved itself.
+
+It also says what the file is: a photo sphere or panorama, a motion photo and where its clip is,
+an HDR picture's gain map or an HDR video's transfer, a 360° video, an animation, and the cover of
+a recording. copyTo() carries what one file says onto another, whatever their formats.
 ```java
-exif.setAttribute("ImageEditor", "A. Editor");
-exif.setTag(0xA4F0, Exif.TYPE_ASCII, "A tag from a later standard");
+MediaTags.Panorama sphere = tags.getPanorama();
+MediaTags.MotionPhoto motion = tags.getMotionPhoto();
+boolean hdr = tags.getGainMap() != MediaTags.GAIN_MAP_NONE;
+original.copyTo(MediaTags.open(edited));
 ```
-If the file has no room for some of its tags, save() writes everything else and throws an
-ExifNoRoomException naming them.
+Any other Exif tag, MP4 tag or XMP property is there by name or number.
+```java
+tags.setExifTag(0xA4F0, Exif.TYPE_ASCII, "A tag from a later standard");
+tags.setXmp("http://purl.org/dc/elements/1.1/", "source", "Scanned print");
+```
 
 VideoView
 -----------------
