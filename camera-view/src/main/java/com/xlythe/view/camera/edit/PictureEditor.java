@@ -330,6 +330,7 @@ public class PictureEditor {
     private void run() {
         File temporary = null;
         try {
+            ensureWritableTempDir(mContext);
             File directory = mOutput.getAbsoluteFile().getParentFile();
             if (directory != null && !directory.isDirectory() && !directory.mkdirs()) {
                 throw new IOException("Unable to make " + directory);
@@ -928,6 +929,19 @@ public class PictureEditor {
         Runtime runtime = Runtime.getRuntime();
         long free = runtime.maxMemory() - (runtime.totalMemory() - runtime.freeMemory());
         return (long) (free * 0.8f);
+    }
+
+    /**
+     * Gives the metadata writers somewhere to write. They save through copies made in
+     * java.io.tmpdir, which newer releases point at the app's cache and Android 4.2 and older
+     * leave at /sdcard, which an app without storage permission cannot write.
+     */
+    @WorkerThread
+    private static void ensureWritableTempDir(@NonNull Context context) {
+        File directory = new File(System.getProperty("java.io.tmpdir", ""));
+        if (!directory.canWrite()) {
+            System.setProperty("java.io.tmpdir", context.getCacheDir().getAbsolutePath());
+        }
     }
 
     private void checkCancelled() throws CancelledException {
