@@ -74,6 +74,15 @@ public final class MediaTestFiles {
         return new String(xmp.toBytes(), Bytes.UTF_8);
     }
 
+    /**
+     * A picture whose Ultra HDR gain map is there, located by MPF, built around real pictures so
+     * that a view can decode and show it.
+     */
+    public static byte[] gainMapJpeg(byte[] primary, byte[] gainMap) {
+        return MediaTagsFixtures.gainMapJpeg(primary, gainMap,
+                xmp("xmlns:hdrgm=\"" + Xmp.NS_HDR_GAIN_MAP + "\"", "hdrgm:Version=\"1.0\""));
+    }
+
     public static byte[] concat(byte[]... parts) {
         return Bytes.concat(parts);
     }

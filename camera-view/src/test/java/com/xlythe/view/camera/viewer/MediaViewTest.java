@@ -526,7 +526,7 @@ public class MediaViewTest {
     @Config(sdk = 34)
     public void hdrHoldsTheWindowOnlyWhileItShows() throws IOException {
         int before = mActivity.getWindow().getColorMode();
-        show(file(MediaTestFiles.gainMapJpeg(), ".jpg"));
+        show(file(MediaTestFiles.gainMapJpeg(jpeg(64, 48, null), jpeg(32, 24, null)), ".jpg"));
         assertTrue(mView.isHoldingHdr());
         assertEquals(ActivityInfo.COLOR_MODE_HDR, mActivity.getWindow().getColorMode());
 
