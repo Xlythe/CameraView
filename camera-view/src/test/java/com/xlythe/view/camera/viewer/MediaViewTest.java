@@ -693,6 +693,16 @@ public class MediaViewTest {
                 file(MediaTestFiles.movie(), ".mp4"))).playable);
     }
 
+    /** A MIDI file is sound, though the platform's retriever may say nothing of it. */
+    @Test
+    public void aMidiFileIsSound() throws IOException {
+        // A header chunk for one track at 96 ticks a beat, and a track that only ends.
+        byte[] midi = {'M', 'T', 'h', 'd', 0, 0, 0, 6, 0, 0, 0, 1, 0, 96,
+                'M', 'T', 'r', 'k', 0, 0, 0, 4, 0, (byte) 0xFF, 0x2F, 0};
+        assertEquals(MediaView.AUDIO, MediaDetector.detect(ApplicationProvider
+                .getApplicationContext(), ImageLocation.of(file(midi, ".mid"))).type);
+    }
+
     /** Draws without anything to show, which draws nothing. */
     @Test
     public void drawsNothingWhenEmpty() {

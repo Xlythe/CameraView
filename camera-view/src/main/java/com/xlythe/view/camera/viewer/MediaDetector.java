@@ -121,6 +121,10 @@ final class MediaDetector {
             Log.w(TAG, "Unable to read the metadata of " + location, e);
         }
         int kind = tags == null ? MediaTags.KIND_UNKNOWN : tags.getKind();
+        if (kind == MediaTags.KIND_UNKNOWN && isMidi(context, location)) {
+            // Sound wherever it plays, though Android 5's retriever says nothing of it.
+            kind = MediaTags.KIND_AUDIO;
+        }
         int[] bounds = kind == MediaTags.KIND_IMAGE || kind == MediaTags.KIND_UNKNOWN
                 ? bounds(context, location) : null;
         if (kind == MediaTags.KIND_UNKNOWN) {
@@ -302,6 +306,25 @@ final class MediaDetector {
             }
         }
         return MediaTags.KIND_UNKNOWN;
+    }
+
+    /** Whether a file starts as a standard MIDI file does, with its header chunk. */
+    @WorkerThread
+    private static boolean isMidi(@NonNull Context context, @NonNull ImageLocation location) {
+        byte[] start = new byte[4];
+        try (InputStream input = location.open(context)) {
+            int read = 0;
+            while (read < start.length) {
+                int count = input.read(start, read, start.length - read);
+                if (count < 0) {
+                    return false;
+                }
+                read += count;
+            }
+        } catch (IOException | RuntimeException e) {
+            return false;
+        }
+        return start[0] == 'M' && start[1] == 'T' && start[2] == 'h' && start[3] == 'd';
     }
 
     /**
