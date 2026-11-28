@@ -11,14 +11,17 @@ import android.graphics.Matrix;
 import android.graphics.Rect;
 import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
+import android.location.Location;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.os.Parcelable;
+import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.util.Log;
+import android.util.Size;
 import android.view.Display;
 import android.view.MotionEvent;
 import android.view.ScaleGestureDetector;
@@ -32,7 +35,9 @@ import android.view.animation.AccelerateDecelerateInterpolator;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.ColorInt;
+import androidx.annotation.FloatRange;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RawRes;
@@ -47,6 +52,9 @@ import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.gl.SegmentationMask;
 import com.xlythe.view.camera.legacy.LegacyCameraModule;
+import com.xlythe.view.camera.pano.PanoramaFrame;
+import com.xlythe.view.camera.pano.PanoramaGuideView;
+import com.xlythe.view.camera.pano.PanoramaSession;
 import com.xlythe.view.camera.v2.Camera2Module;
 
 import java.io.File;
@@ -156,6 +164,20 @@ public class CameraView extends FrameLayout {
      * is never coming.</p>
      */
     private static final long FOCUS_TIMEOUT_MILLIS = 3000;
+
+    /**
+     * The widest frame a sweep asks for: as much detail as a panorama keeps, and small enough to
+     * convert and paint several times a second. Two ints rather than a Size, since this class
+     * loads below API 21, where Size does not exist.
+     */
+    private static final int PANORAMA_FRAME_WIDTH = 1024;
+
+    /**
+     * The tallest frame a sweep asks for. A cap this shape, 4:3, picks a frame the shape of the
+     * sensor wherever the camera offers one, where a wider cap can pick a 16:9 frame instead, which
+     * is the sensor cropped and sees less across a phone held upright.
+     */
+    private static final int PANORAMA_FRAME_HEIGHT = 768;
 
     /**
      * How long an animated {@link #setZoomRatio(float, boolean)} takes. About what a phone's own
@@ -532,6 +554,18 @@ public class CameraView extends FrameLayout {
     @Nullable
     private FrameStream mFrameStream;
 
+    /** The panorama or photosphere being swept, or null when none is. */
+    @Nullable
+    private PanoramaSession mPanoramaSession;
+
+    /** The frames feeding the sweep on a backend that hands out a surface; null on legacy. */
+    @Nullable
+    private FrameStream mPanoramaFrames;
+
+    /** Draws the sweep's guide over the preview while one runs. */
+    @Nullable
+    private PanoramaGuideView mPanoramaGuide;
+
     /** The caller's face listener, if the camera agreed to report faces. */
     @Nullable
     private FaceDetectionListener mFaceDetectionListener;
@@ -679,6 +713,10 @@ public class CameraView extends FrameLayout {
         addView(mCameraView = new TextureView(getContext()));
         addView(mImagePreview = new ImageView(getContext()));
         addView(mVideoPreview = new VideoView(getContext()));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
+            addView(mPanoramaGuide = new PanoramaGuideView(getContext()));
+            mPanoramaGuide.setVisibility(View.GONE);
+        }
         addView(mFocusReticle = new FocusReticle(getContext()));
         mFocusReticle.setColors(mFocusReticleColor, mFocusReticleLockedColor);
         mImagePreview.setScaleType(ImageView.ScaleType.CENTER_CROP);
@@ -1306,6 +1344,8 @@ public class CameraView extends FrameLayout {
     }
 
     protected void onClose() {
+        // A camera being closed is no reason to lose the half of a room already swept.
+        stopPanorama();
         stopBurst();
         exitBarcodeScanner();
         stopFrameAnalysis();
@@ -1715,6 +1755,9 @@ public class CameraView extends FrameLayout {
         if (mBarcodeScanner != null || mUsingModuleBarcodeScanner) {
             throw new IllegalStateException("Barcode scanner cannot be started twice");
         }
+        if (mPanoramaSession != null) {
+            throw new IllegalStateException("The camera's frames are going to a panorama");
+        }
 
         if (mReplacingBackground) {
             Log.w(TAG, "Barcodes cannot be scanned while the background is being replaced");
@@ -1832,9 +1875,10 @@ public class CameraView extends FrameLayout {
         return mReplacingBackground;
     }
 
-    /** Whether frame analysis or the barcode scanner is reading frames. */
+    /** Whether frame analysis, the barcode scanner or a sweep is reading frames. */
     private boolean isReadingFrames() {
-        return mFrameStream != null || mBarcodeScanner != null || mUsingModuleBarcodeScanner;
+        return mFrameStream != null || mBarcodeScanner != null || mUsingModuleBarcodeScanner
+                || mPanoramaSession != null;
     }
 
     public void exitBarcodeScanner() {
@@ -1882,6 +1926,9 @@ public class CameraView extends FrameLayout {
         if (mFrameStream != null) {
             throw new IllegalStateException("Frame analysis cannot be started twice");
         }
+        if (mPanoramaSession != null) {
+            throw new IllegalStateException("The camera's frames are going to a panorama");
+        }
         if (mReplacingBackground) {
             Log.w(TAG, "Frames cannot be analyzed while the background is being replaced");
             return false;
@@ -1928,6 +1975,259 @@ public class CameraView extends FrameLayout {
     /** Whether an analyzer is receiving frames. */
     public boolean isAnalyzingFrames() {
         return mFrameStream != null && mFrameStream.isAnalyzing();
+    }
+
+    /**
+     * What a sweep covers.
+     *
+     * @see #startPanorama
+     */
+    public enum PanoramaMode {
+        /** All the way round, at the height the sweep starts at. */
+        PANORAMA,
+        /** Everything, from straight up to straight down. */
+        PHOTOSPHERE
+    }
+
+    /**
+     * Told how a sweep is going and what came of it, on the main thread. A sweep started with
+     * {@link #startPanorama(File, PanoramaMode, PanoramaListener)} arrives at
+     * {@link #onPanoramaCaptured(File)}, and one started with
+     * {@link #startPanorama(PanoramaMode, PanoramaListener)} at {@link #onPanoramaSaved(Uri)}.
+     */
+    public interface PanoramaListener {
+        /** How much of what the sweep covers is done, from 0 to 1. */
+        default void onPanoramaProgress(@FloatRange(from = 0.0, to = 1.0) float progress) {}
+
+        /** The sweep was written to its file, as a JPEG carrying photo sphere metadata. */
+        default void onPanoramaCaptured(@NonNull File file) {}
+
+        /** The sweep was filed in the gallery, as a JPEG carrying photo sphere metadata. */
+        default void onPanoramaSaved(@NonNull Uri uri) {}
+
+        /**
+         * Nothing was saved: the sweep ended before a frame was taken, or could not be written
+         * or filed.
+         */
+        void onPanoramaFailed();
+    }
+
+    /**
+     * Sweeps a panorama or a photosphere, as {@link #startPanorama(File, PanoramaMode,
+     * PanoramaListener)} does, and files it where the gallery looks, under Pictures, reporting
+     * where it went to {@link PanoramaListener#onPanoramaSaved(Uri)}. Below API 29 that needs
+     * {@link Manifest.permission#WRITE_EXTERNAL_STORAGE}, and without it
+     * {@link PanoramaListener#onPanoramaFailed()} is called instead.
+     */
+    @UiThread
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public boolean startPanorama(@NonNull PanoramaMode mode, @NonNull PanoramaListener listener) {
+        return startPanorama(newCaptureFile(getContext(), ".jpg"), mode, listener,
+                true /* gallery */);
+    }
+
+    /**
+     * Sweeps a panorama or a photosphere, and saves it to a file.
+     *
+     * <p>CameraView draws the guide over its preview while the sweep runs, with no words in it.
+     * For a panorama it shows the panorama so far in a strip, a line to keep level on and arrows
+     * the way to turn, turning orange when the phone tips or turns too fast. For a photosphere it
+     * puts dots on everything still to take; holding the circle in the middle on a dot until it
+     * fills takes it. The person should turn on the spot rather than walk. A panorama finishes once
+     * it has gone all the way round and a photosphere once every dot is taken, straight up and down
+     * included; either is also saved, with whatever it covered, when {@link #stopPanorama} is
+     * called or the camera closes. Once it ends, its frames are aligned by what they show and
+     * blended into one picture, which takes several seconds before the listener hears of it.</p>
+     *
+     * <p>The file is a JPEG with the Exif any picture has, the device's location included when the
+     * app holds a location permission, and photo sphere XMP metadata, so a gallery or a panorama
+     * viewer shows it as a panorama.</p>
+     *
+     * @return whether the sweep started. False on a device that cannot report its rotation, or a
+     *     camera that does not publish its angle of view, before API 19, and while the background
+     *     is being replaced.
+     * @throws IllegalStateException if the camera is not open, a sweep is already running, or the
+     *     camera's frames are already going to a barcode scanner, a frame analyzer or a recording
+     */
+    @UiThread
+    @RequiresPermission(Manifest.permission.CAMERA)
+    public boolean startPanorama(@NonNull File file, @NonNull PanoramaMode mode,
+            @NonNull PanoramaListener listener) {
+        return startPanorama(file, mode, listener, false /* gallery */);
+    }
+
+    @UiThread
+    @RequiresPermission(Manifest.permission.CAMERA)
+    private boolean startPanorama(@NonNull File file, @NonNull PanoramaMode mode,
+            @NonNull PanoramaListener listener, boolean gallery) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) {
+            return false;
+        }
+        if (!isOpen()) {
+            throw new IllegalStateException("Camera must be open before sweeping a panorama");
+        }
+        if (mPanoramaSession != null) {
+            throw new IllegalStateException("A panorama cannot be started twice");
+        }
+        if (mFrameStream != null || mBarcodeScanner != null || mUsingModuleBarcodeScanner
+                || isRecording()) {
+            throw new IllegalStateException("The camera's frames are already in use");
+        }
+        if (mReplacingBackground) {
+            Log.w(TAG, "A sweep cannot run while the background is being replaced");
+            return false;
+        }
+        PanoramaCallback callback = new PanoramaCallback(listener, gallery);
+        PanoramaSession session = new PanoramaSession(getContext(),
+                mode == PanoramaMode.PHOTOSPHERE, file, getPictureQuality(),
+                getHorizontalFieldOfView(), getVerticalFieldOfView(), callback, mHandler::post);
+        callback.mSession = session;
+        if (!session.start()) {
+            Log.w(TAG, "This device cannot report the rotation or the optics a sweep needs");
+            return false;
+        }
+        if (Build.VERSION.SDK_INT >= 21 && mCameraModule.isFrameAnalysisSupported()) {
+            Size maxSize = new Size(PANORAMA_FRAME_WIDTH, PANORAMA_FRAME_HEIGHT);
+            mPanoramaFrames = new FrameStream(mCameraModule.getCanvas(), this,
+                    new FrameStream.Params().setMaxSize(maxSize), frame -> {
+                        PanoramaFrame panoramaFrame = PanoramaFrame.fromImage(frame.getImage(),
+                                frame.getRotationDegrees(), frame.isMirrored(),
+                                SystemClock.elapsedRealtimeNanos(), System.nanoTime());
+                        if (panoramaFrame != null) {
+                            session.onFrame(panoramaFrame);
+                        }
+                    });
+            mPanoramaFrames.start();
+        } else if (!mCameraModule.setPreviewFrameListener(
+                (nv21, width, height, rotationDegrees, frontFacing) -> session.offerFrame(
+                        PanoramaFrame.fromNv21(nv21, width, height, rotationDegrees,
+                                frontFacing, SystemClock.elapsedRealtimeNanos())))) {
+            session.cancel();
+            Log.w(TAG, "The " + getBackend() + " backend cannot deliver frames to a sweep");
+            return false;
+        }
+        mPanoramaSession = session;
+        if (mPanoramaGuide != null) {
+            mPanoramaGuide.setSession(session);
+            mPanoramaGuide.setVisibility(View.VISIBLE);
+        }
+        return true;
+    }
+
+    /**
+     * Ends a sweep and saves what it covered, however much that is: half a sweep is a panorama
+     * of half a room, and its metadata says which half. The listener hears when it is written.
+     */
+    @UiThread
+    public void stopPanorama() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT && mPanoramaSession != null) {
+            mPanoramaSession.finish();
+        }
+    }
+
+    /** Ends a sweep and saves nothing. The listener is not called again. */
+    @UiThread
+    public void cancelPanorama() {
+        PanoramaSession session = mPanoramaSession;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT || session == null) {
+            return;
+        }
+        session.cancel();
+        stopPanoramaFrames();
+        endPanorama(session);
+    }
+
+    /** Whether a sweep is running or being saved. */
+    public boolean isCapturingPanorama() {
+        return mPanoramaSession != null;
+    }
+
+    @RequiresApi(19)
+    private void stopPanoramaFrames() {
+        if (mPanoramaFrames != null) {
+            mPanoramaFrames.close();
+            mPanoramaFrames = null;
+        }
+        mCameraModule.setPreviewFrameListener(null);
+    }
+
+    @RequiresApi(19)
+    private void endPanorama(@NonNull PanoramaSession session) {
+        if (mPanoramaSession != session) {
+            return;
+        }
+        mPanoramaSession = null;
+        if (mPanoramaGuide != null) {
+            mPanoramaGuide.setSession(null);
+            mPanoramaGuide.setVisibility(View.GONE);
+        }
+    }
+
+    /** Connects a sweep to the frames it is fed and the listener it reports to. */
+    @RequiresApi(19)
+    private final class PanoramaCallback implements PanoramaSession.Callback {
+        /** The app's listener. */
+        private final PanoramaListener mListener;
+
+        /** Whether the picture is filed in the gallery rather than left in the app's file. */
+        private final boolean mGallery;
+
+        /** The sweep this reports for, set once it is built. */
+        @Nullable
+        PanoramaSession mSession;
+
+        PanoramaCallback(@NonNull PanoramaListener listener, boolean gallery) {
+            mListener = listener;
+            mGallery = gallery;
+        }
+
+        @Override
+        public void onProgress(float progress) {
+            if (mSession != null && mSession == mPanoramaSession) {
+                mListener.onPanoramaProgress(progress);
+            }
+        }
+
+        @Override
+        public void onFinishing() {
+            if (mSession != null && mSession == mPanoramaSession) {
+                stopPanoramaFrames();
+            }
+        }
+
+        @Override
+        public void onSaved(@NonNull File file) {
+            if (mSession != null) {
+                endPanorama(mSession);
+            }
+            if (!mGallery) {
+                mListener.onPanoramaCaptured(file);
+                return;
+            }
+            List<File> files = Collections.singletonList(file);
+            MediaStoreSaver.save(getContext(), files, false /* isVideo */, uris -> {
+                if (uris != null) {
+                    mListener.onPanoramaSaved(uris.get(0));
+                } else {
+                    mListener.onPanoramaFailed();
+                }
+            });
+        }
+
+        @Override
+        public void onFailed() {
+            if (mSession != null) {
+                endPanorama(mSession);
+            }
+            mListener.onPanoramaFailed();
+        }
+
+        @AnyThread
+        @Nullable
+        @Override
+        public Location getLocation() {
+            return mCameraModule.getLocation();
+        }
     }
 
     /**
@@ -2586,7 +2886,10 @@ public class CameraView extends FrameLayout {
             return super.onTouchEvent(event);
         }
 
-        mScaleDetector.onTouchEvent(event);
+        // A sweep is placed with the angle of view it started at, so the zoom stays put.
+        if (mPanoramaSession == null) {
+            mScaleDetector.onTouchEvent(event);
+        }
         if (event.getPointerCount() == 2 && isPinchToZoomEnabled() && isZoomSupported()) {
             return true;
         }
