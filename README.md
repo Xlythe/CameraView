@@ -511,16 +511,16 @@ mCameraView.stopFrameAnalysis();
 Panoramas
 -----------------
 startPanorama sweeps a panorama or a photosphere. CameraView draws the guide over its own
-preview, with no words in it: for a panorama, a strip of what is taken so far, a line to keep
-level on and arrows the way to turn; for a photosphere, dots on everything still to take, each
+preview: for a panorama, a strip of what is taken so far, a line to keep level on and arrows
+the way to turn; for a photosphere, dots on everything still to take, each
 taken by holding the circle on it until it fills. A panorama finishes once it has gone all the way
 round, and a photosphere once every dot is taken, straight up and down included. stopPanorama
 saves what was covered so far, and cancelPanorama saves nothing. Once a sweep ends, its frames are
 aligned by what they show and blended into one picture, which takes several seconds before the
 listener hears of it.
 
-The picture is a JPEG with the same Exif as any other picture and photo sphere metadata, so
-galleries and panorama viewers show it as a panorama. Without a file it is filed in the gallery,
+The picture is a JPEG with photo sphere metadata, so galleries and panorama viewers show it as
+a panorama. Without a file it is filed in the gallery,
 under Pictures, and reported to onPanoramaSaved(Uri); given a file it is written there and
 reported to onPanoramaCaptured(File). startPanorama returns false on a device that cannot report
 which way it is pointing. While a sweep runs, lock the screen's orientation, or turning the phone
