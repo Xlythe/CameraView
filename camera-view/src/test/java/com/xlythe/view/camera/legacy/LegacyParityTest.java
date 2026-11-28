@@ -3,6 +3,7 @@ package com.xlythe.view.camera.legacy;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -18,6 +19,7 @@ import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
+import com.xlythe.view.camera.shadow.ShadowFrameRateRefusingCamera;
 import com.xlythe.view.camera.shadow.ShadowRefusingCamera;
 import com.xlythe.view.camera.shadow.ShadowSlowPictureCamera;
 
@@ -114,6 +116,76 @@ public class LegacyParityTest {
         assertEquals(Camera.Parameters.FLASH_MODE_AUTO, flashMode());
         module.setFlash(CameraView.Flash.OFF);
         assertEquals(Camera.Parameters.FLASH_MODE_OFF, flashMode());
+    }
+
+    /**
+     * The preview runs no slower than 15 fps where the camera allows it, rather than at the 5 fps
+     * the camera service's widest range lets a dim scene fall to. These are the API 37 emulator's
+     * ranges, where the default made a flash picture take three times as long as on Camera2.
+     */
+    @Test
+    public void thePreviewKeepsItsFrameRateUp() {
+        givenTheCameraOffersFrameRates("(15000,15000),(5000,30000),(15000,30000),(30000,30000)",
+                "5000,30000");
+        module.open();
+        idle();
+
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        int[] range = new int[2];
+        camera.getParameters().getPreviewFpsRange(range);
+        assertEquals(15000, range[Camera.Parameters.PREVIEW_FPS_MIN_INDEX]);
+        assertEquals(30000, range[Camera.Parameters.PREVIEW_FPS_MAX_INDEX]);
+    }
+
+    /** A camera that will not take the range it lists keeps its own, and still opens. */
+    @Test
+    @Config(shadows = {ShadowFrameRateRefusingCamera.class})
+    public void aCameraThatRefusesTheFrameRateStillOpens() {
+        givenTheCameraOffersFrameRates("(5000,30000),(15000,30000)", "5000,30000");
+        module.open();
+        idle();
+
+        assertTrue(module.isCameraReady());
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        assertEquals("5000,30000", camera.getParameters().get("preview-fps-range"));
+    }
+
+    @Test
+    public void theFastestTopRateUpTo30FpsIsChosen() {
+        assertRange(15000, 30000, new int[] {7500, 24000}, new int[] {15000, 30000},
+                new int[] {30000, 60000});
+        assertRange(30000, 30000, new int[] {7500, 30000}, new int[] {30000, 30000});
+        assertRange(24000, 24000, new int[] {24000, 24000}, new int[] {15000, 15000});
+    }
+
+    @Test
+    public void theLowestFloorOf15FpsIsChosen() {
+        assertRange(15000, 30000, new int[] {30000, 30000}, new int[] {15000, 30000},
+                new int[] {20000, 30000});
+    }
+
+    @Test
+    public void aCameraWhoseFloorsAreAllLowGetsItsHighest() {
+        assertRange(10000, 30000, new int[] {5000, 30000}, new int[] {10000, 30000},
+                new int[] {7500, 30000});
+    }
+
+    @Test
+    public void aCameraWhoseRangesAreAllFasterGetsItsSlowest() {
+        assertRange(30000, 60000, new int[] {60000, 120000}, new int[] {30000, 60000});
+    }
+
+    @Test
+    public void aCameraThatListsNoRangesIsLeftAlone() {
+        assertNull(LegacyCameraModule.previewFpsRange(null));
+        assertNull(LegacyCameraModule.previewFpsRange(new ArrayList<>()));
+    }
+
+    private static void assertRange(int min, int max, int[]... supported) {
+        int[] range = LegacyCameraModule.previewFpsRange(Arrays.asList(supported));
+        assertNotNull(range);
+        assertEquals(min + "-" + max, range[Camera.Parameters.PREVIEW_FPS_MIN_INDEX] + "-"
+                + range[Camera.Parameters.PREVIEW_FPS_MAX_INDEX]);
     }
 
     /** The torch lights the flash continuously, and turning it off gives the strategy back. */
@@ -350,6 +422,22 @@ public class LegacyParityTest {
 
         assertFalse(failed.get());
         assertEquals(2, ShadowSlowPictureCamera.getRequestCount());
+    }
+
+    /**
+     * Makes the camera list the given preview frame rate ranges and start at one of them, as
+     * its parameters say on the next open.
+     */
+    private static void givenTheCameraOffersFrameRates(String ranges, String current) {
+        Camera camera = Camera.open(0);
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            parameters.set("preview-fps-range-values", ranges);
+            parameters.set("preview-fps-range", current);
+            camera.setParameters(parameters);
+        } finally {
+            camera.release();
+        }
     }
 
     /** Makes the camera list the given flash modes, as its parameters say on the next open. */

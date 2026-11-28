@@ -285,6 +285,7 @@ public final class BackendMatrixDeviceTest {
     @Test
     public void aFlashPictureIsMeteredAndTaken() throws Exception {
         DeviceState.assumeTheLampMayBeLit();
+        AtomicLong exposed = new AtomicLong();
         AtomicLong millis = new AtomicLong();
 
         withOpenCamera(camera -> {
@@ -292,10 +293,14 @@ public final class BackendMatrixDeviceTest {
             camera.setShutterSoundEnabled(false);
             camera.setFlash(CameraView.Flash.ON);
             sleep(SETTLE_MILLIS);
-            millis.set(takeTimedPicture(camera)[1]);
+            long[] taken = takeTimedPicture(camera);
+            exposed.set(taken[0]);
+            millis.set(taken[1]);
         });
 
-        Log.i(TAG, backend + " took a flash picture in " + millis.get() + "ms");
+        // The exposure comes after the metering, so the two tell its time from the save's.
+        Log.i(TAG, backend + " took a flash picture in " + millis.get() + "ms, exposed at "
+                + exposed.get() + "ms");
         assertTrue(backend + " took " + millis.get() + "ms over a flash picture",
                 millis.get() < MAX_FLASH_PICTURE_MILLIS);
     }
