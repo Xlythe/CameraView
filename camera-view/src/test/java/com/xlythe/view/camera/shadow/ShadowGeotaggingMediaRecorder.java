@@ -1,6 +1,8 @@
 package com.xlythe.view.camera.shadow;
 
+import android.graphics.SurfaceTexture;
 import android.media.MediaRecorder;
+import android.view.Surface;
 
 import androidx.annotation.Nullable;
 
@@ -14,6 +16,9 @@ import org.robolectric.shadows.ShadowMediaRecorder;
  *
  * <p>MediaRecorder hands the location straight to the native recorder, and Robolectric's shadow
  * keeps no record of it, so without this a recording's location cannot be seen at all.</p>
+ *
+ * <p>Its input surface is a new Surface object on every call, as the platform's is, so code that
+ * tells surfaces apart by the object it was given is tested against that.</p>
  */
 @Implements(MediaRecorder.class)
 public class ShadowGeotaggingMediaRecorder extends ShadowMediaRecorder {
@@ -25,6 +30,13 @@ public class ShadowGeotaggingMediaRecorder extends ShadowMediaRecorder {
 
     /** The recorder this shadows. */
     @RealObject private MediaRecorder mRecorder;
+
+    @Implementation
+    @Override
+    protected Surface getSurface() {
+        super.getSurface();
+        return new Surface(new SurfaceTexture(0));
+    }
 
     @Implementation
     @Override

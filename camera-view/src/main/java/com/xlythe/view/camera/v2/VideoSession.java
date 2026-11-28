@@ -529,6 +529,12 @@ class VideoSession extends PictureSession {
         private boolean mAwaitingRecording;
         /** Whether the recording is HDR: HLG, encoded as HEVC Main 10. */
         private boolean mHdr;
+        /**
+         * The recorder's input, kept once asked for. The recorder hands out a new Surface object
+         * each time, and the session tells its outputs apart by the object it was given.
+         */
+        @Nullable
+        private Surface mRecorderSurface;
 
         /**
          * How far the file is tagged to be turned clockwise when it is shown, which is the turn a
@@ -554,6 +560,7 @@ class VideoSession extends PictureSession {
             super.initialize(chooseSize(getSizes(map), mPreviewSurface.mSize));
 
             try {
+                mRecorderSurface = null;
                 mMediaRecorder = new MediaRecorder();
                 // CAMCORDER rather than MIC: on a phone with several microphones it selects the
                 // one facing the same way as the camera, and it applies the camcorder tuning
@@ -640,7 +647,10 @@ class VideoSession extends PictureSession {
 
         @Override
         Surface getSurface() {
-            return mMediaRecorder.getSurface();
+            if (mRecorderSurface == null) {
+                mRecorderSurface = mMediaRecorder.getSurface();
+            }
+            return mRecorderSurface;
         }
 
         boolean isRecording() {
@@ -713,6 +723,7 @@ class VideoSession extends PictureSession {
 
         @Override
         void close() {
+            mRecorderSurface = null;
             if (mMediaRecorder != null) {
                 mMediaRecorder.release();
                 mMediaRecorder = null;
