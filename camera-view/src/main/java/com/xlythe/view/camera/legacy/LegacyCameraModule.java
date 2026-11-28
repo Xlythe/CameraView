@@ -24,6 +24,7 @@ import com.xlythe.view.camera.Face;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.ZoomMath;
+import com.xlythe.view.camera.stream.MotionPhotoRecorder;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.ByteArrayOutputStream;
@@ -966,8 +967,8 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     /**
-     * Puts the one preview callback the camera allows on it, feeding whichever of the stream and
-     * the sweep want frames, or takes it off when neither does.
+     * Puts the one preview callback the camera allows on it, feeding whichever of the stream, the
+     * sweep and the motion photo encoder want frames, or takes it off when none does.
      */
     private void installPreviewCallback() {
         Camera camera = mCamera;
@@ -977,11 +978,17 @@ public class LegacyCameraModule extends ICameraModule {
         }
         Camera.PreviewCallback stream = mStreamCallback;
         PreviewFrameListener frames = mPreviewFrameListener;
-        if (stream == null && (frames == null || size == null)) {
+        // A stream takes the clip's place, as it does on every other backend.
+        Object motion = Build.VERSION.SDK_INT >= 21 && size != null && stream == null
+                ? getMotionPhotoRecorder() : null;
+        if (stream == null && (frames == null || size == null) && motion == null) {
             camera.setPreviewCallback(null);
             return;
         }
         int rotation = getSensorOrientation();
+        // A clip is turned and mirrored as the picture is, which is from the sensor's orientation
+        // to the display's, and not as the preview is drawn.
+        int pictureRotation = getRelativeCameraOrientation(false /* isPreview */);
         boolean frontFacing = isUsingFrontFacingCamera();
         camera.setPreviewCallback((data, source) -> {
             if (frames != null && size != null && data != null) {
@@ -989,10 +996,31 @@ public class LegacyCameraModule extends ICameraModule {
                 // tells it otherwise.
                 frames.onPreviewFrame(data, size.width, size.height, rotation, frontFacing);
             }
+            if (motion != null && data != null && Build.VERSION.SDK_INT >= 21) {
+                // The camera hands every callback a buffer of its own, so this one can be kept
+                // until the encoder has copied it.
+                ((MotionPhotoRecorder) motion).queueFrame(data, size.width, size.height,
+                        pictureRotation, frontFacing);
+            }
             if (stream != null) {
                 stream.onPreviewFrame(data, source);
             }
         });
+    }
+
+    /**
+     * Whether this camera can take motion photos: from API 21, on a device with an encoder that
+     * takes the preview's frames as they are copied in, since the old API has no surface to give
+     * one.
+     */
+    @Override
+    public boolean isMotionPhotoSupported() {
+        return Build.VERSION.SDK_INT >= 21 && MotionPhotoRecorder.isByteInputSupported();
+    }
+
+    @Override
+    protected void onMotionPhotoChanged() {
+        installPreviewCallback();
     }
 
     private Bitmap toBitmap(byte[] data, Camera camera) {
