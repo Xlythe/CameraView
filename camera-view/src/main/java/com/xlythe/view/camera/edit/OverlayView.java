@@ -3,6 +3,7 @@ package com.xlythe.view.camera.edit;
 import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipDescription;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.ContextWrapper;
 import android.graphics.Bitmap;
@@ -449,7 +450,8 @@ public class OverlayView extends View {
 
     /**
      * Starts dragging a picture from a view, such as a cell of a sticker grid, so it can be
-     * dropped on an overlay view here or in another app, which may read it.
+     * dropped on an overlay view. A content URI can be dropped in another app too, which may
+     * read it; any other, such as a file's, only within this app.
      *
      * @return whether the drag started
      */
@@ -461,9 +463,13 @@ public class OverlayView extends View {
                 new ClipData.Item(uri));
         View.DragShadowBuilder shadow = new View.DragShadowBuilder(source);
         if (Build.VERSION.SDK_INT >= 24) {
-            return source.startDragAndDrop(clip, shadow, uri, View.DRAG_FLAG_GLOBAL
-                    | View.DRAG_FLAG_GLOBAL_URI_READ
-                    | View.DRAG_FLAG_GLOBAL_PERSISTABLE_URI_PERMISSION);
+            // Only a content URI can be granted to another app; the platform refuses to let a
+            // file URI leave the app at all.
+            int flags = ContentResolver.SCHEME_CONTENT.equals(uri.getScheme())
+                    ? View.DRAG_FLAG_GLOBAL | View.DRAG_FLAG_GLOBAL_URI_READ
+                            | View.DRAG_FLAG_GLOBAL_PERSISTABLE_URI_PERMISSION
+                    : 0;
+            return source.startDragAndDrop(clip, shadow, uri, flags);
         }
         return source.startDrag(clip, shadow, uri, 0);
     }
@@ -537,8 +543,29 @@ public class OverlayView extends View {
     @MainThread
     @NonNull
     public Bitmap toBitmap(int width, int height, long timeMillis) {
+        return toBitmap(width, height, timeMillis, null);
+    }
+
+    /**
+     * The items over a drawing, as one transparent picture of a size, stretched to fill it, at a
+     * moment: what goes over the picture beneath, to pass to
+     * {@link PictureEdits.Builder#setOverlay}. The drawing, such as a {@link DrawingView}'s,
+     * fills the picture whatever its own size; items are left out as {@link #toBitmap(int, int,
+     * long)} says.
+     */
+    @MainThread
+    @NonNull
+    public Bitmap toBitmap(int width, int height, long timeMillis, @Nullable Drawing beneath) {
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         Canvas canvas = new Canvas(bitmap);
+        if (beneath != null && !beneath.isEmpty()) {
+            int saved = canvas.save();
+            if (beneath.getWidth() > 0 && beneath.getHeight() > 0) {
+                canvas.scale(width / beneath.getWidth(), height / beneath.getHeight());
+            }
+            beneath.draw(canvas);
+            canvas.restoreToCount(saved);
+        }
         canvas.scale(width / canvasWidth(), height / canvasHeight());
         drawItems(canvas, timeMillis, false);
         return bitmap;
@@ -679,7 +706,10 @@ public class OverlayView extends View {
         }
     }
 
-    /** The handles: flip at the top left, remove at the top right, scale and turn at the bottom right. */
+    /**
+     * The handles: flip at the top left, remove at the top right, scale and turn at the bottom
+     * right.
+     */
     private static final int HANDLE_FLIP = 0;
     private static final int HANDLE_REMOVE = 1;
     private static final int HANDLE_TRANSFORM = 2;
@@ -784,14 +814,9 @@ public class OverlayView extends View {
                 if (start == null) {
                     return mMode != MODE_NONE;
                 }
-                float[] point = toCanvas(x, y);
-                if (mMode == MODE_MOVE) {
-                    apply(new Overlay.Builder(start).setCenter(
-                            start.getCenterX() + point[0] - mDownX,
-                            start.getCenterY() + point[1] - mDownY).build());
-                    updateDeleteZone(event);
-                } else if (mMode == MODE_HANDLE && mHandle == HANDLE_TRANSFORM) {
-                    apply(transformedByHandle(start, point[0], point[1]));
+                if (mMode == MODE_MOVE
+                        || (mMode == MODE_HANDLE && mHandle == HANDLE_TRANSFORM)) {
+                    dragTo(start, event);
                 } else if (mMode == MODE_PINCH && event.getPointerCount() >= 2) {
                     float scale = mPinchSpan > 0 ? span(event) / mPinchSpan : 1f;
                     float turn = angle(event) - mPinchAngle;
@@ -815,6 +840,15 @@ public class OverlayView extends View {
             }
             case MotionEvent.ACTION_UP:
             case MotionEvent.ACTION_CANCEL: {
+                if (event.getActionMasked() == MotionEvent.ACTION_UP && mGestureStart != null
+                        && (mMode == MODE_MOVE
+                                || (mMode == MODE_HANDLE && mHandle == HANDLE_TRANSFORM))) {
+                    // A finger can lift somewhere its last move did not reach.
+                    float[] point = toCanvas(x, y);
+                    if (mGestureCommitted || point[0] != mDownX || point[1] != mDownY) {
+                        dragTo(mGestureStart, event);
+                    }
+                }
                 if (mMode == MODE_HANDLE && event.getActionMasked() == MotionEvent.ACTION_UP
                         && mGestureStart != null && !mGestureCommitted) {
                     if (mHandle == HANDLE_FLIP) {
@@ -826,9 +860,14 @@ public class OverlayView extends View {
                 }
                 if (mOverDeleteZone && mSelected != null
                         && event.getActionMasked() == MotionEvent.ACTION_UP) {
-                    String id = mSelected;
-                    setDeleteZoneActive(false);
-                    remove(id);
+                    // Part of the drag's step, so one undo puts it back where it was.
+                    List<Overlay> items = new ArrayList<>(mHistory.current());
+                    int index = indexOf(items, mSelected);
+                    select(null);
+                    if (index >= 0) {
+                        items.remove(index);
+                        apply(Collections.unmodifiableList(items));
+                    }
                 }
                 setDeleteZoneActive(false);
                 if (mGestureCommitted && mListener != null) {
@@ -841,6 +880,19 @@ public class OverlayView extends View {
             }
             default:
                 return mMode != MODE_NONE;
+        }
+    }
+
+    /** Moves the item, or scales and turns it by its handle, to where a finger is now. */
+    private void dragTo(@NonNull Overlay start, @NonNull MotionEvent event) {
+        float[] point = toCanvas(event.getX(), event.getY());
+        if (mMode == MODE_MOVE) {
+            apply(new Overlay.Builder(start).setCenter(
+                    start.getCenterX() + point[0] - mDownX,
+                    start.getCenterY() + point[1] - mDownY).build());
+            updateDeleteZone(event);
+        } else {
+            apply(transformedByHandle(start, point[0], point[1]));
         }
     }
 
@@ -876,7 +928,11 @@ public class OverlayView extends View {
             return;
         }
         items.set(index, overlay);
-        List<Overlay> next = Collections.unmodifiableList(items);
+        apply(Collections.unmodifiableList(items));
+    }
+
+    /** Makes a gesture's change to the items, as one step with the rest of the gesture. */
+    private void apply(@NonNull List<Overlay> next) {
         if (mGestureCommitted) {
             mHistory.amend(next);
         } else {

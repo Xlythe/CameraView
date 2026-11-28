@@ -8,6 +8,7 @@ import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 
+import android.app.Activity;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -16,13 +17,17 @@ import android.graphics.PointF;
 import android.net.Uri;
 import android.os.Parcel;
 import android.os.Parcelable;
+import android.view.Gravity;
 import android.view.MotionEvent;
+import android.view.View;
+import android.widget.FrameLayout;
 
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
 import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
+import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
@@ -92,6 +97,22 @@ public class OverlayViewTest {
         assertEquals("the drag is one step", 200f, view.getOverlays().get(0).getCenterX(), 0f);
         view.redo();
         assertEquals(300f, view.getOverlays().get(0).getCenterX(), 1f);
+    }
+
+    @Test
+    public void whereTheFingerLiftsIsWhereTheStickerStays() throws IOException {
+        addSticker(solid(100, 100, Color.RED), new PointF(200, 200));
+        view.dispatchTouchEvent(MotionEvent.obtain(0, 0, MotionEvent.ACTION_DOWN, 100, 100, 0));
+        view.dispatchTouchEvent(MotionEvent.obtain(0, 10, MotionEvent.ACTION_MOVE, 120, 100, 0));
+        view.dispatchTouchEvent(MotionEvent.obtain(0, 20, MotionEvent.ACTION_UP, 150, 110, 0));
+        Overlay moved = view.getOverlays().get(0);
+        assertEquals(300f, moved.getCenterX(), 1f);
+        assertEquals(220f, moved.getCenterY(), 1f);
+        view.undo();
+        assertEquals("still one step", 200f, view.getOverlays().get(0).getCenterX(), 0f);
+        int steps = changes.size();
+        tap(100, 100);
+        assertEquals("a tap moves nothing", steps, changes.size());
     }
 
     @Test
@@ -236,6 +257,47 @@ public class OverlayViewTest {
     }
 
     @Test
+    public void draggingOntoTheDeleteZoneRemovesItAsOneStep() throws IOException {
+        Activity activity = Robolectric.buildActivity(Activity.class).setup().get();
+        FrameLayout root = new FrameLayout(activity);
+        View zone = new View(activity);
+        root.addView(view, new FrameLayout.LayoutParams(400, 200));
+        root.addView(zone, new FrameLayout.LayoutParams(50, 50, Gravity.TOP | Gravity.START));
+        ((FrameLayout.LayoutParams) zone.getLayoutParams()).leftMargin = 300;
+        ((FrameLayout.LayoutParams) zone.getLayoutParams()).topMargin = 120;
+        activity.setContentView(root);
+        ShadowLooper.idleMainLooper();
+        view.setDeleteZone(zone);
+        Overlay sticker = addSticker(solid(100, 100, Color.RED), new PointF(200, 200));
+        int before = changes.size();
+        int[] at = new int[2];
+        view.getLocationOnScreen(at);
+        // From the sticker's middle to the zone's, as the screen sees it.
+        dragOnScreen(at, 100, 100, 325, 145);
+        assertTrue(view.getOverlays().isEmpty());
+        assertFalse("the zone is left as it was", zone.isActivated());
+        view.undo();
+        assertEquals("one undo puts it back where it was", 200f,
+                view.getOverlays().get(0).getCenterX(), 0f);
+        assertEquals(sticker.getId(), view.getOverlays().get(0).getId());
+        assertTrue(changes.size() > before);
+    }
+
+    @Test
+    public void theDrawingGoesBeneathTheStickers() throws IOException {
+        addSticker(solid(100, 100, Color.RED), new PointF(400, 200));
+        // A blue line across the middle of a drawing a tenth the picture's size.
+        Drawing drawing = new Drawing(80, 40).withStrokes(Collections.singletonList(
+                DrawingTest.stroke(Brush.MARKER.withColor(Color.BLUE).withWidth(4), "line",
+                        0, 20, 80, 20)));
+        Bitmap flat = view.toBitmap(80, 40, 0, drawing);
+        assertEquals("the sticker is over the ink", Color.RED, flat.getPixel(40, 20));
+        assertEquals("the ink fills the picture", Color.BLUE,
+                flat.getPixel(10, 20) | 0xFF000000);
+        assertEquals(0, Color.alpha(flat.getPixel(10, 5)));
+    }
+
+    @Test
     public void aMomentOfAVideoShowsOnlyTheItemsShownThen() throws IOException {
         addSticker(solid(100, 100, Color.RED), new PointF(400, 200));
         view.updateOverlay(new Overlay.Builder(view.getOverlays().get(0))
@@ -367,6 +429,20 @@ public class OverlayViewTest {
                 (x0 + x1) / 2, (y0 + y1) / 2, 0));
         view.dispatchTouchEvent(MotionEvent.obtain(0, 20, MotionEvent.ACTION_MOVE, x1, y1, 0));
         view.dispatchTouchEvent(MotionEvent.obtain(0, 30, MotionEvent.ACTION_UP, x1, y1, 0));
+    }
+
+    /** A drag with each event at its place on the screen, offset into the view as delivered. */
+    private void dragOnScreen(int[] at, float x0, float y0, float x1, float y1) {
+        float[][] points = {{x0, y0}, {(x0 + x1) / 2, (y0 + y1) / 2}, {x1, y1}, {x1, y1}};
+        int[] actions = {MotionEvent.ACTION_DOWN, MotionEvent.ACTION_MOVE,
+                MotionEvent.ACTION_MOVE, MotionEvent.ACTION_UP};
+        for (int i = 0; i < points.length; i++) {
+            MotionEvent event = MotionEvent.obtain(0, i * 10L, actions[i],
+                    at[0] + points[i][0], at[1] + points[i][1], 0);
+            event.offsetLocation(-at[0], -at[1]);
+            view.dispatchTouchEvent(event);
+            event.recycle();
+        }
     }
 
     private void tap(float x, float y) {
