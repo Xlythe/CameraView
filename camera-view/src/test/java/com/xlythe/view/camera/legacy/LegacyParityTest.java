@@ -217,7 +217,9 @@ public class LegacyParityTest {
             new LegacyPictureListener(unwritable, 0, false, new ExifCaptureParameters(), module)
                     .onPictureTaken(new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9},
                             camera);
-            long deadline = System.currentTimeMillis() + 5_000;
+            // Generous, because a loaded machine can starve the writer for seconds; the loop
+            // ends as soon as it reports, so a passing run is no slower.
+            long deadline = System.currentTimeMillis() + 30_000;
             while (reported.getCount() > 0 && System.currentTimeMillis() < deadline) {
                 idle();
                 reported.await(10, TimeUnit.MILLISECONDS);

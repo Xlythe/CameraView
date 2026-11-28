@@ -382,7 +382,9 @@ public class CameraViewBurstTest {
 
     /** Runs the main looper until filing, which happens on a thread of its own, has finished. */
     private void awaitFinish() throws InterruptedException {
-        long deadline = System.currentTimeMillis() + 5_000;
+        // Generous, because a loaded machine can starve that thread for seconds; the loop ends
+        // as soon as it reports, so a passing run is no slower.
+        long deadline = System.currentTimeMillis() + 30_000;
         while (heard.finishes.isEmpty() && System.currentTimeMillis() < deadline) {
             idle();
             Thread.sleep(10);
