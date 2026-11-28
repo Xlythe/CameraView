@@ -34,7 +34,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * Each is saved under the test's external files, in media-shots, and a line naming what showed
  * is logged under MediaShots. It asserts nothing; the other device tests do.
  *
- * <p>Reads the corpus pushed to /data/local/tmp/media-corpus, and skips without it.</p>
+ * <p>Reads the corpus pushed to /data/local/tmp/media-corpus, or before Android 6.0 to
+ * media-corpus under the test's external files, and skips without it.</p>
  */
 @RunWith(AndroidJUnit4.class)
 public class MediaShotsDeviceTest {
@@ -194,6 +195,13 @@ public class MediaShotsDeviceTest {
     /** Copies a corpus file the shell can read to where the test can. */
     private static File copy(Instrumentation instrumentation, String path, File directory)
             throws IOException {
+        // Before Android 6.0, whose shell commands never say they have finished, the corpus is
+        // pushed under the test's own external files instead.
+        File local = new File(new File(instrumentation.getTargetContext().getExternalFilesDir(
+                null), "media-corpus"), path);
+        if (local.isFile()) {
+            return local;
+        }
         File file = new File(directory, path.substring(path.lastIndexOf('/') + 1));
         if (file.isFile() && file.length() > 0) {
             return file;
