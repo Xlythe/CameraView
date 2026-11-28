@@ -7,7 +7,6 @@ import androidx.annotation.WorkerThread;
 
 import java.io.File;
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.text.ParsePosition;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -714,6 +713,6 @@ final class MatroskaContainer extends MediaContainer {
             stop++;
         }
         return new String(data, (int) element.data, stop - (int) element.data,
-                StandardCharsets.UTF_8);
+                Bytes.UTF_8);
     }
 }
