@@ -1,50 +1,78 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="#000000"
+    android:orientation="vertical"
     tools:context=".EditorFragment">
 
-    <!-- The picture, or once saved, the edited picture. -->
-    <com.xlythe.view.camera.viewer.MediaView
-        android:id="@+id/editor_media"
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:contentDescription="@string/editor_media_description" />
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
-    <TextView
-        android:id="@+id/editor_info"
+        <!-- The picture being edited, fitted as the drawing over it is. -->
+        <ImageView
+            android:id="@+id/editor_preview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@string/editor_media_description"
+            android:scaleType="fitCenter" />
+
+        <!-- Ink over the picture, in the picture's own pixels. -->
+        <com.xlythe.view.camera.edit.DrawingView
+            android:id="@+id/editor_drawing"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- The saved picture. -->
+        <com.xlythe.view.camera.viewer.MediaView
+            android:id="@+id/editor_media"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@string/editor_media_description"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/editor_info"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:background="#80000000"
+            android:padding="8dp"
+            android:textColor="#FFFFFF"
+            android:visibility="gone" />
+
+        <ProgressBar
+            android:id="@+id/editor_progress"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/editor_message"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:padding="24dp"
+            android:text="@string/editor_empty"
+            android:textColor="#FFFFFF" />
+    </FrameLayout>
+
+    <!-- The library's own text-free brush picker, bound to the drawing. -->
+    <com.xlythe.view.camera.edit.BrushPanelView
+        android:id="@+id/editor_brushes"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="top"
-        android:background="#80000000"
-        android:padding="8dp"
-        android:textColor="#FFFFFF"
-        android:visibility="gone" />
-
-    <ProgressBar
-        android:id="@+id/editor_progress"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:visibility="gone" />
-
-    <TextView
-        android:id="@+id/editor_message"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="center"
-        android:padding="24dp"
-        android:text="@string/editor_empty"
-        android:textColor="#FFFFFF" />
+        android:background="#202020" />
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_gravity="bottom"
-        android:background="#80000000"
+        android:background="#202020"
         android:orientation="vertical"
         android:padding="8dp">
 
@@ -93,9 +121,26 @@
                     android:text="@string/editor_filter" />
 
                 <CheckBox
-                    android:id="@+id/editor_mark"
+                    android:id="@+id/editor_erase"
                     style="@style/ViewerChoice"
-                    android:text="@string/editor_mark" />
+                    android:text="@string/editor_erase" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/editor_undo"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/editor_undo"
+                    android:textColor="#FFFFFF"
+                    app:cornerRadius="20dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/editor_redo"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/editor_redo"
+                    android:textColor="#FFFFFF"
+                    app:cornerRadius="20dp" />
 
                 <CheckBox
                     android:id="@+id/editor_mark_filtered"
@@ -199,7 +244,13 @@
                     android:id="@+id/editor_small"
                     style="@style/ViewerChoice"
                     android:text="@string/editor_small" />
+
+                <CheckBox
+                    android:id="@+id/editor_show_result"
+                    style="@style/ViewerChoice"
+                    android:enabled="false"
+                    android:text="@string/editor_show_result" />
             </LinearLayout>
         </HorizontalScrollView>
     </LinearLayout>
-</FrameLayout>
+</LinearLayout>

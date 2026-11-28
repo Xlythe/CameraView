@@ -5,6 +5,9 @@ import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -28,11 +31,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.xlythe.compose.camera.BrushPanel
+import com.xlythe.compose.camera.DrawingSurface
 import com.xlythe.compose.camera.Media
 import com.xlythe.compose.camera.editPicture
 import com.xlythe.view.camera.MediaTags
+import com.xlythe.view.camera.edit.Brush
+import com.xlythe.view.camera.edit.Drawing
+import com.xlythe.view.camera.edit.DrawingView
 import com.xlythe.view.camera.edit.PictureEditor
 import com.xlythe.view.camera.edit.PictureEdits
 import com.xlythe.view.camera.gl.ColorMatrix
@@ -53,8 +63,9 @@ private val FORMATS = listOf(
 )
 
 /**
- * Edits a picture with the library's [editPicture]: turns, flips, crops and filters it, and
- * writes it in any format the device can, keeping its metadata, then shows the result.
+ * Edits a picture with the library's pieces: [DrawingSurface] to draw on it, [BrushPanel] to
+ * pick the brush, and [editPicture] to turn, flip, crop and filter it with the drawing on it and
+ * write it in any format the device can, keeping its metadata, then shows the result.
  */
 @Composable
 fun EditorDemoScreen(initialUri: Uri?) {
@@ -67,9 +78,27 @@ fun EditorDemoScreen(initialUri: Uri?) {
     var edited by remember(uri) { mutableStateOf<File?>(null) }
     var summary by remember(uri) { mutableStateOf("") }
     var status by remember(uri) { mutableStateOf(if (uri == null) "Open a picture to edit" else "") }
+    var preview by remember(uri) { mutableStateOf<Bitmap?>(null) }
+    var drawing by remember(uri) { mutableStateOf<Drawing?>(null) }
+    var brush by remember { mutableStateOf(Brush.PEN) }
+    var drawingView by remember { mutableStateOf<DrawingView?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
         if (picked != null) {
             uri = picked
+        }
+    }
+    LaunchedEffect(uri) {
+        val source = uri ?: return@LaunchedEffect
+        // The picture upright and small, to draw over; the drawing is in its own pixels.
+        val file = File(context.cacheDir, "editor-demo-preview.png")
+        try {
+            editPicture(context, source, file, PictureEdits.Builder().build(),
+                format = PictureEditor.FORMAT_PNG, maxOutputPixels = 1600L * 1600L)
+            val bitmap = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(file.path) }
+            preview = bitmap
+            drawing = Drawing(bitmap.width.toFloat(), bitmap.height.toFloat())
+        } catch (e: IOException) {
+            status = "This device cannot show this file"
         }
     }
     LaunchedEffect(Unit) {
@@ -80,13 +109,30 @@ fun EditorDemoScreen(initialUri: Uri?) {
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
-            Media(
-                modifier = Modifier.fillMaxSize(),
-                file = edited,
-                uri = uri,
-                onLoaded = { status = "" },
-                onFailed = { status = "This device cannot show this file" },
-            )
+            val shown = preview
+            if (edited != null || shown == null) {
+                Media(
+                    modifier = Modifier.fillMaxSize(),
+                    file = edited,
+                    uri = if (edited == null) null else uri,
+                    onLoaded = { status = "" },
+                    onFailed = { status = "This device cannot show this file" },
+                )
+            } else {
+                Image(
+                    bitmap = shown.asImageBitmap(),
+                    contentDescription = "The picture being edited",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize(),
+                )
+                DrawingSurface(
+                    modifier = Modifier.fillMaxSize(),
+                    drawing = drawing,
+                    brush = brush,
+                    onDrawingChanged = { drawing = it },
+                    onView = { drawingView = it },
+                )
+            }
             if (summary.isNotEmpty()) {
                 Text(
                     summary,
@@ -98,12 +144,22 @@ fun EditorDemoScreen(initialUri: Uri?) {
                 Text(status, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp))
             }
         }
+        BrushPanel(
+            modifier = Modifier.fillMaxWidth(),
+            brush = brush,
+            onBrushChange = { brush = it },
+        )
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Button(onClick = { picker.launch(arrayOf("image/*")) }) { Text("Open") }
+            Button(onClick = { drawingView?.undo() }) { Text("Undo") }
+            Button(onClick = { drawingView?.redo() }) { Text("Redo") }
+            if (edited != null) {
+                Button(onClick = { edited = null; summary = "" }) { Text("Back") }
+            }
             FilterChip(
                 selected = edits.rotationDegrees != 0,
                 onClick = {
@@ -153,7 +209,16 @@ fun EditorDemoScreen(initialUri: Uri?) {
                     status = "Saving…"
                     scope.launch {
                         try {
-                            val file = editPicture(context, source, output, edits, format, quality = 90)
+                            val ink = drawing
+                            val withInk = if (ink == null || ink.isEmpty) edits else {
+                                val overlay = withContext(Dispatchers.IO) {
+                                    val scale = minOf(1f, 2048f / maxOf(ink.width, ink.height))
+                                    ink.toBitmap((ink.width * scale).toInt().coerceAtLeast(1),
+                                        (ink.height * scale).toInt().coerceAtLeast(1))
+                                }
+                                PictureEdits.Builder(edits).setOverlay(overlay).build()
+                            }
+                            val file = editPicture(context, source, output, withInk, format, quality = 90)
                             edited?.delete()
                             edited = file
                             summary = withContext(Dispatchers.IO) {

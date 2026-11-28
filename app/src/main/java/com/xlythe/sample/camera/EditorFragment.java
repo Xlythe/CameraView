@@ -5,9 +5,6 @@ import static com.xlythe.sample.camera.MainActivity.TAG;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
-import android.graphics.Color;
-import android.graphics.Paint;
 import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Bundle;
@@ -19,6 +16,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.RadioGroup;
 import android.widget.TextView;
@@ -34,6 +32,9 @@ import androidx.core.os.BundleCompat;
 import androidx.fragment.app.Fragment;
 
 import com.xlythe.view.camera.MediaTags;
+import com.xlythe.view.camera.edit.BrushPanelView;
+import com.xlythe.view.camera.edit.Drawing;
+import com.xlythe.view.camera.edit.DrawingView;
 import com.xlythe.view.camera.edit.PictureEditor;
 import com.xlythe.view.camera.edit.PictureEdits;
 import com.xlythe.view.camera.gl.ColorMatrix;
@@ -43,13 +44,15 @@ import com.xlythe.view.camera.viewer.MediaView;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /**
- * EditorFragment edits a picture with the library's PictureEditor: turns, flips, straightens,
- * crops and filters it, marks it with an overlay, and writes it in any format the device can,
- * keeping its metadata. The result is shown in a MediaView, with what MediaTags reads from it.
+ * EditorFragment edits a picture with the library's pieces: a DrawingView to draw on it with a
+ * pen or a finger and a BrushPanelView to pick the brush, then PictureEditor to turn, flip,
+ * straighten, crop and filter it with the drawing on it, and write it in any format the device
+ * can, keeping its metadata. The result is shown in a MediaView, with what MediaTags reads.
  */
 public class EditorFragment extends Fragment {
     /** The argument naming the picture to edit. */
@@ -73,8 +76,11 @@ public class EditorFragment extends Fragment {
     /** The quality lossy formats are written at. */
     private static final int QUALITY = 90;
 
-    /** How wide the mark's overlay is drawn; it is stretched over the picture. */
-    private static final int OVERLAY_WIDTH = 512;
+    /** The longest side the drawing is drawn at to go over the picture. */
+    private static final int MAX_OVERLAY_SIDE = 2048;
+
+    /** The longest side the picture is shown at while it is edited. */
+    private static final int MAX_PREVIEW_SIDE = 1600;
 
     /** Picks a picture from the gallery or the files app. */
     private final ActivityResultLauncher<String[]> mPicker = registerForActivityResult(
@@ -104,6 +110,11 @@ public class EditorFragment extends Fragment {
     @Nullable private PictureEditor mEditor;
 
     @Nullable private MediaView mMedia;
+    @Nullable private ImageView mPreview;
+    @Nullable private DrawingView mDrawing;
+    @Nullable private BrushPanelView mBrushes;
+    @Nullable private CheckBox mErase;
+    @Nullable private CheckBox mShowResult;
     @Nullable private TextView mInfo;
     @Nullable private TextView mMessage;
     @Nullable private ProgressBar mProgress;
@@ -114,7 +125,6 @@ public class EditorFragment extends Fragment {
     @Nullable private CheckBox mStraighten;
     @Nullable private CheckBox mCrop;
     @Nullable private CheckBox mFilter;
-    @Nullable private CheckBox mMark;
     @Nullable private CheckBox mMarkFiltered;
     @Nullable private CheckBox mSmall;
     @Nullable private RadioGroup mFormat;
@@ -138,6 +148,11 @@ public class EditorFragment extends Fragment {
     public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
         super.onViewCreated(view, savedInstanceState);
         mMedia = view.findViewById(R.id.editor_media);
+        mPreview = view.findViewById(R.id.editor_preview);
+        mDrawing = view.findViewById(R.id.editor_drawing);
+        mBrushes = view.findViewById(R.id.editor_brushes);
+        mErase = view.findViewById(R.id.editor_erase);
+        mShowResult = view.findViewById(R.id.editor_show_result);
         mInfo = view.findViewById(R.id.editor_info);
         mMessage = view.findViewById(R.id.editor_message);
         mProgress = view.findViewById(R.id.editor_progress);
@@ -148,7 +163,6 @@ public class EditorFragment extends Fragment {
         mStraighten = view.findViewById(R.id.editor_straighten);
         mCrop = view.findViewById(R.id.editor_crop);
         mFilter = view.findViewById(R.id.editor_filter);
-        mMark = view.findViewById(R.id.editor_mark);
         mMarkFiltered = view.findViewById(R.id.editor_mark_filtered);
         mSmall = view.findViewById(R.id.editor_small);
         mFormat = view.findViewById(R.id.editor_format);
@@ -172,6 +186,12 @@ public class EditorFragment extends Fragment {
             updateTurn();
         });
         mSave.setOnClickListener(v -> save());
+        mBrushes.setDrawingView(mDrawing);
+        mErase.setOnCheckedChangeListener((box, checked) -> mDrawing.setTool(
+                checked ? DrawingView.TOOL_ERASE : DrawingView.TOOL_DRAW));
+        view.findViewById(R.id.editor_undo).setOnClickListener(v -> mDrawing.undo());
+        view.findViewById(R.id.editor_redo).setOnClickListener(v -> mDrawing.redo());
+        mShowResult.setOnCheckedChangeListener((box, checked) -> showResult(checked));
 
         // HEIF and AVIF need encoders not every device has.
         View heif = view.findViewById(R.id.editor_format_heif);
@@ -222,6 +242,11 @@ public class EditorFragment extends Fragment {
         }
         mEditor = null;
         mMedia = null;
+        mPreview = null;
+        mDrawing = null;
+        mBrushes = null;
+        mErase = null;
+        mShowResult = null;
         mInfo = null;
         mMessage = null;
         mProgress = null;
@@ -232,7 +257,6 @@ public class EditorFragment extends Fragment {
         mStraighten = null;
         mCrop = null;
         mFilter = null;
-        mMark = null;
         mMarkFiltered = null;
         mSmall = null;
         mFormat = null;
@@ -252,8 +276,10 @@ public class EditorFragment extends Fragment {
         mUri = uri;
         mUprightWidth = 0;
         mUprightHeight = 0;
-        if (mMedia != null) {
-            mMedia.setUri(uri);
+        showResult(false);
+        if (mShowResult != null) {
+            mShowResult.setChecked(false);
+            mShowResult.setEnabled(false);
         }
         if (mSave != null) {
             mSave.setEnabled(true);
@@ -263,11 +289,20 @@ public class EditorFragment extends Fragment {
         mExecutor.execute(() -> {
             int[] size = uprightSize(context, uri);
             String summary = describe(context, uri);
+            Bitmap preview = preview(context, uri);
             mHandler.post(() -> {
                 if (uri.equals(mUri)) {
                     mUprightWidth = size[0];
                     mUprightHeight = size[1];
                     setInfo(summary);
+                    setBusy(false, preview == null ? getString(R.string.viewer_failed) : null);
+                    if (mPreview != null) {
+                        mPreview.setImageBitmap(preview);
+                    }
+                    if (mDrawing != null) {
+                        // The drawing is kept in the picture's own pixels.
+                        mDrawing.setDrawingSize(size[0], size[1]);
+                    }
                 }
             });
         });
@@ -286,7 +321,26 @@ public class EditorFragment extends Fragment {
         File directory = requireContext().getExternalFilesDir(null);
         File output = new File(directory == null ? requireContext().getFilesDir() : directory,
                 "edited-" + System.currentTimeMillis() + extensionOf(format));
-        PictureEditor editor = new PictureEditor(requireContext(), mUri, output, edits());
+        Drawing drawing = mDrawing == null ? null : mDrawing.getDrawing();
+        Uri source = mUri;
+        PictureEdits edits = edits();
+        setBusy(true, null);
+        mExecutor.execute(() -> {
+            PictureEdits withInk = drawing == null || drawing.isEmpty() ? edits
+                    : new PictureEdits.Builder(edits).setOverlay(overlay(drawing)).build();
+            mHandler.post(() -> {
+                if (source.equals(mUri) && isAdded()) {
+                    startEditor(source, output, format, withInk);
+                }
+            });
+        });
+    }
+
+    /** Writes the edited picture. */
+    @MainThread
+    private void startEditor(@NonNull Uri source, @NonNull File output, int format,
+            @NonNull PictureEdits edits) {
+        PictureEditor editor = new PictureEditor(requireContext(), source, output, edits);
         editor.setOutputFormat(format);
         editor.setQuality(QUALITY);
         editor.setMaxOutputPixels(mSmall != null && mSmall.isChecked() ? SMALL_PIXELS : 0);
@@ -310,7 +364,6 @@ public class EditorFragment extends Fragment {
             }
         });
         mEditor = editor;
-        setBusy(true, null);
         editor.start();
     }
 
@@ -318,41 +371,58 @@ public class EditorFragment extends Fragment {
     @MainThread
     @NonNull
     private PictureEdits edits() {
-        PictureEdits.Builder builder = new PictureEdits.Builder()
+        return new PictureEdits.Builder()
                 .setRotationDegrees(mTurn)
                 .setFlippedHorizontally(isChecked(mFlipHorizontal))
                 .setFlippedVertically(isChecked(mFlipVertical))
                 .setStraightenDegrees(isChecked(mStraighten) ? STRAIGHTEN_DEGREES : 0)
                 .setCrop(isChecked(mCrop) ? CROP : null)
                 .setColorMatrix(isChecked(mFilter) ? ColorMatrix.grayscale() : null)
-                .setOverlayFiltered(isChecked(mMarkFiltered));
-        if (isChecked(mMark) && mUprightWidth > 0 && mUprightHeight > 0) {
-            builder.setOverlay(mark(mUprightWidth, mUprightHeight));
-        }
-        return builder.build();
+                .setOverlayFiltered(isChecked(mMarkFiltered))
+                .build();
     }
 
-    /**
-     * A red ring and bar in the top left of the picture as seen, drawn smaller than the
-     * picture with its proportions, since the editor stretches an overlay over it.
-     */
-    @VisibleForTesting
+    /** The drawing as a picture to lay over the one edited, no larger than it needs to be. */
+    @WorkerThread
     @NonNull
-    static Bitmap mark(int uprightWidth, int uprightHeight) {
-        int width = OVERLAY_WIDTH;
-        int height = Math.max(1, Math.round(OVERLAY_WIDTH * uprightHeight / (float) uprightWidth));
-        Bitmap overlay = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(overlay);
-        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
-        paint.setColor(Color.RED);
-        paint.setStyle(Paint.Style.STROKE);
-        paint.setStrokeWidth(width / 40f);
-        float radius = Math.min(width, height) / 6f;
-        canvas.drawCircle(width / 4f, height / 4f, radius, paint);
-        paint.setStyle(Paint.Style.FILL);
-        canvas.drawRect(width / 4f - radius, height / 4f + radius * 1.4f, width / 4f + radius,
-                height / 4f + radius * 1.7f, paint);
-        return overlay;
+    private static Bitmap overlay(@NonNull Drawing drawing) {
+        float scale = Math.min(1f, MAX_OVERLAY_SIDE / Math.max(drawing.getWidth(),
+                drawing.getHeight()));
+        return drawing.toBitmap(Math.max(1, Math.round(drawing.getWidth() * scale)),
+                Math.max(1, Math.round(drawing.getHeight() * scale)));
+    }
+
+    /** The picture, upright, small enough to show while it is edited, or null. */
+    @WorkerThread
+    @Nullable
+    private static Bitmap preview(@NonNull Context context, @NonNull Uri uri) {
+        File file = new File(context.getCacheDir(), "editor-preview.png");
+        PictureEditor editor = new PictureEditor(context, uri, file,
+                new PictureEdits.Builder().build());
+        CountDownLatch done = new CountDownLatch(1);
+        new Handler(Looper.getMainLooper()).post(() -> {
+            editor.setOutputFormat(PictureEditor.FORMAT_PNG);
+            editor.setMaxOutputPixels((long) MAX_PREVIEW_SIDE * MAX_PREVIEW_SIDE);
+            editor.setOnPictureEditedListener(new PictureEditor.OnPictureEditedListener() {
+                @Override
+                public void onPictureEdited(@NonNull File edited) {
+                    done.countDown();
+                }
+
+                @Override
+                public void onFailure() {
+                    done.countDown();
+                }
+            });
+            editor.start();
+        });
+        try {
+            done.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+        return BitmapFactory.decodeFile(file.getPath());
     }
 
     @MainThread
@@ -360,6 +430,11 @@ public class EditorFragment extends Fragment {
         if (mMedia != null) {
             mMedia.setFile(file);
         }
+        if (mShowResult != null) {
+            mShowResult.setEnabled(true);
+            mShowResult.setChecked(true);
+        }
+        showResult(true);
         Context context = requireContext().getApplicationContext();
         mExecutor.execute(() -> {
             String summary = describe(context, Uri.fromFile(file));
@@ -400,6 +475,20 @@ public class EditorFragment extends Fragment {
         } catch (IOException e) {
             Log.w(TAG, "Could not read the size of " + uri, e);
             return new int[] {0, 0};
+        }
+    }
+
+    /** Shows the saved picture, or the one being edited with its drawing. */
+    @MainThread
+    private void showResult(boolean result) {
+        if (mMedia != null) {
+            mMedia.setVisibility(result ? View.VISIBLE : View.GONE);
+        }
+        if (mDrawing != null) {
+            mDrawing.setVisibility(result ? View.GONE : View.VISIBLE);
+        }
+        if (mPreview != null) {
+            mPreview.setVisibility(result ? View.GONE : View.VISIBLE);
         }
     }
 
