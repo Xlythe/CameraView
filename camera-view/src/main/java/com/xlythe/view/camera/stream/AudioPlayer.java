@@ -169,6 +169,8 @@ public class AudioPlayer {
       while (isPlaying()) {
         int skip = catchUp.bytesToSkip(audio.available());
         if (skip > 0) {
+          Log.d(TAG, "Skipping " + skip * 1000L / (sampleRate * frameBytes)
+                  + "ms of audio that arrived late");
           // A partial frame from before the skip is part of what is discarded.
           discard(audio, data, skip - carried);
           carried = 0;
@@ -201,6 +203,9 @@ public class AudioPlayer {
     try {
       while (isPlaying()) {
         long skip = output.compressedBytesToSkip(audio.available());
+        if (skip > 0) {
+          Log.d(TAG, "Skipping " + skip + " bytes of compressed audio that arrived late");
+        }
         while (skip > 0) {
           byte[] dropped = AudioCodec.readFrame(audio);
           if (dropped == null) {

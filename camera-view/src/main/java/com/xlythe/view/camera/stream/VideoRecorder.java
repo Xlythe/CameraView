@@ -124,10 +124,10 @@ public class VideoRecorder {
   private int mSessionLevel;
   /** The dropped-frame count the controller was last told about. Recorder thread only. */
   private long mLastDroppedFrames;
-  /** The first session's frame size, which later sessions scale from. Recorder thread only. */
-  private int mBaseWidth;
+  /** The first session's frame size, which later sessions scale from. */
+  private volatile int mBaseWidth;
   /** Likewise. */
-  private int mBaseHeight;
+  private volatile int mBaseHeight;
   /** When the first session's frame count began, or -1. Recorder thread only. */
   private long mMeasureStartMillis = -1;
   /** Frames counted since then. Recorder thread only. */
