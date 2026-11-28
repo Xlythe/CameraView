@@ -11,6 +11,7 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.media.MediaMetadataRetriever;
+import android.os.Debug;
 import android.opengl.GLES20;
 import android.os.SystemClock;
 import android.util.Log;
@@ -53,6 +54,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -567,34 +569,39 @@ public final class FrameEffectDeviceTest {
     }
 
     /**
-     * A frame drawn straight through comes out the shape it would have without the effect.
+     * A frame drawn straight through comes out the size it would have without the effect: the
+     * camera's own still resolution, turned and cropped as the plain picture is.
      *
      * <p>The effect is built with CameraX's only unrestricted constructor, which describes the
      * transformation as arbitrary rather than as the camera-and-surface rotation the processor
      * actually applies. That is a claim about what CameraX may assume downstream, and the place
      * it would show is the geometry of the saved file - a frame rotated a quarter turn, or
-     * cropped to the wrong rectangle, arrives here turned or at another aspect ratio.</p>
+     * cropped to the wrong rectangle, arrives here turned or at another aspect ratio. A still
+     * drawn from the stream CameraX shares with the preview, rather than taken at the still's
+     * own resolution, arrives smaller.</p>
      *
-     * <p>The pixel count is not compared. CameraX draws every output from one shared stream, so
-     * its drawn still has the preview's resolution, which is smaller than its own still on a
-     * camera that offers more.</p>
+     * <p>How long each picture takes and how much memory it costs are logged, for comparing the
+     * drawn path with the plain one.</p>
      */
     @Test
-    public void drawingTheFrameThroughDoesNotChangeItsShape() throws Exception {
-        Size withoutEffect = captureSize(null);
-        Size withEffect = captureSize(frame -> {
+    public void drawingTheFrameThroughDoesNotChangeItsSize() throws Exception {
+        Capture withoutEffect = capture(null);
+        Capture withEffect = capture(frame -> {
             frame.drawCameraFrame();
             return true;
         });
 
         String sizes = withoutEffect + " without the effect, " + withEffect + " with it";
+        Log.i(FILTER_TAG, backend + " still " + sizes);
         assertEquals("an effect that draws the frame through should not turn the capture: "
                         + sizes,
-                withoutEffect.getWidth() > withoutEffect.getHeight(),
-                withEffect.getWidth() > withEffect.getHeight());
+                withoutEffect.size.getWidth() > withoutEffect.size.getHeight(),
+                withEffect.size.getWidth() > withEffect.size.getHeight());
         assertEquals("an effect that draws the frame through should not recrop the capture: "
                         + sizes,
-                aspectRatio(withoutEffect), aspectRatio(withEffect), ASPECT_TOLERANCE);
+                aspectRatio(withoutEffect.size), aspectRatio(withEffect.size), ASPECT_TOLERANCE);
+        assertEquals("an effect should not cost the picture its resolution: " + sizes,
+                withoutEffect.size, withEffect.size);
     }
 
     private static float aspectRatio(@NonNull Size size) {
@@ -779,8 +786,30 @@ public final class FrameEffectDeviceTest {
         };
     }
 
+    /** One capture's size as a viewer sees it, how long it took and what it cost. */
+    private static final class Capture {
+        /** The picture's dimensions once its orientation is applied. */
+        final Size size;
+        /** From asking for the picture to hearing it was written. */
+        final long millis;
+        /** The most the app's Java and native heaps grew while it was taken, in megabytes. */
+        final long peakMegabytes;
+
+        Capture(@NonNull Size size, long millis, long peakMegabytes) {
+            this.size = size;
+            this.millis = millis;
+            this.peakMegabytes = peakMegabytes;
+        }
+
+        @NonNull
+        @Override
+        public String toString() {
+            return size + " in " + millis + " ms, heaps up to " + peakMegabytes + " MB";
+        }
+    }
+
     /**
-     * The dimensions of one capture as a viewer sees them, with the given renderer or with none.
+     * One capture, with the given renderer or with none, measured.
      *
      * <p>Orientation is applied rather than ignored, because the two paths record it differently
      * and both are correct: a JPEG straight from the camera is stored in sensor orientation with
@@ -789,10 +818,12 @@ public final class FrameEffectDeviceTest {
      * displayed is the question actually worth asking.</p>
      */
     @NonNull
-    private Size captureSize(@Nullable FrameRenderer renderer) throws Exception {
+    private Capture capture(@Nullable FrameRenderer renderer) throws Exception {
         File file = temporaryFile(".jpg");
         CountDownLatch finished = new CountDownLatch(1);
         AtomicReference<File> captured = new AtomicReference<>();
+        AtomicLong millis = new AtomicLong();
+        AtomicLong peak = new AtomicLong();
 
         withOpenCamera(renderer, camera -> {
             camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
@@ -807,9 +838,17 @@ public final class FrameEffectDeviceTest {
                     finished.countDown();
                 }
             });
+            // Settled first, so the heaps measured are the picture's and not the camera's.
+            Thread.sleep(1_000);
+            HeapSampler sampler = new HeapSampler(finished);
+            sampler.start();
+            long started = SystemClock.elapsedRealtime();
             camera.takePicture(file);
             assertTrue("the capture never reported",
                     finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            millis.set(SystemClock.elapsedRealtime() - started);
+            sampler.join();
+            peak.set(sampler.peakGrowthMegabytes());
         });
 
         assertNotNull("the capture failed", captured.get());
@@ -823,9 +862,50 @@ public final class FrameEffectDeviceTest {
                 || orientation == ExifInterface.ORIENTATION_ROTATE_270
                 || orientation == ExifInterface.ORIENTATION_TRANSPOSE
                 || orientation == ExifInterface.ORIENTATION_TRANSVERSE;
-        return quarterTurned
+        Size size = quarterTurned
                 ? new Size(bounds.outHeight, bounds.outWidth)
                 : new Size(bounds.outWidth, bounds.outHeight);
+        return new Capture(size, millis.get(), peak.get());
+    }
+
+    /**
+     * Watches how far the app's Java and native heaps grow until a capture finishes. Graphics
+     * buffers are not counted, which leaves out the camera's and the renderer's surfaces.
+     */
+    private static final class HeapSampler extends Thread {
+        /** How often the heaps are read. */
+        private static final long SAMPLE_MILLIS = 10;
+        /** Released when the capture finishes. */
+        private final CountDownLatch mFinished;
+        /** The heaps when sampling started, in bytes. */
+        private final long mBaseline = heapBytes();
+        /** The most the heaps reached, in bytes. */
+        private volatile long mPeak = mBaseline;
+
+        HeapSampler(@NonNull CountDownLatch finished) {
+            super("HeapSampler");
+            mFinished = finished;
+        }
+
+        @Override
+        public void run() {
+            try {
+                do {
+                    mPeak = Math.max(mPeak, heapBytes());
+                } while (!mFinished.await(SAMPLE_MILLIS, TimeUnit.MILLISECONDS));
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        long peakGrowthMegabytes() {
+            return (mPeak - mBaseline) / (1024 * 1024);
+        }
+
+        private static long heapBytes() {
+            Runtime runtime = Runtime.getRuntime();
+            return runtime.totalMemory() - runtime.freeMemory() + Debug.getNativeHeapAllocatedSize();
+        }
     }
 
     private static void assertMagenta(@NonNull String what, int pixel) {
@@ -961,6 +1041,7 @@ public final class FrameEffectDeviceTest {
                 return false;
             }
             DeviceState.turnTheFlashOff(camera);
+            camera.setShutterSoundEnabled(false);
             try {
                 action.run(camera);
             } finally {

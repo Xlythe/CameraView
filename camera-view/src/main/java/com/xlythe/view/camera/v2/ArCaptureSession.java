@@ -20,6 +20,7 @@ import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.UiThread;
 
+import com.xlythe.view.camera.DrawnPictures;
 import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.ar.ArTracker;
 import com.xlythe.view.camera.gl.FrameRenderThread;
@@ -232,7 +233,7 @@ final class ArCaptureSession extends SessionImpl {
             }
             Bitmap bitmap;
             try {
-                bitmap = PictureSession.toBitmap(frame.getImage());
+                bitmap = DrawnPictures.toBitmap(frame.getImage());
             } catch (RuntimeException | OutOfMemoryError error) {
                 Log.e(TAG, "Failed to read back an AR picture", error);
                 abandon();

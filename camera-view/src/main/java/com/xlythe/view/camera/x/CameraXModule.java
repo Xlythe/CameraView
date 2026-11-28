@@ -1486,6 +1486,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             takeRawPicture(imageCapture, file, operationId);
             return;
         }
+        FrameEffect effect = mFrameEffect;
+        if (effect != null) {
+            takeDrawnPicture(imageCapture, effect, file, operationId);
+            return;
+        }
         ImageCapture.Metadata metadata = new ImageCapture.Metadata();
         Location location = getLocation();
         metadata.setLocation(location);
@@ -1591,6 +1596,54 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 Log.w(TAG, "Image capture failed", error);
                 abandonRawCapture();
                 completePendingImage(operationId);
+            }
+        });
+    }
+
+    /**
+     * Takes a picture at the camera's still resolution and draws it through the renderer, as
+     * Camera2 does. The effect is bound to the preview and the recording only, since CameraX
+     * would otherwise draw the still from the stream they share, at the preview's resolution.
+     */
+    @MainThread
+    private void takeDrawnPicture(@NonNull ImageCapture imageCapture,
+            @NonNull FrameEffect effect, @NonNull File file, long operationId) {
+        boolean mirrored = mFrontFacing;
+        int quality = getPictureQuality();
+        ExifCaptureParameters exifParameters = exifCaptureParameters();
+        imageCapture.takePicture(mMainExecutor, new ImageCapture.OnImageCapturedCallback() {
+            @Override public void onCaptureStarted() {
+                if (operationId == mImageOperationId) onShutter();
+            }
+
+            @Override public void onCaptureSuccess(@NonNull ImageProxy image) {
+                if (operationId != mImageOperationId || mPendingImageFile == null) {
+                    image.close();
+                    return;
+                }
+                DrawnStill still;
+                try {
+                    // Read now rather than on the writer's thread, because the camera can close
+                    // before the writer runs and the fix it was following goes with it.
+                    still = new DrawnStill(getContext(), image, mirrored, effect, file, quality,
+                            exifParameters, getLocation(),
+                            written -> mMainHandler.post(() -> {
+                                if (!completePendingImage(operationId)) return;
+                                if (written) showImageConfirmation(file);
+                                else onImageFailed();
+                            }));
+                } catch (RuntimeException | OutOfMemoryError error) {
+                    Log.e(TAG, "Failed to copy the still to draw", error);
+                    if (completePendingImage(operationId)) onImageFailed();
+                    return;
+                }
+                AsyncTask.THREAD_POOL_EXECUTOR.execute(still);
+            }
+
+            @Override public void onError(@NonNull ImageCaptureException error) {
+                if (!completePendingImage(operationId)) return;
+                Log.w(TAG, "Image capture failed", error);
+                onImageFailed();
             }
         });
     }
@@ -2330,17 +2383,17 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /**
      * Creates the effect, once, for as long as a caller wants frames drawn.
      *
-     * <p>Nothing goes through GL until somebody asks. An effect across the preview, the recording
-     * and the still makes CameraX share one camera stream between all three, which costs the still
-     * the resolution it would otherwise have had, so a library that did it unasked would be
-     * charging every app for a feature most of them never use.</p>
+     * <p>Nothing goes through GL until somebody asks. An effect makes CameraX share one camera
+     * stream between the preview and the recording and draw every frame of it, and a still is
+     * drawn after it is taken, so a library that did it unasked would be charging every app for a
+     * feature most of them never use.</p>
      */
     private void ensureFrameEffect() {
         if (mFrameEffect != null || mGlUnavailable) return;
         FrameRenderer renderer = getFrameRenderer();
         CameraTextureProvider textureProvider = getCameraTextureProvider();
         if (renderer == null && textureProvider == null) return;
-        mFrameEffect = FrameEffect.create(FrameEffect.ALL_TARGETS, mMainExecutor, renderer,
+        mFrameEffect = FrameEffect.create(FrameEffect.TARGETS, mMainExecutor, renderer,
                 textureProvider, mLensGeometry, this::onFrameEffectFailed);
         if (mFrameEffect == null) {
             // The renderer logged why. The camera goes on being bound without an effect, which is
@@ -2365,10 +2418,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * The format the still use case is built for: the one asked for, or JPEG while frames are
      * drawn.
      *
-     * <p>A raw or Ultra HDR still cannot come out of a GL pipeline at all, and CameraX says so by
-     * throwing out of the bind rather than by dropping the effect. So the effect wins, as it does
-     * on Camera2: the still is a drawn JPEG, Ultra HDR falls back to it, and a capture asked for
-     * as RAW is refused rather than quietly written as something else.</p>
+     * <p>A drawn still is the JPEG the renderer's drawing is encoded as, and a raw or Ultra HDR
+     * still cannot be drawn. So the effect wins, as it does on Camera2: the still is a drawn JPEG,
+     * Ultra HDR falls back to it, and a capture asked for as RAW is refused rather than quietly
+     * written as something else.</p>
      */
     @NonNull
     static CameraView.PictureFormat boundPictureFormat(
@@ -2760,7 +2813,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
-                .setCaptureMode(getCaptureMode(cameraInfo, format, drawing))
+                .setCaptureMode(getCaptureMode(cameraInfo, format))
                 .setJpegQuality(getPictureQuality());
         // Checked against this camera as well as on request, since the lens may have changed.
         if (format == CameraView.PictureFormat.ULTRA_HDR && writesUltraHdr(cameraInfo)) {
@@ -3096,16 +3149,15 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * <p>RAW never comes from the buffer: CameraX takes such a picture by reprocessing a kept
      * frame, and a reprocessed capture writes only JPEG or YUV, never a RAW_SENSOR frame.</p>
      *
-     * <p>Nor does a drawn still. An effect makes CameraX share one camera stream between the
-     * preview and the still, and each use case it shares has to fit in a single surface; keeping
-     * frames adds the surfaces they are kept and reprocessed through, and the bind throws.</p>
-     *
-     * @param drawing whether the bind puts frames through an effect
+     * <p>A drawn still is taken like any other. The still is not one of the effect's outputs, so
+     * the frames kept for it are the still's own, and the picture is drawn after it is taken.
+     * Taken otherwise, it would not be the picture the camera takes undrawn: on the API 37
+     * emulator CameraX keeps frames at 1856x1392 and takes a picture without them at 1280x720.</p>
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     private int getCaptureMode(@NonNull CameraInfo cameraInfo,
-            @NonNull CameraView.PictureFormat format, boolean drawing) {
-        return captureMode(getQuality(), cameraInfo.isZslSupported(), format, drawing);
+            @NonNull CameraView.PictureFormat format) {
+        return captureMode(getQuality(), cameraInfo.isZslSupported(), format);
     }
 
     /**
@@ -3115,11 +3167,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     static int captureMode(@NonNull CameraView.Quality quality, boolean zslSupported,
-            @NonNull CameraView.PictureFormat format, boolean drawing) {
+            @NonNull CameraView.PictureFormat format) {
         if (quality == CameraView.Quality.MAX) {
             return ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY;
         }
-        return zslSupported && !writesRaw(format) && !drawing
+        return zslSupported && !writesRaw(format)
                 ? ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
                 : ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY;
     }
