@@ -331,7 +331,11 @@ public class Exif {
             attachLastModifiedTimestamp();
         }
         attachMandatoryTags();
-        mExifInterface.saveAttributes();
+        // ExifInterface copies the file into java.io.tmpdir first, which old releases leave
+        // where an app may not write.
+        File folder = mFilePath == null ? null
+                : new File(mFilePath).getAbsoluteFile().getParentFile();
+        TempFiles.run(folder, mExifInterface::saveAttributes);
         restoreUndefinedTypes();
         finishBlock();
     }

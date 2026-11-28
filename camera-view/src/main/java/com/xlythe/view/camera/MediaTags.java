@@ -315,10 +315,25 @@ public final class MediaTags {
         return new MediaTags(null, opener, read(ByteSource.of(bytes), null, opener));
     }
 
-    /** The container for a file, chosen by its first bytes. */
+    /**
+     * The container for a file, chosen by its first bytes, told where the file is for the
+     * temporary copies its writes may need.
+     */
     @WorkerThread
     @NonNull
     private static MediaContainer read(@NonNull ByteSource source, @Nullable File file,
+            @Nullable StreamOpener opener) throws IOException {
+        MediaContainer container = container(source, file, opener);
+        if (file != null) {
+            container.setFolder(file.getAbsoluteFile().getParentFile());
+        }
+        return container;
+    }
+
+    /** The container for a file, chosen by its first bytes. */
+    @WorkerThread
+    @NonNull
+    private static MediaContainer container(@NonNull ByteSource source, @Nullable File file,
             @Nullable StreamOpener opener) throws IOException {
         byte[] head = source.bytesUpTo(0, 64);
         boolean writable = file != null && file.canWrite();
