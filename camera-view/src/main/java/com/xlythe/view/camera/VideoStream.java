@@ -6,6 +6,7 @@ import android.os.Build;
 import android.util.Log;
 import android.util.Size;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.IntDef;
 import androidx.annotation.IntRange;
 import androidx.annotation.NonNull;
@@ -15,7 +16,9 @@ import androidx.annotation.RequiresPermission;
 
 import com.xlythe.view.camera.stream.AudioBuffer;
 import com.xlythe.view.camera.stream.AudioRecorder;
+import com.xlythe.view.camera.stream.DeliveryMeter;
 import com.xlythe.view.camera.stream.LossyPipedOutputStream;
+import com.xlythe.view.camera.stream.PlaybackCapabilities;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.Closeable;
@@ -66,6 +69,12 @@ public class VideoStream implements Closeable {
   /** Exposes a handle to read the encoded video bytes from the stream. Non-null for video streams. */
   @Nullable private final InputStream mVideoInputStream;
 
+  /**
+   * Measures how fast the video is read, and how late it arrives when the app says so. Non-null
+   * for video streams from a camera.
+   */
+  @Nullable private final DeliveryMeter mVideoDeliveryMeter;
+
   @RequiresPermission(allOf = {
           Manifest.permission.CAMERA,
           Manifest.permission.RECORD_AUDIO
@@ -77,6 +86,8 @@ public class VideoStream implements Closeable {
     PipedInputStream audioInputStream = null;
     VideoRecorder videoRecorder = null;
     PipedInputStream videoInputStream = null;
+    DeliveryMeter audioMeter = new DeliveryMeter();
+    DeliveryMeter videoMeter = new DeliveryMeter();
     try {
       if (params.isAudioEnabled()) {
         audioInputStream = new PipedInputStream(AUDIO_PIPE_BYTES);
@@ -85,7 +96,13 @@ public class VideoStream implements Closeable {
                         ? new LossyPipedOutputStream(audioInputStream, AUDIO_MAX_BUFFERED_BYTES)
                         : new PipedOutputStream(audioInputStream),
                 params.getAudioSampleRate(),
-                params.getAudioChannelCount());
+                params.getAudioChannelCount(),
+                new AudioRecorder.Options(
+                        params.getPlaybackCapabilities(),
+                        params.isNoiseSuppressionEnabled(),
+                        params.isEchoCancellationEnabled(),
+                        params.isAutomaticGainControlEnabled(),
+                        audioMeter));
         audioRecorder.start();
       }
 
@@ -96,6 +113,7 @@ public class VideoStream implements Closeable {
                 params.isLossy()
                         ? new LossyPipedOutputStream(videoInputStream, VIDEO_MAX_BUFFERED_BYTES)
                         : new PipedOutputStream(videoInputStream));
+        videoRecorder.setDeliveryMeter(videoMeter);
         if (params.getBitRate() != 0) {
           videoRecorder.setBitRate(params.getBitRate());
         }
@@ -123,9 +141,10 @@ public class VideoStream implements Closeable {
     }
 
     mAudioRecorder = audioRecorder;
-    mAudioInputStream = audioInputStream;
+    mAudioInputStream = audioInputStream == null ? null : audioMeter.wrap(audioInputStream);
     mVideoRecorder = videoRecorder;
-    mVideoInputStream = videoInputStream;
+    mVideoInputStream = videoInputStream == null ? null : videoMeter.wrap(videoInputStream);
+    mVideoDeliveryMeter = videoInputStream == null ? null : videoMeter;
   }
 
   private VideoStream(@Nullable InputStream audioStream,
@@ -137,6 +156,39 @@ public class VideoStream implements Closeable {
 
     mAudioInputStream = audioStream;
     mVideoInputStream = videoStream;
+    mVideoDeliveryMeter = null;
+  }
+
+  /**
+   * Describes what this device can play, for the device that will stream to it.
+   *
+   * <p>Send these bytes to the other device however the app already asks it to start streaming,
+   * and pass them to {@link Params.Builder#setPlaybackCapabilities} there. The stream then
+   * compresses its audio into the best format both devices share, which is a fraction of the
+   * bandwidth. A device that is never sent them streams uncompressed audio, which every version
+   * of this library plays, so two devices on different versions still understand each other.</p>
+   */
+  @NonNull
+  @AnyThread
+  public static byte[] getPlaybackCapabilities() {
+    return PlaybackCapabilities.forThisDevice();
+  }
+
+  /**
+   * Reports how much of this stream's video the receiving device has received so far, as a
+   * running total of bytes.
+   *
+   * <p>Optional, for an app whose link already confirms delivery. The stream lowers its quality
+   * when whoever reads it falls behind, and it can see that on its own once a backlog builds up;
+   * confirmations show a link slowing down before then, from how much longer each takes to come
+   * back. Has no effect on a stream that is not being sent from this device's camera.</p>
+   */
+  @AnyThread
+  public void reportVideoReceived(long totalBytes) {
+    DeliveryMeter meter = mVideoDeliveryMeter;
+    if (meter != null) {
+      meter.onAcknowledged(totalBytes);
+    }
   }
 
   @Override
@@ -293,8 +345,18 @@ public class VideoStream implements Closeable {
     private final boolean mIsLossy;
     /** The largest frame to encode, or null to let the camera choose. */
     @Nullable private final Size mMaxSize;
+    /** The rate to record audio at, which the device may not be able to honour. */
     private final int mAudioSampleRate;
+    /** The channels to record, likewise. */
     private final int mAudioChannelCount;
+    /** What the receiving device said it plays, or null when it said nothing. */
+    @Nullable private final byte[] mPlaybackCapabilities;
+    /** Whether to suppress background noise in the audio, where the device can. */
+    private final boolean mNoiseSuppressionEnabled;
+    /** Whether to cancel this device's own playback from the audio, where it can. */
+    private final boolean mEchoCancellationEnabled;
+    /** Whether to even out the microphone's level, where the device can. */
+    private final boolean mAutomaticGainControlEnabled;
 
     private Params(boolean audioEnabled,
                    boolean videoEnabled,
@@ -304,7 +366,15 @@ public class VideoStream implements Closeable {
                    boolean isLossy,
                    @Nullable Size maxSize,
                    int audioSampleRate,
-                   int audioChannelCount) {
+                   int audioChannelCount,
+                   @Nullable byte[] playbackCapabilities,
+                   boolean noiseSuppressionEnabled,
+                   boolean echoCancellationEnabled,
+                   boolean automaticGainControlEnabled) {
+      this.mPlaybackCapabilities = playbackCapabilities;
+      this.mNoiseSuppressionEnabled = noiseSuppressionEnabled;
+      this.mEchoCancellationEnabled = echoCancellationEnabled;
+      this.mAutomaticGainControlEnabled = automaticGainControlEnabled;
       this.mAudioSampleRate = audioSampleRate;
       this.mAudioChannelCount = audioChannelCount;
       this.mAudioEnabled = audioEnabled;
@@ -361,6 +431,23 @@ public class VideoStream implements Closeable {
       return mMaxSize;
     }
 
+    @Nullable
+    byte[] getPlaybackCapabilities() {
+      return mPlaybackCapabilities == null ? null : mPlaybackCapabilities.clone();
+    }
+
+    boolean isNoiseSuppressionEnabled() {
+      return mNoiseSuppressionEnabled;
+    }
+
+    boolean isEchoCancellationEnabled() {
+      return mEchoCancellationEnabled;
+    }
+
+    boolean isAutomaticGainControlEnabled() {
+      return mAutomaticGainControlEnabled;
+    }
+
     public static class Builder {
       private int mAudioSampleRate = AudioBuffer.DEFAULT_SAMPLE_RATE;
       private int mAudioChannelCount = AudioBuffer.DEFAULT_CHANNEL_COUNT;
@@ -371,6 +458,14 @@ public class VideoStream implements Closeable {
       private int mIFrameInterval;
       private boolean mIsLossy = true;
       @Nullable private Size mMaxSize;
+      /** What the receiving device said it plays; null sends uncompressed audio. */
+      @Nullable private byte[] mPlaybackCapabilities;
+      /** Whether to ask for noise suppression. */
+      private boolean mNoiseSuppressionEnabled;
+      /** Whether to ask for echo cancellation. */
+      private boolean mEchoCancellationEnabled;
+      /** Whether to ask for automatic gain control. */
+      private boolean mAutomaticGainControlEnabled;
 
       public Builder setAudioEnabled(boolean audioEnabled) {
         this.mAudioEnabled = audioEnabled;
@@ -382,6 +477,14 @@ public class VideoStream implements Closeable {
         return this;
       }
 
+      /**
+       * The video bit rate to aim for, in bits per second.
+       *
+       * <p>On a lossy stream this is the most it sends. When whoever reads the stream falls behind,
+       * the stream lowers its bit rate to what they are keeping up with, and raises it back
+       * gradually once they catch up. Below a floor, around 150kbps, it sends fewer frames and
+       * then smaller ones instead of blurrier ones, and restores them in the same way.</p>
+       */
       public Builder setBitRate(@IntRange(from = 1) int bitRate) {
         mBitRate = bitRate;
         return this;
@@ -446,6 +549,52 @@ public class VideoStream implements Closeable {
         return this;
       }
 
+      /**
+       * What the device that plays this stream can play, as
+       * {@link VideoStream#getPlaybackCapabilities()} returned it there.
+       *
+       * <p>With it, the audio is compressed into the best format both devices share, at a bit rate
+       * that falls when the reader falls behind. Without it, or when the bytes came from somewhere
+       * else, the audio is sent uncompressed, which is what a device running an older version of
+       * this library expects.</p>
+       */
+      public Builder setPlaybackCapabilities(@Nullable byte[] playbackCapabilities) {
+        mPlaybackCapabilities = playbackCapabilities == null ? null : playbackCapabilities.clone();
+        return this;
+      }
+
+      /**
+       * Suppresses steady background noise in the audio, such as fans or traffic, on devices that
+       * can. Off by default, because it treats anything that is not a voice as noise.
+       */
+      public Builder setNoiseSuppressionEnabled(boolean enabled) {
+        mNoiseSuppressionEnabled = enabled;
+        return this;
+      }
+
+      /**
+       * Removes this device's own speaker from what its microphone records, on devices that can,
+       * so a conversation does not echo back to the person who spoke.
+       *
+       * <p>Turn it on when this device also plays audio from the other end. It records through the
+       * device's voice call tuning, which the canceller needs and which favours a nearby voice over
+       * the scene in front of the camera, so it is off by default.</p>
+       */
+      public Builder setEchoCancellationEnabled(boolean enabled) {
+        mEchoCancellationEnabled = enabled;
+        return this;
+      }
+
+      /**
+       * Evens out the microphone's level, on devices that can, so a quiet speaker and a loud one
+       * arrive at a similar volume. Off by default, because it also lifts the background between
+       * words.
+       */
+      public Builder setAutomaticGainControlEnabled(boolean enabled) {
+        mAutomaticGainControlEnabled = enabled;
+        return this;
+      }
+
       public Params build() {
         if (!mAudioEnabled && !mVideoEnabled) {
           throw new IllegalStateException("Cannot create a stream with both audio and video disabled");
@@ -462,7 +611,8 @@ public class VideoStream implements Closeable {
                   "Audio is mono or stereo, not " + mAudioChannelCount + " channels");
         }
         return new Params(mAudioEnabled, mVideoEnabled, mBitRate, mFrameRate, mIFrameInterval,
-                mIsLossy, mMaxSize, mAudioSampleRate, mAudioChannelCount);
+                mIsLossy, mMaxSize, mAudioSampleRate, mAudioChannelCount, mPlaybackCapabilities,
+                mNoiseSuppressionEnabled, mEchoCancellationEnabled, mAutomaticGainControlEnabled);
       }
     }
   }

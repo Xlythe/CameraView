@@ -191,7 +191,7 @@ public class WearFragment extends CameraFragment {
         InFlight inFlight = new InFlight(WearProtocol.PREVIEW_IN_FLIGHT_BYTES);
         ExecutorService pump = Executors.newFixedThreadPool(2);
         mPump = pump;
-        pump.execute(() -> readAcknowledgements(acks, inFlight));
+        pump.execute(() -> readAcknowledgements(acks, inFlight, stream));
         pump.execute(() -> {
             InputStream in = stream.getVideoInputStream();
             byte[] chunk = new byte[CHUNK_BYTES];
@@ -222,12 +222,21 @@ public class WearFragment extends CameraFragment {
         });
     }
 
-    /** Hands the totals the watch reports to the copier, until the channel closes. */
+    /**
+     * Hands the totals the watch reports to the copier, until the channel closes.
+     *
+     * <p>And to the stream: every byte the copier sends comes straight out of it, so the watch's
+     * total is also how much of the stream has arrived, and how long each total takes to come back
+     * tells the stream the link is slowing before its own backlog would.</p>
+     */
     @WorkerThread
-    private static void readAcknowledgements(InputStream acks, InFlight inFlight) {
+    private static void readAcknowledgements(InputStream acks, InFlight inFlight,
+            VideoStream stream) {
         try (DataInputStream in = new DataInputStream(acks)) {
             while (true) {
-                inFlight.acknowledged(in.readLong());
+                long total = in.readLong();
+                inFlight.acknowledged(total);
+                stream.reportVideoReceived(total);
             }
         } catch (IOException error) {
             // The channel closing ends the stream, which is how this normally stops.

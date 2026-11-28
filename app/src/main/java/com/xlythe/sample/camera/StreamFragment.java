@@ -17,6 +17,7 @@ import androidx.annotation.Nullable;
 
 import com.xlythe.fragment.camera.CameraFragment;
 import com.xlythe.view.camera.CameraView;
+import com.xlythe.view.camera.VideoStream;
 import com.xlythe.view.camera.VideoView;
 
 import java.util.Objects;
@@ -51,8 +52,25 @@ public class StreamFragment extends CameraFragment {
         }
 
         // Connect the live camera stream to the picture-in-picture video view.
-        mViewStreamView.setStream(mCameraView.stream());
+        mViewStreamView.setStream(mCameraView.stream(streamParams()));
         mViewStreamView.play();
+    }
+
+    /**
+     * The stream this demo sends.
+     *
+     * <p>The picture-in-picture view plays it on this same device, so this device's capabilities
+     * are the receiver's; a stream to another device would carry that device's instead, sent over
+     * however the app asks it to start. The microphone's audio also comes back out of this
+     * device's own speaker, which is exactly the loop echo cancellation is for.</p>
+     */
+    private static VideoStream.Params streamParams() {
+        return new VideoStream.Params.Builder()
+                .setPlaybackCapabilities(VideoStream.getPlaybackCapabilities())
+                .setEchoCancellationEnabled(true)
+                .setNoiseSuppressionEnabled(true)
+                .setAutomaticGainControlEnabled(true)
+                .build();
     }
 
     /**
@@ -66,7 +84,7 @@ public class StreamFragment extends CameraFragment {
             return;
         }
 
-        mViewStreamView.setStream(mCameraView.stream());
+        mViewStreamView.setStream(mCameraView.stream(streamParams()));
         mViewStreamView.play();
     }
 

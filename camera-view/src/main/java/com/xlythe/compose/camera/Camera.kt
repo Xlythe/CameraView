@@ -200,6 +200,14 @@ interface CameraController {
      */
     @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
     fun stream(): VideoStream?
+
+    /**
+     * Starts a stream shaped by [params]: its size and bit rate, whether it carries audio, the
+     * format the receiving device said it plays, and the speech processing to apply. Null when
+     * there is no camera on screen to stream from.
+     */
+    @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
+    fun stream(params: VideoStream.Params): VideoStream?
     fun toggleCamera()
     fun confirmPicture()
     fun confirmVideo()
@@ -328,6 +336,11 @@ private class CameraControllerImpl(
     @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
     override fun stream(): VideoStream? {
         return getView()?.stream()
+    }
+
+    @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
+    override fun stream(params: VideoStream.Params): VideoStream? {
+        return getView()?.stream(params)
     }
 
     override fun toggleCamera() {

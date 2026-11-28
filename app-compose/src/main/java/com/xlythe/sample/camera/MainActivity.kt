@@ -74,6 +74,7 @@ import com.xlythe.compose.camera.CameraController
 import com.xlythe.compose.camera.Permissions
 import com.xlythe.compose.camera.Video
 import com.xlythe.compose.camera.VideoController
+import com.xlythe.view.camera.VideoStream
 import com.xlythe.sample.camera.ui.theme.CameraViewTheme
 import kotlinx.coroutines.launch
 
@@ -290,7 +291,7 @@ fun StreamDemoScreen() {
     val context = LocalContext.current
     val cameraController = remember { mutableStateOf<CameraController?>(null) }
     val videoController = remember { mutableStateOf<VideoController?>(null) }
-    var videoStream by remember { mutableStateOf<com.xlythe.view.camera.VideoStream?>(null) }
+    var videoStream by remember { mutableStateOf<VideoStream?>(null) }
     var hasRequiredPermissions by remember { mutableStateOf(false) }
 
     val allPermissions = remember { (Permissions.REQUIRED_PERMISSIONS + Permissions.OPTIONAL_PERMISSIONS).distinct().toTypedArray() }
@@ -313,7 +314,17 @@ fun StreamDemoScreen() {
                     modifier = Modifier.fillMaxSize(),
                     controller = cameraController,
                     onCameraOpened = {
-                        videoStream = cameraController.value?.stream()
+                        // The picture-in-picture player is on this device, so these are the
+                        // receiver's capabilities; its audio plays back out of this device's
+                        // speaker, which is what echo cancellation removes from the microphone.
+                        videoStream = cameraController.value?.stream(
+                            VideoStream.Params.Builder()
+                                .setPlaybackCapabilities(VideoStream.getPlaybackCapabilities())
+                                .setEchoCancellationEnabled(true)
+                                .setNoiseSuppressionEnabled(true)
+                                .setAutomaticGainControlEnabled(true)
+                                .build()
+                        )
                     }
                 )
             }

@@ -84,6 +84,10 @@ class ComposeControllersTest {
                 return null
             }
 
+            override fun stream(params: VideoStream.Params): VideoStream? {
+                return null
+            }
+
             override fun toggleCamera() {
                 cameraView.toggleCamera()
             }

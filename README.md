@@ -519,6 +519,32 @@ A stream runs until you close it, and closing the camera does not close it. When
 the background the video stops, since another app may want the camera, but the audio keeps
 running, so a call carries on.
 
+When the stream goes to another device, ask that device what it can play and pass the answer
+along, and the audio is compressed into the best format the two share. Without it the audio is
+sent uncompressed, which every version of the library plays, so two devices on different versions
+still understand each other.
+```java
+// On the device that will play the stream. Send these bytes however your app asks the other
+// device to start streaming.
+byte[] capabilities = VideoStream.getPlaybackCapabilities();
+
+// On the device with the camera.
+VideoStream stream = mCameraView.stream(new VideoStream.Params.Builder()
+    .setPlaybackCapabilities(capabilities)
+    .setEchoCancellationEnabled(true)
+    .setNoiseSuppressionEnabled(true)
+    .setAutomaticGainControlEnabled(true)
+    .build());
+```
+A lossy stream lowers its bit rate when whoever reads it falls behind and raises it again,
+gradually, once they catch up. Below about 150kbps it sends fewer frames, and then smaller ones,
+rather than blurrier ones. If your link confirms what arrived, report it and the stream notices a
+slowdown sooner.
+```java
+stream.reportVideoReceived(totalBytesReceived);
+```
+In Compose, pass the same parameters to `cameraController.stream(params)`.
+
 
 Exif
 -----------------
