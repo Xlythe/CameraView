@@ -352,6 +352,111 @@ public class BackgroundReplacerTest {
         assertArrayEquals(new float[] {1f, 1f}, read(reads, 1f, 0f), TOLERANCE);
     }
 
+    /**
+     * A picture is drawn with the mask made nearest to it, though a newer one has arrived since.
+     * Drawn with whichever came last, a picture taken just after a move kept the subject where
+     * it had been.
+     */
+    @Test
+    public void aPictureIsDrawnWithTheMaskMadeNearestToIt() {
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(3, 1, 100));
+        replacer.setMask(timedMask(1, 2, 200));
+        replacer.setMask(timedMask(2, 2, 300));
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 190, new int[] {0, 0, 1080, 1920});
+
+        replacer.onDrawFrame(frame);
+
+        List<ShadowRecordingGles20.TextureUpload> uploads = ShadowRecordingGles20.uploads();
+        assertEquals(1, uploads.size());
+        assertEquals("the mask made at 200", 1, uploads.get(0).width);
+        assertEquals(2, uploads.get(0).height);
+    }
+
+    /** A preview frame comes after every mask made so far, so it is drawn with the newest. */
+    @Test
+    public void aPreviewFrameIsDrawnWithTheNewestMask() {
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(3, 1, 100));
+        replacer.setMask(timedMask(2, 2, 300));
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 400, new int[] {0, 0, 1080, 1920});
+
+        replacer.onDrawFrame(frame);
+
+        assertEquals(2, ShadowRecordingGles20.uploads().get(0).width);
+    }
+
+    /**
+     * A frame further than a second from every mask keeps another clock than the masks, and is
+     * drawn with the newest rather than with whichever the numbers put nearest.
+     */
+    @Test
+    public void aFrameFromAnotherClockIsDrawnWithTheNewestMask() {
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(3, 1, 5_000_000_000L));
+        replacer.setMask(timedMask(2, 2, 5_100_000_000L));
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 1_000L, new int[] {0, 0, 1080, 1920});
+
+        replacer.onDrawFrame(frame);
+
+        assertEquals(2, ShadowRecordingGles20.uploads().get(0).width);
+    }
+
+    /** The mask drawn last is not uploaded again for the next frame that wants it. */
+    @Test
+    public void aMaskAlreadyInTheTextureIsNotUploadedAgain() {
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(3, 1, 100));
+        replacer.setMask(timedMask(2, 2, 300));
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 120, new int[] {0, 0, 1080, 1920});
+        replacer.onDrawFrame(frame);
+        frame.set(CAMERA_TEXTURE, mirror, 1080, 1920, 400, new int[] {0, 0, 1080, 1920});
+        replacer.onDrawFrame(frame);
+        replacer.onDrawFrame(frame);
+
+        List<ShadowRecordingGles20.TextureUpload> uploads = ShadowRecordingGles20.uploads();
+        assertEquals("the picture's mask, then the newest once", 2, uploads.size());
+        assertEquals(3, uploads.get(0).width);
+        assertEquals(2, uploads.get(1).width);
+    }
+
+    /**
+     * A picture waits for a mask made at its moment or after, when the camera segments for the
+     * replacer; with none expected, or masks that say nothing of time, it never waits.
+     */
+    @Test
+    public void aPictureWaitsOnlyForTheCamerasMaskFromItsOwnMoment() {
+        assertTrue("nothing segments for it", replacer.hasMaskFor(1_000));
+
+        replacer.setSegmentedByCamera(true);
+        assertFalse("no mask yet", replacer.hasMaskFor(1_000));
+        replacer.setMask(timedMask(1, 1, 900));
+        assertFalse("only one made before it", replacer.hasMaskFor(1_000));
+        replacer.setMask(timedMask(1, 1, 1_000));
+        assertTrue("one made at its moment", replacer.hasMaskFor(1_000));
+        assertTrue("a frame with no time of its own", replacer.hasMaskFor(0));
+
+        replacer.setMask(mask(1, 1, 1f));
+        assertTrue("a mask that says nothing of time", replacer.hasMaskFor(5_000));
+
+        replacer.setSegmentedByCamera(false);
+        replacer.setMask(timedMask(1, 1, 100));
+        assertTrue(replacer.hasMaskFor(5_000));
+    }
+
+    /** Stopping forgets the masks kept for pictures, which belong to the frames before it. */
+    @Test
+    public void stoppingForgetsTheKeptMasks() {
+        replacer.setSegmentedByCamera(true);
+        replacer.onRendererStarted();
+        replacer.setMask(timedMask(1, 1, 1_000));
+        assertTrue(replacer.hasMaskFor(1_000));
+
+        replacer.onRendererStopped();
+
+        assertFalse(replacer.hasMaskFor(1_000));
+    }
+
     /** Where a column-major matrix takes a texture coordinate. */
     private static float[] read(float[] matrix, float s, float t) {
         return new float[] {
@@ -363,6 +468,13 @@ public class BackgroundReplacerTest {
     /** A mask of these confidences, row major, in the native-order floats a model hands over. */
     private static SegmentationMask mask(int width, int height, float... confidences) {
         return new SegmentationMask(floats(confidences), width, height, false);
+    }
+
+    /** A mask of this size, all subject, made from a frame taken at this time. */
+    private static SegmentationMask timedMask(int width, int height, long timestampNanos) {
+        float[] confidences = new float[width * height];
+        java.util.Arrays.fill(confidences, 1f);
+        return new SegmentationMask(floats(confidences), width, height, false, timestampNanos);
     }
 
     /** {@link #mask}, made from a mirrored frame. */

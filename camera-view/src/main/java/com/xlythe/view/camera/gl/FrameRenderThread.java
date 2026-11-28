@@ -60,6 +60,16 @@ public final class FrameRenderThread {
      */
     private static final long START_TIMEOUT_SECONDS = 2;
 
+    /**
+     * The longest a still waits for the mask made nearest to it before it is drawn with the
+     * nearest there is. A model that has started returns one within a few frames; one still
+     * starting may take many seconds, and the picture is not held for it.
+     */
+    private static final long STILL_MASK_WAIT_MILLIS = 1_500;
+
+    /** How often a waiting still looks for its mask. */
+    private static final long STILL_MASK_POLL_MILLIS = 15;
+
     /** How the matrix a frame is drawn with is arrived at, which is the backend's business. */
     public interface TextureTransform {
         /**
@@ -159,15 +169,21 @@ public final class FrameRenderThread {
         private final TextureTransform mTransform;
         /** Runs on the render thread once the still has been drawn. */
         private final Runnable mOnDrawn;
+        /**
+         * When the camera took the still, in nanoseconds on its clock, or 0 for the time the
+         * frame landed on the still input with.
+         */
+        private final long mTimestampNanos;
 
         private Still(@NonNull Surface surface, @NonNull Size size,
                 @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform,
-                @NonNull Runnable onDrawn) {
+                @NonNull Runnable onDrawn, long timestampNanos) {
             mSurface = surface;
             mSize = size;
             mScaleType = scaleType;
             mTransform = transform;
             mOnDrawn = onDrawn;
+            mTimestampNanos = timestampNanos;
         }
     }
 
@@ -233,6 +249,8 @@ public final class FrameRenderThread {
 
     /** What to do with the next frame to land on the still input, or null for nothing. */
     @Nullable private Still mPendingStill;
+    /** The still that has landed but waits on its mask, or null. Render thread only. */
+    @Nullable private MaskedStill mMaskedStill;
     /** What draws each frame, or null to draw the camera frame unchanged. */
     @Nullable private volatile FrameRenderer mRenderer;
     /** Who creates the camera texture, or null for one of this thread's own. */
@@ -404,12 +422,24 @@ public final class FrameRenderThread {
     public boolean drawStillInto(@NonNull Surface surface, @NonNull Size size,
             @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform,
             @NonNull Runnable onDrawn) {
+        return drawStillInto(surface, size, scaleType, transform, onDrawn, 0);
+    }
+
+    /**
+     * {@link #drawStillInto}, for a still the camera took at a known time but that reaches the
+     * still input later, drawn there from a decoded picture.
+     *
+     * @param timestampNanos when the camera took it, on the clock its preview frames carry
+     */
+    public boolean drawStillInto(@NonNull Surface surface, @NonNull Size size,
+            @NonNull GlMath.ScaleType scaleType, @NonNull TextureTransform transform,
+            @NonNull Runnable onDrawn, long timestampNanos) {
         Handler handler = mHandler;
         if (!mRunning || handler == null) {
             return false;
         }
         handler.post(() -> mPendingStill =
-                new Still(surface, size, scaleType, transform, onDrawn));
+                new Still(surface, size, scaleType, transform, onDrawn, timestampNanos));
         return true;
     }
 
@@ -426,6 +456,9 @@ public final class FrameRenderThread {
             return;
         }
         try {
+            // A still waiting on its mask is drawn now, from the frame still in the texture,
+            // before the next one takes its place.
+            drawMaskedStillNow();
             egl.makeCurrent();
             texture.updateTexImage();
             if (still == null) {
@@ -434,12 +467,88 @@ public final class FrameRenderThread {
                 return;
             }
             mPendingStill = null;
-            texture.getTransformMatrix(mSurfaceTextureMatrix);
-            drawStill(still, texture.getTimestamp());
+            float[] stillMatrix = new float[16];
+            texture.getTransformMatrix(stillMatrix);
+            long timestampNanos = still.mTimestampNanos != 0
+                    ? still.mTimestampNanos : texture.getTimestamp();
+            drawWhenMasked(new MaskedStill(still, stillMatrix, timestampNanos,
+                    SystemClock.uptimeMillis() + STILL_MASK_WAIT_MILLIS), false /* now */);
         } catch (RuntimeException | LinkageError error) {
             Log.w(TAG, "Dropped a still frame", error);
             mPendingStill = null;
         }
+    }
+
+    /** A still that has landed on the still input and waits for the mask nearest to it. */
+    private final class MaskedStill implements Runnable {
+        /** Where it is drawn. */
+        final Still mStill;
+        /** The still texture's transform as the frame landed. */
+        final float[] mMatrix;
+        /** When the camera took it. */
+        final long mTimestampNanos;
+        /** When it is drawn with whatever mask there is, in uptime milliseconds. */
+        final long mDeadline;
+
+        MaskedStill(@NonNull Still still, @NonNull float[] matrix, long timestampNanos,
+                long deadline) {
+            mStill = still;
+            mMatrix = matrix;
+            mTimestampNanos = timestampNanos;
+            mDeadline = deadline;
+        }
+
+        @Override
+        public void run() {
+            mMaskedStill = null;
+            drawWhenMasked(this, false /* now */);
+        }
+    }
+
+    /**
+     * Draws a still once the renderer has the mask made nearest to it, or once
+     * {@link #STILL_MASK_WAIT_MILLIS} have passed. A mask arrives some time after its frame, so
+     * a still drawn on landing would take whichever mask came last: one made before the press,
+     * or none at all while the model starts. The preview goes on drawing meanwhile.
+     *
+     * @param now draw it with whatever mask there is, as when another still or a stop needs the
+     *     texture
+     */
+    private void drawWhenMasked(@NonNull MaskedStill waiting, boolean now) {
+        Handler handler = mHandler;
+        FrameRenderer renderer = mRenderer;
+        if (!now && handler != null && renderer instanceof BackgroundReplacer
+                && !((BackgroundReplacer) renderer).hasMaskFor(waiting.mTimestampNanos)
+                && SystemClock.uptimeMillis() < waiting.mDeadline) {
+            mMaskedStill = waiting;
+            handler.postDelayed(waiting, STILL_MASK_POLL_MILLIS);
+            return;
+        }
+        if (mEgl == null) {
+            waiting.mStill.mOnDrawn.run();
+            return;
+        }
+        try {
+            System.arraycopy(waiting.mMatrix, 0, mSurfaceTextureMatrix, 0,
+                    waiting.mMatrix.length);
+            drawStill(waiting.mStill, waiting.mTimestampNanos);
+        } catch (RuntimeException | LinkageError error) {
+            Log.w(TAG, "Dropped a still frame", error);
+        }
+    }
+
+    /** Draws the still waiting on its mask, if one is, with whatever mask is nearest now. */
+    private void drawMaskedStillNow() {
+        MaskedStill waiting = mMaskedStill;
+        if (waiting == null) {
+            return;
+        }
+        mMaskedStill = null;
+        Handler handler = mHandler;
+        if (handler != null) {
+            handler.removeCallbacks(waiting);
+        }
+        drawWhenMasked(waiting, true /* now */);
     }
 
     /** Draws the still input into its one output, through the renderer like any other frame. */
@@ -477,6 +586,8 @@ public final class FrameRenderThread {
     }
 
     private void releaseStillInput() {
+        // Drawn from the texture about to go, rather than lost with it.
+        drawMaskedStillNow();
         mPendingStill = null;
         if (mStillSurface != null) {
             mStillSurface.release();
@@ -785,6 +896,8 @@ public final class FrameRenderThread {
      */
     private void releaseGl() {
         mRunning = false;
+        // Drawn while the renderer is still up, rather than lost or drawn without it.
+        drawMaskedStillNow();
         FrameRenderer renderer = mRenderer;
         if (renderer != null && mProgram != null) {
             try {

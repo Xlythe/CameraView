@@ -165,11 +165,14 @@ final class FrameEffect extends CameraEffect {
      * @param mirrored whether it is then shown mirrored left to right, as a front camera's is
      * @param into what to draw into, the size of the frame once turned
      * @param onDrawn called on the render thread once the still has been drawn
+     * @param timestampNanos when the camera took the frame, on the clock its preview frames
+     *     carry, so the renderer draws it with what it made nearest to that moment
      * @return whether the still went in, which it cannot once the renderer has stopped
      */
     @WorkerThread
     boolean drawStill(@NonNull Bitmap frame, @GlMath.Rotation int rotationDegrees,
-            boolean mirrored, @NonNull Surface into, @NonNull Runnable onDrawn) {
+            boolean mirrored, @NonNull Surface into, @NonNull Runnable onDrawn,
+            long timestampNanos) {
         FrameRenderThread renderThread = mProcessor.mRenderThread;
         Size size = new Size(frame.getWidth(), frame.getHeight());
         Surface input = renderThread.createStillInput(size);
@@ -181,7 +184,7 @@ final class FrameEffect extends CameraEffect {
                 (surfaceTextureMatrix, matrix) -> System.arraycopy(
                         GlMath.uprightMatrix(surfaceTextureMatrix, rotationDegrees, mirrored), 0,
                         matrix, 0, matrix.length),
-                onDrawn);
+                onDrawn, timestampNanos);
         if (!armed) {
             return false;
         }

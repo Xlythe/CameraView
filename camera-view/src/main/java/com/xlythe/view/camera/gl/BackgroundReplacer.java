@@ -9,11 +9,13 @@ import android.util.Log;
 import androidx.annotation.ColorInt;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.FloatBuffer;
+import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -23,12 +25,22 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@link #setMask}.
  *
  * <p>Masks arrive slower than frames, so the newest mask is drawn with the newest frame, and the
- * edge trails a subject that moves quickly. Until the first mask arrives, frames are drawn
- * unchanged.</p>
+ * edge trails a subject that moves quickly. A picture is drawn with the mask made nearest to it
+ * instead. Until the first mask arrives, frames are drawn unchanged.</p>
  */
 public final class BackgroundReplacer implements FrameRenderer {
     /** The tag this logs under. */
     private static final String TAG = "BackgroundReplacer";
+    /**
+     * How many masks are kept for a picture to be drawn with the nearest: a second's worth at the
+     * rate a model on a phone keeps up with.
+     */
+    private static final int RECENT_MASKS = 8;
+    /**
+     * The furthest a mask may be from a frame and still be drawn with it as the nearest; beyond,
+     * the newest is.
+     */
+    private static final long MAX_MASK_GAP_NANOS = 1_000_000_000L;
 
     /** The bytes in one float of the vertex buffer. */
     private static final int BYTES_PER_FLOAT = 4;
@@ -83,8 +95,15 @@ public final class BackgroundReplacer implements FrameRenderer {
             + "  gl_FragColor = mix(background, camera, subject);\n"
             + "}\n";
 
-    /** The newest mask, waiting to be uploaded at the next frame, or null. */
-    private final AtomicReference<SegmentationMask> mPendingMask = new AtomicReference<>();
+    /**
+     * The newest masks, oldest first, guarded by itself: the newest is drawn with each preview
+     * frame, and a picture with whichever was made nearest to it.
+     */
+    private final ArrayDeque<SegmentationMask> mRecentMasks = new ArrayDeque<>();
+    /** The mask in the mask texture, or null before one is uploaded. Render thread only. */
+    @Nullable private SegmentationMask mUploadedMask;
+    /** Whether the camera segments its frames for this replacer, which pictures then wait on. */
+    private volatile boolean mSegmentedByCamera;
     /** The newest background image, waiting to be uploaded at the next frame, or null. */
     private final AtomicReference<Bitmap> mPendingBackground = new AtomicReference<>();
     /**
@@ -164,7 +183,15 @@ public final class BackgroundReplacer implements FrameRenderer {
 
     /** The newest mask, from any thread. It replaces any mask not yet drawn. */
     public void setMask(@Nullable SegmentationMask mask) {
-        mPendingMask.set(mask);
+        if (mask == null) {
+            return;
+        }
+        synchronized (mRecentMasks) {
+            mRecentMasks.addLast(mask);
+            while (mRecentMasks.size() > RECENT_MASKS) {
+                mRecentMasks.removeFirst();
+            }
+        }
     }
 
     @Override
@@ -217,7 +244,7 @@ public final class BackgroundReplacer implements FrameRenderer {
         if (mFailed || mVertices == null) {
             return false;
         }
-        uploadPendingMask();
+        uploadMask(maskFor(frame.getTimestampNanos()));
         uploadPendingBackground();
 
         float[] color = new float[4];
@@ -283,6 +310,10 @@ public final class BackgroundReplacer implements FrameRenderer {
         mBackgroundTexture = 0;
         mMaskWidth = 0;
         mMaskHeight = 0;
+        mUploadedMask = null;
+        synchronized (mRecentMasks) {
+            mRecentMasks.clear();
+        }
         mVertices = null;
         // The image went with its texture; the next renderer uploads it again, unless a newer
         // one, or none, has been set since.
@@ -293,12 +324,67 @@ public final class BackgroundReplacer implements FrameRenderer {
         }
     }
 
-    /** Uploads the newest mask, if one arrived since the last frame. */
-    private void uploadPendingMask() {
-        SegmentationMask mask = mPendingMask.getAndSet(null);
-        if (mask == null) {
+    /**
+     * Whether the camera segments its frames for this replacer, so a picture waits, within a
+     * bound, for a mask made at its own moment. The camera sets this; a model of an app's own
+     * hands over masks that say nothing of time, and pictures never wait on those.
+     *
+     * @hide
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    public void setSegmentedByCamera(boolean segmented) {
+        mSegmentedByCamera = segmented;
+    }
+
+    /**
+     * Whether a picture taken at a time can be drawn: once a mask from that moment or after has
+     * arrived, since the mask nearest to it is then known; straight away when the camera is not
+     * segmenting for this replacer or its masks say nothing of time.
+     */
+    boolean hasMaskFor(long timestampNanos) {
+        if (!mSegmentedByCamera || timestampNanos <= 0) {
+            return true;
+        }
+        synchronized (mRecentMasks) {
+            SegmentationMask newest = mRecentMasks.peekLast();
+            return newest != null && (newest.getTimestampNanos() == 0
+                    || newest.getTimestampNanos() >= timestampNanos);
+        }
+    }
+
+    /**
+     * The mask to draw a frame with: the one made nearest to it. For a preview frame that is the
+     * newest, since masks arrive after their frames; for a picture, the one either side of it.
+     * Masks that say nothing of time give the newest.
+     */
+    @Nullable
+    private SegmentationMask maskFor(long timestampNanos) {
+        synchronized (mRecentMasks) {
+            SegmentationMask nearest = mRecentMasks.peekLast();
+            if (nearest == null || timestampNanos <= 0 || nearest.getTimestampNanos() == 0) {
+                return nearest;
+            }
+            SegmentationMask newest = nearest;
+            long distance = Math.abs(nearest.getTimestampNanos() - timestampNanos);
+            for (SegmentationMask mask : mRecentMasks) {
+                long from = Math.abs(mask.getTimestampNanos() - timestampNanos);
+                if (from < distance) {
+                    nearest = mask;
+                    distance = from;
+                }
+            }
+            // So far from every mask that the frame and the masks keep different clocks, and
+            // the nearest by the numbers could be the oldest.
+            return distance <= MAX_MASK_GAP_NANOS ? nearest : newest;
+        }
+    }
+
+    /** Uploads a mask into the mask texture, unless it is already there. */
+    private void uploadMask(@Nullable SegmentationMask mask) {
+        if (mask == null || mask == mUploadedMask) {
             return;
         }
+        mUploadedMask = mask;
         byte[] alpha = mask.toAlpha();
         ByteBuffer buffer = ByteBuffer.allocateDirect(alpha.length);
         buffer.put(alpha).position(0);

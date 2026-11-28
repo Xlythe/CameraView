@@ -94,6 +94,8 @@ public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeab
         if (mClosed.get()) {
             return;
         }
+        // Read now, since the frame is closed once the model has read it.
+        long timestampNanos = frame.getImage().getTimestamp();
         Task<com.google.mlkit.vision.segmentation.SegmentationMask> segmented;
         try {
             segmented = mSegmenter.process(InputImage.fromMediaImage(
@@ -109,8 +111,8 @@ public final class SegmentationAnalyzer implements FrameStream.Analyzer, Closeab
             Log.w(TAG, "Segmentation failed", error);
             return;
         }
-        SegmentationMask result = new SegmentationMask(
-                mask.getBuffer(), mask.getWidth(), mask.getHeight(), frame.isMirrored());
+        SegmentationMask result = new SegmentationMask(mask.getBuffer(), mask.getWidth(),
+                mask.getHeight(), frame.isMirrored(), timestampNanos);
         mCallbackExecutor.execute(() -> {
             if (!mClosed.get()) {
                 mListener.onSegmentation(result);
