@@ -93,6 +93,12 @@ public class MediaCompatDeviceTest {
     private Context mContext;
     private File mDirectory;
 
+    /**
+     * The activity, taken once: ActivityScenario waits for the main thread to idle on every
+     * call, which an animation redrawn every frame can keep it from doing on Android 5.
+     */
+    private ViewerTestActivity mHost;
+
     /** The corpus where the test can read it itself, before Android 6.0, or null. */
     @Nullable
     private File mLocalCorpus;
@@ -105,6 +111,9 @@ public class MediaCompatDeviceTest {
         assertTrue(mDirectory.isDirectory() || mDirectory.mkdirs());
         File local = new File(mContext.getExternalFilesDir(null), "media-corpus");
         mLocalCorpus = local.isDirectory() ? local : null;
+        AtomicReference<ViewerTestActivity> host = new AtomicReference<>();
+        mActivity.getScenario().onActivity(host::set);
+        mHost = host.get();
     }
 
     @Test
@@ -254,7 +263,7 @@ public class MediaCompatDeviceTest {
         if (shown != FAILED && shown != HUNG && wantHdr && !hdr) {
             wrong.add("HDR not held");
         }
-        mActivity.getScenario().onActivity(activity -> activity.getRoot().removeAllViews());
+        mInstrumentation.runOnMainSync(() -> mHost.getRoot().removeAllViews());
         if (mLocalCorpus == null && !file.delete()) {
             Log.w(TAG, "Unable to delete " + file);
         }
@@ -488,7 +497,8 @@ public class MediaCompatDeviceTest {
                 done.countDown();
             }
         };
-        mActivity.getScenario().onActivity(activity -> {
+        mInstrumentation.runOnMainSync(() -> {
+            ViewerTestActivity activity = mHost;
             MediaView view = new MediaView(activity);
             made.set(view);
             view.setMediaListener(listener);
