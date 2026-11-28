@@ -217,14 +217,84 @@ public class BackgroundReplacerTest {
         assertArrayEquals(new float[] {0f}, ShadowRecordingGles20.uniform("uHasMask"), TOLERANCE);
     }
 
+    /**
+     * A mask is read the way up a segmenter writes it, its first row across the top of what is
+     * drawn. Uploading puts that row at the bottom of the texture, which read straight across the
+     * output drew every mask upside down.
+     */
+    @Test
+    public void aMaskIsReadTopRowFirst() {
+        replacer.onRendererStarted();
+        replacer.setMask(mask(2, 2, 1f, 1f, 0f, 0f));
+
+        replacer.onDrawFrame(frame);
+
+        float[] reads = ShadowRecordingGles20.uniform("uMaskMatrix");
+        assertArrayEquals("the top left of the output reads the mask's first sample",
+                new float[] {0f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals("and the bottom right its last",
+                new float[] {1f, 1f}, read(reads, 1f, 0f), TOLERANCE);
+    }
+
+    /**
+     * A mask made from a mirrored frame is read mirrored, so its subject lands where the subject
+     * is shown. Ignoring the flag left a front camera's mask on the wrong side of its subject.
+     */
+    @Test
+    public void aMirroredMaskIsReadMirrored() {
+        replacer.onRendererStarted();
+        replacer.setMask(mirroredMask(2, 2, 1f, 0f, 1f, 0f));
+
+        replacer.onDrawFrame(frame);
+
+        float[] reads = ShadowRecordingGles20.uniform("uMaskMatrix");
+        assertArrayEquals("the top left of the output reads the top right of the mask",
+                new float[] {1f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals("and the bottom right its bottom left",
+                new float[] {0f, 1f}, read(reads, 1f, 0f), TOLERANCE);
+    }
+
+    /** A background image is shown the way up it was given, and never mirrored with a mask. */
+    @Test
+    public void theBackgroundImageIsReadTopRowFirstAndUnmirrored() {
+        replacer.onRendererStarted();
+        replacer.setMask(mirroredMask(1, 1, 0f));
+        replacer.setBackgroundImage(Bitmap.createBitmap(4, 4, Bitmap.Config.ARGB_8888));
+
+        replacer.onDrawFrame(frame);
+
+        float[] reads = ShadowRecordingGles20.uniform("uBackgroundMatrix");
+        assertArrayEquals("the top left of the output reads the image's top left",
+                new float[] {0f, 0f}, read(reads, 0f, 1f), TOLERANCE);
+        assertArrayEquals(new float[] {1f, 1f}, read(reads, 1f, 0f), TOLERANCE);
+    }
+
+    /** Where a column-major matrix takes a texture coordinate. */
+    private static float[] read(float[] matrix, float s, float t) {
+        return new float[] {
+                matrix[0] * s + matrix[4] * t + matrix[12],
+                matrix[1] * s + matrix[5] * t + matrix[13],
+        };
+    }
+
     /** A mask of these confidences, row major, in the native-order floats a model hands over. */
     private static SegmentationMask mask(int width, int height, float... confidences) {
+        return new SegmentationMask(floats(confidences), width, height, false);
+    }
+
+    /** {@link #mask}, made from a mirrored frame. */
+    private static SegmentationMask mirroredMask(int width, int height, float... confidences) {
+        return new SegmentationMask(floats(confidences), width, height, true);
+    }
+
+    /** Confidences as the native-order floats a model hands over. */
+    private static ByteBuffer floats(float... confidences) {
         ByteBuffer buffer = ByteBuffer.allocateDirect(confidences.length * Float.BYTES)
                 .order(ByteOrder.nativeOrder());
         for (float confidence : confidences) {
             buffer.putFloat(confidence);
         }
         buffer.rewind();
-        return new SegmentationMask(buffer, width, height, false);
+        return buffer;
     }
 }

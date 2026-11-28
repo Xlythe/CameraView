@@ -69,6 +69,23 @@ class ComposeControllersTest {
                 cameraView.takePicture(file)
             }
 
+            override fun startBurst(
+                count: Int,
+                onImageSaved: (uri: Uri) -> Unit,
+                onFinished: (count: Int) -> Unit
+            ) {}
+
+            override fun startBurst(
+                directory: File,
+                count: Int,
+                onImageCaptured: (file: File) -> Unit,
+                onFinished: (count: Int) -> Unit
+            ) {}
+
+            override fun stopBurst() {
+                cameraView.stopBurst()
+            }
+
             override fun startRecording() {
                 cameraView.startRecording()
             }

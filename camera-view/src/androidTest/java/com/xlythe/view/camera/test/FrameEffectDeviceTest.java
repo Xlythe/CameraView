@@ -11,7 +11,9 @@ import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.media.MediaMetadataRetriever;
+import android.os.Debug;
 import android.opengl.GLES20;
+import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
@@ -21,6 +23,7 @@ import androidx.annotation.Nullable;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.exifinterface.media.ExifInterface;
 import androidx.test.rule.GrantPermissionRule;
 
@@ -37,6 +40,7 @@ import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 import org.junit.runners.Parameterized;
 
@@ -52,6 +56,7 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -95,7 +100,13 @@ public final class FrameEffectDeviceTest {
     private static final int COLOUR_SPREAD = 30;
     /** How near to 255 a clamped channel has to land, allowing for JPEG. */
     private static final int WHITE_FLOOR = 243;
+    /** How far apart two aspect ratios may be and still count as one crop, after rounding. */
+    private static final float ASPECT_TOLERANCE = 0.01f;
     private static final String FILTER_TAG = "FrameEffect";
+    /** Where burst rates are logged, for {@code adb logcat -s BurstRate}. */
+    private static final String BURST_TAG = "BurstRate";
+    /** How many pictures the drawn burst takes: enough to see each one drawn, and a rate. */
+    private static final int DRAWN_BURST_COUNT = 5;
     /** How long the preview is given to show what the renderer drew, once the camera is open. */
     private static final long PREVIEW_WAIT_MILLIS = 10_000;
     /** How often the screen is looked at while waiting for it. */
@@ -108,6 +119,10 @@ public final class FrameEffectDeviceTest {
             Manifest.permission.CAMERA,
             Manifest.permission.RECORD_AUDIO
     );
+
+    /** Skips, rather than fails, a test that the emulator's camera HAL stalled under. */
+    @Rule
+    public final TestRule cameraHal = DeviceState.skipWhenTheEmulatorCameraHalStalls();
 
     @Before
     public void useTheBackendUnderTest() {
@@ -560,24 +575,43 @@ public final class FrameEffectDeviceTest {
     }
 
     /**
-     * A frame drawn straight through comes out the size it would have without the effect.
+     * A frame drawn straight through comes out the size it would have without the effect: the
+     * camera's own still resolution, turned and cropped as the plain picture is.
      *
      * <p>The effect is built with CameraX's only unrestricted constructor, which describes the
      * transformation as arbitrary rather than as the camera-and-surface rotation the processor
      * actually applies. That is a claim about what CameraX may assume downstream, and the place
      * it would show is the geometry of the saved file - a frame rotated a quarter turn, or
-     * cropped to the wrong rectangle, arrives here as different dimensions.</p>
+     * cropped to the wrong rectangle, arrives here turned or at another aspect ratio. A still
+     * drawn from the stream CameraX shares with the preview, rather than taken at the still's
+     * own resolution, arrives smaller.</p>
+     *
+     * <p>How long each picture takes and how much memory it costs are logged, for comparing the
+     * drawn path with the plain one.</p>
      */
     @Test
-    public void drawingTheFrameThroughDoesNotChangeItsShape() throws Exception {
-        Size withoutEffect = captureSize(null);
-        Size withEffect = captureSize(frame -> {
+    public void drawingTheFrameThroughDoesNotChangeItsSize() throws Exception {
+        Capture withoutEffect = capture(null);
+        Capture withEffect = capture(frame -> {
             frame.drawCameraFrame();
             return true;
         });
 
-        assertEquals("an effect that draws the frame through should not reshape the capture",
-                withoutEffect, withEffect);
+        String sizes = withoutEffect + " without the effect, " + withEffect + " with it";
+        Log.i(FILTER_TAG, backend + " still " + sizes);
+        assertEquals("an effect that draws the frame through should not turn the capture: "
+                        + sizes,
+                withoutEffect.size.getWidth() > withoutEffect.size.getHeight(),
+                withEffect.size.getWidth() > withEffect.size.getHeight());
+        assertEquals("an effect that draws the frame through should not recrop the capture: "
+                        + sizes,
+                aspectRatio(withoutEffect.size), aspectRatio(withEffect.size), ASPECT_TOLERANCE);
+        assertEquals("an effect should not cost the picture its resolution: " + sizes,
+                withoutEffect.size, withEffect.size);
+    }
+
+    private static float aspectRatio(@NonNull Size size) {
+        return (float) size.getWidth() / size.getHeight();
     }
 
     /**
@@ -621,6 +655,152 @@ public final class FrameEffectDeviceTest {
         } finally {
             unfiltered.recycle();
             grey.recycle();
+        }
+    }
+
+    /**
+     * Every picture of a burst is drawn as a single picture is: a filter that clamps every channel
+     * to white leaves each file white. The rate is logged under the BurstRate tag beside the
+     * undrawn one from BackendMatrixDeviceTest.
+     */
+    @Test
+    public void aColourFilterReachesEveryPictureOfABurst() throws Exception {
+        File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                "drawn-burst-" + backend);
+        File[] stale = directory.listFiles();
+        if (stale != null) {
+            for (File file : stale) {
+                assertTrue(file.delete());
+            }
+        }
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicInteger count = new AtomicInteger(-1);
+        long[] times = new long[3];
+        withOpenCamera(new ColorFilter(ColorMatrix.brightness(1f)), camera -> {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                camera.setShutterSoundEnabled(false);
+                times[0] = SystemClock.elapsedRealtime();
+                camera.startBurst(directory, DRAWN_BURST_COUNT, new CameraView.OnBurstListener() {
+                    @Override public void onBurstImageCaptured(@NonNull File file) {
+                        if (times[1] == 0) {
+                            times[1] = SystemClock.elapsedRealtime();
+                        }
+                        times[2] = SystemClock.elapsedRealtime();
+                    }
+
+                    @Override public void onBurstFinished(int pictures) {
+                        count.set(pictures);
+                        finished.countDown();
+                    }
+                });
+            });
+            assertTrue("the drawn burst never finished",
+                    finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        });
+
+        assertEquals("the drawn burst lost pictures", DRAWN_BURST_COUNT, count.get());
+        File[] pictures = directory.listFiles();
+        assertNotNull(pictures);
+        assertEquals(DRAWN_BURST_COUNT, pictures.length);
+        for (File picture : pictures) {
+            Bitmap decoded = BitmapFactory.decodeFile(picture.getAbsolutePath());
+            assertNotNull(picture.getName() + " is not an image", decoded);
+            try {
+                for (int[] point : samplePoints(decoded)) {
+                    int pixel = decoded.getPixel(point[0], point[1]);
+                    assertTrue(picture.getName() + " was not drawn through the filter, and left "
+                                    + String.format("#%06X", pixel & 0xFFFFFF),
+                            Color.red(pixel) >= WHITE_FLOOR && Color.green(pixel) >= WHITE_FLOOR
+                                    && Color.blue(pixel) >= WHITE_FLOOR);
+                }
+            } finally {
+                decoded.recycle();
+            }
+        }
+        Log.i(BURST_TAG, String.format(Locale.US,
+                "%s %s drawn: %d pictures, first after %d ms, then %.1f per second",
+                Build.MODEL, backend, DRAWN_BURST_COUNT, times[1] - times[0],
+                (DRAWN_BURST_COUNT - 1) / ((times[2] - times[1]) / 1000.0)));
+    }
+
+    /**
+     * A drawn burst picture is the drawn picture a single press takes, from either lens: the same
+     * size, the same way up and mirrored the same way. {@link Quarters} marks each quarter of the
+     * camera's buffer, so a picture turned or mirrored differently shows them elsewhere.
+     */
+    @Test
+    public void aDrawnBurstPictureIsTheSingleDrawnPicture() throws Exception {
+        for (CameraView.LensFacing lensFacing : CameraView.LensFacing.values()) {
+            File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                    "drawn-burst-quarters-" + backend + "-" + lensFacing);
+            File[] stale = directory.listFiles();
+            if (stale != null) {
+                for (File file : stale) {
+                    assertTrue(file.delete());
+                }
+            }
+            CountDownLatch burstFinished = new CountDownLatch(1);
+            AtomicInteger count = new AtomicInteger(-1);
+            CountDownLatch singleFinished = new CountDownLatch(1);
+            AtomicReference<File> single = new AtomicReference<>();
+
+            boolean opened = withOpenCamera(new Quarters(), lensFacing, camera -> {
+                camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+                    @Override public void onImageConfirmation() {}
+
+                    @Override public void onImageCaptured(File saved) {
+                        single.set(saved);
+                        singleFinished.countDown();
+                    }
+
+                    @Override public void onFailure() {
+                        singleFinished.countDown();
+                    }
+                });
+                Thread.sleep(1_000);
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() ->
+                        camera.startBurst(directory, DRAWN_BURST_COUNT,
+                                new CameraView.OnBurstListener() {
+                                    @Override public void onBurstFinished(int pictures) {
+                                        count.set(pictures);
+                                        burstFinished.countDown();
+                                    }
+                                }));
+                assertTrue("the drawn burst never finished",
+                        burstFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                camera.takePicture(temporaryFile(".jpg"));
+                assertTrue("the single picture never reported",
+                        singleFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            });
+            if (!opened) {
+                continue;
+            }
+
+            assertEquals("the " + lensFacing + " drawn burst lost pictures",
+                    DRAWN_BURST_COUNT, count.get());
+            assertNotNull("the " + lensFacing + " single picture failed", single.get());
+            File[] pictures = directory.listFiles();
+            assertNotNull(pictures);
+            assertEquals(DRAWN_BURST_COUNT, pictures.length);
+            Bitmap expected = ShownFrames.ofPicture(single.get());
+            try {
+                for (File picture : pictures) {
+                    Bitmap shown = ShownFrames.ofPicture(picture);
+                    try {
+                        String what = lensFacing + " burst picture " + picture.getName();
+                        assertEquals("the " + what + " is the single picture's size",
+                                new Size(expected.getWidth(), expected.getHeight()),
+                                new Size(shown.getWidth(), shown.getHeight()));
+                        assertSameQuarters(what, expected, shown);
+                    } finally {
+                        shown.recycle();
+                    }
+                }
+            } finally {
+                expected.recycle();
+            }
+            Log.i(FILTER_TAG, backend + " " + lensFacing + " drawn burst pictures are "
+                    + "the single drawn picture");
         }
     }
 
@@ -758,8 +938,30 @@ public final class FrameEffectDeviceTest {
         };
     }
 
+    /** One capture's size as a viewer sees it, how long it took and what it cost. */
+    private static final class Capture {
+        /** The picture's dimensions once its orientation is applied. */
+        final Size size;
+        /** From asking for the picture to hearing it was written. */
+        final long millis;
+        /** The most the app's Java and native heaps grew while it was taken, in megabytes. */
+        final long peakMegabytes;
+
+        Capture(@NonNull Size size, long millis, long peakMegabytes) {
+            this.size = size;
+            this.millis = millis;
+            this.peakMegabytes = peakMegabytes;
+        }
+
+        @NonNull
+        @Override
+        public String toString() {
+            return size + " in " + millis + " ms, heaps up to " + peakMegabytes + " MB";
+        }
+    }
+
     /**
-     * The dimensions of one capture as a viewer sees them, with the given renderer or with none.
+     * One capture, with the given renderer or with none, measured.
      *
      * <p>Orientation is applied rather than ignored, because the two paths record it differently
      * and both are correct: a JPEG straight from the camera is stored in sensor orientation with
@@ -768,10 +970,12 @@ public final class FrameEffectDeviceTest {
      * displayed is the question actually worth asking.</p>
      */
     @NonNull
-    private Size captureSize(@Nullable FrameRenderer renderer) throws Exception {
+    private Capture capture(@Nullable FrameRenderer renderer) throws Exception {
         File file = temporaryFile(".jpg");
         CountDownLatch finished = new CountDownLatch(1);
         AtomicReference<File> captured = new AtomicReference<>();
+        AtomicLong millis = new AtomicLong();
+        AtomicLong peak = new AtomicLong();
 
         withOpenCamera(renderer, camera -> {
             camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
@@ -786,9 +990,17 @@ public final class FrameEffectDeviceTest {
                     finished.countDown();
                 }
             });
+            // Settled first, so the heaps measured are the picture's and not the camera's.
+            Thread.sleep(1_000);
+            HeapSampler sampler = new HeapSampler(finished);
+            sampler.start();
+            long started = SystemClock.elapsedRealtime();
             camera.takePicture(file);
             assertTrue("the capture never reported",
                     finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            millis.set(SystemClock.elapsedRealtime() - started);
+            sampler.join();
+            peak.set(sampler.peakGrowthMegabytes());
         });
 
         assertNotNull("the capture failed", captured.get());
@@ -802,9 +1014,50 @@ public final class FrameEffectDeviceTest {
                 || orientation == ExifInterface.ORIENTATION_ROTATE_270
                 || orientation == ExifInterface.ORIENTATION_TRANSPOSE
                 || orientation == ExifInterface.ORIENTATION_TRANSVERSE;
-        return quarterTurned
+        Size size = quarterTurned
                 ? new Size(bounds.outHeight, bounds.outWidth)
                 : new Size(bounds.outWidth, bounds.outHeight);
+        return new Capture(size, millis.get(), peak.get());
+    }
+
+    /**
+     * Watches how far the app's Java and native heaps grow until a capture finishes. Graphics
+     * buffers are not counted, which leaves out the camera's and the renderer's surfaces.
+     */
+    private static final class HeapSampler extends Thread {
+        /** How often the heaps are read. */
+        private static final long SAMPLE_MILLIS = 10;
+        /** Released when the capture finishes. */
+        private final CountDownLatch mFinished;
+        /** The heaps when sampling started, in bytes. */
+        private final long mBaseline = heapBytes();
+        /** The most the heaps reached, in bytes. */
+        private volatile long mPeak = mBaseline;
+
+        HeapSampler(@NonNull CountDownLatch finished) {
+            super("HeapSampler");
+            mFinished = finished;
+        }
+
+        @Override
+        public void run() {
+            try {
+                do {
+                    mPeak = Math.max(mPeak, heapBytes());
+                } while (!mFinished.await(SAMPLE_MILLIS, TimeUnit.MILLISECONDS));
+            } catch (InterruptedException error) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        long peakGrowthMegabytes() {
+            return (mPeak - mBaseline) / (1024 * 1024);
+        }
+
+        private static long heapBytes() {
+            Runtime runtime = Runtime.getRuntime();
+            return runtime.totalMemory() - runtime.freeMemory() + Debug.getNativeHeapAllocatedSize();
+        }
     }
 
     private static void assertMagenta(@NonNull String what, int pixel) {
@@ -940,6 +1193,7 @@ public final class FrameEffectDeviceTest {
                 return false;
             }
             DeviceState.turnTheFlashOff(camera);
+            camera.setShutterSoundEnabled(false);
             try {
                 action.run(camera);
             } finally {

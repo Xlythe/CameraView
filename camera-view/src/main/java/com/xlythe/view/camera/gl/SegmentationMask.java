@@ -51,6 +51,11 @@ public final class SegmentationMask {
         return mHeight;
     }
 
+    /** Whether the mask was made from a mirrored frame, so it is read flipped left to right. */
+    boolean isMirrored() {
+        return mMirrored;
+    }
+
     /**
      * How confident the model is that this point is the subject.
      *
