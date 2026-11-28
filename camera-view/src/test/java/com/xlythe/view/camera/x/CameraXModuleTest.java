@@ -222,7 +222,8 @@ public final class CameraXModuleTest {
      * A picture comes from kept frames where the camera keeps them, below MAX and for anything
      * but RAW. A drawn still is no exception, since it is taken apart from the effect and drawn
      * after: taken without kept frames, it came out smaller than the undrawn picture. A still
-     * beside analysis is, since a camera promises it beside a preview alone.
+     * beside analysis is, since a camera promises it beside a preview alone, and so is one through
+     * the camera's own photo mode, whose session CameraX will not build with kept frames.
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     @Test

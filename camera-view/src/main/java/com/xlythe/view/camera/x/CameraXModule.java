@@ -226,6 +226,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Nullable private ListenableFuture<ExtensionsManager> mExtensionsManagerFuture;
     /** CameraX vendor extension manager after initialization. */
     @Nullable private ExtensionsManager mExtensionsManager;
+    /** Whether the selector last chosen runs the camera's own photo mode. Main thread. */
+    private boolean mBindsOwnPhotoMode;
     /** Camera returned by the latest successful atomic bind. */
     @Nullable private Camera mActiveCamera;
     /** Display Preview in the latest successful bind. */
@@ -2251,6 +2253,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         long generation = ++mGeneration;
         mState = State.BINDING;
         CameraSelector selector = getCameraSelector();
+        boolean throughPhotoMode = mBindsOwnPhotoMode;
         try {
             if (!provider.hasCamera(selector)) throw new IllegalStateException("No camera matches the requested lens facing");
             CameraInfo cameraInfo = provider.getCameraInfo(selector);
@@ -2263,7 +2266,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // combination a camera app's video-snapshot button uses. Analysis is bound beside the
             // still, which every camera can hold with a preview, and gives way to a recording.
             boolean analyzing = mVideoCapture == null && mFrameAnalyzer != null;
-            ImageCapture imageCapture = createImageCapture(cameraInfo, drawing, analyzing);
+            ImageCapture imageCapture =
+                    createImageCapture(cameraInfo, drawing, analyzing, throughPhotoMode);
             ImageAnalysis imageAnalysis = analyzing ? createImageAnalysis() : null;
             List<UseCase> requested = new ArrayList<>();
             requested.add(displayPreview);
@@ -2806,9 +2810,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * @param analyzing whether analysis is bound beside the still. A camera promises a RAW or
      *     Ultra HDR still, and the frames zero shutter lag keeps, beside a preview alone, so the
      *     still is then a JPEG taken as it is asked for, as it is beside a Camera2 stream.
+     * @param throughPhotoMode whether the bind runs the camera's own photo mode, whose session
+     *     keeps no frames and writes a JPEG
      */
-    @NonNull private ImageCapture createImageCapture(
-            @NonNull CameraInfo cameraInfo, boolean drawing, boolean analyzing) {
+    @NonNull private ImageCapture createImageCapture(@NonNull CameraInfo cameraInfo,
+            boolean drawing, boolean analyzing, boolean throughPhotoMode) {
         boolean plain = drawing || analyzing;
         CameraView.PictureFormat format =
                 boundPictureFormat(getPictureFormat(), plain || isPhotoModeOn());
@@ -2816,7 +2822,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .setResolutionSelector(createImageResolutionSelector())
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
-                .setCaptureMode(getCaptureMode(cameraInfo, format, analyzing))
+                .setCaptureMode(getCaptureMode(cameraInfo, format, analyzing || throughPhotoMode))
                 .setJpegQuality(getPictureQuality());
         // Checked against this camera as well as on request, since the lens may have changed.
         if (format == CameraView.PictureFormat.ULTRA_HDR && writesUltraHdr(cameraInfo)) {
@@ -3124,6 +3130,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @NonNull private CameraSelector getCameraSelector() {
         CameraSelector selector = selectorFor(mFrontFacing
                 ? CameraSelector.LENS_FACING_FRONT : CameraSelector.LENS_FACING_BACK);
+        mBindsOwnPhotoMode = false;
         int photoMode = getOwnPhotoMode();
         ExtensionsManager manager = mExtensionsManager;
         if (photoMode != CameraView.PhotoMode.NONE && manager != null && mVideoCapture == null
@@ -3131,7 +3138,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             try {
                 int extensionMode = toExtensionMode(photoMode);
                 if (manager.isExtensionAvailable(selector, extensionMode)) {
-                    return manager.getExtensionEnabledCameraSelector(selector, extensionMode);
+                    CameraSelector extension =
+                            manager.getExtensionEnabledCameraSelector(selector, extensionMode);
+                    mBindsOwnPhotoMode = true;
+                    return extension;
                 }
             } catch (IllegalArgumentException | IllegalStateException error) {
                 Log.w(TAG, "Unable to run the camera's photo mode " + photoMode, error);
@@ -3172,14 +3182,16 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * </p>
      *
      * <p>Not so a still beside analysis, which a camera promises with a preview, not with the
-     * surfaces frames are kept and reprocessed through as well.</p>
+     * surfaces frames are kept and reprocessed through as well; nor one through the camera's own
+     * photo mode, whose session CameraX refuses to build with them.</p>
      *
-     * @param besideAnalysis whether the still is bound beside analysis
+     * @param withoutKeptFrames whether the still is bound beside analysis or through the
+     *     camera's own photo mode
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     private int getCaptureMode(@NonNull CameraInfo cameraInfo,
-            @NonNull CameraView.PictureFormat format, boolean besideAnalysis) {
-        return captureMode(getQuality(), cameraInfo.isZslSupported(), format, besideAnalysis);
+            @NonNull CameraView.PictureFormat format, boolean withoutKeptFrames) {
+        return captureMode(getQuality(), cameraInfo.isZslSupported(), format, withoutKeptFrames);
     }
 
     /**
@@ -3189,11 +3201,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     static int captureMode(@NonNull CameraView.Quality quality, boolean zslSupported,
-            @NonNull CameraView.PictureFormat format, boolean besideAnalysis) {
+            @NonNull CameraView.PictureFormat format, boolean withoutKeptFrames) {
         if (quality == CameraView.Quality.MAX) {
             return ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY;
         }
-        return zslSupported && !writesRaw(format) && !besideAnalysis
+        return zslSupported && !writesRaw(format) && !withoutKeptFrames
                 ? ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG
                 : ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY;
     }
