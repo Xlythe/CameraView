@@ -133,6 +133,7 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** A CameraView backend implemented with CameraX. */
 @RestrictTo(RestrictTo.Scope.LIBRARY)
@@ -2422,8 +2423,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         FrameRenderer renderer = getDrawingRenderer();
         CameraTextureProvider textureProvider = getDrawingTextureProvider();
         if (renderer == null && textureProvider == null) return;
+        AtomicReference<FrameEffect> created = new AtomicReference<>();
         mFrameEffect = FrameEffect.create(FrameEffect.TARGETS, mMainExecutor, renderer,
-                textureProvider, this::onFrameEffectFailed);
+                textureProvider, error -> onFrameEffectFailed(created.get(), error));
+        created.set(mFrameEffect);
         if (mFrameEffect == null) {
             // The renderer logged why. The camera goes on being bound without an effect, which is
             // a camera that works and an effect that does not, rather than no camera at all.
@@ -2513,11 +2516,22 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * <p>Reaching here means CameraX accepted the effect and then could not run it, which leaves a
      * camera that is bound but showing nothing. Letting the effect go and binding again without
      * one puts the preview back; latching stops the next bind walking into the same wall.</p>
+     *
+     * <p>An effect already let go is the exception. A bind made a moment before its release can
+     * still hand it a surface, which it refuses because it has stopped; that says nothing about
+     * GL, and latching on it would turn effects off for good after a renderer was merely swapped.
+     * </p>
+     *
+     * @param failed the effect that failed, or null if it failed before it was returned
      */
-    private void onFrameEffectFailed(@NonNull Throwable error) {
-        Log.e(TAG, "Showing the camera without effects; CameraX could not run one", error);
+    private void onFrameEffectFailed(@Nullable FrameEffect failed, @NonNull Throwable error) {
         runOnMainThread(() -> {
             if (mDestroyed) return;
+            if (failed != null && failed != mFrameEffect) {
+                Log.w(TAG, "An effect already let go refused a late surface", error);
+                return;
+            }
+            Log.e(TAG, "Showing the camera without effects; CameraX could not run one", error);
             mGlUnavailable = true;
             releaseFrameEffect();
             reconcileUseCases(false);
