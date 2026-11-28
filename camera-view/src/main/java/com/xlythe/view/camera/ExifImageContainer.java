@@ -145,7 +145,7 @@ abstract class ExifImageContainer extends MediaContainer {
         byte[] tiff = tiffBlock();
         byte[] jpeg = tiff == null ? new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF,
                 (byte) 0xD9} : wrap(tiff);
-        File wrapped = File.createTempFile("mediatags", ".jpg");
+        File wrapped = File.createTempFile("mediatags", ".jpg", tempDirectory());
         try (FileOutputStream out = new FileOutputStream(wrapped)) {
             out.write(jpeg);
         }
