@@ -301,6 +301,9 @@ final class MultiBandBlender {
             double focal = frame.focal * imageScale;
             double cx = image.width / 2.0;
             double cy = image.height / 2.0;
+            double[] vignetting = frame.vignetting;
+            boolean vignetted = vignetting[0] != 0 || vignetting[1] != 0;
+            double corner = cx * cx + cy * cy;
             float[] red = mImage[0][0];
             float[] green = mImage[0][1];
             float[] blue = mImage[0][2];
@@ -330,9 +333,15 @@ final class MultiBandBlender {
                     px = Math.max(0, Math.min(image.width - 1, px));
                     py = Math.max(0, Math.min(image.height - 1, py));
                     int argb = image.sample(px, py);
-                    red[p] = ArgbImage.red(argb) * frame.gains[0];
-                    green[p] = ArgbImage.green(argb) * frame.gains[1];
-                    blue[p] = ArgbImage.blue(argb) * frame.gains[2];
+                    float lens = 1f;
+                    if (vignetted) {
+                        double ux = focal * x / z;
+                        double uy = focal * y / z;
+                        lens = Vignetting.correction(vignetting, (ux * ux + uy * uy) / corner);
+                    }
+                    red[p] = ArgbImage.red(argb) * frame.gains[0] * lens;
+                    green[p] = ArgbImage.green(argb) * frame.gains[1] * lens;
+                    blue[p] = ArgbImage.blue(argb) * frame.gains[2] * lens;
                 }
             }
             // Gaussian pyramids of the colour and the mask, over the frame's reach alone.

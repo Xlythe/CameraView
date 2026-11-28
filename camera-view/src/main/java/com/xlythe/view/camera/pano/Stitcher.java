@@ -25,9 +25,10 @@ import java.util.Map;
  *   <li>Overlaps too plain for corners, as on a ceiling or a floor, are aligned by their
  *       brightness from there ({@link DirectAligner}), and every frame is turned again with what
  *       those found as well, refining the focal length too when the matches close a loop.</li>
- *   <li>The frames are drawn onto a small picture, where their exposures are matched
- *       ({@link GainCompensator}) and the seams between them cut around whatever they disagree
- *       on ({@link SeamFinder}).</li>
+ *   <li>The frames are drawn onto a small picture, where the lens's falloff towards the corners
+ *       ({@link Vignetting}) and the frames' exposures ({@link GainCompensator}) are matched,
+ *       and the seams between them cut around whatever they disagree on
+ *       ({@link SeamFinder}).</li>
  *   <li>The finished picture is drawn at full size and blended across the seams band by band
  *       ({@link MultiBandBlender}).</li>
  * </ol>
@@ -262,6 +263,11 @@ final class Stitcher {
         if (warps.isEmpty()) {
             return null;
         }
+        double[] vignetting = Vignetting.fit(warps, mFrames, smallGrid);
+        Vignetting.correct(warps, mFrames, smallGrid, vignetting);
+        for (StitchFrame frame : mFrames) {
+            frame.vignetting = vignetting;
+        }
         GainCompensator.compensate(warps, mFrames, smallGrid.width);
         int top = smallGrid.height;
         int bottom = 0;
@@ -299,6 +305,7 @@ final class Stitcher {
                     alignment.p95After, alignment.rmsBefore, alignment.medianBefore,
                     alignment.p95Before));
         }
+        Log.i(TAG, exposureSummary(vignetting));
         Log.i(TAG, String.format(Locale.US, "Stitching took %d ms: corners %d, matches %d, "
                         + "alignment %d, seams %d, blending %d",
                 blended - start, detected - start, matched - detected, aligned - matched,
@@ -337,6 +344,31 @@ final class Stitcher {
             }
         }
         return true;
+    }
+
+    /**
+     * How far apart the frames' exposures were, as the gains that matched them, and how dark the
+     * lens left its corners: what a sweep with exposure held still should show little of.
+     */
+    @NonNull
+    private String exposureSummary(@NonNull double[] vignetting) {
+        double lowest = Double.MAX_VALUE;
+        double highest = 0;
+        double sum = 0;
+        double sumSquares = 0;
+        for (StitchFrame frame : mFrames) {
+            double gain = (frame.gains[0] + frame.gains[1] + frame.gains[2]) / 3;
+            lowest = Math.min(lowest, gain);
+            highest = Math.max(highest, gain);
+            double log = Math.log(gain);
+            sum += log;
+            sumSquares += log * log;
+        }
+        int n = mFrames.length;
+        double spread = Math.sqrt(Math.max(0, sumSquares / n - (sum / n) * (sum / n)));
+        return String.format(Locale.US, "Exposure: gains %.3f to %.3f, spread %.2f%%; the lens "
+                        + "leaves its corners at %.3f", lowest, highest, 100 * spread,
+                Math.exp(Vignetting.logFalloff(vignetting, 1)));
     }
 
     /** Matches every pair of frames the sensor says overlap. */

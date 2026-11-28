@@ -41,6 +41,9 @@ final class StitchFrame {
     /** Each colour channel's gain, red, green and blue, once exposure is matched. */
     final float[] gains = {1f, 1f, 1f};
 
+    /** The lens's falloff towards the corners, as {@link Vignetting} fits it; none at first. */
+    double[] vignetting = Vignetting.NONE;
+
     StitchFrame(@NonNull CameraPose pose, long timeMillis) {
         this.width = pose.width;
         this.height = pose.height;
