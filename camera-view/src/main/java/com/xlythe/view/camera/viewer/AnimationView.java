@@ -430,15 +430,33 @@ final class AnimationView extends View {
             drawMovie(canvas, mMovie, played);
         } else if (mDrawable != null) {
             if (fit(mDrawable.getIntrinsicWidth(), mDrawable.getIntrinsicHeight())) {
-                mDrawable.setBounds(Math.round(mBounds.left), Math.round(mBounds.top),
-                        Math.round(mBounds.right), Math.round(mBounds.bottom));
+                drawFitted(canvas, mDrawable, mBounds);
             } else {
                 mDrawable.setBounds(0, 0, getWidth(), getHeight());
+                mDrawable.draw(canvas);
             }
-            mDrawable.draw(canvas);
         } else if (mStill != null && fit(mStill.getWidth(), mStill.getHeight())) {
             canvas.drawBitmap(mStill, null, mBounds, mPaint);
         }
+    }
+
+    /**
+     * Draws a drawable of a known size into the bounds it is fitted to. It is drawn at its own
+     * size, scaled by the canvas, rather than given those bounds: Android 9's
+     * AnimatedImageDrawable draws at its own size in the corner whatever its bounds say.
+     */
+    @VisibleForTesting
+    @MainThread
+    static void drawFitted(@NonNull Canvas canvas, @NonNull Drawable drawable,
+            @NonNull RectF bounds) {
+        int width = drawable.getIntrinsicWidth();
+        int height = drawable.getIntrinsicHeight();
+        drawable.setBounds(0, 0, width, height);
+        int saved = canvas.save();
+        canvas.translate(bounds.left, bounds.top);
+        canvas.scale(bounds.width() / width, bounds.height() / height);
+        drawable.draw(canvas);
+        canvas.restoreToCount(saved);
     }
 
     @SuppressWarnings("deprecation")
