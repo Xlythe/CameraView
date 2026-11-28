@@ -34,6 +34,7 @@ import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.RawCapturePairer;
 import com.xlythe.view.camera.gl.FrameRenderThread;
 import com.xlythe.view.camera.gl.GlMath;
+import com.xlythe.view.camera.stream.MotionPhotoRecorder;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -89,6 +90,13 @@ class PictureSession extends PreviewSession {
     /** The RAW_SENSOR output, configured only for a RAW format on a camera that has one. */
     private final RawPictureSurface mRawSurface;
 
+    /**
+     * Feeds the motion photo encoder every preview frame, or null when pictures carry no clip or
+     * this session cannot carry one.
+     */
+    @Nullable
+    private MotionSurface mMotionSurface;
+
     /** A flash picture waiting on auto-exposure to meter, or null. */
     @Nullable
     private volatile Metering mMetering;
@@ -133,6 +141,8 @@ class PictureSession extends PreviewSession {
         // hook goes between the two: a recording session sizes its video here and the still is
         // then capped to it.
         onPreviewInitialized(map);
+        // Before the still, which a motion photo output may cap.
+        mMotionSurface = createMotionSurface(map);
         if (hasStillCapture()) {
             // Asked of the camera again rather than trusted from the request, because a lens
             // change can leave a format accepted for the back camera in front of a front camera
@@ -175,6 +185,55 @@ class PictureSession extends PreviewSession {
                 new Size(mPictureSurface.getWidth(), mPictureSurface.getHeight()));
     }
 
+    /**
+     * The motion photo output, if pictures are to carry a clip and this session can feed one.
+     *
+     * <p>The recorder is asked for here rather than when the session was made, because a session
+     * can be made and then wait for the one before it to close, and motion photos may have been
+     * turned off in between. An output that cannot be set up costs the session its clips, not its
+     * pictures.</p>
+     */
+    @Nullable
+    private MotionSurface createMotionSurface(@NonNull StreamConfigurationMap map) {
+        if (!allowsMotionPhoto() || !hasStillCapture()) {
+            return null;
+        }
+        MotionPhotoRecorder recorder = getModule().motionPhotoRecorder();
+        if (recorder == null) {
+            return null;
+        }
+        MotionSurface surface = new MotionSurface(getModule(), recorder, getPreviewSurface());
+        try {
+            surface.initialize(map);
+            return surface;
+        } catch (RuntimeException error) {
+            Log.w(TAG, "Taking pictures without motion photo clips", error);
+            surface.close();
+            return null;
+        }
+    }
+
+    /**
+     * Whether this session may feed a motion photo's encoder. A recording or a stream has an
+     * encoder of its own in the slot it would take.
+     */
+    protected boolean allowsMotionPhoto() {
+        return true;
+    }
+
+    /** Whether this session is feeding the motion photo encoder. */
+    boolean hasMotionSurface() {
+        return mMotionSurface != null;
+    }
+
+    @Override
+    protected void addRepeatingTargets(@NonNull CaptureRequest.Builder builder) {
+        MotionSurface motionSurface = mMotionSurface;
+        if (motionSurface != null) {
+            builder.addTarget(motionSurface.getSurface());
+        }
+    }
+
     /** Lets a subclass add its own outputs once the preview has a size and before the still does. */
     protected void onPreviewInitialized(@NonNull StreamConfigurationMap map)
             throws CameraAccessException {}
@@ -191,12 +250,13 @@ class PictureSession extends PreviewSession {
     /**
      * The largest still this session may ask for, or null for the largest the camera offers.
      *
-     * <p>Only a recording session needs this: the combination of a preview, a recording and a
-     * still is guaranteed by Camera2 at the recording size, not at the sensor's maximum.</p>
+     * <p>A session feeding an encoder needs this: the combination of a preview, a recording and a
+     * still is guaranteed at the recording size, and only from FULL hardware upwards at the
+     * sensor's maximum beside a second preview-sized output.</p>
      */
     @Nullable
     protected Size maxPictureSize() {
-        return null;
+        return mMotionSurface == null ? null : getModule().motionPhotoPictureCap();
     }
 
     /**
@@ -242,6 +302,9 @@ class PictureSession extends PreviewSession {
         if (mRawSurface.isInitialized()) {
             surfaces.add(mRawSurface.getSurface());
         }
+        if (mMotionSurface != null) {
+            surfaces.add(mMotionSurface.getSurface());
+        }
         return surfaces;
     }
 
@@ -255,6 +318,9 @@ class PictureSession extends PreviewSession {
         }
         mPictureSurface.close();
         mRawSurface.close();
+        if (mMotionSurface != null) {
+            mMotionSurface.close();
+        }
         abandonDrawnPicture();
     }
 
