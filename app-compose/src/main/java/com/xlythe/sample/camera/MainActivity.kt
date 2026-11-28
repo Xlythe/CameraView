@@ -16,6 +16,8 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -29,6 +31,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
 import androidx.compose.material.icons.filled.Menu
@@ -43,6 +46,7 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -80,6 +84,10 @@ import com.xlythe.compose.camera.Video
 import com.xlythe.compose.camera.VideoController
 import com.xlythe.sample.camera.ui.theme.CameraViewTheme
 import kotlinx.coroutines.launch
+import java.io.File
+
+/** Where a held burst stops on its own, so a button held by accident does not fill the disk. */
+private const val MAX_BURST_PICTURES = 50
 
 enum class DemoScreen(val title: String) {
     SIMPLE("Simple Demo"),
@@ -207,6 +215,27 @@ fun SimpleDemoScreen() {
 
     LaunchedEffect(Unit) { permissionLauncher.launch(allPermissions) }
 
+    // A burst runs for as long as its button is held, into a directory of the app's own: the
+    // pictures are kept for the app to work with rather than filed in the gallery.
+    val burstDirectory = remember { File(context.cacheDir, "burst") }
+    val burstInteractions = remember { MutableInteractionSource() }
+    val burstPressed by burstInteractions.collectIsPressedAsState()
+    LaunchedEffect(burstPressed) {
+        val controller = cameraController.value ?: return@LaunchedEffect
+        if (!burstPressed) {
+            controller.stopBurst()
+            return@LaunchedEffect
+        }
+        burstDirectory.listFiles()?.forEach { it.delete() }
+        var taken = 0
+        controller.startBurst(
+            burstDirectory,
+            MAX_BURST_PICTURES,
+            onImageCaptured = { uiStatusText = "Burst: ${++taken}" },
+            onFinished = { count -> uiStatusText = "Burst took $count pictures" }
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -265,6 +294,15 @@ fun SimpleDemoScreen() {
                     Icon(Icons.Default.Cameraswitch, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Toggle Camera", fontWeight = FontWeight.SemiBold)
+                }
+
+                // Held rather than tapped, so it reports presses instead of clicks.
+                FilledTonalIconButton(
+                    onClick = {},
+                    enabled = cameraController.value != null,
+                    interactionSource = burstInteractions
+                ) {
+                    Icon(Icons.Default.BurstMode, contentDescription = "Burst")
                 }
 
                 Button(

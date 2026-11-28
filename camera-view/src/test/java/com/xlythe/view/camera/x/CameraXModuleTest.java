@@ -20,6 +20,9 @@ import androidx.camera.core.resolutionselector.ResolutionStrategy;
 import androidx.camera.video.Quality;
 import androidx.exifinterface.media.ExifInterface;
 
+import androidx.annotation.NonNull;
+
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
@@ -30,11 +33,14 @@ import org.junit.runner.RunWith;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.annotation.Config;
+import org.robolectric.shadows.ShadowLooper;
 
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {29, 37})
@@ -328,5 +334,68 @@ public final class CameraXModuleTest {
         assertEquals(0, CameraXModule.remainingDurationMillis(1_500, 2_000));
         assertEquals(-1, CameraXModule.remainingDurationMillis(
                 CameraView.INDEFINITE_VIDEO_DURATION, 2_000));
+    }
+
+    /**
+     * A drawn burst asks for its next picture only once the last is written, so one full-size
+     * drawing is in memory at a time, and the app hears of each picture before the next is taken.
+     */
+    @Test
+    public void aDrawnBurstAsksForTheNextPictureOnceTheLastIsWritten() throws IOException {
+        File directory = Files.createTempDirectory("drawn-burst").toFile();
+        List<String> events = new ArrayList<>();
+        Burst burst = new Burst(directory, "drawn", 2, new Burst.Callback() {
+            @Override public void onPictureTaken(@NonNull File file) {
+                events.add("taken " + file.getName());
+            }
+
+            @Override public void onBurstFinished() {
+                events.add("finished");
+            }
+        });
+
+        File first = burst.nextFile();
+        assertNotNull(first);
+        CameraXModule.onDrawnBurstPictureWritten(burst, first, true, () -> {
+            events.add("next");
+            File second = burst.nextFile();
+            assertNotNull("the burst still has a picture to take", second);
+            CameraXModule.onDrawnBurstPictureWritten(burst, second, true,
+                    () -> assertNull("and then it has all it takes", burst.nextFile()));
+        });
+
+        assertEquals(Arrays.asList("taken drawn_001.jpg", "next", "taken drawn_002.jpg",
+                "finished"), events);
+        assertTrue(burst.isFinished());
+    }
+
+    /** A picture that could not be drawn ends the burst, and no further picture is asked for. */
+    @Test
+    public void aDrawnBurstPictureThatIsNotWrittenEndsTheBurst() throws IOException {
+        File directory = Files.createTempDirectory("drawn-burst").toFile();
+        int[] taken = {0};
+        int[] finished = {0};
+        Burst burst = new Burst(directory, "drawn", 5, new Burst.Callback() {
+            @Override public void onPictureTaken(@NonNull File file) {
+                taken[0]++;
+            }
+
+            @Override public void onBurstFinished() {
+                finished[0]++;
+            }
+        });
+        File file = burst.nextFile();
+        assertNotNull(file);
+        Files.write(file.toPath(), new byte[] {1, 2, 3});
+
+        CameraXModule.onDrawnBurstPictureWritten(burst, file, false,
+                () -> { throw new AssertionError("no picture follows a failed one"); });
+        ShadowLooper.idleMainLooper();
+
+        assertEquals(0, taken[0]);
+        assertEquals(1, finished[0]);
+        assertTrue(burst.isEnded());
+        assertNull(burst.nextFile());
+        assertFalse("a picture that failed is not left behind", file.exists());
     }
 }
