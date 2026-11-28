@@ -73,8 +73,12 @@ import java.util.concurrent.atomic.AtomicReference;
 @RunWith(Parameterized.class)
 public final class ExtensionDeviceTest {
     private static final String TAG = "ExtensionDeviceTest";
-    /** Long enough for a mode that stacks frames, which can take several seconds. */
-    private static final long TIMEOUT_SECONDS = 30;
+    /**
+     * Long enough for a mode that stacks frames, which can take several seconds, and for an
+     * emulator drawing a full-size still through its software GL, which takes up to half a
+     * minute.
+     */
+    private static final long TIMEOUT_SECONDS = 60;
     /** Long enough for a session to reconfigure, and for exposure, focus and masks to settle. */
     private static final long SETTLE_MILLIS = 3_000;
     /** Every photo mode but NONE, in the order they are tried. */
@@ -221,8 +225,8 @@ public final class ExtensionDeviceTest {
                 camera.setPhotoMode(CameraView.PhotoMode.NONE);
                 sleep(SETTLE_MILLIS);
                 assertTrue(String.format(Locale.US,
-                                "the library's blur should soften the %s picture: edges %.2f"
-                                        + " against %.2f without it", lens, blurred, sharp),
+                                "the library's blur should soften the %s picture: detail %.1f"
+                                        + " against %.1f without it", lens, blurred, sharp),
                         blurred < sharp);
             }
         });
@@ -243,22 +247,24 @@ public final class ExtensionDeviceTest {
             for (CameraView.LensFacing lens : lenses(camera)) {
                 useLens(lens);
                 takeAndDescribePicture(camera, lens, CameraView.PhotoMode.NONE, "-before-mask");
-                double[] sharp = quarterEdges(lastPicture);
+                double[] sharp = quarterDetail(lastPicture);
 
                 BackgroundBlur blur = new BackgroundBlur();
                 blur.setMask(topLeftQuarter());
                 camera.setFrameRenderer(blur);
                 sleep(SETTLE_MILLIS);
                 takeAndDescribePicture(camera, lens, CameraView.PhotoMode.NONE, "-top-left-mask");
-                double[] masked = quarterEdges(lastPicture);
+                double[] masked = quarterDetail(lastPicture);
                 camera.setFrameRenderer(null);
                 sleep(SETTLE_MILLIS);
 
                 String quarters = String.format(Locale.US,
-                        "%s %s: edges by quarter %.2f %.2f %.2f %.2f, masked %.2f %.2f %.2f %.2f",
+                        "%s %s: detail by quarter %.1f %.1f %.1f %.1f, masked %.1f %.1f %.1f %.1f",
                         backend, lens, sharp[0], sharp[1], sharp[2], sharp[3],
                         masked[0], masked[1], masked[2], masked[3]);
                 Log.i(TAG, quarters);
+                Assume.assumeTrue("the scene has no detail to blur: " + quarters,
+                        sharp[0] > 0 && sharp[1] > 0 && sharp[2] > 0 && sharp[3] > 0);
                 double kept = masked[0] / sharp[0];
                 for (int quarter = 1; quarter < 4; quarter++) {
                     assertTrue("the top-left quarter is the one kept sharp: " + quarters,
@@ -373,7 +379,7 @@ public final class ExtensionDeviceTest {
      * Takes a picture on one lens and logs what came back: how long it took, how it was exposed,
      * the scene it is tagged with, and how bright and how sharp it is.
      *
-     * @return how sharp it is, as the average difference between neighbouring pixels
+     * @return how much detail it has, as {@link #detail} measures it
      */
     private double takeAndDescribePicture(CameraView camera, CameraView.LensFacing lens,
             int photoMode, String suffix) throws Exception {
@@ -405,18 +411,18 @@ public final class ExtensionDeviceTest {
         File kept = keep(captured.get(), backend + "-" + lens + "-" + name(photoMode) + suffix);
         lastPicture = kept;
         ExifInterface exif = new ExifInterface(kept.getAbsolutePath());
-        double edges = edgeStrength(kept);
+        double detail = quarterDetail(kept)[4];
         Log.i(TAG, String.format(Locale.US,
                 "%s: %d ms, %d bytes, %sx%s, exposure %s s, ISO %s, scene %s, mean luma %.1f,"
-                        + " edges %.2f",
+                        + " edges %.2f, detail %.1f",
                 what, millis, kept.length(),
                 exif.getAttribute(ExifInterface.TAG_IMAGE_WIDTH),
                 exif.getAttribute(ExifInterface.TAG_IMAGE_LENGTH),
                 exif.getAttribute(ExifInterface.TAG_EXPOSURE_TIME),
                 exif.getAttribute(ExifInterface.TAG_ISO_SPEED_RATINGS),
                 exif.getAttribute(ExifInterface.TAG_SCENE_CAPTURE_TYPE),
-                meanLuma(kept), edges));
-        return edges;
+                meanLuma(kept), edgeStrength(kept), detail));
+        return detail;
     }
 
     /** Closes the camera and opens it again, waiting for it to settle. */
@@ -456,31 +462,38 @@ public final class ExtensionDeviceTest {
     }
 
     /**
-     * How sharp each quarter of a picture is, upright as its Exif says it is shown: top left, top
-     * right, bottom left, bottom right.
+     * How much detail each quarter of a picture has, upright as its Exif says it is shown - top
+     * left, top right, bottom left, bottom right - and then the whole picture: the mean squared
+     * difference between neighbouring pixels of a reduced copy. Squared, because a blur spreads a
+     * hard edge out without changing the sum of the plain differences across it, which a scene of
+     * flat colours is all edges of.
      */
-    private static double[] quarterEdges(File file) throws IOException {
+    private static double[] quarterDetail(File file) throws IOException {
         Bitmap bitmap = decodeUpright(file);
         int width = bitmap.getWidth();
         int height = bitmap.getHeight();
         int[] pixels = pixels(bitmap);
-        double[] sums = new double[4];
-        long[] counts = new long[4];
+        double[] sums = new double[5];
+        long[] counts = new long[5];
         for (int y = 0; y < height - 1; y++) {
             for (int x = 0; x < width - 1; x++) {
                 int quarter = (y < height / 2 ? 0 : 2) + (x < width / 2 ? 0 : 1);
                 int here = luma(pixels[y * width + x]);
-                sums[quarter] += Math.abs(here - luma(pixels[y * width + x + 1]))
-                        + Math.abs(here - luma(pixels[(y + 1) * width + x]));
+                int across = here - luma(pixels[y * width + x + 1]);
+                int down = here - luma(pixels[(y + 1) * width + x]);
+                double squared = across * across + down * down;
+                sums[quarter] += squared;
                 counts[quarter] += 2;
+                sums[4] += squared;
+                counts[4] += 2;
             }
         }
         bitmap.recycle();
-        double[] edges = new double[4];
-        for (int quarter = 0; quarter < 4; quarter++) {
-            edges[quarter] = counts[quarter] == 0 ? 0 : sums[quarter] / counts[quarter];
+        double[] detail = new double[5];
+        for (int part = 0; part < detail.length; part++) {
+            detail[part] = counts[part] == 0 ? 0 : sums[part] / counts[part];
         }
-        return edges;
+        return detail;
     }
 
     /** A reduced copy of a picture, turned and flipped the way its Exif says it is shown. */
