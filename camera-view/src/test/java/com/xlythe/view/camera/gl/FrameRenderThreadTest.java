@@ -542,6 +542,28 @@ public class FrameRenderThreadTest {
         assertEquals(1, drawn.get());
     }
 
+    /**
+     * A still whose mask has come in is drawn ahead of the next preview frame, rather than when
+     * its next look for the mask comes round behind the frames queued meanwhile.
+     */
+    @Test
+    public void aStillIsDrawnAheadOfThePreviewOnceItsMaskIsIn() {
+        BackgroundReplacer replacer = new BackgroundReplacer();
+        replacer.setSegmentedByCamera(true);
+        FrameRenderThread thread = started(replacer);
+        thread.addOutput("preview", newSurface(), PORTRAIT, PORTRAIT,
+                GlMath.ScaleType.FILL_CENTER, copying(MIRROR));
+        thread.createStillInput(new Size(4000, 3000));
+        AtomicInteger drawn = armTimedStill(thread, 1_000L);
+        ShadowFrameSurfaceTexture.deliverFrame(stillTexture(thread));
+        assertEquals(0, drawn.get());
+
+        replacer.setMask(timedMask(1_000L));
+        ShadowFrameSurfaceTexture.deliverFrame(thread.getInputSurfaceTexture());
+
+        assertEquals(1, drawn.get());
+    }
+
     /** A still whose mask never comes is drawn once the wait is up, with the nearest there is. */
     @Test
     public void aStillIsDrawnOnceItsWaitIsUp() {

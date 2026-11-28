@@ -537,6 +537,18 @@ public final class FrameRenderThread {
         }
     }
 
+    /** Draws the still waiting on its mask, if one is and its mask or its deadline has come. */
+    private void drawMaskedStillIfReady() {
+        MaskedStill waiting = mMaskedStill;
+        FrameRenderer renderer = mRenderer;
+        if (waiting == null || (renderer instanceof BackgroundReplacer
+                && !((BackgroundReplacer) renderer).hasMaskFor(waiting.mTimestampNanos)
+                && SystemClock.uptimeMillis() < waiting.mDeadline)) {
+            return;
+        }
+        drawMaskedStillNow();
+    }
+
     /** Draws the still waiting on its mask, if one is, with whatever mask is nearest now. */
     private void drawMaskedStillNow() {
         MaskedStill waiting = mMaskedStill;
@@ -730,6 +742,9 @@ public final class FrameRenderThread {
             return;
         }
         try {
+            // A still whose mask has come in goes ahead of the preview, rather than behind every
+            // frame queued since it began to wait.
+            drawMaskedStillIfReady();
             // Consuming a frame is a GL operation on the texture, so it needs a current context
             // even though nothing is being drawn yet.
             egl.makeCurrent();
