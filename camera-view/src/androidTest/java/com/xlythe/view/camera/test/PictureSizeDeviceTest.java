@@ -158,6 +158,37 @@ public final class PictureSizeDeviceTest {
     }
 
     /**
+     * A LOW picture is no larger than 480p either way, on a camera that lists a size that small,
+     * as on every backend. The old API used to take every quality but MAX at the camera's own
+     * default size.
+     */
+    @Test
+    public void aLowPictureKeepsWithinItsBound() throws Exception {
+        // CameraX sizes a still taken from kept frames by the frames, not by the quality, so it
+        // is held to this bound only once that is fixed.
+        Assume.assumeFalse("CameraX does not yet hold a LOW picture to 480p",
+                backend == CameraView.Backend.CAMERA_X);
+        String cameraId = firstCameraFacing(facing);
+        Assume.assumeTrue("no " + facing + " camera", cameraId != null);
+        List<Size> listed = backend == CameraView.Backend.LEGACY
+                ? legacyPictureSizes(facing) : jpegSizes(cameraId, false /* unbinned */);
+        boolean listsALowSize = false;
+        for (Size size : listed) {
+            listsALowSize |= Math.max(size.getWidth(), size.getHeight()) <= 640
+                    && Math.min(size.getWidth(), size.getHeight()) <= 480;
+        }
+        Assume.assumeTrue("this camera lists nothing as small as 480p", listsALowSize);
+
+        Size size = takePicture(CameraView.Quality.LOW).size;
+
+        Log.i(TAG, String.format(Locale.US, "%s %s %s LOW: %dx%d", backend, facing, shape,
+                size.getWidth(), size.getHeight()));
+        assertTrue(size + " is larger than 480p on " + backend,
+                Math.max(size.getWidth(), size.getHeight()) <= 640
+                        && Math.min(size.getWidth(), size.getHeight()) <= 480);
+    }
+
+    /**
      * A MAX picture still arrives while recording, on a camera that says it can take one: a
      * recording leaves less room for the still than an idle camera does, so this is the
      * combination a camera is likeliest to refuse.

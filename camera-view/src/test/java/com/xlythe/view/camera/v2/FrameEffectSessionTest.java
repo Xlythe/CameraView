@@ -28,6 +28,7 @@ import android.util.Size;
 import androidx.annotation.NonNull;
 import androidx.exifinterface.media.ExifInterface;
 
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.CaptureDelivery;
 import com.xlythe.view.camera.Exif;
@@ -482,6 +483,107 @@ public class FrameEffectSessionTest {
         deliverDrawnPicture(still);
         assertEquals("the second is written", output, captured.get());
         assertFalse(first.exists());
+    }
+
+    /**
+     * A burst while frames are drawn draws each picture as a single one is drawn, and asks for the
+     * next only once the last is written, so one drawing is held at a time.
+     */
+    @Test
+    public void aBurstDrawsAndWritesEachPictureBeforeTheNext() throws IOException {
+        module.setFrameRenderer(renderer);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        FrameRenderThread effect = module.getEffect();
+        assertNotNull(effect);
+        SurfaceTexture still = stillInput(effect);
+        BurstHeard heard = new BurstHeard();
+        Burst burst = new Burst(burstDirectory(), "drawn", 2, heard);
+
+        module.startBurst(burst);
+        FakeCamera2.idleMainLooper();
+        assertEquals("one drawn picture at a time", 1, stills().size());
+        assertEquals("a burst never fires the flash",
+                Integer.valueOf(CaptureRequest.FLASH_MODE_OFF),
+                stills().get(0).get(CaptureRequest.FLASH_MODE));
+
+        deliverDrawnPicture(still);
+        assertEquals(1, heard.pictures.size());
+        assertEquals("the next is asked for once the last is written", 2, stills().size());
+        deliverDrawnPicture(still);
+
+        assertTrue(burst.isFinished());
+        assertEquals(1, heard.finishes);
+        assertEquals(2, heard.pictures.size());
+        Size upright = new Size(STILL.getHeight(), STILL.getWidth());
+        for (File picture : heard.pictures) {
+            Bitmap written = BitmapFactory.decodeFile(picture.getPath());
+            assertNotNull(picture.getName() + " should be a JPEG", written);
+            assertEquals(upright.getWidth(), written.getWidth());
+            assertEquals(upright.getHeight(), written.getHeight());
+            assertNoPadding(written);
+            ExifInterface exif = new ExifInterface(picture.getPath());
+            assertEquals("drawn the right way up, as a single picture is",
+                    ExifInterface.ORIENTATION_NORMAL,
+                    exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, -1));
+            assertEquals("tagged with the flash held off", "16",
+                    exif.getAttribute(ExifInterface.TAG_FLASH));
+        }
+        assertEquals("a burst picture reports no shutter to the picture listener",
+                0, shutters.get());
+        assertFalse(failed.get());
+    }
+
+    /** Closing while a burst picture is drawn loses that picture, and the burst finishes. */
+    @Test
+    public void closingDuringADrawnBurstFinishesIt() {
+        module.setFrameRenderer(renderer);
+        module.open();
+        FakeCamera2.idleMainLooper();
+        BurstHeard heard = new BurstHeard();
+        Burst burst = new Burst(burstDirectory(), "closed", 5, heard);
+        module.startBurst(burst);
+        FakeCamera2.idleMainLooper();
+
+        module.close();
+        FakeCamera2.idleMainLooper();
+
+        assertTrue(burst.isFinished());
+        assertEquals(1, heard.finishes);
+        assertTrue(heard.pictures.isEmpty());
+        assertEquals("nothing more is asked for once the camera closes", 1, stills().size());
+    }
+
+    /** Where the burst tests write, emptied first. */
+    private File burstDirectory() {
+        File directory = new File(output.getParentFile(), "drawn-burst");
+        File[] stale = directory.listFiles();
+        if (stale != null) {
+            for (File file : stale) {
+                assertTrue(file.delete());
+            }
+        }
+        assertTrue(directory.isDirectory() || directory.mkdirs());
+        return directory;
+    }
+
+    /** What a burst reported. */
+    private static final class BurstHeard implements Burst.Callback {
+        /** Each picture written, in the order reported. */
+        final List<File> pictures = new ArrayList<>();
+
+        /** How many times the burst said it was over. */
+        int finishes;
+
+        @Override
+        public void onPictureTaken(@NonNull File file) {
+            pictures.add(file);
+        }
+
+        @Override
+        public void onBurstFinished() {
+            finishes++;
+        }
     }
 
     /** Lands the still's frame on the renderer's input, and hands back what it drew. */

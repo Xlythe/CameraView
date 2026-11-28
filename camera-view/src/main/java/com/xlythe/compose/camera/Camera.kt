@@ -181,6 +181,38 @@ interface CameraController {
     fun takePicture(file: File)
 
     /**
+     * Takes up to [count] pictures in quick succession and files each where the gallery looks, as
+     * takePicture() does, until [count] is reached or [stopBurst] is called. [onImageSaved] hears
+     * each picture as it is filed, and [onFinished] then how many there were.
+     *
+     * Each picture is the one takePicture() would take with the same settings, drawn through
+     * [Camera]'s frameRenderer when one is set, except that the flash never fires and no picture
+     * clicks: where the shutter sound is on or required, the burst plays a click looped at its rate
+     * while it runs, and a tone once it ends. Image confirmation does not apply. While
+     * frames are drawn, each picture is drawn and written before the next is taken, so the burst
+     * is slower.
+     *
+     * A burst that can't start finishes at once with 0. Below API 29, filing needs
+     * WRITE_EXTERNAL_STORAGE, as it does for takePicture().
+     */
+    fun startBurst(
+        count: Int,
+        onImageSaved: (uri: Uri) -> Unit = {},
+        onFinished: (count: Int) -> Unit = {}
+    )
+
+    /** Takes a burst into [directory] instead, reporting each picture's file to [onImageCaptured]. */
+    fun startBurst(
+        directory: File,
+        count: Int,
+        onImageCaptured: (file: File) -> Unit = {},
+        onFinished: (count: Int) -> Unit = {}
+    )
+
+    /** Ends a burst before its count. Pictures already being taken still arrive. */
+    fun stopBurst()
+
+    /**
      * Records a video and files it where the gallery looks, reporting it to [Camera]'s
      * onVideoSaved. Only this overload files into MediaStore. Below API 29 that needs
      * WRITE_EXTERNAL_STORAGE, and without it onVideoCaptureFailed is called instead.
@@ -291,6 +323,56 @@ private class CameraControllerImpl(
     override fun takePicture(file: File) {
         getView()?.takePicture(file)
             ?: Log.e(TAG, "View not available for takePicture")
+    }
+
+    override fun startBurst(
+        count: Int,
+        onImageSaved: (uri: Uri) -> Unit,
+        onFinished: (count: Int) -> Unit
+    ) {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for startBurst")
+            onFinished(0)
+            return
+        }
+        view.startBurst(count, object : CameraView.OnBurstListener {
+            override fun onBurstImageSaved(uri: Uri) {
+                onImageSaved(uri)
+            }
+
+            override fun onBurstFinished(count: Int) {
+                onFinished(count)
+            }
+        })
+    }
+
+    override fun startBurst(
+        directory: File,
+        count: Int,
+        onImageCaptured: (file: File) -> Unit,
+        onFinished: (count: Int) -> Unit
+    ) {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for startBurst")
+            onFinished(0)
+            return
+        }
+        view.startBurst(directory, count, object : CameraView.OnBurstListener {
+            override fun onBurstImageCaptured(file: File) {
+                onImageCaptured(file)
+            }
+
+            override fun onBurstFinished(count: Int) {
+                onFinished(count)
+            }
+        })
+    }
+
+    override fun stopBurst() {
+        getView()?.stopBurst()
+            ?: Log.e(TAG, "View not available for stopBurst")
     }
 
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
@@ -614,7 +696,8 @@ private fun Extension.toCameraView() = when (this) {
  * @param cameraTextureProvider Creates the texture the camera writes its frames into, or null for
  *  the library's own. Changing it restarts the camera; changing [frameRenderer] does not.
  * @param controller Exposes the methods {@link CameraController#takePicture(File)},
- *  {@link CameraController#startRecording(File)} and {@link CameraController#stopRecording()}.
+ *  {@link CameraController#startBurst}, {@link CameraController#startRecording(File)} and
+ *  {@link CameraController#stopRecording()}.
  * @param state Receives what the camera can do and what it is doing, or null while it is closed.
  * @param onShutter Called as a picture is exposed, before it is saved: the moment for a shutter
  *  animation, or for a sound of the app's own with [shutterSoundEnabled] off.
