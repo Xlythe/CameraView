@@ -20,6 +20,7 @@ import android.view.ViewGroup;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.rule.GrantPermissionRule;
@@ -133,7 +134,7 @@ public final class PictureSizeDeviceTest {
         String cameraId = firstCameraFacing(facing);
         Assume.assumeTrue("no " + facing + " camera", cameraId != null);
         List<Size> listed = backend == CameraView.Backend.LEGACY
-                ? legacyPictureSizes(cameraId) : jpegSizes(cameraId, false /* unbinned */);
+                ? legacyPictureSizes(facing) : jpegSizes(cameraId, false /* unbinned */);
         List<Size> unbinned = backend == CameraView.Backend.CAMERA2
                 ? jpegSizes(cameraId, true /* unbinned */) : new ArrayList<>();
 
@@ -155,6 +156,37 @@ public final class PictureSizeDeviceTest {
             assertTrue(size + " is not the unbinned " + largestUnbinned + " on " + backend,
                     area(size) >= area(largestUnbinned));
         }
+    }
+
+    /**
+     * A LOW picture is no larger than 480p either way, on a camera that lists a size that small,
+     * as on every backend. The old API used to take every quality but MAX at the camera's own
+     * default size.
+     */
+    @Test
+    public void aLowPictureKeepsWithinItsBound() throws Exception {
+        // CameraX sizes a still taken from kept frames by the frames, not by the quality, so it
+        // is held to this bound only once that is fixed.
+        Assume.assumeFalse("CameraX does not yet hold a LOW picture to 480p",
+                backend == CameraView.Backend.CAMERA_X);
+        String cameraId = firstCameraFacing(facing);
+        Assume.assumeTrue("no " + facing + " camera", cameraId != null);
+        List<Size> listed = backend == CameraView.Backend.LEGACY
+                ? legacyPictureSizes(facing) : jpegSizes(cameraId, false /* unbinned */);
+        boolean listsALowSize = false;
+        for (Size size : listed) {
+            listsALowSize |= Math.max(size.getWidth(), size.getHeight()) <= 640
+                    && Math.min(size.getWidth(), size.getHeight()) <= 480;
+        }
+        Assume.assumeTrue("this camera lists nothing as small as 480p", listsALowSize);
+
+        Size size = takePicture(CameraView.Quality.LOW).size;
+
+        Log.i(TAG, String.format(Locale.US, "%s %s %s LOW: %dx%d", backend, facing, shape,
+                size.getWidth(), size.getHeight()));
+        assertTrue(size + " is larger than 480p on " + backend,
+                Math.max(size.getWidth(), size.getHeight()) <= 640
+                        && Math.min(size.getWidth(), size.getHeight()) <= 480);
     }
 
     /**
@@ -379,10 +411,27 @@ public final class PictureSizeDeviceTest {
         return sizes;
     }
 
-    /** The picture sizes the old camera API lists for the same camera. */
-    private static List<Size> legacyPictureSizes(String cameraId) {
+    /**
+     * The picture sizes the old camera API lists for the camera the view opens on that side.
+     *
+     * <p>Looked up by facing, the way the view picks it, and not by the camera2 id: the old API
+     * numbers its cameras from zero in its own order, so an emulator with no front camera calls
+     * its back camera "1" in one API and 0 in the other.</p>
+     */
+    private static List<Size> legacyPictureSizes(CameraView.LensFacing facing) {
+        int wanted = facing == CameraView.LensFacing.FRONT
+                ? Camera.CameraInfo.CAMERA_FACING_FRONT : Camera.CameraInfo.CAMERA_FACING_BACK;
+        int index = -1;
+        Camera.CameraInfo info = new Camera.CameraInfo();
+        for (int i = 0; i < Camera.getNumberOfCameras() && index == -1; i++) {
+            Camera.getCameraInfo(i, info);
+            if (info.facing == wanted) {
+                index = i;
+            }
+        }
+        Assume.assumeTrue("the old camera API lists no " + facing + " camera", index != -1);
         List<Size> sizes = new ArrayList<>();
-        Camera camera = Camera.open(Integer.parseInt(cameraId));
+        Camera camera = Camera.open(index);
         try {
             for (Camera.Size size : camera.getParameters().getSupportedPictureSizes()) {
                 sizes.add(new Size(size.width, size.height));
@@ -437,6 +486,6 @@ public final class PictureSizeDeviceTest {
 
     private static CameraManager cameraManager() {
         Context context = ApplicationProvider.getApplicationContext();
-        return context.getSystemService(CameraManager.class);
+        return ContextCompat.getSystemService(context, CameraManager.class);
     }
 }

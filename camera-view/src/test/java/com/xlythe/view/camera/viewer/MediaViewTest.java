@@ -12,7 +12,15 @@ import android.content.Context;
 import android.content.pm.ActivityInfo;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.ColorFilter;
+import android.graphics.PixelFormat;
+import android.graphics.Rect;
 import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
+import android.media.MediaCodecInfo;
+import android.media.MediaFormat;
+import android.os.Build;
 import android.os.SystemClock;
 import android.util.AttributeSet;
 import android.view.MotionEvent;
@@ -28,6 +36,7 @@ import com.xlythe.view.camera.MediaTags;
 import com.xlythe.view.camera.MediaTestFiles;
 import com.xlythe.view.camera.VideoView;
 
+import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
@@ -35,8 +44,12 @@ import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 import org.robolectric.annotation.GraphicsMode;
+import org.robolectric.shadows.MediaCodecInfoBuilder;
 import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.shadows.ShadowMediaCodecList;
+import org.robolectric.shadows.ShadowMediaExtractor;
 import org.robolectric.shadows.ShadowMediaPlayer;
+import org.robolectric.shadows.util.DataSource;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
@@ -73,7 +86,27 @@ public class MediaViewTest {
 
     @Before
     public void setUp() {
+        ShadowMediaCodecList.reset();
+        ShadowMediaExtractor.reset();
         ShadowMediaPlayer.resetStaticState();
+        // Robolectric's extractor knows a file by a name; every file here is the one source.
+        // Set after the player's reset, which clears it. Every video here has a track an H.264
+        // decoder takes, unless a test says otherwise.
+        DataSource.setFileDescriptorTransform((descriptor, offset) -> SOURCE);
+        ShadowMediaExtractor.addTrack(DataSource.toDataSource(SOURCE),
+                MediaFormat.createVideoFormat("video/avc", 64, 48), new byte[0]);
+        if (Build.VERSION.SDK_INT >= 29) {
+            // Robolectric builds a codec list from Android 10.
+            ShadowMediaCodecList.addCodec(MediaCodecInfoBuilder.newBuilder()
+                    .setName("test.avc.decoder")
+                    .setCapabilities(MediaCodecInfoBuilder.CodecCapabilitiesBuilder.newBuilder()
+                            .setMediaFormat(MediaFormat.createVideoFormat("video/avc", 64, 48))
+                            .setProfileLevels(new MediaCodecInfo.CodecProfileLevel[0])
+                            .setColorFormats(new int[] {
+                                    MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible})
+                            .build())
+                    .build());
+        }
         ShadowMediaPlayer.setMediaInfoProvider(
                 source -> new ShadowMediaPlayer.MediaInfo(4000, 0));
         mActivity = Robolectric.buildActivity(Activity.class).setup().get();
@@ -84,6 +117,23 @@ public class MediaViewTest {
         root.addView(mView, new ViewGroup.LayoutParams(400, 300));
         mActivity.setContentView(root);
         mView.layout(0, 0, 400, 300);
+    }
+
+    @After
+    public void tearDown() {
+        ShadowMediaCodecList.reset();
+        ShadowMediaExtractor.reset();
+        DataSource.reset();
+    }
+
+    /** What Robolectric's extractor knows every file here as. */
+    private static final String SOURCE = "media-view-test";
+
+    /** Gives every file a video track of a format, which no decoder here takes, alone. */
+    private static void videoTrackWithoutADecoder(String mime) {
+        ShadowMediaExtractor.reset();
+        ShadowMediaExtractor.addTrack(DataSource.toDataSource(SOURCE),
+                MediaFormat.createVideoFormat(mime, 64, 48), new byte[0]);
     }
 
     private static File file(byte[] bytes, String suffix) throws IOException {
@@ -198,6 +248,173 @@ public class MediaViewTest {
         assertTrue(mRecorder.failed);
         assertEquals(MediaView.UNKNOWN, mView.getMediaType());
         assertNull(mView.getContentView());
+        assertTrue(mView.hasFailed());
+    }
+
+    /**
+     * A video no decoder here takes fails before it plays, rather than playing its sound over
+     * nothing, and shows the error placeholder.
+     */
+    @Test
+    @Config(sdk = 30)
+    public void aVideoNoDecoderTakesFails() throws IOException {
+        videoTrackWithoutADecoder("video/av01");
+        show(file(MediaTestFiles.movie(), ".mp4"));
+        assertTrue(mRecorder.failed);
+        assertEquals(-1, mRecorder.loaded);
+        assertEquals(MediaView.VIDEO, mView.getMediaType());
+        assertNull(mView.getContentView());
+        assertTrue(mView.hasFailed());
+        assertFalse(mView.play());
+
+        // A 360° video too.
+        mRecorder.failed = false;
+        show(file(MediaTestFiles.sphericalMovie(), ".mp4"));
+        assertTrue(mRecorder.failed);
+        assertNull(mView.getContentView());
+    }
+
+    /**
+     * What showed and then cannot play is reported failed and shows it, as a video does when
+     * Android 4.0's software decoder gives up on H.264 High with (1, UNKNOWN_ERROR).
+     */
+    @Test
+    public void whatShowedThenCannotPlayShowsItFailed() throws IOException {
+        ShadowMediaPlayer[] created = new ShadowMediaPlayer[1];
+        ShadowMediaPlayer.setCreateListener((player, shadow) -> created[0] = shadow);
+        show(file(MediaTestFiles.mp3WithCover(null), ".mp3"));
+        ShadowLooper.idleMainLooper();
+        assertEquals(MediaView.AUDIO, mRecorder.loaded);
+        assertTrue(mView.performClick());
+        assertTrue(mView.isPlaying());
+        assertFalse(mView.hasFailed());
+
+        created[0].invokeErrorListener(1, Integer.MIN_VALUE);
+        assertTrue(mRecorder.failed);
+        assertTrue(mView.hasFailed());
+        assertFalse(mView.isPlaying());
+        assertNull(mView.getContentView());
+        assertEquals(MediaView.AUDIO, mView.getMediaType());
+
+        // Reported once; a new file starts afresh.
+        mRecorder.failed = false;
+        created[0].invokeErrorListener(1, Integer.MIN_VALUE);
+        assertFalse(mRecorder.failed);
+
+        // An error once prepared that stops nothing, such as a stream that cannot seek, does not
+        // fail it.
+        show(file(MediaTestFiles.mp3WithCover(null), ".mp3"));
+        ShadowLooper.idleMainLooper();
+        assertTrue(mView.play());
+        created[0].invokeErrorListener(Integer.MIN_VALUE, 0);
+        assertFalse(mRecorder.failed);
+        assertFalse(mView.hasFailed());
+        show(file(jpeg(64, 48, null), ".jpg"));
+        assertFalse(mView.hasFailed());
+    }
+
+    /** A motion photo whose clip no decoder here takes stays on its still when held. */
+    @Test
+    @Config(sdk = 30)
+    public void aMotionPhotoWhoseClipCannotPlayStaysStill() throws IOException {
+        videoTrackWithoutADecoder("video/hevc");
+        byte[] video = MediaTestFiles.mp4Clip(500);
+        String packet = MediaTestFiles.motionPhotoXmp(video.length);
+        show(file(MediaTestFiles.concat(jpeg(64, 48, packet), video), ".jpg"));
+        assertEquals(MediaView.MOTION_PHOTO, mView.getMediaType());
+        assertFalse(mRecorder.failed);
+        mView.performLongClick();
+        assertFalse(hasClip());
+    }
+
+    /** The error placeholder is drawn in the middle, at its own size; it can be taken away. */
+    @Test
+    public void theErrorPlaceholderCanBeReplacedOrTakenAway() {
+        assertNotNull(mView.getErrorPlaceholder());
+        Recording replacement = new Recording(40, 20);
+        mView.setErrorPlaceholder(replacement);
+        assertEquals(replacement, mView.getErrorPlaceholder());
+        show(new File("/nowhere/to/be/found.jpg"));
+        mView.draw(new Canvas(Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888)));
+        assertEquals(new Rect(180, 140, 220, 160), replacement.drawnAt);
+
+        // Larger than the view, it is shrunk to fit, keeping its shape.
+        Recording large = new Recording(800, 300);
+        mView.setErrorPlaceholder(large);
+        mView.draw(new Canvas(Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888)));
+        assertEquals(new Rect(0, 75, 400, 225), large.drawnAt);
+
+        mView.setErrorPlaceholder(null);
+        assertNull(mView.getErrorPlaceholder());
+        mView.draw(new Canvas(Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888)));
+    }
+
+    /** The library's own error icon: in colorControlNormal, in the middle, nowhere else. */
+    @Test
+    @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    public void theLibrarysErrorIconIsDrawnInTheMiddle() {
+        show(new File("/nowhere/to/be/found.jpg"));
+        Bitmap bitmap = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888);
+        mView.draw(new Canvas(bitmap));
+        // The icon is a quarter of the shorter side, 75 px, around the middle; the corners of the
+        // view are left alone.
+        int drawn = 0;
+        for (int x = 160; x < 240; x++) {
+            for (int y = 110; y < 190; y++) {
+                if (Color.alpha(bitmap.getPixel(x, y)) > 0) {
+                    drawn++;
+                }
+            }
+        }
+        assertTrue("the icon should be drawn, " + drawn + " pixels were", drawn > 300);
+        // The line across, through the middle.
+        assertTrue(Color.alpha(bitmap.getPixel(200, 150)) > 0);
+        // The frame's top, left and right sides, away from the line; and inside it, nothing.
+        assertTrue(Color.alpha(bitmap.getPixel(215, 131)) > 0);
+        assertTrue(Color.alpha(bitmap.getPixel(175, 160)) > 0);
+        assertTrue(Color.alpha(bitmap.getPixel(225, 140)) > 0);
+        assertEquals(0, bitmap.getPixel(210, 140));
+        assertEquals(0, bitmap.getPixel(5, 5));
+        assertEquals(0, bitmap.getPixel(395, 295));
+        assertEquals(0, bitmap.getPixel(100, 150));
+    }
+
+    /** Draws nothing, and remembers where it was asked to. */
+    private static final class Recording extends Drawable {
+        private final int mWidth;
+        private final int mHeight;
+        Rect drawnAt;
+
+        Recording(int width, int height) {
+            mWidth = width;
+            mHeight = height;
+        }
+
+        @Override
+        public void draw(Canvas canvas) {
+            drawnAt = new Rect(getBounds());
+        }
+
+        @Override
+        public int getIntrinsicWidth() {
+            return mWidth;
+        }
+
+        @Override
+        public int getIntrinsicHeight() {
+            return mHeight;
+        }
+
+        @Override
+        public void setAlpha(int alpha) {}
+
+        @Override
+        public void setColorFilter(ColorFilter filter) {}
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
+        }
     }
 
     @Test
@@ -309,7 +526,7 @@ public class MediaViewTest {
     @Config(sdk = 34)
     public void hdrHoldsTheWindowOnlyWhileItShows() throws IOException {
         int before = mActivity.getWindow().getColorMode();
-        show(file(MediaTestFiles.gainMapJpeg(), ".jpg"));
+        show(file(MediaTestFiles.gainMapJpeg(jpeg(64, 48, null), jpeg(32, 24, null)), ".jpg"));
         assertTrue(mView.isHoldingHdr());
         assertEquals(ActivityInfo.COLOR_MODE_HDR, mActivity.getWindow().getColorMode());
 
@@ -359,8 +576,13 @@ public class MediaViewTest {
                 .addAttribute(com.xlythe.view.camera.R.attr.mediaProgressColor, "#ff00ff00")
                 .addAttribute(com.xlythe.view.camera.R.attr.mediaProgressHeight, "4dp")
                 .addAttribute(com.xlythe.view.camera.R.attr.audioPlaceholder, "@null")
+                .addAttribute(com.xlythe.view.camera.R.attr.errorPlaceholder, "@null")
                 .build();
         MediaView view = new MediaView(context, attributes);
+        // @null takes the library's icons away; unset, they stay.
+        assertNull(view.getErrorPlaceholder());
+        assertNotNull(new MediaView(context, Robolectric.buildAttributeSet().build())
+                .getErrorPlaceholder());
         assertFalse(view.isTapToPlayEnabled());
         assertFalse(view.isHoldToPlayEnabled());
         assertFalse(view.isProgressVisible());

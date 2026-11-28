@@ -149,6 +149,18 @@
                 app:cornerRadius="20dp" />
 
             <com.google.android.material.button.MaterialButton
+                android:id="@+id/burst"
+                android:layout_width="match_parent"
+                android:layout_height="0dp"
+                android:layout_marginBottom="8dp"
+                android:layout_weight="1"
+                android:text="@string/btn_burst"
+                android:textColor="#FFFFFF"
+                app:backgroundTint="#455A64"
+                app:cornerRadius="24dp"
+                app:elevation="4dp" />
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@id/capture"
                 android:layout_width="match_parent"
                 android:layout_height="0dp"

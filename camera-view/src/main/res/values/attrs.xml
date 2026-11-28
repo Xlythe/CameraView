@@ -75,6 +75,8 @@
         <attr name="mediaProgressHeight" format="dimension" />
         <!-- What shows for sound with no cover; @null for nothing. -->
         <attr name="audioPlaceholder" format="reference" />
+        <!-- What shows in place of a file that cannot be shown; @null for nothing. -->
+        <attr name="errorPlaceholder" format="reference" />
         <attr name="hdrEnabled" format="boolean" />
         <attr name="gyroscopeEnabled" format="boolean" />
     </declare-styleable>

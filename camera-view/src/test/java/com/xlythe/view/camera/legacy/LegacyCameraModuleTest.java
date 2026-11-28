@@ -162,15 +162,6 @@ public class LegacyCameraModuleTest {
         assertEquals("800x600", pictureSize());
     }
 
-    /** Every other quality keeps the size the camera started with. */
-    @Test
-    public void otherQualitiesKeepTheCamerasOwnSize() {
-        module.setQuality(CameraView.Quality.HIGH);
-        module.open();
-
-        assertEquals("1280x960", pictureSize());
-    }
-
     /** A change of quality reaches a camera that is already open, both ways. */
     @Test
     public void changingQualityWhileOpenResizesThePicture() {
@@ -180,7 +171,7 @@ public class LegacyCameraModuleTest {
         assertEquals("800x600", pictureSize());
 
         module.setQuality(CameraView.Quality.LOW);
-        assertEquals("1280x960", pictureSize());
+        assertEquals("640x480", pictureSize());
     }
 
     private String pictureSize() {
@@ -347,6 +338,12 @@ public class LegacyCameraModuleTest {
         module.setTorchEnabled(true);
         assertTrue("kept until a camera opens", module.isTorchEnabled());
         module.setTorchEnabled(false);
+        // A camera without a flash unit, which lists no flash modes.
+        Camera camera = Camera.open(0);
+        Camera.Parameters parameters = camera.getParameters();
+        parameters.remove("flash-mode-values");
+        camera.setParameters(parameters);
+        camera.release();
 
         module.open();
         assertFalse(module.hasFlash());

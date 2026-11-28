@@ -58,6 +58,8 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     private static final List<CaptureRequest> sRepeatingRequests = new CopyOnWriteArrayList<>();
     /** Every one-off request, such as a still or a metering trigger, oldest first. */
     private static final List<CaptureRequest> sCaptures = new CopyOnWriteArrayList<>();
+    /** Every one-off request with the callback it was given, oldest first. */
+    private static final List<Capture> sCapturesWithCallbacks = new CopyOnWriteArrayList<>();
     /** The auto-exposure state results report, or null for none. */
     @Nullable private static Integer sAeState;
     /** The repeating request in force, so a test can deliver more of its frames. */
@@ -69,6 +71,19 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     /** The one-off captures held back, in the order they were sent. */
     private static final List<Runnable> sHeldCaptures = new ArrayList<>();
 
+    /** A one-off request the session accepted, with the callback it was given. */
+    public static final class Capture {
+        /** The request the camera was asked for. */
+        public final CaptureRequest request;
+        /** Where the camera reports how the request went, which a test can call for it. */
+        public final CameraCaptureSession.CaptureCallback callback;
+
+        Capture(CaptureRequest request, CameraCaptureSession.CaptureCallback callback) {
+            this.request = request;
+            this.callback = callback;
+        }
+    }
+
     @RealObject private CameraCaptureSession realSession;
 
     /** Turns delivery off, for a test that wants the old do-nothing behavior. */
@@ -79,6 +94,14 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
     /** How many captures have been reported complete. */
     public static int getCompletedCaptureCount() {
         return sCompletedCaptures.get();
+    }
+
+    /**
+     * Every one-off request since the last {@link #reset} with the callback it was given, oldest
+     * first, for a test that reports a lost frame itself.
+     */
+    public static List<Capture> getCapturesWithCallbacks() {
+        return new ArrayList<>(sCapturesWithCallbacks);
     }
 
     /** The request the camera is repeating, or null when none has been made. */
@@ -141,6 +164,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
         sRepeatingRequests.clear();
         sLastSensorTimestamp.set(0);
         sCaptures.clear();
+        sCapturesWithCallbacks.clear();
         sAeState = null;
         sNextRepeatingFrame = null;
         sResultValues.clear();
@@ -165,6 +189,7 @@ public class ShadowCallbackCameraCaptureSession extends ShadowCameraCaptureSessi
             throws CameraAccessException {
         int sequenceId = super.capture(request, callback, handler);
         sCaptures.add(request);
+        sCapturesWithCallbacks.add(new Capture(request, callback));
         if (sHoldCaptures) {
             sHeldCaptures.add(() -> deliver(request, callback, handler));
         } else {

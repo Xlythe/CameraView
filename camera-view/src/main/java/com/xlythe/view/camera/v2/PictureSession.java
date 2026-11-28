@@ -25,8 +25,10 @@ import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
 
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
+import com.xlythe.view.camera.DrawnPictures;
 import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.ExifNoRoomException;
@@ -41,8 +43,11 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Deque;
+import java.util.Iterator;
 import java.util.List;
 
 import androidx.annotation.MainThread;
@@ -84,6 +89,15 @@ class PictureSession extends PreviewSession {
     /** Frames after the trigger in which metering has to start, for a camera that skips it. */
     private static final int METERING_START_FRAMES = 3;
 
+    /**
+     * How many burst pictures of the camera's own frames are asked for at once: enough that the
+     * next is always queued while the last is encoded, and few enough that little is still to
+     * come once the burst is stopped. A drawn burst asks for one at a time, since the renderer
+     * draws one still at a time and each drawing is a full-size bitmap until it is written.
+     */
+    @VisibleForTesting
+    static final int BURST_PICTURES_IN_FLIGHT = 3;
+
     /** The JPEG (or JPEG_R) output, which every format but RAW writes to. */
     private final PictureSurface mPictureSurface;
 
@@ -121,6 +135,10 @@ class PictureSession extends PreviewSession {
      */
     @Nullable
     private volatile DrawnPicture mDrawnPicture;
+
+    /** The burst being taken, or null when none is. */
+    @Nullable
+    private BurstCapture mBurstCapture;
 
     PictureSession(Camera2Module camera2Module) {
         super(camera2Module);
@@ -311,6 +329,10 @@ class PictureSession extends PreviewSession {
     @Override
     public void close() {
         super.close();
+        BurstCapture burst = mBurstCapture;
+        if (burst != null) {
+            burst.mBurst.end();
+        }
         Metering metering = mMetering;
         if (metering != null) {
             mMetering = null;
@@ -359,7 +381,7 @@ class PictureSession extends PreviewSession {
     }
 
     void takePicture(@NonNull File file, @NonNull CameraDevice device, @NonNull CameraCaptureSession session) {
-        if (!hasStillCapture()) {
+        if (!hasStillCapture() || mBurstCapture != null) {
             Log.w(TAG, "This camera cannot take a picture in its current configuration");
             onImageFailed();
             return;
@@ -403,7 +425,8 @@ class PictureSession extends PreviewSession {
         });
         Targets targets;
         if (effect != null) {
-            DrawnPicture drawn = prepareDrawnPicture(effect, file, picture);
+            DrawnPicture drawn = prepareDrawnPicture(effect, file, picture,
+                    exifCaptureParameters());
             if (drawn == null) {
                 return;
             }
@@ -423,10 +446,12 @@ class PictureSession extends PreviewSession {
             if (metersForFlash()) {
                 meterForFlash(device, session, targets);
             } else {
-                captureStill(device, session, targets, false /* fromBuffer */, false /* metered */);
+                captureStill(device, session, targets, false /* fromBuffer */, false /* metered */,
+                        false /* burst */);
             }
         } else {
-            captureStill(device, session, targets, true /* fromBuffer */, false /* metered */);
+            captureStill(device, session, targets, true /* fromBuffer */, false /* metered */,
+                    false /* burst */);
         }
     }
 
@@ -462,14 +487,18 @@ class PictureSession extends PreviewSession {
      *     request was made rather than after it arrived. Never for a flash picture, whose frame
      *     has to be lit by the flash.
      * @param metered whether a precapture sequence ran for this picture, to be ended after it
+     * @param burst whether this is a picture of a burst, which neither fires the flash nor plays
+     *     the click
      */
     private void captureStill(@NonNull CameraDevice device, @NonNull CameraCaptureSession session,
-            @NonNull Targets targets, boolean fromBuffer, boolean metered) {
+            @NonNull Targets targets, boolean fromBuffer, boolean metered, boolean burst) {
         try {
-            CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
-            builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
-            applyStillAeMode(builder);
-            applyExposureCompensation(builder);
+            CaptureRequest.Builder builder = newStillRequest(device, fromBuffer);
+            if (burst) {
+                applyBurstAeMode(builder);
+            } else {
+                applyStillAeMode(builder);
+            }
             if (targets.mJpeg) {
                 builder.addTarget(mPictureSurface.getSurface());
             }
@@ -480,29 +509,6 @@ class PictureSession extends PreviewSession {
             if (drawn != null) {
                 builder.addTarget(drawn.mInput);
             }
-            MeteringRectangle metering = mMeteringRectangle;
-            Rect cropRegion = mCropRegion;
-            if (Build.VERSION.SDK_INT >= 31 && mPictureSurface.isMaximumResolution()) {
-                builder.set(CaptureRequest.SENSOR_PIXEL_MODE,
-                        CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
-                metering = toMaximumResolution(metering);
-                cropRegion = toMaximumResolution(cropRegion);
-            }
-            if (metering != null) {
-                builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{metering});
-                builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{metering});
-            }
-            applyZoom(builder, cropRegion);
-            applyStabilization(builder);
-            builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
-            if (Build.VERSION.SDK_INT >= 26 && isZeroShutterLagSupported()) {
-                // Set either way, since some still templates turn it on themselves. A RAW frame
-                // taken from the buffer carries that frame's timestamp, and so does its result,
-                // so the two still pair. An unbinned still never comes from the buffer, whose
-                // frames are binned.
-                builder.set(CaptureRequest.CONTROL_ENABLE_ZSL,
-                        fromBuffer && !mPictureSurface.isMaximumResolution());
-            }
             // A DNG is written from the capture result as much as from the frame, so only a RAW
             // capture hands the result on.
             CameraCaptureSession.CaptureCallback rawCallback =
@@ -511,7 +517,11 @@ class PictureSession extends PreviewSession {
                 @Override
                 public void onCaptureStarted(@NonNull CameraCaptureSession session,
                         @NonNull CaptureRequest request, long timestamp, long frameNumber) {
-                    onShutter();
+                    if (burst) {
+                        onBurstShutter();
+                    } else {
+                        onShutter();
+                    }
                 }
 
                 @Override
@@ -555,6 +565,262 @@ class PictureSession extends PreviewSession {
             mPictureSurface.abandonPicture();
             mRawSurface.abandonPicture();
             abandonDrawnPicture();
+        }
+    }
+
+    /**
+     * A still request carrying everything a picture shares with every other: focus, exposure
+     * compensation, metering, zoom, stabilization, quality, and the sensor mode the still output
+     * was configured for. The flash and the targets are left to the caller.
+     *
+     * @param fromBuffer whether the picture may be a frame the camera already has. See
+     *     {@link #captureStill}.
+     */
+    @NonNull
+    private CaptureRequest.Builder newStillRequest(@NonNull CameraDevice device,
+            boolean fromBuffer) throws CameraAccessException {
+        CaptureRequest.Builder builder = device.createCaptureRequest(CameraDevice.TEMPLATE_STILL_CAPTURE);
+        builder.set(CaptureRequest.CONTROL_AF_MODE, CaptureRequest.CONTROL_AF_MODE_CONTINUOUS_PICTURE);
+        applyExposureCompensation(builder);
+        MeteringRectangle metering = mMeteringRectangle;
+        Rect cropRegion = mCropRegion;
+        if (Build.VERSION.SDK_INT >= 31 && mPictureSurface.isMaximumResolution()) {
+            builder.set(CaptureRequest.SENSOR_PIXEL_MODE,
+                    CameraMetadata.SENSOR_PIXEL_MODE_MAXIMUM_RESOLUTION);
+            metering = toMaximumResolution(metering);
+            cropRegion = toMaximumResolution(cropRegion);
+        }
+        if (metering != null) {
+            builder.set(CaptureRequest.CONTROL_AE_REGIONS, new MeteringRectangle[]{metering});
+            builder.set(CaptureRequest.CONTROL_AF_REGIONS, new MeteringRectangle[]{metering});
+        }
+        applyZoom(builder, cropRegion);
+        applyStabilization(builder);
+        builder.set(CaptureRequest.JPEG_QUALITY, (byte) getPictureQuality());
+        if (Build.VERSION.SDK_INT >= 26 && isZeroShutterLagSupported()) {
+            // Set either way, since some still templates turn it on themselves. A RAW frame
+            // taken from the buffer carries that frame's timestamp, and so does its result,
+            // so the two still pair. An unbinned still never comes from the buffer, whose
+            // frames are binned.
+            builder.set(CaptureRequest.CONTROL_ENABLE_ZSL,
+                    fromBuffer && !mPictureSurface.isMaximumResolution());
+        }
+        return builder;
+    }
+
+    /**
+     * The auto-exposure mode for a picture of a burst: the preview's, without the flash. A flash
+     * cannot recharge between pictures, and metering for it would hold each one up. A lit torch
+     * stays lit.
+     */
+    private void applyBurstAeMode(@NonNull CaptureRequest.Builder builder) {
+        builder.set(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON);
+        builder.set(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF);
+        applyAeMode(builder, false /* withFlashStrategy */);
+    }
+
+    /**
+     * How a picture of a burst was taken, for its Exif: as any picture is, except that the flash
+     * never fires for one.
+     */
+    @NonNull
+    private ExifCaptureParameters burstExifParameters() {
+        return exifCaptureParameters().setFlash(CameraView.Flash.OFF, hasFlash());
+    }
+
+    /**
+     * Takes a burst. Each picture is the one {@link #takePicture} would take with the same
+     * settings, written and tagged the same way, except that the flash stays off and the click
+     * plays only where it is required.
+     *
+     * <p>The camera's own frames are asked for a few at a time, another as each arrives. A
+     * repeating request would be simpler to start, but its frames cannot be told apart from the
+     * ones still in flight once it stops, while each of these carries its own file. While frames
+     * are drawn, each picture is drawn and written as a single one is before the next is asked
+     * for.</p>
+     */
+    void startBurst(@NonNull Burst burst, @NonNull CameraDevice device,
+            @NonNull CameraCaptureSession session) {
+        if (!hasStillCapture() || mBurstCapture != null || mMetering != null
+                || mDrawnPicture != null || mPictureSurface.hasPicture()) {
+            Log.w(TAG, "This camera cannot take a burst in its current configuration");
+            burst.end();
+            return;
+        }
+        FrameRenderThread effect = getModule().getEffect();
+        BurstCapture capture = new BurstCapture(burst, device, session, effect);
+        mBurstCapture = capture;
+        burst.whenFinished(() -> {
+            if (mBurstCapture == capture) {
+                mBurstCapture = null;
+            }
+        });
+        if (effect == null) {
+            mPictureSurface.startBurst(burst, capture::requestNext);
+        }
+        int inFlight = effect == null ? BURST_PICTURES_IN_FLIGHT : 1;
+        for (int i = 0; i < inFlight; i++) {
+            capture.requestNext();
+        }
+    }
+
+    /**
+     * How many JPEGs a second the camera says it can write at the still's size, from its minimum
+     * frame duration and its stall duration there, or 0 when it does not say.
+     */
+    float getReportedBurstRate(@Nullable StreamConfigurationMap map) {
+        if (map == null || !mPictureSurface.hasSize()) {
+            return 0f;
+        }
+        Size size = new Size(mPictureSurface.getWidth(), mPictureSurface.getHeight());
+        try {
+            return burstRate(map.getOutputMinFrameDuration(ImageFormat.JPEG, size),
+                    map.getOutputStallDuration(ImageFormat.JPEG, size));
+        } catch (IllegalArgumentException error) {
+            // Not a JPEG size, as a still of another format can be.
+            return 0f;
+        }
+    }
+
+    /** Pictures a second from a frame's minimum duration and its stall, in nanoseconds. */
+    @VisibleForTesting
+    static float burstRate(long minFrameNanos, long stallNanos) {
+        long nanos = minFrameNanos + stallNanos;
+        return nanos > 0 ? 1e9f / nanos : 0f;
+    }
+
+    /** A burst on its way, and the camera and session its pictures are asked of. */
+    private final class BurstCapture {
+        /** Hands out each picture's file, and hears how each turned out. */
+        final Burst mBurst;
+
+        /** The camera each request is made for. */
+        private final CameraDevice mDevice;
+
+        /** The session each request goes to. */
+        private final CameraCaptureSession mSession;
+
+        /** The renderer each picture is drawn through, or null for the camera's own frames. */
+        @Nullable
+        private final FrameRenderThread mEffect;
+
+        /** Hears of pictures of the camera's own frames that no frame will arrive for. */
+        private final CameraCaptureSession.CaptureCallback mFrameCallback =
+                new CameraCaptureSession.CaptureCallback() {
+                    @Override
+                    public void onCaptureStarted(@NonNull CameraCaptureSession session,
+                            @NonNull CaptureRequest request, long timestamp, long frameNumber) {
+                        onBurstShutter();
+                    }
+
+                    @Override
+                    public void onCaptureFailed(@NonNull CameraCaptureSession session,
+                            @NonNull CaptureRequest request, @NonNull CaptureFailure failure) {
+                        if (!failure.wasImageCaptured()) {
+                            onPictureLost(request);
+                        }
+                    }
+
+                    @Override
+                    public void onCaptureBufferLost(@NonNull CameraCaptureSession session,
+                            @NonNull CaptureRequest request, @NonNull Surface target,
+                            long frameNumber) {
+                        if (mPictureSurface.isSurface(target)) {
+                            onPictureLost(request);
+                        }
+                    }
+                };
+
+        BurstCapture(@NonNull Burst burst, @NonNull CameraDevice device,
+                @NonNull CameraCaptureSession session, @Nullable FrameRenderThread effect) {
+            mBurst = burst;
+            mDevice = device;
+            mSession = session;
+            mEffect = effect;
+        }
+
+        /** Asks for the burst's next picture, unless it has all it is going to take. */
+        @MainThread
+        void requestNext() {
+            if (mBurstCapture != this) {
+                return;
+            }
+            File file = mBurst.nextFile();
+            if (file == null) {
+                return;
+            }
+            if (mEffect == null) {
+                requestFrame(file);
+            } else {
+                requestDrawing(mEffect, file);
+            }
+        }
+
+        /**
+         * Asks for one of the camera's own frames. The preview is a target too, because the
+         * camera serves queued requests ahead of the repeating one and the preview would
+         * otherwise freeze for the whole burst. An unbinned still is the exception: the preview
+         * cannot be read out in that mode, and the readout holds it up anyway.
+         *
+         * <p>Never from the zero-shutter-lag buffer: pictures asked for back to back could be
+         * handed the same buffered frame, or frames from before the burst began.</p>
+         */
+        private void requestFrame(@NonNull File file) {
+            mPictureSurface.expectBurstPicture(file, burstExifParameters());
+            try {
+                CaptureRequest.Builder builder = newStillRequest(mDevice, false /* fromBuffer */);
+                applyBurstAeMode(builder);
+                builder.addTarget(mPictureSurface.getSurface());
+                if (!mPictureSurface.isMaximumResolution()) {
+                    builder.addTarget(getPreviewSurface().getSurface());
+                }
+                builder.setTag(file);
+                mSession.capture(builder.build(), mFrameCallback, getHandler());
+            } catch (CameraAccessException | IllegalStateException | IllegalArgumentException e) {
+                Log.e(TAG, "Failed to request a burst picture", e);
+                if (mPictureSurface.forgetBurstPicture(file)) {
+                    mBurst.onPictureFailed(file);
+                }
+            }
+        }
+
+        /**
+         * Asks for a picture drawn as a single one would be, and for the next once it is written.
+         * Waiting for the write rather than the drawing keeps one full-size bitmap in memory, not
+         * a queue of them, and the pictures in order.
+         */
+        private void requestDrawing(@NonNull FrameRenderThread effect, @NonNull File file) {
+            PendingPicture picture = new PendingPicture(file, new PendingPicture.Callback() {
+                @Override
+                public void onSaved(@NonNull File saved) {
+                    mBurst.onPictureTaken(saved);
+                    requestNext();
+                }
+
+                @Override
+                public void onFailed() {
+                    mBurst.onPictureFailed(file);
+                }
+            });
+            DrawnPicture drawn = prepareDrawnPicture(effect, file, picture, burstExifParameters());
+            if (drawn == null) {
+                return;
+            }
+            captureStill(mDevice, mSession, new Targets(drawn), false /* fromBuffer */,
+                    false /* metered */, true /* burst */);
+        }
+
+        /** A picture of the camera's own frames that the camera dropped. */
+        private void onPictureLost(@NonNull CaptureRequest request) {
+            Object tag = request.getTag();
+            if (!(tag instanceof File)) {
+                return;
+            }
+            File file = (File) tag;
+            if (mPictureSurface.forgetBurstPicture(file)) {
+                Log.w(TAG, "The camera dropped a burst picture");
+                mBurst.onPictureFailed(file);
+            }
         }
     }
 
@@ -676,7 +942,8 @@ class PictureSession extends PreviewSession {
             }
             mMetering = null;
             getHandler().removeCallbacks(this);
-            captureStill(mDevice, mSession, mTargets, false /* fromBuffer */, true /* metered */);
+            captureStill(mDevice, mSession, mTargets, false /* fromBuffer */, true /* metered */,
+                    false /* burst */);
         }
     }
 
@@ -696,10 +963,13 @@ class PictureSession extends PreviewSession {
      * orientation with an Exif tag to turn it as the camera's own JPEG is. A renderer then draws
      * the picture exactly as it draws the preview, and a caption it puts at the top is at the
      * top of the file.</p>
+     *
+     * @param exifParameters how the picture is being taken, which the file is tagged with
      */
     @Nullable
     private DrawnPicture prepareDrawnPicture(@NonNull FrameRenderThread effect,
-            @NonNull File file, @NonNull PendingPicture picture) {
+            @NonNull File file, @NonNull PendingPicture picture,
+            @NonNull ExifCaptureParameters exifParameters) {
         Surface input = mEffectStillInput;
         if (input == null) {
             Log.w(TAG, "The renderer has no still input, so there is nothing to draw into");
@@ -732,7 +1002,7 @@ class PictureSession extends PreviewSession {
             return null;
         }
         DrawnPicture drawn = new DrawnPicture(
-                effect, input, reader, file, exifCaptureParameters(), picture);
+                effect, input, reader, file, exifParameters, picture);
         mDrawnPicture = drawn;
         reader.setOnImageAvailableListener(drawn::onImageAvailable, getHandler());
         return drawn;
@@ -812,7 +1082,7 @@ class PictureSession extends PreviewSession {
             }
             Bitmap bitmap;
             try {
-                bitmap = toBitmap(frame.getImage());
+                bitmap = DrawnPictures.toBitmap(frame.getImage());
             } catch (RuntimeException | OutOfMemoryError error) {
                 Log.e(TAG, "Failed to read back a drawn picture", error);
                 abandon();
@@ -901,33 +1171,7 @@ class PictureSession extends PreviewSession {
         }
     }
 
-    /** The drawn frame as a bitmap, which is RGBA and so needs no conversion beyond the stride. */
-    @NonNull
-    private static Bitmap toBitmap(@NonNull Image drawn) {
-        Image.Plane plane = drawn.getPlanes()[0];
-        int rowStride = plane.getRowStride();
-        int pixelStride = plane.getPixelStride();
-        // The reader pads each row out to its stride, so the bitmap is made wide enough to hold
-        // the padding and then cropped - reading it as if it were packed shears the picture.
-        int padded = rowStride / pixelStride;
-        Bitmap full = Bitmap.createBitmap(padded, drawn.getHeight(), Bitmap.Config.ARGB_8888);
-        full.copyPixelsFromBuffer(plane.getBuffer());
-        if (padded == drawn.getWidth()) {
-            return full;
-        }
-        Bitmap cropped = Bitmap.createBitmap(full, 0, 0, drawn.getWidth(), drawn.getHeight());
-        full.recycle();
-        return cropped;
-    }
-
-    /**
-     * Writes a drawn picture, and tags it as {@link ImageSaver} tags a camera frame.
-     *
-     * <p>Separate from {@link ImageSaver} because what it is given is already pixels, already the
-     * right way up and mirrored as shown, rather than a camera frame. So the orientation it
-     * records is normal, where a camera frame's records the turn and the mirror a viewer still
-     * has to apply.</p>
-     */
+    /** Writes a drawn picture off the main thread, through {@link DrawnPictures#write}. */
     private static class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
         /** The application, whose name and version the picture records as its software. */
         private final Context mContext;
@@ -963,36 +1207,8 @@ class PictureSession extends PreviewSession {
         @WorkerThread
         @Override
         protected Boolean doInBackground(Void... params) {
-            try (FileOutputStream output = new FileOutputStream(mFile)) {
-                if (!mBitmap.compress(Bitmap.CompressFormat.JPEG, mQuality, output)) {
-                    Log.e(TAG, "Failed to compress a drawn picture");
-                    return false;
-                }
-            } catch (IOException | RuntimeException error) {
-                Log.e(TAG, "Failed to write a drawn picture", error);
-                if (mFile.exists() && !mFile.delete()) {
-                    Log.w(TAG, "Failed to clean up a partially written picture");
-                }
-                return false;
-            } finally {
-                mBitmap.recycle();
-            }
-            try {
-                Exif exif = new Exif(mFile);
-                exif.attachTimestamp();
-                exif.attachCaptureDevice(mContext);
-                exif.attachThumbnail();
-                mExifParameters.applyTo(exif);
-                exif.setAttribute(ExifInterface.TAG_ORIENTATION,
-                        Integer.toString(ExifInterface.ORIENTATION_NORMAL));
-                if (mLocation != null) {
-                    exif.attachLocation(mLocation);
-                }
-                exif.save();
-            } catch (IOException error) {
-                Log.e(TAG, "Failed to update EXIF on a drawn picture", error);
-            }
-            return true;
+            return DrawnPictures.write(mContext, mBitmap, mFile, mQuality, mExifParameters,
+                    mLocation);
         }
     }
 
@@ -1024,8 +1240,14 @@ class PictureSession extends PreviewSession {
         @Nullable
         private final Location mLocation;
 
-        // The frame that was captured, closed as soon as its bytes are copied out
+        // The frame that was captured, closed as soon as its bytes are copied out, or null when
+        // they were copied out before the saver was made
+        @Nullable
         private final SafeCloseImageReader.Frame mFrame;
+
+        // The encoded picture, when it was copied out of its frame up front, or null
+        @Nullable
+        private final byte[] mBytes;
 
         // The orientation of the image
         private final int mOrientation;
@@ -1046,6 +1268,24 @@ class PictureSession extends PreviewSession {
             mContext = context.getApplicationContext();
             mLocation = location;
             mFrame = frame;
+            mBytes = null;
+            mOrientation = orientation;
+            mIsReversed = reversed;
+            mFile = file;
+            mExifParameters = exifParameters;
+        }
+
+        /**
+         * Saves a picture already copied out of its frame. A burst copies each one out as it
+         * arrives, so the reader never runs out of frames to hand the camera while saves queue.
+         */
+        ImageSaver(Context context, @Nullable Location location, @NonNull byte[] bytes,
+                int orientation, boolean reversed, File file,
+                ExifCaptureParameters exifParameters) {
+            mContext = context.getApplicationContext();
+            mLocation = location;
+            mFrame = null;
+            mBytes = bytes;
             mOrientation = orientation;
             mIsReversed = reversed;
             mFile = file;
@@ -1057,11 +1297,14 @@ class PictureSession extends PreviewSession {
         @Override
         protected Boolean doInBackground(Void... params) {
             // Finally, we save the file to disk
-            byte[] bytes;
-            try {
-                bytes = getBytes();
-            } finally {
-                mFrame.close();
+            byte[] bytes = mBytes;
+            SafeCloseImageReader.Frame frame = mFrame;
+            if (frame != null) {
+                try {
+                    bytes = toByteArray(frame.getImage());
+                } finally {
+                    frame.close();
+                }
             }
             if (bytes == null) {
                 Log.e(TAG, "Failed to get bytes from image");
@@ -1102,10 +1345,7 @@ class PictureSession extends PreviewSession {
             return true;
         }
 
-        private byte[] getBytes() {
-            return toByteArray(mFrame.getImage());
-        }
-
+        @Nullable
         private static byte[] toByteArray(Image image) {
             byte[] data = null;
             if (image.getFormat() == ImageFormat.JPEG
@@ -1197,6 +1437,12 @@ class PictureSession extends PreviewSession {
     }
 
     private static final class PictureSurface extends CameraSurface {
+        /**
+         * Frames the reader holds at once. A burst gives each back as soon as it is copied, so a
+         * second is only there to cover a moment where the main thread is late to collect one.
+         */
+        private static final int MAX_IMAGES = 2;
+
         private List<Size> getSizes(StreamConfigurationMap map) {
             Size[] sizes = map.getOutputSizes(mImageFormat);
 
@@ -1247,6 +1493,11 @@ class PictureSession extends PreviewSession {
                 new SafeCloseImageReader.OnImageAvailableListener() {
             @Override
             public void onImageAvailable(@NonNull SafeCloseImageReader reader) {
+                Burst burst = mBurst;
+                if (burst != null) {
+                    onBurstImageAvailable(reader, burst);
+                    return;
+                }
                 try {
                     if (mFile != null) {
                         SafeCloseImageReader.Frame frame = reader.acquireLatestImage();
@@ -1295,6 +1546,17 @@ class PictureSession extends PreviewSession {
         /** How the picture for {@link #mFile} is being taken, described when it was asked for. */
         private ExifCaptureParameters mExifParameters = new ExifCaptureParameters();
 
+        /** The burst whose frames this reader collects, or null when none is running. */
+        @Nullable
+        private Burst mBurst;
+
+        /** The burst pictures the camera still owes, in the order they were asked for. */
+        private final Deque<OwedPicture> mOwedPictures = new ArrayDeque<>();
+
+        /** Asks the camera for another burst picture, run as each one arrives. */
+        @Nullable
+        private Runnable mOnBurstFrame;
+
         /** What {@link #mImageReader} was made for: JPEG, or JPEG_R for Ultra HDR. */
         private int mImageFormat = IMAGE_FORMAT_DEFAULT;
 
@@ -1332,8 +1594,11 @@ class PictureSession extends PreviewSession {
                 // replaced has to be handed back rather than dropped.
                 mImageReader.close();
             }
+            // A frame left the camera for every one replaced, so a burst running on the old reader
+            // will never see the rest of its pictures.
+            abandonBurstPictures();
             mImageReader = new SafeCloseImageReader(
-                    getWidth(), getHeight(), mImageFormat, 1 /* maxImages */);
+                    getWidth(), getHeight(), mImageFormat, MAX_IMAGES);
             mImageReader.setOnImageAvailableListener(mOnImageAvailableListener, mCameraView.getHandler());
         }
 
@@ -1374,6 +1639,132 @@ class PictureSession extends PreviewSession {
             }
         }
 
+        /** Whether a single picture is waiting on its frame. */
+        boolean hasPicture() {
+            return mFile != null;
+        }
+
+        /** Collects the frames of a burst until it finishes, asking for more as each arrives. */
+        void startBurst(@NonNull Burst burst, @NonNull Runnable onFrame) {
+            mBurst = burst;
+            mOnBurstFrame = onFrame;
+            burst.whenFinished(() -> {
+                if (mBurst == burst) {
+                    mBurst = null;
+                    mOnBurstFrame = null;
+                    mOwedPictures.clear();
+                }
+            });
+        }
+
+        /**
+         * Notes where the next frame of the burst goes and how it was asked for. Frames arrive in
+         * the order they were asked for.
+         */
+        void expectBurstPicture(@NonNull File file, @NonNull ExifCaptureParameters exifParameters) {
+            mOwedPictures.add(new OwedPicture(file, exifParameters));
+        }
+
+        /** Forgets a burst picture no frame will arrive for, if it was still owed. */
+        boolean forgetBurstPicture(@NonNull File file) {
+            Iterator<OwedPicture> owed = mOwedPictures.iterator();
+            while (owed.hasNext()) {
+                if (owed.next().mFile.equals(file)) {
+                    owed.remove();
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /** Whether a surface is this reader's, for the camera's word on a lost frame. */
+        boolean isSurface(@NonNull Surface surface) {
+            return mImageReader != null && mImageReader.getSurface() == surface;
+        }
+
+        /**
+         * Copies a burst frame out and gives it back to the reader at once, then saves it in the
+         * order it was taken. Asking for the next picture before saving keeps the camera busy.
+         */
+        private void onBurstImageAvailable(@NonNull SafeCloseImageReader reader,
+                @NonNull Burst burst) {
+            SafeCloseImageReader.Frame frame;
+            try {
+                frame = reader.acquireNextImage();
+            } catch (IllegalStateException e) {
+                Log.e(TAG, "Failed to read a burst frame", e);
+                return;
+            }
+            if (frame == null) {
+                return;
+            }
+            byte[] bytes;
+            try {
+                bytes = ImageSaver.toByteArray(frame.getImage());
+            } finally {
+                frame.close();
+            }
+            OwedPicture owed = mOwedPictures.poll();
+            if (owed == null) {
+                Log.w(TAG, "Dropped a frame the burst did not ask for");
+                return;
+            }
+            File file = owed.mFile;
+            if (bytes == null) {
+                burst.onPictureFailed(file);
+                return;
+            }
+            Runnable onFrame = mOnBurstFrame;
+            if (onFrame != null) {
+                onFrame.run();
+            }
+            new ImageSaver(
+                    mCameraView.getContext(),
+                    getLocation(),
+                    bytes,
+                    mCameraView.getRelativeCameraOrientation(),
+                    isUsingFrontFacingCamera(),
+                    file,
+                    owed.mExifParameters) {
+                @UiThread
+                @Override
+                protected void onPostExecute(Boolean saved) {
+                    if (Boolean.TRUE.equals(saved)) {
+                        burst.onPictureTaken(file);
+                    } else {
+                        burst.onPictureFailed(file);
+                    }
+                }
+            }.executeOnExecutor(burst.getExecutor());
+        }
+
+        /** Fails the burst pictures still owed by a reader that is going away. */
+        private void abandonBurstPictures() {
+            Burst burst = mBurst;
+            if (burst == null) {
+                return;
+            }
+            burst.end();
+            OwedPicture owed;
+            while ((owed = mOwedPictures.poll()) != null) {
+                burst.onPictureFailed(owed.mFile);
+            }
+        }
+
+        /** A burst picture the camera still owes. */
+        private static final class OwedPicture {
+            /** Where its frame is written. */
+            final File mFile;
+
+            /** How it was taken, described when it was asked for. */
+            final ExifCaptureParameters mExifParameters;
+
+            OwedPicture(@NonNull File file, @NonNull ExifCaptureParameters exifParameters) {
+                mFile = file;
+                mExifParameters = exifParameters;
+            }
+        }
+
         boolean isMaximumResolution() {
             return mMaximumResolution;
         }
@@ -1389,6 +1780,7 @@ class PictureSession extends PreviewSession {
                 mImageReader.close();
                 mImageReader = null;
             }
+            abandonBurstPictures();
             abandonPicture();
         }
     }

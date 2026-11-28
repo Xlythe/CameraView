@@ -12,6 +12,8 @@ import static com.xlythe.view.camera.MediaFixtures.xmpSegment;
 
 import androidx.annotation.Nullable;
 
+import java.util.Arrays;
+
 /** Values and files that more than one metadata test needs. */
 final class MediaTagsFixtures {
     private MediaTagsFixtures() {}
@@ -149,6 +151,24 @@ final class MediaTagsFixtures {
                 mpf(offset, false));
         primary = jpeg(before, mpf);
         return stripped ? primary : concat(primary, gainMap);
+    }
+
+    /**
+     * A gain map picture made of real pictures, so that a decoder can show it: the primary's XMP
+     * and an MPF segment locating the gain map go straight after its start marker, and the gain
+     * map follows it.
+     */
+    static byte[] gainMapJpeg(byte[] primaryPicture, byte[] gainMapPicture, String primaryXmp) {
+        byte[] start = Arrays.copyOfRange(primaryPicture, 0, 2);
+        byte[] rest = Arrays.copyOfRange(primaryPicture, 2, primaryPicture.length);
+        byte[] before = xmpSegment(primaryXmp);
+        int mpfLength = segment(JpegContainer.APP2, JpegContainer.MPF_IDENTIFIER,
+                mpf(0, false)).length;
+        int mpfTiff = 2 + before.length + 4 + JpegContainer.MPF_IDENTIFIER.length;
+        long offset = 2 + before.length + mpfLength + rest.length - mpfTiff;
+        byte[] mpf = segment(JpegContainer.APP2, JpegContainer.MPF_IDENTIFIER,
+                mpf(offset, false));
+        return concat(start, before, mpf, rest, gainMapPicture);
     }
 
     /** An empty XMP declaration list, for tests that need none. */

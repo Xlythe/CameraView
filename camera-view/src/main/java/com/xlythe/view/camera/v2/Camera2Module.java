@@ -37,6 +37,8 @@ import android.util.Size;
 import android.util.SizeF;
 import android.view.Surface;
 
+import com.xlythe.view.camera.Burst;
+import com.xlythe.view.camera.BusyCameraRetry;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.DngWriter;
 import com.xlythe.view.camera.ExifCaptureParameters;
@@ -502,6 +504,10 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     private SegmentationAnalyzer mSegmentationAnalyzer;
 
+    /** Who hears the masks, kept to start segmenting again on another lens, or null. */
+    @Nullable
+    private CameraView.SegmentationListener mSegmentationListener;
+
     /**
      * Starts segmenting frames, through a stream of this session's own.
      *
@@ -527,8 +533,7 @@ public class Camera2Module extends ICameraModule {
         stopSegmentation();
         SegmentationAnalyzer analyzer;
         try {
-            analyzer = new SegmentationAnalyzer(listener, mHandler::post,
-                    isUsingFrontFacingCamera());
+            analyzer = new SegmentationAnalyzer(listener, mHandler::post);
         } catch (RuntimeException | LinkageError error) {
             // The model is delivered by Play services and its client is built here, so a device
             // without it fails at construction. Reported rather than thrown: a camera library
@@ -542,11 +547,28 @@ public class Camera2Module extends ICameraModule {
             stream.start();
             mSegmentationStream = stream;
             mSegmentationAnalyzer = analyzer;
+            mSegmentationListener = listener;
             return true;
         } catch (RuntimeException error) {
             Log.w(TAG, "Unable to start segmenting frames", error);
             analyzer.close();
             return false;
+        }
+    }
+
+    /**
+     * Segments the next lens's frames through a stream of their own, if anything is segmenting.
+     *
+     * <p>A stream keeps the size and the labels of the lens it started on - its reader is sized
+     * for that lens's preview, and its frames say whether that lens was mirrored - so carrying it
+     * over would hand the camera a surface it may not take and the model frames marked the wrong
+     * way round.</p>
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    private void restartSegmentation() {
+        CameraView.SegmentationListener listener = mSegmentationListener;
+        if (listener != null) {
+            startSegmentation(listener);
         }
     }
 
@@ -556,6 +578,7 @@ public class Camera2Module extends ICameraModule {
         SegmentationAnalyzer analyzer = mSegmentationAnalyzer;
         mSegmentationStream = null;
         mSegmentationAnalyzer = null;
+        mSegmentationListener = null;
         if (stream != null) {
             stream.close();
         }
@@ -570,6 +593,17 @@ public class Camera2Module extends ICameraModule {
      */
     @Nullable
     private String mActiveCamera;
+
+    /**
+     * The stream attached by a caller - frames for analysis, or an encoder for a live stream - or
+     * null when none is. Every session built while it is attached carries it, so a recording, a
+     * settings change or the camera reopening does not quietly drop it. Main thread only.
+     */
+    @Nullable
+    private VideoRecorder.SurfaceProvider mStreamProvider;
+
+    /** The cameras that would not configure a still beside a stream, which are not asked again. */
+    private final Set<String> mStillBesideStreamRefused = new HashSet<>();
 
     /**
      * The current capture session. There is one capture session per {@link Session}.
@@ -642,6 +676,9 @@ public class Camera2Module extends ICameraModule {
     /** Number of consecutive reopen attempts since the last usable capture session. */
     private int mReopenAttempts;
 
+    /** Opens the camera again while another client holds it, for a short while. */
+    @NonNull private final BusyCameraRetry mBusyRetry;
+
     /**
      * Generation to open after the previous Camera2 device reports that it has fully closed, or
      * zero when no lens switch is waiting for device release.
@@ -666,29 +703,46 @@ public class Camera2Module extends ICameraModule {
     @Nullable
     private Runnable mPendingPictureTimeout;
 
+    /** A burst waiting for that session, as a capture does, or null. */
+    @Nullable
+    private Burst mPendingBurst;
+
+    /** Ends {@link #mPendingBurst} if the session never configures. */
+    @Nullable
+    private Runnable mPendingBurstTimeout;
+
     private CameraDevice.StateCallback createStateCallback(final int generation) {
         return new CameraDevice.StateCallback() {
+            /** Whether this open reached onOpened, after which a disconnect is not a busy camera. */
+            private boolean mOpened;
+
             @Override
             public void onOpened(@NonNull CameraDevice cameraDevice) {
+                mOpened = true;
                 if (!mIsOpen || generation != mGeneration) {
                     Log.w(TAG, "Ignoring a stale Camera2 open callback");
                     cameraDevice.close();
                     return;
                 }
 
+                mBusyRetry.cancel();
                 mCameraDevice = cameraDevice;
-                setSession(new PictureSession(Camera2Module.this));
+                setSession(newPictureSession());
             }
 
             @Override
             public void onDisconnected(@NonNull CameraDevice cameraDevice) {
-                handleCameraFailure(cameraDevice, generation, "Camera disconnected");
+                // Disconnected before it opened, the camera was taken by another client while
+                // this one was connecting, which is a camera changing hands.
+                handleCameraFailure(cameraDevice, generation, "Camera disconnected",
+                        !mOpened /* busy */, false /* permanent */);
             }
 
             @Override
             public void onError(@NonNull CameraDevice cameraDevice, int error) {
                 handleCameraFailure(cameraDevice, generation,
-                        "Camera device error: " + Camera2Module.toString(error));
+                        "Camera device error: " + Camera2Module.toString(error),
+                        isBusy(error), error == ERROR_CAMERA_DISABLED);
             }
 
             @Override
@@ -712,15 +766,68 @@ public class Camera2Module extends ICameraModule {
             mActiveCamera = getActiveCamera();
             if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
             mCameraManager.openCamera(mActiveCamera, createStateCallback(generation), mHandler);
-        } catch (CameraAccessException | RuntimeException e) {
-            mIsOpen = false;
-            closeCameraResources();
-            onCameraError(new IllegalStateException("Failed to open Camera2 device", e));
+        } catch (CameraAccessException e) {
+            // A camera in use is reported both here and to onError. Retrying moves the generation
+            // on, so the onError that follows is ignored as stale.
+            if (isBusy(e) && retryWhileBusy()) {
+                Log.w(TAG, "Camera " + mActiveCamera + " is in use; trying again", e);
+                return;
+            }
+            failToOpen(e);
+        } catch (RuntimeException e) {
+            failToOpen(e);
         }
     }
 
+    @MainThread
+    private void failToOpen(@NonNull Exception error) {
+        mIsOpen = false;
+        mBusyRetry.cancel();
+        closeCameraResources();
+        onCameraError(new IllegalStateException("Failed to open Camera2 device", error));
+    }
+
+    /**
+     * Opens the camera again shortly, under a new generation, while another client holds it.
+     *
+     * @return false once the camera has been busy for longer than the retry allows, or when the
+     *     camera is no longer wanted
+     */
+    @MainThread
+    private boolean retryWhileBusy() {
+        if (!mIsOpen) {
+            return false;
+        }
+        int retryGeneration = ++mGeneration;
+        return mBusyRetry.retry(() -> {
+            if (mIsOpen && retryGeneration == mGeneration) {
+                openCamera(retryGeneration);
+            }
+        });
+    }
+
+    /** Whether a camera refused because another client has it, or has too many others open. */
+    static boolean isBusy(int stateCallbackError) {
+        return stateCallbackError == CameraDevice.StateCallback.ERROR_CAMERA_IN_USE
+                || stateCallbackError == CameraDevice.StateCallback.ERROR_MAX_CAMERAS_IN_USE;
+    }
+
+    /** The same, for the refusal openCamera throws, which names these reasons from API 23. */
+    static boolean isBusy(@NonNull CameraAccessException error) {
+        return Build.VERSION.SDK_INT >= 23
+                && (error.getReason() == CameraAccessException.CAMERA_IN_USE
+                || error.getReason() == CameraAccessException.MAX_CAMERAS_IN_USE);
+    }
+
+    /**
+     * Answers a camera that failed or went away.
+     *
+     * @param busy whether another client refused or took it, which is tried again for a short
+     *     while
+     * @param permanent whether it refuses however often it is asked, which is reported at once
+     */
     private void handleCameraFailure(@NonNull CameraDevice cameraDevice, int generation,
-            String message) {
+            String message, boolean busy, boolean permanent) {
         Log.e(TAG, message);
         cameraDevice.close();
         if (generation != mGeneration) {
@@ -728,7 +835,16 @@ public class Camera2Module extends ICameraModule {
             return;
         }
 
-        boolean shouldReopen = mIsOpen && mReopenAttempts < MAX_REOPEN_ATTEMPTS;
+        if (busy && mIsOpen) {
+            closeCameraResources();
+            if (!retryWhileBusy()) {
+                mIsOpen = false;
+                onCameraError(new IllegalStateException(message));
+            }
+            return;
+        }
+
+        boolean shouldReopen = mIsOpen && !permanent && mReopenAttempts < MAX_REOPEN_ATTEMPTS;
         closeCameraResources();
         if (shouldReopen) {
             mReopenAttempts++;
@@ -764,13 +880,23 @@ public class Camera2Module extends ICameraModule {
         super(cameraView);
         mCameraManager = (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
         mHandler = new Handler(Looper.getMainLooper());
+        mBusyRetry = new BusyCameraRetry(mHandler);
     }
 
-    private void setSession(final Session session) {
+    private void setSession(Session requested) {
         if (!mIsOpen || mCameraDevice == null) {
             if (DEBUG) Log.w(TAG, "Cannot start a session without an open CameraDevice");
-            closeSession(session);
+            closeSession(requested);
             return;
+        }
+        final Session session;
+        if (isBuiltForAnotherStream(requested)) {
+            // Built before a stream came or went, and waited on the session before it. The stream
+            // as it is now wins, or a stream attached in the meantime is quietly dropped.
+            closeSession(requested);
+            session = newPictureSession();
+        } else {
+            session = requested;
         }
 
         try {
@@ -851,6 +977,7 @@ public class Camera2Module extends ICameraModule {
                         onCameraReady();
                         mAwaitingFormatSession = false;
                         capturePendingPicture();
+                        startPendingBurst();
                     } catch (CameraAccessException | RuntimeException e) {
                         failSession(session, cameraCaptureSession,
                                 "Failed to start " + session.getClass().getSimpleName(), e);
@@ -863,28 +990,92 @@ public class Camera2Module extends ICameraModule {
                         cameraCaptureSession.close();
                         return;
                     }
-                    if (session instanceof PictureSession
-                            && ((PictureSession) session).hasMotionSurface()) {
-                        // No combination of outputs is promised beyond the tables, and some
-                        // cameras turn down one that is. Pictures matter more than their clips.
-                        Log.w(TAG, "The camera will not feed a motion photo beside its preview"
-                                + " and still, so pictures are taken without clips");
-                        refuseMotionPhotos();
+                    if (fallBackFrom(session)) {
                         cameraCaptureSession.close();
-                        mRegisteringSession = null;
-                        closeSession(session);
-                        setSession(new PictureSession(Camera2Module.this));
                         return;
                     }
                     mAwaitingFormatSession = false;
                     cancelPendingPicture();
+                    cancelPendingBurst();
                     failSession(session, cameraCaptureSession,
                             "Failed to configure " + session.getClass().getSimpleName(), null);
                 }
             });
         } catch (CameraAccessException | RuntimeException e) {
+            if (mRegisteringSession == session && fallBackFrom(session)) {
+                Log.w(TAG, "Failed to create capture session", e);
+                return;
+            }
             failSession(session, null, "Failed to create capture session", e);
         }
+    }
+
+    /** Whether a session was built beside a stream other than the one attached now. */
+    private boolean isBuiltForAnotherStream(@NonNull Session session) {
+        if (!(session instanceof PictureSession) || session instanceof VideoSession) {
+            return false;
+        }
+        VideoRecorder.SurfaceProvider builtFor = session instanceof StreamSession
+                ? ((StreamSession) session).getSurfaceProvider() : null;
+        return builtFor != mStreamProvider;
+    }
+
+    /**
+     * The session to show the preview and take pictures in: beside the attached stream, if one
+     * is, with a still output unless this camera has refused one there.
+     */
+    @NonNull
+    private PictureSession newPictureSession() {
+        VideoRecorder.SurfaceProvider stream = mStreamProvider;
+        if (stream == null) {
+            return new PictureSession(this);
+        }
+        return new StreamSession(this, stream, !mStillBesideStreamRefused.contains(mActiveCamera));
+    }
+
+    /**
+     * Builds a session with less in it, for a session the camera would not configure.
+     *
+     * <p>A motion photo's encoder beside the preview and the still is more than some cameras
+     * take, though the tables promise it, and pictures matter more than their clips: such a
+     * camera takes pictures without clips from then on.</p>
+     *
+     * <p>A still beside a stream is more than Camera2 promises below FULL hardware, so a camera
+     * that refuses one gets the stream alone, which is how a stream ran before it could have a
+     * still. A stream the camera will not take at all - one sized for another lens, say - is let
+     * go, leaving the preview, rather than taking the camera down with it.</p>
+     *
+     * @return whether a session was built in this one's place
+     */
+    private boolean fallBackFrom(@NonNull Session session) {
+        if (session instanceof PictureSession && ((PictureSession) session).hasMotionSurface()) {
+            Log.w(TAG, "The camera will not feed a motion photo beside its preview and still,"
+                    + " so pictures are taken without clips");
+            refuseMotionPhotos();
+            mRegisteringSession = null;
+            closeSession(session);
+            setSession(newPictureSession());
+            return true;
+        }
+        if (!(session instanceof StreamSession)) {
+            return false;
+        }
+        StreamSession refused = (StreamSession) session;
+        if (refused.hasStillCapture()) {
+            Log.w(TAG, "This camera cannot take a picture beside a stream");
+            if (mActiveCamera != null) {
+                mStillBesideStreamRefused.add(mActiveCamera);
+            }
+        } else {
+            Log.w(TAG, "This camera cannot carry the stream; letting it go");
+            if (mStreamProvider == refused.getSurfaceProvider()) {
+                mStreamProvider = null;
+            }
+        }
+        mRegisteringSession = null;
+        closeSession(session);
+        setSession(newPictureSession());
+        return true;
     }
 
     /**
@@ -1009,6 +1200,7 @@ public class Camera2Module extends ICameraModule {
         closeCameraResources();
         mIsOpen = true;
         mReopenAttempts = 0;
+        mBusyRetry.cancel();
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         openCamera(++mGeneration);
@@ -1018,6 +1210,7 @@ public class Camera2Module extends ICameraModule {
     public void close() {
         mAwaitingFormatSession = false;
         cancelPendingPicture();
+        cancelPendingBurst();
         stopSegmentation();
         FrameRenderThread effect = mEffect;
         mEffect = null;
@@ -1028,6 +1221,7 @@ public class Camera2Module extends ICameraModule {
         }
         mIsOpen = false;
         mReopenAttempts = 0;
+        mBusyRetry.cancel();
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         mIsFocusPending = false;
@@ -1101,18 +1295,21 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
+    @RequiresPermission(Manifest.permission.CAMERA)
     private void switchCamera(String cameraId) {
         boolean shouldReopen = mIsOpen;
         CameraDevice deviceToClose = mCameraDevice;
         boolean mustAwaitDeviceClose = deviceToClose != null;
         mIsOpen = false;
         mReopenAttempts = 0;
+        mBusyRetry.cancel();
         mPendingOpenGeneration = 0;
         mPendingCloseDevice = null;
         mGeneration++;
         closeCameraResources();
         mActiveCamera = cameraId;
         clampZoomToActiveCamera();
+        restartSegmentation();
         if (shouldReopen) {
             mIsOpen = true;
             int nextGeneration = ++mGeneration;
@@ -1567,7 +1764,7 @@ public class Camera2Module extends ICameraModule {
         // recording or streaming, which a rebuild would end. The session after it is built with
         // the new quality.
         if (mActiveSession != null && !isRecordingOrStreaming()) {
-            setSession(new PictureSession(this));
+            setSession(newPictureSession());
         }
     }
 
@@ -2071,6 +2268,56 @@ public class Camera2Module extends ICameraModule {
     }
 
     /**
+     * Holds a burst until the session being built for the format is configured, as
+     * {@link #awaitSessionThenCapture} holds a picture. The timeout ends it for a session that
+     * never configures.
+     */
+    private void awaitSessionThenBurst(@NonNull Burst burst) {
+        mPendingBurst = burst;
+        mPendingBurstTimeout = () -> {
+            mPendingBurstTimeout = null;
+            Burst pending = mPendingBurst;
+            if (pending != null) {
+                Log.w(TAG, "The session for this picture format never configured");
+                mPendingBurst = null;
+                pending.end();
+            }
+        };
+        mHandler.postDelayed(mPendingBurstTimeout, PENDING_PICTURE_TIMEOUT_MILLIS);
+    }
+
+    /** Starts the burst that was waiting for this session, if there was one. */
+    private void startPendingBurst() {
+        Burst burst = mPendingBurst;
+        if (burst == null) {
+            return;
+        }
+        mPendingBurst = null;
+        if (mPendingBurstTimeout != null) {
+            mHandler.removeCallbacks(mPendingBurstTimeout);
+            mPendingBurstTimeout = null;
+        }
+        // Stopped while it waited, and already reported as having taken nothing.
+        if (burst.isEnded()) {
+            return;
+        }
+        startBurst(burst);
+    }
+
+    /** Ends a waiting burst, which then finishes with nothing taken. */
+    private void cancelPendingBurst() {
+        if (mPendingBurstTimeout != null) {
+            mHandler.removeCallbacks(mPendingBurstTimeout);
+            mPendingBurstTimeout = null;
+        }
+        Burst burst = mPendingBurst;
+        if (burst != null) {
+            mPendingBurst = null;
+            burst.end();
+        }
+    }
+
+    /**
      * Whether a camera writes JPEG_R, in the colour space asked for. The gain map is composed by
      * the camera, so one that does not list the format cannot produce it.
      */
@@ -2106,9 +2353,10 @@ public class Camera2Module extends ICameraModule {
                 // waiting for one goes to the session there is.
                 mAwaitingFormatSession = false;
                 capturePendingPicture();
+                startPendingBurst();
                 return;
             }
-            setSession(new PictureSession(this));
+            setSession(newPictureSession());
         });
     }
 
@@ -2454,6 +2702,34 @@ public class Camera2Module extends ICameraModule {
         }
     }
 
+    @Override
+    protected void startBurst(@NonNull Burst burst) {
+        // A burst waits for the session a new format needs, as takePicture does.
+        if (mAwaitingFormatSession && mPendingBurst == null && mPendingPictureFile == null) {
+            awaitSessionThenBurst(burst);
+            return;
+        }
+        if (mCaptureSession == null || mActiveSession == null || mCameraDevice == null
+                || mIsPaused || mIsRecording || !(mActiveSession instanceof PictureSession)
+                || mPendingBurst != null || mPendingPictureFile != null) {
+            Log.w(TAG, "Cannot take a burst before Camera2 preview is ready");
+            burst.end();
+            return;
+        }
+        ((PictureSession) mActiveSession).startBurst(burst, mCameraDevice, mCaptureSession);
+    }
+
+    /** What the camera says it can write at the still's size, one picture after another. */
+    @Override
+    protected float getReportedBurstRate() {
+        CameraCharacteristics characteristics = getCameraCharacteristics();
+        if (!(mActiveSession instanceof PictureSession) || characteristics == null) {
+            return 0f;
+        }
+        return ((PictureSession) mActiveSession).getReportedBurstRate(
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP));
+    }
+
     @RequiresPermission(Manifest.permission.RECORD_AUDIO)
     @Override
     public void startRecording(File file) {
@@ -2476,7 +2752,7 @@ public class Camera2Module extends ICameraModule {
     @Override
     public void stopRecording() {
         mIsRecording = false;
-        setSession(new PictureSession(this));
+        setSession(newPictureSession());
     }
 
     @Override
@@ -2496,14 +2772,31 @@ public class Camera2Module extends ICameraModule {
         mIsRecording = false;
     }
 
+    /**
+     * Carries the stream in every session from here on, starting with one built now. A recording
+     * is left alone: the stream joins the session built when it ends, rather than cutting it
+     * short.
+     */
+    @MainThread
     @Override
     protected void attachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-        setSession(new StreamSession(this, surfaceProvider));
+        mStreamProvider = surfaceProvider;
+        if (!isRecording()) {
+            setSession(newPictureSession());
+        }
     }
 
+    /** Lets the stream go, unless another has taken its place since. */
+    @MainThread
     @Override
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-        setSession(new PictureSession(this));
+        if (mStreamProvider != surfaceProvider) {
+            return;
+        }
+        mStreamProvider = null;
+        if (!isRecording()) {
+            setSession(newPictureSession());
+        }
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {

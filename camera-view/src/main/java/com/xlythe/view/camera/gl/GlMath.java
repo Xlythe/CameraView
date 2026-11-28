@@ -180,6 +180,18 @@ public final class GlMath {
     }
 
     /**
+     * Where each point of an output reads an image uploaded top row first, as a bitmap or a
+     * segmentation mask is: the right way up, and mirrored left to right or not.
+     *
+     * <p>An upload puts an image's first row at t = 0, which is the bottom of what GL draws, so
+     * an image read with the output's own coordinate comes out upside down.</p>
+     */
+    @NonNull
+    public static float[] topRowFirst(boolean mirrored) {
+        return unitSquareSymmetry(new float[] {mirrored ? -1f : 1f, 0f, 0f, -1f});
+    }
+
+    /**
      * Where each of an output's texture coordinates reads the camera's buffer, as the camera
      * wrote it: the output's own matrix with the SurfaceTexture's flip, crop and camera request
      * taken back off.

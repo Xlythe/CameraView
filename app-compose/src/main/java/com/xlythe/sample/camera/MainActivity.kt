@@ -19,8 +19,8 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -34,8 +34,10 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.BurstMode
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Cameraswitch
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.MotionPhotosOff
 import androidx.compose.material.icons.filled.MotionPhotosOn
@@ -52,7 +54,7 @@ import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconToggleButton
@@ -95,13 +97,13 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.io.IOException
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import androidx.compose.foundation.background
 import com.xlythe.compose.camera.Media
 import com.xlythe.view.camera.MediaTags
 import com.xlythe.view.camera.viewer.MediaView
+import java.io.File
+
+/** Where a held burst stops on its own, so a button held by accident does not fill the disk. */
+private const val MAX_BURST_PICTURES = 50
 
 enum class DemoScreen(val title: String) {
     SIMPLE("Simple Demo"),
@@ -109,34 +111,8 @@ enum class DemoScreen(val title: String) {
     RESIZING("Resizing Demo"),
     PANORAMA("Panorama Demo"),
     QR_CODE("QR Code Demo"),
-    VIEWER("Media Demo")
-}
-
-/** What the media demo can show a file as: whatever it is found to be, or one kind. */
-enum class ViewerMode(val label: String, val type: Int) {
-    /** Whatever it is found to be. */
-    AUTO("Auto", MediaView.UNKNOWN),
-    /** Flat, to zoom into. */
-    PICTURE("Picture", MediaView.PICTURE),
-    /** As a strip to pan along. */
-    PANORAMA("Panorama", MediaView.PANORAMA),
-    /** From the inside of a sphere. */
-    PHOTOSPHERE("Sphere", MediaView.PHOTOSPHERE),
-    /** As a video. */
-    VIDEO("Video", MediaView.VIDEO),
-    /** As a motion photo, whose clip plays while held. */
-    MOTION("Motion", MediaView.MOTION_PHOTO),
-    /** As a 360 degree video. */
-    SPHERICAL("360°", MediaView.SPHERICAL_VIDEO),
-    /** As a recording. */
-    AUDIO("Sound", MediaView.AUDIO),
-    /** As an animated picture. */
-    ANIMATION("Animation", MediaView.ANIMATION);
-
-    companion object {
-        /** The choice that names a media type, or AUTO for one no choice names. */
-        fun of(type: Int): ViewerMode = entries.firstOrNull { it.type == type } ?: AUTO
-    }
+    VIEWER("Media Demo"),
+    EDITOR("Editor Demo")
 }
 
 /**
@@ -188,6 +164,7 @@ class MainActivity : ComponentActivity() {
                                             DemoScreen.PANORAMA -> Icon(Icons.Default.Panorama, contentDescription = null)
                                             DemoScreen.QR_CODE -> Icon(Icons.Default.QrCode, contentDescription = null)
                                             DemoScreen.VIEWER -> Icon(Icons.Default.PhotoLibrary, contentDescription = null)
+                                            DemoScreen.EDITOR -> Icon(Icons.Default.Edit, contentDescription = null)
                                         }
                                     },
                                     modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding),
@@ -240,6 +217,7 @@ class MainActivity : ComponentActivity() {
                                 DemoScreen.PANORAMA -> PanoramaDemoScreen()
                                 DemoScreen.QR_CODE -> QrCodeDemoScreen()
                                 DemoScreen.VIEWER -> ViewerDemoScreen(initialUri = viewerUri)
+                                DemoScreen.EDITOR -> EditorDemoScreen(initialUri = viewerUri)
                             }
                         }
                     }
@@ -272,6 +250,27 @@ fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
     }
 
     LaunchedEffect(Unit) { permissionLauncher.launch(allPermissions) }
+
+    // A burst runs for as long as its button is held, into a directory of the app's own: the
+    // pictures are kept for the app to work with rather than filed in the gallery.
+    val burstDirectory = remember { File(context.cacheDir, "burst") }
+    val burstInteractions = remember { MutableInteractionSource() }
+    val burstPressed by burstInteractions.collectIsPressedAsState()
+    LaunchedEffect(burstPressed) {
+        val controller = cameraController.value ?: return@LaunchedEffect
+        if (!burstPressed) {
+            controller.stopBurst()
+            return@LaunchedEffect
+        }
+        burstDirectory.listFiles()?.forEach { it.delete() }
+        var taken = 0
+        controller.startBurst(
+            burstDirectory,
+            MAX_BURST_PICTURES,
+            onImageCaptured = { uiStatusText = "Burst: ${++taken}" },
+            onFinished = { count -> uiStatusText = "Burst took $count pictures" }
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -335,6 +334,15 @@ fun SimpleDemoScreen(onView: (Uri) -> Unit = {}) {
                     Icon(Icons.Default.Cameraswitch, contentDescription = null, modifier = Modifier.size(18.dp))
                     Spacer(modifier = Modifier.width(8.dp))
                     Text("Toggle Camera", fontWeight = FontWeight.SemiBold)
+                }
+
+                // Held rather than tapped, so it reports presses instead of clicks.
+                FilledTonalIconButton(
+                    onClick = {},
+                    enabled = cameraController.value != null,
+                    interactionSource = burstInteractions
+                ) {
+                    Icon(Icons.Default.BurstMode, contentDescription = "Burst")
                 }
 
                 Button(
@@ -728,79 +736,50 @@ fun QrCodeDemoScreen() {
 
 /**
  * Shows any picture, video or recording in the library's [Media], which works out what it is,
- * with a picker to open another, a switch to show it as something else, and a line saying what
- * the library's MediaTags reads from it.
+ * with a picker to open another.
  */
 @Composable
 fun ViewerDemoScreen(initialUri: Uri?) {
     val context = LocalContext.current
     var uri by remember(initialUri) { mutableStateOf(initialUri) }
-    var mode by remember(uri) { mutableStateOf(ViewerMode.AUTO) }
-    var shown by remember(uri) { mutableStateOf(ViewerMode.AUTO) }
+    var shown by remember(uri) { mutableStateOf(MediaView.UNKNOWN) }
     var gyroscope by remember { mutableStateOf(false) }
-    var status by remember(uri, mode) {
+    var status by remember(uri) {
         mutableStateOf(if (uri == null) "Take a picture, or open any picture, video or recording" else "")
     }
-    var summary by remember(uri) { mutableStateOf("") }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
         if (picked != null) {
             uri = picked
         }
     }
     val hasRotationSensor = remember { hasRotationSensor(context) }
-    LaunchedEffect(uri) {
-        val current = uri ?: return@LaunchedEffect
-        summary = withContext(Dispatchers.IO) { describeMedia(context, current) }
-    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             Media(
                 modifier = Modifier.fillMaxSize(),
                 uri = uri,
-                type = mode.type,
                 gyroscope = gyroscope,
-                onLoaded = { type -> shown = ViewerMode.of(type); status = "" },
-                onFailed = { status = "This device cannot show this file" }
+                onLoaded = { type -> shown = type; status = "" },
+                // Media shows that it failed itself.
+                onFailed = { status = "" }
             )
-            if (uri != null) {
-                Text(
-                    listOf(shown.label, summary).filter { it.isNotEmpty() }.joinToString(" · "),
-                    color = Color.White,
-                    modifier = Modifier.align(Alignment.TopStart).background(Color(0x80000000)).padding(8.dp)
-                )
-            }
             if (status.isNotEmpty()) {
                 Text(status, color = Color.White, modifier = Modifier.align(Alignment.Center).padding(24.dp))
             }
         }
-        // Scrolls rather than wraps where the screen is too narrow for every choice.
         Row(
-            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
+            modifier = Modifier.fillMaxWidth().padding(8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Button(onClick = { picker.launch(arrayOf("image/*", "video/*", "audio/*")) }) { Text("Open") }
-            ViewerMode.entries.forEach { option ->
-                FilterChip(
-                    selected = mode == option,
-                    onClick = { mode = option },
-                    label = { Text(option.label) }
-                )
-            }
-            if ((shown == ViewerMode.PHOTOSPHERE || shown == ViewerMode.SPHERICAL) && hasRotationSensor) {
+            if ((shown == MediaView.PHOTOSPHERE || shown == MediaView.SPHERICAL_VIDEO) && hasRotationSensor) {
                 Checkbox(checked = gyroscope, onCheckedChange = { gyroscope = it })
                 Text("Gyro", color = Color.White)
             }
         }
     }
-}
-
-/** What MediaTags reads from a file that is worth a line on screen. */
-private fun describeMedia(context: Context, uri: Uri): String = try {
-    describeMedia(MediaTags.open(context, uri))
-} catch (e: IOException) {
-    "No metadata"
 }
 
 /** When, where, what and how special a file is, as its metadata says. */

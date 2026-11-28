@@ -34,7 +34,7 @@ The following permissions are required in your AndroidManfiest.xml
 ```xml
 <uses-permission android:name="android.permission.CAMERA" />
 <uses-permission android:name="android.permission.RECORD_AUDIO" />
-<!-- Below API 29, takePicture(), startRecording() and startPanorama() need this to file captures in the gallery -->
+<!-- Below API 29, takePicture(), startBurst(), startRecording() and startPanorama() need this to file captures in the gallery -->
 <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
 
 <!-- Optional camera permissions -->
@@ -147,6 +147,12 @@ Camera(
 Stops recording
 ```kotlin
 cameraController.stopRecording()
+```
+Takes up to 50 pictures in quick succession, until stopBurst is called, filing each in the gallery.
+Given a directory first, startBurst writes the pictures there and reports each file instead.
+```kotlin
+cameraController.startBurst(50, onImageSaved = { uri -> ... }, onFinished = { count -> ... })
+cameraController.stopBurst()
 ```
 Returns a stream of bytes for both audio and video channels. These bytes can then be played with Video.
 ```kotlin
@@ -376,6 +382,23 @@ mCameraView.exitBarcodeScanner();
 ```
 
 
+Burst
+-----------------
+startBurst takes pictures in quick succession, as fast as the camera allows, until the count is
+reached or stopBurst is called. Like takePicture, it files each picture in the gallery, or writes
+it into a directory you pass first. The listener hears each one as it lands, then how many there
+were. Each picture is the one takePicture would take, except that the flash stays off and no
+picture clicks: where the shutter sound is on or required, the burst plays a click looped at its
+rate while it runs, and a tone when it ends. Confirmation does not apply, and a burst does not
+start while the picture format is RAW or RAW_JPEG.
+```java
+mCameraView.startBurst(50, new CameraView.OnBurstListener() {
+  @Override public void onBurstImageSaved(Uri uri) { ... }
+  @Override public void onBurstFinished(int count) { ... }
+});
+mCameraView.stopBurst();
+```
+
 Video snapshot
 -----------------
 takePicture works during a recording, where the camera can hold a preview, a recording and a still
@@ -524,16 +547,16 @@ mCameraView.stopFrameAnalysis();
 Panoramas
 -----------------
 startPanorama sweeps a panorama or a photosphere. CameraView draws the guide over its own
-preview, with no words in it: for a panorama, a strip of what is taken so far, a line to keep
-level on and arrows the way to turn; for a photosphere, dots on everything still to take, each
+preview: for a panorama, a strip of what is taken so far, a line to keep level on and arrows
+the way to turn; for a photosphere, dots on everything still to take, each
 taken by holding the circle on it until it fills. A panorama finishes once it has gone all the way
 round, and a photosphere once every dot is taken, straight up and down included. stopPanorama
 saves what was covered so far, and cancelPanorama saves nothing. Once a sweep ends, its frames are
 aligned by what they show and blended into one picture, which takes several seconds before the
 listener hears of it.
 
-The picture is a JPEG with the same Exif as any other picture and photo sphere metadata, so
-galleries and panorama viewers show it as a panorama. Without a file it is filed in the gallery,
+The picture is a JPEG with photo sphere metadata, so galleries and panorama viewers show it as
+a panorama. Without a file it is filed in the gallery,
 under Pictures, and reported to onPanoramaSaved(Uri); given a file it is written there and
 reported to onPanoramaCaptured(File). startPanorama returns false on a device that cannot report
 which way it is pointing. While a sweep runs, lock the screen's orientation, or turning the phone
@@ -620,7 +643,7 @@ Viewing pictures
 -----------------
 Three views show the pictures the camera takes, from a file or from a uri such as the one
 onImageSaved(Uri) reports. None of them ever decodes a picture whole: each holds a bounded amount
-of memory however large the picture is.
+of memory however large the picture is. In Compose they are LargeImage, Panorama and Photosphere.
 
 LargeImageView shows any picture, a DNG included, and zooms in until its own pixels show: pinch or
 double-tap to zoom, drag or fling to pan. PanoramaView shows a panorama as a strip filling the
@@ -642,8 +665,6 @@ LargeImage(uri = uri, onFailed = { ... })
 Panorama(uri = uri)
 Photosphere(uri = uri, gyroscope = true)
 ```
-A DNG is shown on Android 7.0 and newer. The first time, it is decoded once and kept in the app's
-cache as a JPEG, so showing it again is as quick as any other picture.
 
 Viewing any media
 -----------------
@@ -664,7 +685,9 @@ mMediaView.setMediaType(MediaView.PANORAMA);  // to show it as something else
 Media(uri = uri, onLoaded = { type -> ... })
 ```
 The line and the tap and hold can each be turned off, and the line restyled, with the MediaView
-attributes or setters; it draws no text.
+attributes or setters; it draws no text. A file it can't show calls `onMediaFailed` and shows a
+small struck-out picture in its place: `errorPlaceholder` or `setErrorPlaceholder` swaps it for a
+drawable of your own, `@null` removes it, and in Compose `Media` takes `showError = false`.
 
 What shows depends on what the device decodes:
 
@@ -677,7 +700,8 @@ What shows depends on what the device decodes:
 | DNG | Android 7.0 and newer; before that, the preview it carries, if any |
 | Other camera raws (CR2, CR3, NEF, ARW, RAF, ORF, RW2) | every version, as the largest JPEG the camera embedded, which for some cameras is smaller than the photo |
 | Ultra HDR and other gain maps, in HDR | Android 14 and newer; before that, as an ordinary picture |
-| Videos and sound | the codecs the device has; 10-bit, Dolby Vision and AV1 vary the most |
+| Videos and sound | the codecs the device has; 10-bit, Dolby Vision and AV1 vary the most. A video none of them decodes fails rather than playing its sound over nothing |
+| H.264 video, as most phones record it | Baseline on every version; High where the device has a decoder for it, which the decoders Android 5.1 and older come with are not |
 | TIFF, JPEG XL, AVI | not shown |
 
 VideoEditor

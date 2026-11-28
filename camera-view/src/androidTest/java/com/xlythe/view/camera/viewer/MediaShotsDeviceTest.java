@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -77,6 +78,12 @@ public class MediaShotsDeviceTest {
             {"animation-apng-later", "stills/apng_bouncing_beach_ball.png", LATER},
             {"animation-webp-first", "stills/webp_animated_clock.webp", STILL},
             {"animation-webp-later", "stills/webp_animated_clock.webp", LATER},
+            {"animation-webp-stoplight-first", "stills/skia_stoplight_animated.webp", STILL},
+            {"animation-webp-stoplight-later", "stills/skia_stoplight_animated.webp", LATER},
+            {"animation-gif-flight-first", "stills/skia_flightAnim.gif", STILL},
+            {"animation-gif-flight-later", "stills/skia_flightAnim.gif", LATER},
+            {"video-av1", "video/androidx_sample_av1.mp4", PLAY},
+            {"video-hevc-rext-422", "video/chromium_hevc-rext-10bit-422.mp4", PLAY},
             {"hdr-on", "pixel/androidx_ultraHDR.jpg", STILL},
             {"hdr-off", "pixel/androidx_ultraHDR.jpg", NO_HDR},
             {"quicktime-without-ftyp", "apple/mxi_apple-livephoto-quicktime.mov", PLAY},
@@ -105,14 +112,20 @@ public class MediaShotsDeviceTest {
         }
         File probe = copy(instrumentation, SHOTS[0][1].toString(), directory);
         assumeTrue("the corpus was not pushed", probe.length() > 0);
+        // Taken once: ActivityScenario waits for the main thread to idle on every call, which an
+        // animation drawn in software can keep it from ever doing on Android 5.
+        AtomicReference<ViewerTestActivity> host = new AtomicReference<>();
+        mActivity.getScenario().onActivity(host::set);
+        ViewerTestActivity activity = host.get();
         for (Object[] shot : SHOTS) {
             String name = (String) shot[0];
             int action = (Integer) shot[2];
             File file = copy(instrumentation, (String) shot[1], directory);
             CountDownLatch done = new CountDownLatch(1);
             int[] type = {-1};
+            AtomicBoolean failed = new AtomicBoolean();
             AtomicReference<MediaView> made = new AtomicReference<>();
-            mActivity.getScenario().onActivity(activity -> {
+            instrumentation.runOnMainSync(() -> {
                 MediaView view = new MediaView(activity);
                 view.setHdrEnabled(action != NO_HDR);
                 view.setMediaListener(new MediaListener() {
@@ -124,6 +137,7 @@ public class MediaShotsDeviceTest {
 
                     @Override
                     public void onMediaFailed() {
+                        failed.set(true);
                         done.countDown();
                     }
                 });
@@ -151,14 +165,14 @@ public class MediaShotsDeviceTest {
             }
             int[] mode = new int[1];
             if (Build.VERSION.SDK_INT >= 26) {
-                mActivity.getScenario().onActivity(activity ->
-                        mode[0] = activity.getWindow().getColorMode());
+                instrumentation.runOnMainSync(() -> mode[0] = activity.getWindow().getColorMode());
             }
             boolean playing = isPlaying(instrumentation, view);
             save(screenshot(instrumentation, view), new File(shots,
                     name + "-api" + Build.VERSION.SDK_INT + ".png"));
             Log.i(TAG, "SHOT\t" + name + "\t" + shot[1] + "\t" + (reported ? type[0] : "hung")
-                    + "\tplaying=" + playing + "\tcolorMode=" + mode[0]);
+                    + "\tplaying=" + playing + "\tcolorMode=" + mode[0]
+                    + "\tfailed=" + failed.get());
             if (action == HOLD) {
                 instrumentation.runOnMainSync(() -> {
                     long now = SystemClock.uptimeMillis();
@@ -167,7 +181,7 @@ public class MediaShotsDeviceTest {
                     up.recycle();
                 });
             }
-            mActivity.getScenario().onActivity(activity -> activity.getRoot().removeAllViews());
+            instrumentation.runOnMainSync(() -> activity.getRoot().removeAllViews());
         }
     }
 

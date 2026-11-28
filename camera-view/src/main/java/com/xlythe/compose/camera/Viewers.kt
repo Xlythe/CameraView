@@ -1,5 +1,6 @@
 package com.xlythe.compose.camera
 
+import android.graphics.drawable.Drawable
 import android.net.Uri
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -125,8 +126,10 @@ fun Photosphere(
  * @param holdToPlay Whether holding a motion photo plays its clip.
  * @param showProgress Whether a thin line shows how far playback has got.
  * @param hdr Whether HDR content puts the window in HDR colour mode.
+ * @param showError Whether the library's icon shows in place of a file that cannot be shown;
+ *     turn it off to show your own from [onFailed].
  * @param onLoaded Called once the file is showing, with what it shows as.
- * @param onFailed Called if it cannot be shown.
+ * @param onFailed Called if it cannot be shown, including after it showed if it cannot play.
  */
 @Composable
 fun Media(
@@ -139,6 +142,7 @@ fun Media(
     holdToPlay: Boolean = true,
     showProgress: Boolean = true,
     hdr: Boolean = true,
+    showError: Boolean = true,
     onLoaded: (Int) -> Unit = {},
     onFailed: () -> Unit = {},
 ) {
@@ -150,13 +154,19 @@ fun Media(
             override fun onMediaFailed() = currentOnFailed()
         }
     }
+    // The library's own error icon, kept from the view that made it to put back when asked.
+    val libraryError = remember { arrayOfNulls<Drawable>(1) }
     AndroidView(
         modifier = modifier,
         factory = { context ->
-            MediaView(context).apply { setMediaListener(listener) }
+            MediaView(context).apply {
+                setMediaListener(listener)
+                libraryError[0] = errorPlaceholder
+            }
         },
         update = { view ->
             view.setMediaType(type)
+            view.errorPlaceholder = if (showError) libraryError[0] else null
             view.isGyroscopeEnabled = gyroscope
             view.isTapToPlayEnabled = tapToPlay
             view.isHoldToPlayEnabled = holdToPlay

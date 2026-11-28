@@ -337,6 +337,41 @@ final class Xmp {
     }
 
     /**
+     * Sets a container's directory, which lists the files a motion photo or gain map picture
+     * carries after its own: one entry per item, each its fields keyed by namespace and name as
+     * {@link #getStructs} gives them, of which those in the item namespace are written. No
+     * entries remove the directory.
+     */
+    void setDirectory(@NonNull List<Map<String, String>> items) {
+        Element description = prepare(NS_CONTAINER, "Directory", items.isEmpty() ? null : "");
+        if (description == null) {
+            return;
+        }
+        Document document = description.getOwnerDocument();
+        String rdf = prefixFor(NS_RDF, description);
+        String container = prefixFor(NS_CONTAINER, description);
+        String item = prefixFor(NS_ITEM, description);
+        Element property = document.createElementNS(NS_CONTAINER, container + ":Directory");
+        Element sequence = document.createElementNS(NS_RDF, rdf + ":Seq");
+        for (Map<String, String> fields : items) {
+            Element entry = document.createElementNS(NS_RDF, rdf + ":li");
+            entry.setAttributeNS(NS_RDF, rdf + ":parseType", "Resource");
+            Element described = document.createElementNS(NS_CONTAINER, container + ":Item");
+            for (Map.Entry<String, String> field : fields.entrySet()) {
+                if (field.getKey().startsWith(NS_ITEM) && field.getValue() != null) {
+                    described.setAttributeNS(NS_ITEM,
+                            item + ":" + field.getKey().substring(NS_ITEM.length()),
+                            field.getValue());
+                }
+            }
+            entry.appendChild(described);
+            sequence.appendChild(entry);
+        }
+        property.appendChild(sequence);
+        description.appendChild(property);
+    }
+
+    /**
      * Takes a property out wherever it is, and finds the description a new value goes in.
      *
      * @return the description, or null when the value is null and there is nothing to add

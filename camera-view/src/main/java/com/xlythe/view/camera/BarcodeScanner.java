@@ -6,8 +6,8 @@ import android.util.Log;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.WorkerThread;
 
-import com.google.android.gms.tasks.Tasks;
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions;
 import com.google.mlkit.vision.barcode.BarcodeScanning;
 import com.google.mlkit.vision.common.InputImage;
@@ -16,9 +16,8 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -36,8 +35,8 @@ class BarcodeScanner {
   /** Loaded to learn whether ML Kit is on the classpath, which an app on the core build adds. */
   private static final String ML_KIT_CLASS = "com.google.mlkit.vision.barcode.BarcodeScanning";
 
-  /** Maximum time allowed for a single ML Kit scan. */
-  private static final long OPERATION_TIMEOUT_SECONDS = 10;
+  /** How long a scan may take before it is logged as slow. It is waited for regardless. */
+  private static final long SLOW_SCAN_MILLIS = 10_000;
 
   /** The camera's frames. */
   private final FrameStream mFrames;
@@ -101,22 +100,28 @@ class BarcodeScanner {
     }
   }
 
+  @WorkerThread
   private void processFrame(FrameStream.Frame frame) {
     if (mStopped.get()) {
       return;
     }
     InputImage image = InputImage.fromMediaImage(
             frame.getImage(), frame.getRotationDegrees());
+    List<com.google.mlkit.vision.barcode.common.Barcode> barcodes;
     try {
-      List<com.google.mlkit.vision.barcode.common.Barcode> barcodes =
-              Tasks.await(mScanner.process(image), OPERATION_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-      List<Barcode> list = new ArrayList<>(barcodes.size());
-      for (com.google.mlkit.vision.barcode.common.Barcode barcode : barcodes) {
-        list.add(new Barcode(barcode));
-      }
-      mListener.onBarcodeFound(list);
-    } catch (ExecutionException | InterruptedException | TimeoutException e) {
+      barcodes = MlKitTasks.awaitFrameRead(mScanner.process(image), SLOW_SCAN_MILLIS,
+              "A barcode scan");
+    } catch (ExecutionException | CancellationException e) {
       Log.w(TAG, "Barcode processing failed", e);
+      return;
     }
+    if (mStopped.get()) {
+      return;
+    }
+    List<Barcode> list = new ArrayList<>(barcodes.size());
+    for (com.google.mlkit.vision.barcode.common.Barcode barcode : barcodes) {
+      list.add(new Barcode(barcode));
+    }
+    mListener.onBarcodeFound(list);
   }
 }

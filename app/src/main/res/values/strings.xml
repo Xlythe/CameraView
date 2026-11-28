@@ -19,6 +19,7 @@
     <string name="panorama_image_description">The saved panorama</string>
     <string name="app_name_effect">Effect Demo</string>
     <string name="app_name_viewer">Media Demo</string>
+    <string name="app_name_editor">Editor Demo</string>
     <string name="wear_status_idle">Open the companion app on your watch</string>
     <string name="wear_status_opening">Connecting to the watch…</string>
     <string name="wear_status_streaming">Streaming to the watch</string>
@@ -31,6 +32,12 @@
     <string name="btn_request_permissions">Request Permissions</string>
 
     <string name="btn_capture">Capture</string>
+    <string name="btn_burst">Burst</string>
+    <string name="btn_burst_count">Burst (%1$d)</string>
+    <plurals name="burst_saved">
+        <item quantity="one">Burst saved %1$d picture</item>
+        <item quantity="other">Burst saved %1$d pictures</item>
+    </plurals>
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_resize">Resize</string>
@@ -47,22 +54,8 @@
     <string name="viewer_empty">Take a picture, or open any picture, video or recording</string>
     <!-- Picks a file to view -->
     <string name="viewer_open">Open</string>
-    <!-- Shows the file as whatever it is found to be -->
-    <string name="viewer_mode_detect">Auto</string>
-    <!-- Plays the file as a video -->
-    <string name="viewer_mode_video">Video</string>
-    <!-- Shows the file as a motion photo, whose clip plays while it is held -->
-    <string name="viewer_mode_motion">Motion</string>
-    <!-- Plays the file as a 360 degree video -->
-    <string name="viewer_mode_spherical">360°</string>
-    <!-- Plays the file as a recording -->
-    <string name="viewer_mode_audio">Sound</string>
-    <!-- Plays the file as an animated picture -->
-    <string name="viewer_mode_animation">Animation</string>
     <!-- What the viewer shows, for accessibility services -->
     <string name="viewer_media_description">The file being viewed</string>
-    <!-- What the file is shown as, then what its metadata says -->
-    <string name="viewer_info">%1$s · %2$s</string>
     <!-- Where the file was captured, as latitude and longitude -->
     <string name="viewer_location">%1$.5f, %2$.5f</string>
     <!-- The file is in high dynamic range -->
@@ -73,16 +66,56 @@
     <string name="viewer_animated">Animated</string>
     <!-- The file says nothing about itself -->
     <string name="viewer_no_metadata">No metadata</string>
-    <!-- Shows the picture flat, to zoom into -->
-    <string name="viewer_mode_picture">Picture</string>
-    <!-- Shows the picture as a strip to pan along -->
-    <string name="viewer_mode_panorama">Panorama</string>
-    <!-- Shows the picture from the inside of a sphere -->
-    <string name="viewer_mode_photosphere">Sphere</string>
     <!-- Looks around the sphere by turning the phone -->
     <string name="viewer_gyroscope">Gyro</string>
     <!-- The picture could not be shown -->
     <string name="viewer_failed">This device cannot show this file</string>
+    <!-- The editor before a picture is picked -->
+    <string name="editor_empty">Open a picture to edit</string>
+    <!-- What the editor shows, for accessibility services -->
+    <string name="editor_media_description">The picture being edited</string>
+    <!-- Turns the picture a further quarter; shows how far it is turned -->
+    <string name="editor_turn">Turn</string>
+    <string name="editor_turn_degrees">Turn %1$d°</string>
+    <!-- Mirrors the picture left to right -->
+    <string name="editor_flip_horizontal">Flip ↔</string>
+    <!-- Mirrors the picture top to bottom -->
+    <string name="editor_flip_vertical">Flip ↕</string>
+    <!-- Levels the picture by a few degrees -->
+    <string name="editor_straighten">Straighten</string>
+    <!-- Keeps the middle of the picture -->
+    <string name="editor_crop">Crop</string>
+    <!-- Makes the picture black and white -->
+    <string name="editor_filter">B&amp;W</string>
+    <!-- Strokes on the picture erase -->
+    <string name="editor_erase">Erase</string>
+    <!-- Takes back the last stroke -->
+    <string name="editor_undo">Undo</string>
+    <!-- Puts back the last stroke taken back -->
+    <string name="editor_redo">Redo</string>
+    <!-- Makes the drawing black and white too -->
+    <string name="editor_mark_filtered">B&amp;W ink</string>
+    <!-- Shows the saved picture instead of the one being edited -->
+    <string name="editor_show_result">Result</string>
+    <!-- Writes the edited picture -->
+    <string name="editor_save">Save</string>
+    <!-- Formats to write the edited picture in -->
+    <string name="editor_format_same">Same</string>
+    <string name="editor_format_jpeg">JPEG</string>
+    <string name="editor_format_png">PNG</string>
+    <string name="editor_format_webp">WebP</string>
+    <string name="editor_format_heif">HEIF</string>
+    <string name="editor_format_avif">AVIF</string>
+    <!-- What becomes of a motion photo's clip -->
+    <string name="editor_clip_auto">Clip: auto</string>
+    <string name="editor_clip_keep">Keep clip</string>
+    <string name="editor_clip_drop">Drop clip</string>
+    <!-- Writes a smaller picture -->
+    <string name="editor_small">2 MP</string>
+    <!-- What the edited picture is: its format, size and metadata -->
+    <string name="editor_info">%1$s · %2$d × %3$d · %4$s</string>
+    <!-- The picture could not be edited -->
+    <string name="editor_failed">This picture could not be edited</string>
     <!-- A zoom preset button, such as 0.6x or 2x -->
     <string name="zoom_preset">%1$sx</string>
     <!-- How far exposure compensation shifts the exposure, in stops, such as +0.7 EV -->

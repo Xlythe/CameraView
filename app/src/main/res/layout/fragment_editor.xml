@@ -1,0 +1,256 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"
+    android:orientation="vertical"
+    tools:context=".EditorFragment">
+
+    <FrameLayout
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1">
+
+        <!-- The picture being edited, fitted as the drawing over it is. -->
+        <ImageView
+            android:id="@+id/editor_preview"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@string/editor_media_description"
+            android:scaleType="fitCenter" />
+
+        <!-- Ink over the picture, in the picture's own pixels. -->
+        <com.xlythe.view.camera.edit.DrawingView
+            android:id="@+id/editor_drawing"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- The saved picture. -->
+        <com.xlythe.view.camera.viewer.MediaView
+            android:id="@+id/editor_media"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:contentDescription="@string/editor_media_description"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/editor_info"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top"
+            android:background="#80000000"
+            android:padding="8dp"
+            android:textColor="#FFFFFF"
+            android:visibility="gone" />
+
+        <ProgressBar
+            android:id="@+id/editor_progress"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/editor_message"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:padding="24dp"
+            android:text="@string/editor_empty"
+            android:textColor="#FFFFFF" />
+    </FrameLayout>
+
+    <!-- The library's own text-free brush picker, bound to the drawing. -->
+    <com.xlythe.view.camera.edit.BrushPanelView
+        android:id="@+id/editor_brushes"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#202020" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#202020"
+        android:orientation="vertical"
+        android:padding="8dp">
+
+        <!-- What to change. Scrolls rather than wraps on a narrow screen. -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/editor_turn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/editor_turn"
+                    android:textColor="#FFFFFF"
+                    app:cornerRadius="20dp" />
+
+                <CheckBox
+                    android:id="@+id/editor_flip_horizontal"
+                    style="@style/ViewerChoice"
+                    android:text="@string/editor_flip_horizontal" />
+
+                <CheckBox
+                    android:id="@+id/editor_flip_vertical"
+                    style="@style/ViewerChoice"
+                    android:text="@string/editor_flip_vertical" />
+
+                <CheckBox
+                    android:id="@+id/editor_straighten"
+                    style="@style/ViewerChoice"
+                    android:text="@string/editor_straighten" />
+
+                <CheckBox
+                    android:id="@+id/editor_crop"
+                    style="@style/ViewerChoice"
+                    android:text="@string/editor_crop" />
+
+                <CheckBox
+                    android:id="@+id/editor_filter"
+                    style="@style/ViewerChoice"
+                    android:text="@string/editor_filter" />
+
+                <CheckBox
+                    android:id="@+id/editor_erase"
+                    style="@style/ViewerChoice"
+                    android:text="@string/editor_erase" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/editor_undo"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/editor_undo"
+                    android:textColor="#FFFFFF"
+                    app:cornerRadius="20dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/editor_redo"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/editor_redo"
+                    android:textColor="#FFFFFF"
+                    app:cornerRadius="20dp" />
+
+                <CheckBox
+                    android:id="@+id/editor_mark_filtered"
+                    style="@style/ViewerChoice"
+                    android:text="@string/editor_mark_filtered" />
+            </LinearLayout>
+        </HorizontalScrollView>
+
+        <!-- How to write it. -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/editor_open"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="@string/viewer_open"
+                    android:textColor="#FFFFFF"
+                    app:cornerRadius="20dp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/editor_save"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:enabled="false"
+                    android:text="@string/editor_save"
+                    android:textColor="#FFFFFF"
+                    app:cornerRadius="20dp" />
+
+                <RadioGroup
+                    android:id="@+id/editor_format"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:checkedButton="@id/editor_format_same"
+                    android:orientation="horizontal">
+
+                    <RadioButton
+                        android:id="@+id/editor_format_same"
+                        style="@style/ViewerChoice"
+                        android:text="@string/editor_format_same" />
+
+                    <RadioButton
+                        android:id="@+id/editor_format_jpeg"
+                        style="@style/ViewerChoice"
+                        android:text="@string/editor_format_jpeg" />
+
+                    <RadioButton
+                        android:id="@+id/editor_format_png"
+                        style="@style/ViewerChoice"
+                        android:text="@string/editor_format_png" />
+
+                    <RadioButton
+                        android:id="@+id/editor_format_webp"
+                        style="@style/ViewerChoice"
+                        android:text="@string/editor_format_webp" />
+
+                    <RadioButton
+                        android:id="@+id/editor_format_heif"
+                        style="@style/ViewerChoice"
+                        android:text="@string/editor_format_heif" />
+
+                    <RadioButton
+                        android:id="@+id/editor_format_avif"
+                        style="@style/ViewerChoice"
+                        android:text="@string/editor_format_avif" />
+                </RadioGroup>
+
+                <RadioGroup
+                    android:id="@+id/editor_clip"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:checkedButton="@id/editor_clip_auto"
+                    android:orientation="horizontal">
+
+                    <RadioButton
+                        android:id="@+id/editor_clip_auto"
+                        style="@style/ViewerChoice"
+                        android:text="@string/editor_clip_auto" />
+
+                    <RadioButton
+                        android:id="@+id/editor_clip_keep"
+                        style="@style/ViewerChoice"
+                        android:text="@string/editor_clip_keep" />
+
+                    <RadioButton
+                        android:id="@+id/editor_clip_drop"
+                        style="@style/ViewerChoice"
+                        android:text="@string/editor_clip_drop" />
+                </RadioGroup>
+
+                <CheckBox
+                    android:id="@+id/editor_small"
+                    style="@style/ViewerChoice"
+                    android:text="@string/editor_small" />
+
+                <CheckBox
+                    android:id="@+id/editor_show_result"
+                    style="@style/ViewerChoice"
+                    android:enabled="false"
+                    android:text="@string/editor_show_result" />
+            </LinearLayout>
+        </HorizontalScrollView>
+    </LinearLayout>
+</LinearLayout>
