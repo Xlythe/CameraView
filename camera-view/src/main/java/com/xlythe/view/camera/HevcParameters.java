@@ -40,7 +40,7 @@ final class HevcParameters {
                 }
                 if (type == SPS && length > 2) {
                     try {
-                        int transfer = spsTransfer(unescape(data, at + 2, at + length));
+                        int transfer = spsTransfer(BitReader.unescape(data, at + 2, at + length));
                         if (transfer >= 0) {
                             return transfer;
                         }
@@ -54,30 +54,10 @@ final class HevcParameters {
         return -1;
     }
 
-    /** A NAL unit's payload with its emulation prevention bytes taken out. */
-    @NonNull
-    private static byte[] unescape(@NonNull byte[] data, int start, int end) {
-        byte[] out = new byte[end - start];
-        int length = 0;
-        int zeros = 0;
-        for (int i = start; i < end; i++) {
-            int value = data[i] & 0xFF;
-            if (zeros >= 2 && value == 3) {
-                zeros = 0;
-                continue;
-            }
-            zeros = value == 0 ? zeros + 1 : 0;
-            out[length++] = (byte) value;
-        }
-        byte[] trimmed = new byte[length];
-        System.arraycopy(out, 0, trimmed, 0, length);
-        return trimmed;
-    }
-
     /** The transfer characteristics in a sequence parameter set's payload, or -1. */
     @VisibleForTesting
     static int spsTransfer(@NonNull byte[] sps) {
-        Bits bits = new Bits(sps);
+        BitReader bits = new BitReader(sps);
         bits.skip(4);
         int maxSubLayers = bits.read(3);
         bits.skip(1);
@@ -150,7 +130,7 @@ final class HevcParameters {
         return bits.read(8);
     }
 
-    private static void profileTierLevel(@NonNull Bits bits, int maxSubLayers) {
+    private static void profileTierLevel(@NonNull BitReader bits, int maxSubLayers) {
         bits.skip(2 + 1 + 5 + 32 + 48 + 8);
         boolean[] profile = new boolean[maxSubLayers];
         boolean[] level = new boolean[maxSubLayers];
@@ -171,7 +151,7 @@ final class HevcParameters {
         }
     }
 
-    private static void scalingListData(@NonNull Bits bits) {
+    private static void scalingListData(@NonNull BitReader bits) {
         for (int size = 0; size < 4; size++) {
             for (int matrix = 0; matrix < 6; matrix += size == 3 ? 3 : 1) {
                 if (bits.read(1) == 0) {
@@ -190,7 +170,7 @@ final class HevcParameters {
     }
 
     /** Skips one short-term reference picture set and returns how many pictures it holds. */
-    private static int shortTermRefPicSet(@NonNull Bits bits, int index, @NonNull int[] counts) {
+    private static int shortTermRefPicSet(@NonNull BitReader bits, int index, @NonNull int[] counts) {
         if (index != 0 && bits.read(1) == 1) {
             bits.skip(1);
             bits.ue();
@@ -211,48 +191,5 @@ final class HevcParameters {
             bits.skip(1);
         }
         return negative + positive;
-    }
-
-    /** Reads bits most significant first, and Exp-Golomb codes. */
-    private static final class Bits {
-        /** The bytes. */
-        @NonNull
-        private final byte[] mData;
-
-        /** The next bit to read, counted from the first byte's top bit. */
-        private int mPosition;
-
-        Bits(@NonNull byte[] data) {
-            mData = data;
-        }
-
-        int read(int count) {
-            int value = 0;
-            for (int i = 0; i < count; i++) {
-                int bit = (mData[mPosition >> 3] >> (7 - (mPosition & 7))) & 1;
-                value = (value << 1) | bit;
-                mPosition++;
-            }
-            return value;
-        }
-
-        void skip(int count) {
-            mPosition += count;
-            if (mPosition > mData.length * 8) {
-                throw new IndexOutOfBoundsException("Past the end of the parameter set");
-            }
-        }
-
-        /** An unsigned Exp-Golomb code; a signed one is skipped the same way. */
-        int ue() {
-            int zeros = 0;
-            while (read(1) == 0) {
-                zeros++;
-                if (zeros > 31) {
-                    throw new IndexOutOfBoundsException("Not an Exp-Golomb code");
-                }
-            }
-            return zeros == 0 ? 0 : (1 << zeros) - 1 + read(zeros);
-        }
     }
 }

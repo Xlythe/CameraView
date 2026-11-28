@@ -572,29 +572,38 @@ the background the video stops, since another app may want the camera, but the a
 running, so a call carries on.
 
 
-Exif
+Metadata
 -----------------
-CameraView encodes metadata into pictures via Exif. By default, there's nothing more you need to do.
-Exif metadata will be read by most Android image libraries (we recommend Glide), as well as most
-computers (Windows, Mac, Linux). However, if needed, Exif gives you the option to be more privacy
-sensitive (via Exif.removeLocation(), Exif.removeTimestamp()) as well as the information needed to
-manually rotate/flip images if you cannot use another library.
+CameraView writes the usual metadata into every picture and video it saves, so there is nothing
+more to do. MediaTags reads and writes it afterwards, the same way for pictures, videos and sound:
+JPEG, PNG, WebP, HEIF and AVIF, MP4 and QuickTime, MP3, FLAC, Ogg and WAV, and reads it from DNG
+and other camera raws, Matroska and WebM. It works out the format from the file's own bytes.
 ```java
-Exif exif = new Exif(file);
-exif.removeLocation();
-exif.setTitle("Harbour at dawn");
-exif.setPhotographer("A. Photographer");
-exif.attachAmbientConditions(new AmbientConditions.Builder().setTemperature(21.5).build());
-exif.save();
+MediaTags tags = MediaTags.open(file);    // or MediaTags.open(context, uri)
+tags.setTitle("Harbour at dawn");
+tags.setAuthor("A. Photographer");
+tags.setLocation(null);                   // removes it
+tags.setAmbientConditions(new AmbientConditions.Builder().setTemperature(21.5).build());
+tags.save();
 ```
-Any other tag can be read and written by its standard name, or by its number for one newer than
-the library.
+Each setter returns false when the file cannot keep that field. A field the format has no place
+of its own for is kept in the file's XMP. A Uri can be written where the app may write it: a
+document it was granted write access to, or, from Android 10, a gallery item it saved itself.
+
+It also says what the file is: a photo sphere or panorama, a motion photo and where its clip is,
+an HDR picture's gain map or an HDR video's transfer, a 360° video, an animation, and the cover of
+a recording. copyTo() carries what one file says onto another, whatever their formats.
 ```java
-exif.setAttribute("ImageEditor", "A. Editor");
-exif.setTag(0xA4F0, Exif.TYPE_ASCII, "A tag from a later standard");
+MediaTags.Panorama sphere = tags.getPanorama();
+MediaTags.MotionPhoto motion = tags.getMotionPhoto();
+boolean hdr = tags.getGainMap() != MediaTags.GAIN_MAP_NONE;
+original.copyTo(MediaTags.open(edited));
 ```
-If the file has no room for some of its tags, save() writes everything else and throws an
-ExifNoRoomException naming them.
+Any other Exif tag, MP4 tag or XMP property is there by name or number.
+```java
+tags.setExifTag(0xA4F0, Exif.TYPE_ASCII, "A tag from a later standard");
+tags.setXmp("http://purl.org/dc/elements/1.1/", "source", "Scanned print");
+```
 
 VideoView
 -----------------
@@ -643,6 +652,41 @@ Photosphere(uri = uri, gyroscope = true)
 ```
 A DNG is shown on Android 7.0 and newer. The first time, it is decoded once and kept in the app's
 cache as a JPEG, so showing it again is as quick as any other picture.
+
+Viewing any media
+-----------------
+MediaView shows whatever a file turns out to be, worked out from its contents: a picture to zoom
+into, a panorama to pan along, a photo sphere to look around, a video, a motion photo whose clip
+plays while it is held, a 360° video, a recording, or an animated picture. A tap plays and pauses;
+a thin line along the bottom shows how far it has played. HDR pictures show in HDR
+where the screen can; an HDR video puts the window in HDR mode, but is drawn in standard range.
+```java
+mMediaView.setUri(uri);                  // or setFile(file)
+mMediaView.setMediaListener(new MediaListener() {
+  @Override public void onMediaLoaded(int type) { ... }  // MediaView.PHOTOSPHERE, VIDEO, ...
+  @Override public void onMediaFailed() { ... }
+});
+mMediaView.setMediaType(MediaView.PANORAMA);  // to show it as something else
+```
+```kotlin
+Media(uri = uri, onLoaded = { type -> ... })
+```
+The line and the tap and hold can each be turned off, and the line restyled, with the MediaView
+attributes or setters; it draws no text.
+
+What shows depends on what the device decodes:
+
+| | Shows on |
+|---|---|
+| JPEG, PNG, WebP, GIF, BMP | every version |
+| Animated GIF and PNG | every version |
+| Animated WebP, HEIF and HEIC | Android 9 and newer |
+| AVIF, and animated AVIF | Android 12 and newer |
+| DNG | Android 7.0 and newer; before that, the preview it carries, if any |
+| Other camera raws (CR2, CR3, NEF, ARW, RAF, ORF, RW2) | every version, as the largest JPEG the camera embedded, which for some cameras is smaller than the photo |
+| Ultra HDR and other gain maps, in HDR | Android 14 and newer; before that, as an ordinary picture |
+| Videos and sound | the codecs the device has; 10-bit, Dolby Vision and AV1 vary the most |
+| TIFF, JPEG XL, AVI | not shown |
 
 VideoEditor
 -----------------

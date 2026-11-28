@@ -64,6 +64,7 @@
             <enum name="motionPhoto" value="5"/>
             <enum name="sphericalVideo" value="6"/>
             <enum name="audio" value="7"/>
+            <enum name="animation" value="8"/>
         </attr>
         <attr name="tapToPlay" format="boolean" />
         <attr name="holdToPlay" format="boolean" />

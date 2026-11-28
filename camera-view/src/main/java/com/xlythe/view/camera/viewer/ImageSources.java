@@ -6,7 +6,9 @@ import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.ColorSpace;
+import android.graphics.Rect;
 import android.os.Build;
+import android.os.ParcelFileDescriptor;
 import android.util.Log;
 
 import androidx.annotation.NonNull;
@@ -18,9 +20,11 @@ import androidx.exifinterface.media.ExifInterface;
 import com.xlythe.view.camera.MediaTags;
 
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.channels.FileChannel;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -35,6 +39,9 @@ import java.util.Comparator;
  * that can be; after that it is viewed the same way, and opening it again finds the copy. The
  * whole decode is the most memory a viewer ever uses, and it is held only while the copy is
  * written.</p>
+ *
+ * <p>A camera's raw file that this release cannot decode at all shows the largest JPEG the
+ * camera embedded in it instead, copied out to the cache the same way.</p>
  */
 final class ImageSources {
     /** Where the copies go, under the app's cache. */
@@ -104,7 +111,11 @@ final class ImageSources {
             BitmapFactory.decodeStream(input, null, bounds);
         }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
-            throw new IOException(location + " is not a picture this device can decode");
+            File preview = rawPreview(context, location);
+            if (preview == null) {
+                throw new IOException(location + " is not a picture this device can decode");
+            }
+            return openPreview(context, location, preview);
         }
         int orientation = ExifInterface.ORIENTATION_NORMAL;
         GPano gpano = null;
@@ -119,11 +130,99 @@ final class ImageSources {
         try {
             source = DecoderRegionSource.open(location.openDescriptor(context),
                     HdrStills.config(bounds), declaredHdrColorSpace(context, location, bounds));
+            if (Build.VERSION.SDK_INT < 24 && !decodesAPiece(source)) {
+                source.close();
+                throw new IOException("The region decoder opened it but decodes nothing");
+            }
         } catch (IOException e) {
             Log.d(TAG, location + " cannot be decoded in pieces, so it is copied", e);
             source = copy(context, location, bounds.outWidth, bounds.outHeight, MAX_COPY_PIXELS);
         }
         return new Opened(source, orientation, gpano);
+    }
+
+    /**
+     * Whether a region decoder decodes anything at all, tried on the picture's corner. Android
+     * 5's opens some small PNGs and then decodes none of them. Asked only before Android 7.0:
+     * Android 9's HEIF decoder crashes the app on some small regions, so later releases are
+     * trusted as they are.
+     */
+    @WorkerThread
+    private static boolean decodesAPiece(@NonNull RegionSource source) {
+        Rect corner = new Rect(0, 0, Math.min(source.getWidth(), 16),
+                Math.min(source.getHeight(), 16));
+        Bitmap piece = source.decode(corner, 1);
+        if (piece == null) {
+            return false;
+        }
+        piece.recycle();
+        return true;
+    }
+
+    /**
+     * Opens the JPEG a raw file embeds, turned as the raw file says, or as the JPEG itself says
+     * when the raw file does not.
+     */
+    @WorkerThread
+    @NonNull
+    private static Opened openPreview(@NonNull Context context, @NonNull ImageLocation location,
+            @NonNull File preview) throws IOException {
+        int orientation = ExifInterface.ORIENTATION_NORMAL;
+        try {
+            MediaTags tags = location.openTags(context);
+            if (tags.getRotation() == 0 && !tags.isMirrored()) {
+                tags = MediaTags.open(preview);
+            }
+            orientation = Orientation.exifOrientation(tags.getRotation(), tags.isMirrored());
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "Unable to read the metadata of " + location, e);
+        }
+        return new Opened(DecoderRegionSource.open(ImageLocation.of(preview)
+                .openDescriptor(context)), orientation, null);
+    }
+
+    /**
+     * The largest JPEG a raw file embeds, copied to the cache, or null if it embeds none or is
+     * not a raw file.
+     */
+    @VisibleForTesting
+    @WorkerThread
+    @Nullable
+    static File rawPreview(@NonNull Context context, @NonNull ImageLocation location)
+            throws IOException {
+        File directory = new File(context.getCacheDir(), CACHE_DIRECTORY);
+        if (!directory.isDirectory() && !directory.mkdirs()) {
+            throw new IOException("Unable to make " + directory);
+        }
+        File copy = new File(directory, digest(location.fingerprint(context)) + ".raw.jpg");
+        if (copy.isFile()) {
+            return copy;
+        }
+        try (ParcelFileDescriptor descriptor = location.openDescriptor(context);
+                FileInputStream input = new FileInputStream(descriptor.getFileDescriptor())) {
+            FileChannel channel = input.getChannel();
+            RawPreview.Found found = RawPreview.find(channel);
+            if (found == null) {
+                return null;
+            }
+            File partial = new File(directory, copy.getName() + ".partial");
+            try (FileOutputStream output = new FileOutputStream(partial)) {
+                FileChannel out = output.getChannel();
+                long done = 0;
+                while (done < found.length) {
+                    long moved = channel.transferTo(found.offset + done, found.length - done, out);
+                    if (moved <= 0) {
+                        throw new IOException("The preview in " + location + " ends early");
+                    }
+                    done += moved;
+                }
+            }
+            if (!partial.renameTo(copy)) {
+                throw new IOException("Unable to keep the preview of " + location);
+            }
+        }
+        trim(directory);
+        return copy;
     }
 
     /**
@@ -219,7 +318,7 @@ final class ImageSources {
 
     /** Deletes all but the newest copies. */
     @WorkerThread
-    private static void trim(@NonNull File directory) {
+    static void trim(@NonNull File directory) {
         File[] copies = directory.listFiles();
         if (copies == null || copies.length <= MAX_COPIES) {
             return;
@@ -240,7 +339,7 @@ final class ImageSources {
 
     /** A file name for a fingerprint. */
     @NonNull
-    private static String digest(@NonNull String fingerprint) {
+    static String digest(@NonNull String fingerprint) {
         try {
             byte[] hash = MessageDigest.getInstance("SHA-1").digest(fingerprint.getBytes("UTF-8"));
             StringBuilder name = new StringBuilder(hash.length * 2);

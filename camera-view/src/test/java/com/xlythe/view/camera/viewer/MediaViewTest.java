@@ -402,6 +402,109 @@ public class MediaViewTest {
                 MediaTags.SphericalVideo.STEREO_MONO), 0f);
     }
 
+    /** An animated picture plays as soon as it shows, and a tap pauses and plays it. */
+    @Test
+    public void anAnimationPlaysAndATapPausesIt() throws IOException {
+        show(file(ApngDecoderTest.everyOperation(), ".png"));
+        ShadowLooper.idleMainLooper();
+        assertEquals(MediaView.ANIMATION, mView.getMediaType());
+        assertEquals(MediaView.ANIMATION, mRecorder.loaded);
+        assertTrue(mView.getContentView() instanceof AnimationView);
+        assertTrue(mView.isPlaying());
+        assertFalse("already playing", mView.play());
+
+        assertTrue(mView.performClick());
+        assertFalse(mView.isPlaying());
+        assertFalse("already paused", mView.pause());
+        assertTrue(mView.performClick());
+        assertTrue(mView.isPlaying());
+        Bitmap bitmap = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888);
+        mView.draw(new Canvas(bitmap));
+
+        // Shown as a still, an animation is just its first frame.
+        mView.setMediaType(MediaView.PICTURE);
+        assertTrue(mView.getContentView() instanceof LargeImageView);
+    }
+
+    /** An animation taken off the screen pauses, and plays on when it is put back. */
+    @Test
+    public void anAnimationPlaysOnWhenItsViewIsPutBack() throws IOException {
+        show(file(ApngDecoderTest.everyOperation(), ".png"));
+        ShadowLooper.idleMainLooper();
+        assertTrue(mView.isPlaying());
+        ViewGroup parent = (ViewGroup) mView.getParent();
+        parent.removeView(mView);
+        assertFalse(mView.isPlaying());
+        parent.addView(mView);
+        assertTrue(mView.isPlaying());
+        assertTrue(mView.getContentView() instanceof AnimationView);
+    }
+
+    /** A picture asked to animate that does not, shows still. */
+    @Test
+    public void aStillShownAsAnAnimationStaysStill() throws IOException {
+        mView.setMediaType(MediaView.ANIMATION);
+        show(file(jpeg(64, 48, null), ".jpg"));
+        ShadowLooper.idleMainLooper();
+        assertTrue(mView.getContentView() instanceof AnimationView);
+        assertEquals(MediaView.ANIMATION, mRecorder.loaded);
+        assertFalse(mView.isPlaying());
+        assertFalse(mView.play());
+        Bitmap bitmap = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888);
+        mView.draw(new Canvas(bitmap));
+    }
+
+    /** What cannot be decoded at all fails, as anything else would. */
+    @Test
+    public void anAnimationThatCannotBeReadFails() {
+        mView.setMediaType(MediaView.ANIMATION);
+        show(new File("/nowhere.gif"));
+        ShadowLooper.idleMainLooper();
+        assertTrue(mRecorder.failed);
+    }
+
+    @Test
+    @Config(sdk = 27)
+    public void beforeAndroid9OnlyGifAndPngAnimate() {
+        assertTrue(MediaDetector.animatesHere(MediaTags.FORMAT_PNG));
+        assertTrue(MediaDetector.animatesHere(MediaTags.FORMAT_GIF));
+        assertFalse(MediaDetector.animatesHere(MediaTags.FORMAT_WEBP));
+        assertFalse(MediaDetector.animatesHere(MediaTags.FORMAT_HEIF));
+    }
+
+    @Test
+    public void fromAndroid9WebpAnimatesButAvifWaitsFor12() {
+        assertTrue(MediaDetector.animatesHere(MediaTags.FORMAT_WEBP));
+        assertFalse(MediaDetector.animatesHere(MediaTags.FORMAT_AVIF));
+    }
+
+    @Test
+    @Config(sdk = 31)
+    public void fromAndroid12AvifAnimates() {
+        assertTrue(MediaDetector.animatesHere(MediaTags.FORMAT_AVIF));
+    }
+
+    /** A QuickTime movie Android would not open plays from a copy that it will. */
+    @Test
+    public void aQuickTimeMovieWithoutAFileTypePlaysFromACopy() throws IOException {
+        Context context = ApplicationProvider.getApplicationContext();
+        // A movie whose file type box gives way to the wide box an old QuickTime movie opens with.
+        byte[] mp4 = MediaTestFiles.movie();
+        int ftyp = ((mp4[0] & 0xFF) << 24) | ((mp4[1] & 0xFF) << 16) | ((mp4[2] & 0xFF) << 8)
+                | (mp4[3] & 0xFF);
+        byte[] rest = new byte[mp4.length - ftyp];
+        System.arraycopy(mp4, ftyp, rest, 0, rest.length);
+        File movie = file(MediaTestFiles.concat(new byte[] {0, 0, 0, 8, 'w', 'i', 'd', 'e'},
+                rest), ".mov");
+        MediaDetector.Detection detection = MediaDetector.detect(context,
+                ImageLocation.of(movie));
+        assertEquals(MediaView.VIDEO, detection.type);
+        assertNotNull(detection.playable);
+        assertTrue(detection.playable.file().getName().endsWith(".mov"));
+        assertNull(MediaDetector.detect(context, ImageLocation.of(
+                file(MediaTestFiles.movie(), ".mp4"))).playable);
+    }
+
     /** Draws without anything to show, which draws nothing. */
     @Test
     public void drawsNothingWhenEmpty() {

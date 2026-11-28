@@ -478,6 +478,12 @@ final class HeifContainer extends ExifImageContainer {
     }
 
     @Override
+    boolean animated() {
+        // An image sequence keeps its frames as a movie's track, beside its still.
+        return IsoBoxes.find(mTopLevel, "moov") != null;
+    }
+
+    @Override
     int format() {
         return mAvif ? MediaTags.FORMAT_AVIF : MediaTags.FORMAT_HEIF;
     }

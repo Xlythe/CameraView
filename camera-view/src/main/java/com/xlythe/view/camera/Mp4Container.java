@@ -32,7 +32,9 @@ import java.util.regex.Pattern;
  * <p>A changed {@code moov} goes back where it was when it fits there, with any free box after
  * it as room to grow, and otherwise moves to the end of the file, leaving a free box behind; the
  * samples never move, so no offset to them changes. A fragmented file, whose fragments must
- * follow its {@code moov}, is never moved.</p>
+ * follow its {@code moov}, never moves it; a {@code moov} that grows pushes the fragments along
+ * instead, where every fragment counts its data from itself, and its random access index is
+ * moved to match.</p>
  */
 final class Mp4Container extends MediaContainer {
     private static final String TAG = "MediaTags";
@@ -49,6 +51,9 @@ final class Mp4Container extends MediaContainer {
 
     /** The largest moov this reads into memory: far more than any recording's metadata. */
     private static final long MAX_MOOV_BYTES = 64L * 1024 * 1024;
+
+    /** How much of a fragmented file is moved at a time when its moov grows. */
+    private static final int PUSH_BUFFER_BYTES = 256 * 1024;
 
     /** Seconds between 1904, where QuickTime counts from, and 1970. */
     static final long SECONDS_1904_TO_1970 = 2082844800L;
@@ -216,6 +221,10 @@ final class Mp4Container extends MediaContainer {
         }
         int kind = video ? MediaTags.KIND_VIDEO
                 : moov != null || audioBrand ? MediaTags.KIND_AUDIO : MediaTags.KIND_UNKNOWN;
+        if (writable && fragmented && moovBox != null) {
+            writable = canPushAlong(box -> source.bytes(box.offset, box.size), topLevel,
+                    moovBox);
+        }
         return new Mp4Container(source, writable, format, kind, topLevel, moovBox, moov, xmpBox,
                 xmp == null ? Xmp.empty() : xmp, fragmented);
     }
@@ -808,6 +817,11 @@ final class Mp4Container extends MediaContainer {
                         (int) child.end()));
             } else if ("vpcC".equals(child.type) && child.dataSize() >= 9) {
                 stream = transferOf(Bytes.u8(mMoov, at + 8));
+            } else if ("avcC".equals(child.type)) {
+                stream = transferOf(AvcParameters.transferCharacteristics(mMoov, at,
+                        (int) child.end()));
+            } else if ("esds".equals(child.type)) {
+                stream = transferOf(AvcParameters.esdsTransfer(mMoov, at, (int) child.end()));
             }
         }
         if (dolby != MediaTags.TRANSFER_UNKNOWN) {
@@ -830,14 +844,15 @@ final class Mp4Container extends MediaContainer {
                 return MediaTags.TRANSFER_PQ;
             case 18:
                 return MediaTags.TRANSFER_HLG;
-            case 1:
-            case 6:
-            case 13:
-            case 14:
-            case 15:
-                return MediaTags.TRANSFER_SDR;
-            default:
+            case 0:
+            case 2:
+            case 3:
+                // Reserved, and unspecified.
                 return MediaTags.TRANSFER_UNKNOWN;
+            default:
+                // Every other curve H.273 defines is a standard dynamic range one.
+                return code > 0 && code <= 17 ? MediaTags.TRANSFER_SDR
+                        : MediaTags.TRANSFER_UNKNOWN;
         }
     }
 
@@ -1019,8 +1034,11 @@ final class Mp4Container extends MediaContainer {
         IsoBoxes.Box last = topLevel.isEmpty() ? null : topLevel.get(topLevel.size() - 1);
         List<byte[]> appends = new ArrayList<>();
         List<IsoBoxes.Box> freed = new ArrayList<>();
+        // Where the file was pushed along to make room, and by how much, for the boxes after.
+        long[] shift = {Long.MAX_VALUE, 0};
         for (Placement placement : placements) {
-            IsoBoxes.Box old = placement.old;
+            IsoBoxes.Box original = placement.old;
+            IsoBoxes.Box old = moved(original, shift);
             byte[] bytes = placement.bytes;
             if (old == null) {
                 if (bytes != null) {
@@ -1033,12 +1051,12 @@ final class Mp4Container extends MediaContainer {
                 continue;
             }
             long room = old.size;
-            IsoBoxes.Box next = following(topLevel, old);
+            IsoBoxes.Box next = moved(following(topLevel, original), shift);
             if (next != null && ("free".equals(next.type) || "skip".equals(next.type))
                     && !next.toEnd) {
                 room += next.size;
             }
-            if (old.end() == length && old == last) {
+            if (old.end() == length && original == last) {
                 raf.seek(old.offset);
                 raf.write(bytes);
                 raf.setLength(old.offset + bytes.length);
@@ -1053,10 +1071,26 @@ final class Mp4Container extends MediaContainer {
             } else if (placement.movable) {
                 appends.add(bytes);
                 freed.add(old);
+            } else if (canPushAlong(box -> {
+                byte[] whole = new byte[(int) box.size];
+                raf.seek(box.offset);
+                raf.readFully(whole);
+                return whole;
+            }, topLevel, old)) {
+                long grow = bytes.length - room;
+                pushAlong(raf, old.offset + room, grow);
+                moveIndex(raf, topLevel, shift, old.offset + room, grow);
+                raf.seek(old.offset);
+                raf.write(bytes);
+                shift[0] = old.offset + room;
+                shift[1] = grow;
+                length = raf.length();
             } else {
-                throw new IOException("A fragmented file has no room for its larger metadata");
+                throw new IOException("A fragmented file whose fragments say where their data "
+                        + "is has no room for its larger metadata");
             }
         }
+        last = moved(last, shift);
         if (!appends.isEmpty()) {
             if (last != null && last.end() != length) {
                 throw new IOException("The file has data after its last box, so nothing can "
@@ -1086,6 +1120,120 @@ final class Mp4Container extends MediaContainer {
                 raf.write(freeHeader(old.size));
             }
         }
+    }
+
+    /** Where a box is now, after the file was pushed along from a place, or null for null. */
+    @Nullable
+    private static IsoBoxes.Box moved(@Nullable IsoBoxes.Box box, @NonNull long[] shift) {
+        if (box == null || box.offset < shift[0]) {
+            return box;
+        }
+        return new IsoBoxes.Box(box.type, box.offset + shift[1], box.header, box.size,
+                box.toEnd);
+    }
+
+    /** Reads a whole top-level box. */
+    private interface BoxReader {
+        @WorkerThread
+        @NonNull
+        byte[] read(@NonNull IsoBoxes.Box box) throws IOException;
+    }
+
+    /**
+     * Whether everything after a box can be pushed along: every fragment counts its data from
+     * itself rather than from the file's start, and no segment index before it points past it.
+     */
+    @WorkerThread
+    private static boolean canPushAlong(@NonNull BoxReader reader,
+            @NonNull List<IsoBoxes.Box> topLevel, @NonNull IsoBoxes.Box box) throws IOException {
+        for (IsoBoxes.Box top : topLevel) {
+            if ("sidx".equals(top.type) && top.offset < box.offset) {
+                return false;
+            }
+            if (!"moof".equals(top.type)) {
+                continue;
+            }
+            if (top.size > MAX_MOOV_BYTES) {
+                return false;
+            }
+            byte[] moof = reader.read(top);
+            IsoBoxes.Box root = new IsoBoxes.Box("moof", 0, top.header, moof.length, false);
+            for (IsoBoxes.Box traf : IsoBoxes.children(moof, root, 0)) {
+                if (!"traf".equals(traf.type)) {
+                    continue;
+                }
+                for (IsoBoxes.Box tfhd : IsoBoxes.children(moof, traf, 0)) {
+                    // The base data offset flag: the data is counted from the file's start.
+                    if ("tfhd".equals(tfhd.type) && tfhd.dataSize() >= 4
+                            && (Bytes.u8(moof, (int) tfhd.data() + 3) & 0x01) != 0) {
+                        return false;
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    /** Moves everything from a place to the end of the file along by some bytes. */
+    private static void pushAlong(@NonNull RandomAccessFile raf, long from, long by)
+            throws IOException {
+        long length = raf.length();
+        raf.setLength(length + by);
+        byte[] buffer = new byte[PUSH_BUFFER_BYTES];
+        long end = length;
+        while (end > from) {
+            int count = (int) Math.min(buffer.length, end - from);
+            long start = end - count;
+            raf.seek(start);
+            raf.readFully(buffer, 0, count);
+            raf.seek(start + by);
+            raf.write(buffer, 0, count);
+            end = start;
+        }
+    }
+
+    /** Moves the fragments' places in a random access index along with them. */
+    private static void moveIndex(@NonNull RandomAccessFile raf,
+            @NonNull List<IsoBoxes.Box> topLevel, @NonNull long[] shift, long from, long by)
+            throws IOException {
+        IsoBoxes.Box mfra = IsoBoxes.find(topLevel, "mfra");
+        if (mfra == null || mfra.size > MAX_MOOV_BYTES) {
+            return;
+        }
+        long at = mfra.offset >= from ? mfra.offset + by : mfra.offset;
+        byte[] index = new byte[(int) mfra.size];
+        raf.seek(at);
+        raf.readFully(index);
+        IsoBoxes.Box root = new IsoBoxes.Box("mfra", 0, mfra.header, index.length, false);
+        for (IsoBoxes.Box tfra : IsoBoxes.children(index, root, 0)) {
+            if (!"tfra".equals(tfra.type) || tfra.dataSize() < 16) {
+                continue;
+            }
+            int data = (int) tfra.data();
+            boolean wide = Bytes.u8(index, data) == 1;
+            long sizes = Bytes.u32(index, data + 8);
+            int extra = (int) (((sizes >> 4) & 3) + ((sizes >> 2) & 3) + (sizes & 3) + 3);
+            long count = Bytes.u32(index, data + 12);
+            int entry = data + 16;
+            int timeSize = wide ? 8 : 4;
+            for (long i = 0; i < count && entry + 2 * timeSize + extra <= tfra.end(); i++) {
+                int offsetAt = entry + timeSize;
+                long offset = wide ? (Bytes.u32(index, offsetAt) << 32)
+                        | Bytes.u32(index, offsetAt + 4) : Bytes.u32(index, offsetAt);
+                if (offset >= from) {
+                    offset += by;
+                    if (wide) {
+                        Bytes.put32(index, offsetAt, offset >>> 32);
+                        Bytes.put32(index, offsetAt + 4, offset);
+                    } else {
+                        Bytes.put32(index, offsetAt, offset);
+                    }
+                }
+                entry += 2 * timeSize + extra;
+            }
+        }
+        raf.seek(at);
+        raf.write(index);
     }
 
     @Nullable

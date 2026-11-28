@@ -59,6 +59,7 @@ import java.io.IOException;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
@@ -76,11 +77,33 @@ import java.util.concurrent.TimeUnit;
  *   <li>a video, which a tap plays and pauses;</li>
  *   <li>a motion photo, whose clip plays while it is held;</li>
  *   <li>a 360° video, to look around while it plays;</li>
- *   <li>sound, showing its cover picture if it has one, which a tap plays and pauses.</li>
+ *   <li>sound, showing its cover picture if it has one, which a tap plays and pauses;</li>
+ *   <li>an animated GIF, WebP or PNG, which plays as soon as it shows and a tap pauses.</li>
  * </ul>
  *
  * <p>HDR pictures and videos put the window in HDR colour mode while they show, where the device
- * has one, and it goes back once nothing in the window shows HDR.</p>
+ * has one, and it goes back once nothing in the window shows HDR. A picture's gain map is drawn
+ * in HDR; a video is drawn tone-mapped to standard range.</p>
+ *
+ * <h2>What each release shows</h2>
+ * <ul>
+ *   <li>JPEG, PNG, WebP, GIF and BMP pictures, animated GIFs and animated PNGs, on every
+ *       release.</li>
+ *   <li>HEIF and HEIC pictures, and animated WebP and HEIF sequences, from Android 9. Before it,
+ *       an animated WebP shows as a still only where the platform decodes its first frame, which
+ *       Android 5 does not.</li>
+ *   <li>AVIF pictures, still and animated, from Android 12.</li>
+ *   <li>DNG from Android 7.0. Before it, and on every release for a camera's other raw formats
+ *       (CR2, CR3, NEF, ARW, RAF, ORF and RW2), the largest JPEG the camera embedded in the file
+ *       is shown instead; some cameras embed one smaller than the photo, and a raw with none
+ *       fails.</li>
+ *   <li>Gain maps in HDR from Android 14. Before it, an Ultra HDR picture shows as an ordinary
+ *       one.</li>
+ *   <li>Videos and sound in whichever codecs the device decodes. QuickTime movies that open
+ *       without a file type, as older ones and some Live Photos do, play from a copy the
+ *       platform recognises, kept in the app's cache.</li>
+ *   <li>TIFF, JPEG XL and AVI files fail on every release so far.</li>
+ * </ul>
  *
  * <h2>Look</h2>
  * <p>The only thing it draws itself is a thin line along its bottom edge that shows how far a
@@ -92,7 +115,7 @@ import java.util.concurrent.TimeUnit;
 public class MediaView extends FrameLayout {
     /** What a file is shown as. */
     @IntDef({UNKNOWN, PICTURE, PANORAMA, PHOTOSPHERE, VIDEO, MOTION_PHOTO, SPHERICAL_VIDEO,
-            AUDIO})
+            AUDIO, ANIMATION})
     @Retention(RetentionPolicy.SOURCE)
     public @interface MediaType {}
 
@@ -112,6 +135,8 @@ public class MediaView extends FrameLayout {
     public static final int SPHERICAL_VIDEO = 6;
     /** Sound, shown as its cover picture. */
     public static final int AUDIO = 7;
+    /** An animated picture, which loops. */
+    public static final int ANIMATION = 8;
 
     /** The progress line's thickness when no style sets it, in dp. */
     private static final float DEFAULT_PROGRESS_DP = 2;
@@ -125,6 +150,12 @@ public class MediaView extends FrameLayout {
     /** Works out what files are, and opens them to play, off the main thread. */
     private Executor mExecutor = new ThreadPoolExecutor(
             0, 1, 1, TimeUnit.SECONDS, new LinkedBlockingQueue<Runnable>());
+
+    /**
+     * Decodes animations, each on a thread of its own, so a decode a platform decoder stalls on
+     * holds nothing else up.
+     */
+    private Executor mAnimationExecutor = Executors.newCachedThreadPool();
 
     /** Taps and holds. */
     private final GestureDetector mGestures;
@@ -270,19 +301,15 @@ public class MediaView extends FrameLayout {
     /** A colour from the theme, or the fallback if the theme has none. */
     @ColorInt
     private static int themeColor(@NonNull Context context, int attribute, @ColorInt int fallback) {
-        TypedValue value = new TypedValue();
-        if (!context.getTheme().resolveAttribute(attribute, value, true)) {
+        // Through the theme's own attributes, which resolve a colour resource on every release.
+        TypedArray array = context.obtainStyledAttributes(new int[] {attribute});
+        try {
+            return array.getColor(0, fallback);
+        } catch (RuntimeException notAColor) {
             return fallback;
+        } finally {
+            array.recycle();
         }
-        if (value.resourceId != 0) {
-            try {
-                return ContextCompat.getColor(context, value.resourceId);
-            } catch (RuntimeException notAColor) {
-                return fallback;
-            }
-        }
-        return value.type >= TypedValue.TYPE_FIRST_COLOR_INT
-                && value.type <= TypedValue.TYPE_LAST_COLOR_INT ? value.data : fallback;
     }
 
     // ---------- What to show ----------
@@ -401,14 +428,22 @@ public class MediaView extends FrameLayout {
                 break;
             }
             case VIDEO:
-                showVideo(location);
+                showVideo(detection.playable != null ? detection.playable : location);
                 break;
             case SPHERICAL_VIDEO:
-                showSphericalVideo(location, detection);
+                showSphericalVideo(detection.playable != null ? detection.playable : location,
+                        detection);
                 break;
             case AUDIO:
                 showAudio(location, detection);
                 break;
+            case ANIMATION: {
+                AnimationView animation = new AnimationView(getContext(), mAnimationExecutor);
+                animation.setImageLoadListener(imageListener());
+                setContent(animation);
+                animation.setLocation(location);
+                break;
+            }
             default:
                 reportFailed();
                 return;
@@ -561,6 +596,8 @@ public class MediaView extends FrameLayout {
         if (mContent != null) {
             if (mContent instanceof PhotosphereView) {
                 ((PhotosphereView) mContent).clearVideo();
+            } else if (mContent instanceof AnimationView) {
+                ((AnimationView) mContent).release();
             }
             removeView(mContent);
             mContent = null;
@@ -758,6 +795,9 @@ public class MediaView extends FrameLayout {
         if (mContent instanceof VideoView) {
             return ((VideoView) mContent).isPlaying();
         }
+        if (mContent instanceof AnimationView) {
+            return ((AnimationView) mContent).isPlaying();
+        }
         try {
             return mPlayer != null && mPlayerPrepared && mPlayer.isPlaying();
         } catch (IllegalStateException released) {
@@ -774,6 +814,9 @@ public class MediaView extends FrameLayout {
     public boolean play() {
         if (mContent instanceof VideoView) {
             return ((VideoView) mContent).play();
+        }
+        if (mContent instanceof AnimationView) {
+            return ((AnimationView) mContent).play();
         }
         if (mType == MOTION_PHOTO || mPlayer == null || !mPlayerPrepared) {
             return false;
@@ -795,6 +838,9 @@ public class MediaView extends FrameLayout {
     public boolean pause() {
         if (mContent instanceof VideoView) {
             return ((VideoView) mContent).pause();
+        }
+        if (mContent instanceof AnimationView) {
+            return ((AnimationView) mContent).pause();
         }
         if (!isPlaying()) {
             return false;
@@ -943,7 +989,8 @@ public class MediaView extends FrameLayout {
     @Override
     public boolean performClick() {
         boolean handled = super.performClick();
-        if (!mTapToPlay || (mType != VIDEO && mType != SPHERICAL_VIDEO && mType != AUDIO)) {
+        if (!mTapToPlay || (mType != VIDEO && mType != SPHERICAL_VIDEO && mType != AUDIO
+                && mType != ANIMATION)) {
             return handled;
         }
         if (isPlaying()) {
@@ -1168,6 +1215,7 @@ public class MediaView extends FrameLayout {
     @VisibleForTesting
     void setExecutor(@NonNull Executor executor) {
         mExecutor = executor;
+        mAnimationExecutor = executor;
     }
 
     /** What shows the file, for tests. */

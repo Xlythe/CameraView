@@ -18,6 +18,7 @@ import androidx.annotation.WorkerThread;
 
 import com.xlythe.view.camera.MediaTags;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -64,15 +65,27 @@ final class MediaDetector {
         @Nullable
         final byte[] coverArt;
 
+        /** A copy of a video that plays where the file itself does not, or null. */
+        @Nullable
+        final ImageLocation playable;
+
         Detection(@MediaView.MediaType int type, boolean hdr,
                 @Nullable MediaTags.MotionPhoto motionPhoto, @Nullable GPano sphere,
                 @NonNull float[] eye, @Nullable byte[] coverArt) {
+            this(type, hdr, motionPhoto, sphere, eye, coverArt, null);
+        }
+
+        Detection(@MediaView.MediaType int type, boolean hdr,
+                @Nullable MediaTags.MotionPhoto motionPhoto, @Nullable GPano sphere,
+                @NonNull float[] eye, @Nullable byte[] coverArt,
+                @Nullable ImageLocation playable) {
             this.type = type;
             this.hdr = hdr;
             this.motionPhoto = motionPhoto;
             this.sphere = sphere;
             this.eye = eye;
             this.coverArt = coverArt;
+            this.playable = playable;
         }
     }
 
@@ -112,6 +125,10 @@ final class MediaDetector {
                     return new Detection(MediaView.MOTION_PHOTO, hdr, motion, null, wholeFrame,
                             null);
                 }
+                if (tags != null && tags.isAnimated() && animatesHere(tags.getFormat())) {
+                    return new Detection(MediaView.ANIMATION, false, null, null, wholeFrame,
+                            null);
+                }
                 int rotation = tags == null ? 0 : tags.getRotation();
                 return new Detection(pictureType(tags == null ? null : tags.getPanorama(),
                         bounds, rotation), hdr, null, null, wholeFrame, null);
@@ -124,12 +141,14 @@ final class MediaDetector {
                 }
                 MediaTags.SphericalVideo spherical =
                         tags == null ? null : tags.getSphericalVideo();
+                ImageLocation playable = playableCopy(context, location);
                 if (spherical != null && spherical.getProjection()
                         == MediaTags.SphericalVideo.PROJECTION_EQUIRECTANGULAR) {
                     return new Detection(MediaView.SPHERICAL_VIDEO, hdr, null, sphereOf(spherical),
-                            eyeOf(spherical.getStereoMode()), null);
+                            eyeOf(spherical.getStereoMode()), null, playable);
                 }
-                return new Detection(MediaView.VIDEO, hdr, null, null, wholeFrame, null);
+                return new Detection(MediaView.VIDEO, hdr, null, null, wholeFrame, null,
+                        playable);
             }
             case MediaTags.KIND_AUDIO:
                 return new Detection(MediaView.AUDIO, false, null, null, wholeFrame,
@@ -137,6 +156,35 @@ final class MediaDetector {
             default:
                 throw new IOException(location + " is no media this device knows");
         }
+    }
+
+    /** A copy of a QuickTime movie Android does not recognise as one, or null if none is needed. */
+    @WorkerThread
+    @Nullable
+    private static ImageLocation playableCopy(@NonNull Context context,
+            @NonNull ImageLocation location) {
+        try {
+            File copy = QuickTimeCopy.playable(context, location);
+            return copy == null ? null : ImageLocation.of(copy);
+        } catch (IOException | RuntimeException e) {
+            Log.w(TAG, "Unable to make a playable copy of " + location, e);
+            return null;
+        }
+    }
+
+    /**
+     * Whether an animated picture of a format plays on this release: an animated PNG and GIF
+     * always, the rest from Android 9, and AVIF from Android 12, where it decodes at all.
+     */
+    @VisibleForTesting
+    static boolean animatesHere(@MediaTags.Format int format) {
+        if (format == MediaTags.FORMAT_PNG || format == MediaTags.FORMAT_GIF) {
+            return true;
+        }
+        if (format == MediaTags.FORMAT_AVIF) {
+            return Build.VERSION.SDK_INT >= 31;
+        }
+        return Build.VERSION.SDK_INT >= 28;
     }
 
     /**

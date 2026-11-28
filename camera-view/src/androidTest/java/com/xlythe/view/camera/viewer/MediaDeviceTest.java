@@ -21,6 +21,7 @@ import android.graphics.Gainmap;
 import android.graphics.Paint;
 import android.graphics.Rect;
 import android.media.MediaRecorder;
+import android.net.Uri;
 import android.os.Build;
 import android.os.ParcelFileDescriptor;
 import android.os.SystemClock;
@@ -31,6 +32,7 @@ import android.view.Surface;
 import android.view.View;
 import android.widget.FrameLayout;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.exifinterface.media.ExifInterface;
@@ -166,6 +168,87 @@ public class MediaDeviceTest {
         }
     }
 
+    /**
+     * The whole pipeline through the gallery: the camera files a picture in MediaStore, MediaTags
+     * writes its title through the Uri the app owns, and MediaView shows it from that Uri.
+     */
+    @Test
+    @SdkSuppress(minSdkVersion = 29)
+    public void aPictureFiledInTheGalleryIsWrittenThroughItsUri() throws Exception {
+        assumeTrue("no camera on this device", mContext.getPackageManager()
+                .hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY));
+        AtomicReference<Uri> filed = new AtomicReference<>();
+        try (ActivityScenario<CameraTestActivity> scenario =
+                     ActivityScenario.launch(CameraTestActivity.class)) {
+            CountDownLatch opened = new CountDownLatch(1);
+            CountDownLatch saved = new CountDownLatch(1);
+            AtomicReference<CameraView> held = new AtomicReference<>();
+            scenario.onActivity(activity -> {
+                CameraView camera = activity.getCameraView();
+                held.set(camera);
+                camera.setOnCameraStateChangedListener(
+                        new CameraView.OnCameraStateChangedListener() {
+                            @Override
+                            public void onCameraOpened() {
+                                opened.countDown();
+                            }
+
+                            @Override
+                            public void onCameraClosed() {}
+                        });
+                if (camera.isOpen()) {
+                    opened.countDown();
+                } else {
+                    camera.open();
+                }
+            });
+            assertTrue("the camera never opened",
+                    opened.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            CameraView camera = held.get();
+            camera.setFlash(CameraView.Flash.OFF);
+            try {
+                camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+                    @Override
+                    public void onImageConfirmation() {}
+
+                    @Override
+                    public void onImageSaved(@NonNull Uri uri) {
+                        filed.set(uri);
+                        saved.countDown();
+                    }
+
+                    @Override
+                    public void onFailure() {
+                        saved.countDown();
+                    }
+                });
+                camera.takePicture();
+                assertTrue("the picture was never filed",
+                        saved.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            } finally {
+                scenario.onActivity(activity -> activity.getCameraView().close());
+            }
+        }
+        Uri uri = filed.get();
+        assertNotNull("the capture failed", uri);
+        try {
+            MediaTags tags = MediaTags.open(mContext, uri);
+            assertFalse("the app filed it, so it may write it", tags.isReadOnly());
+            assertTrue(tags.setTitle("Filed and titled"));
+            tags.save();
+            assertEquals("Filed and titled", MediaTags.open(mContext, uri).getTitle());
+
+            mScenario = ActivityScenario.launch(ViewerTestActivity.class);
+            try {
+                assertEquals(MediaView.PICTURE, showUri(uri, "gallery-picture"));
+            } finally {
+                mScenario.close();
+            }
+        } finally {
+            mContext.getContentResolver().delete(uri, null, null);
+        }
+    }
+
     /** A DNG is a picture, turned by the orientation in its first IFD. */
     @Test
     public void aDngIsAPictureTurnedByItsOwnOrientation() throws Exception {
@@ -182,6 +265,108 @@ public class MediaDeviceTest {
         LargeImageView picture = (LargeImageView) make(mView::getContentView);
         assertTrue("shown upright, it stands taller than it is wide", onMain(() ->
                 picture.mViewport.scaledHeight() > picture.mViewport.scaledWidth()));
+        // Upright, the stored left half, red, is the top; the stored top right, green, is the
+        // bottom right, and the stored bottom right, blue, the bottom left. A mirror swaps the
+        // last two.
+        Bitmap shown = draw(picture);
+        assertEquals('R', ViewerDeviceTest.hue(at(picture, shown, 400, 300)));
+        assertEquals('G', ViewerDeviceTest.hue(at(picture, shown, 600, 900)));
+        assertEquals('B', ViewerDeviceTest.hue(at(picture, shown, 200, 900)));
+    }
+
+    /**
+     * A real HEIC turned and mirrored through its own transforms is shown turned and mirrored
+     * exactly once: what shows matches the upright picture turned a quarter, or mirrored, and no
+     * other way.
+     */
+    @Test
+    @SdkSuppress(minSdkVersion = 28)
+    public void aHeicIsTurnedByItsOwnTransformsExactlyOnce() throws Exception {
+        File heic = new File(mDirectory, "turned.heic");
+        try (FileOutputStream out = new FileOutputStream(heic)) {
+            out.write(shell("cat /data/local/tmp/media-corpus/stills/androidx_sample_still_photo.heic"));
+        }
+        assumeTrue("the corpus was not pushed", heic.length() > 0);
+        float[][] upright = grid(heic, 0, false);
+        float[][] turned = grid(heic, 90, false);
+        float[][] mirrored = grid(heic, 0, true);
+        Log.i(TAG, "HEIC turned matches transform " + closest(upright, turned)
+                + ", mirrored matches " + closest(upright, mirrored));
+        assertEquals("turned a quarter clockwise", 1, closest(upright, turned));
+        assertEquals("mirrored left to right", 4, closest(upright, mirrored));
+    }
+
+    /** The picture as shown with an orientation written into it, as a grid of brightness. */
+    private float[][] grid(File file, int rotation, boolean mirrored) throws Exception {
+        MediaTags tags = MediaTags.open(file);
+        assertTrue(tags.setOrientation(rotation, mirrored));
+        tags.save();
+        assertEquals(MediaView.PICTURE, show(file, "heic-" + rotation + (mirrored ? "-m" : "")));
+        LargeImageView picture = (LargeImageView) make(mView::getContentView);
+        Bitmap shown = draw(picture);
+        Viewport viewport = picture.mViewport;
+        int left = Math.max(0, Math.round(viewport.getX()));
+        int top = Math.max(0, Math.round(viewport.getY()));
+        int width = Math.min(shown.getWidth() - left, Math.round(viewport.scaledWidth()));
+        int height = Math.min(shown.getHeight() - top, Math.round(viewport.scaledHeight()));
+        Bitmap small = Bitmap.createScaledBitmap(Bitmap.createBitmap(shown, left, top, width,
+                height), 16, 16, true);
+        float[][] grid = new float[16][16];
+        for (int y = 0; y < 16; y++) {
+            for (int x = 0; x < 16; x++) {
+                int c = small.getPixel(x, y);
+                grid[y][x] = Color.red(c) * 0.3f + Color.green(c) * 0.59f + Color.blue(c) * 0.11f;
+            }
+        }
+        return grid;
+    }
+
+    /**
+     * Which of the eight ways to turn and mirror a grid makes it closest to another: 0 as it is,
+     * 1 to 3 turned that many quarters clockwise, 4 mirrored, 5 to 7 mirrored then turned.
+     */
+    private static int closest(float[][] from, float[][] to) {
+        int best = -1;
+        double bestDifference = Double.MAX_VALUE;
+        for (int way = 0; way < 8; way++) {
+            double difference = 0;
+            for (int y = 0; y < 16; y++) {
+                for (int x = 0; x < 16; x++) {
+                    int sx = x;
+                    int sy = y;
+                    for (int turn = 0; turn < way % 4; turn++) {
+                        int t = sx;
+                        sx = sy;
+                        sy = 15 - t;
+                    }
+                    if (way >= 4) {
+                        sx = 15 - sx;
+                    }
+                    difference += Math.abs(from[sy][sx] - to[y][x]);
+                }
+            }
+            if (difference < bestDifference) {
+                bestDifference = difference;
+                best = way;
+            }
+        }
+        return best;
+    }
+
+    /** What a view draws, drawn in software. */
+    private Bitmap draw(View view) {
+        Bitmap bitmap = Bitmap.createBitmap(view.getWidth(), view.getHeight(),
+                Bitmap.Config.ARGB_8888);
+        mInstrumentation.runOnMainSync(() -> view.draw(new Canvas(bitmap)));
+        return bitmap;
+    }
+
+    /** An upright picture's pixel in what a viewer drew. */
+    private static int at(LargeImageView view, Bitmap shown, int x, int y) {
+        Viewport viewport = view.mViewport;
+        float scale = viewport.getScale();
+        return shown.getPixel(Math.round(viewport.getX() + x * scale),
+                Math.round(viewport.getY() + y * scale));
     }
 
     /**
@@ -388,6 +573,38 @@ public class MediaDeviceTest {
         return type[0];
     }
 
+    /** Shows a Uri in a new MediaView and waits until it says what it is. */
+    private int showUri(Uri uri, String name) throws Exception {
+        CountDownLatch done = new CountDownLatch(1);
+        int[] type = {FAILED};
+        AtomicReference<MediaView> made = new AtomicReference<>();
+        mScenario.onActivity(activity -> {
+            MediaView view = new MediaView(activity);
+            view.setMediaListener(new MediaListener() {
+                @Override
+                public void onMediaLoaded(int loaded) {
+                    type[0] = loaded;
+                    done.countDown();
+                }
+
+                @Override
+                public void onMediaFailed() {
+                    done.countDown();
+                }
+            });
+            activity.getRoot().removeAllViews();
+            activity.getRoot().addView(view, new FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+            view.setUri(uri);
+            made.set(view);
+        });
+        mView = made.get();
+        assertTrue(uri + " was never reported", done.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        SystemClock.sleep(1500);
+        save(screenshot(mView), name);
+        return type[0];
+    }
+
     /** Plays what the last view shows, and waits until it is playing. */
     private boolean play() {
         MediaView view = mView;
@@ -528,7 +745,7 @@ public class MediaDeviceTest {
 
     /** A grey picture whose gain map brightens its left half fourfold. */
     @RequiresApi(34)
-    private static void writeUltraHdr(File file, int width, int height) throws IOException {
+    static void writeUltraHdr(File file, int width, int height) throws IOException {
         Bitmap base = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
         base.eraseColor(0xFF808080);
         Bitmap gain = Bitmap.createBitmap(width / 4, height / 4, Bitmap.Config.ARGB_8888);
@@ -570,7 +787,7 @@ public class MediaDeviceTest {
      */
     @RequiresApi(23)
     @SuppressWarnings("deprecation")
-    private static void record(File file, int width, int height, @Nullable Bitmap frame)
+    static void record(File file, int width, int height, @Nullable Bitmap frame)
             throws IOException {
         MediaRecorder recorder = new MediaRecorder();
         try {
@@ -668,7 +885,7 @@ public class MediaDeviceTest {
     }
 
     /** A JPEG of a bitmap with an XMP packet straight after its start, and bytes after it. */
-    private static void writeJpeg(File file, Bitmap bitmap, String xmp, byte[] tail)
+    static void writeJpeg(File file, Bitmap bitmap, String xmp, byte[] tail)
             throws IOException {
         ByteArrayOutputStream encoded = new ByteArrayOutputStream();
         assertTrue(bitmap.compress(Bitmap.CompressFormat.JPEG, 90, encoded));
