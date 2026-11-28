@@ -323,8 +323,12 @@ final class OverlayContent {
         @Nullable
         private static Drawable decode(@NonNull byte[] data, int maxDimension)
                 throws IOException {
-            Drawable drawable = ImageDecoder.decodeDrawable(
-                    ImageDecoder.createSource(ByteBuffer.wrap(data)),
+            // A direct buffer, read natively. From a heap array, Android 9 reads each frame back
+            // through the JVM on its animation thread, which has no JVM, and aborts.
+            ByteBuffer buffer = ByteBuffer.allocateDirect(data.length);
+            buffer.put(data);
+            buffer.flip();
+            Drawable drawable = ImageDecoder.decodeDrawable(ImageDecoder.createSource(buffer),
                     (decoder, info, source) -> {
                         int width = info.getSize().getWidth();
                         int height = info.getSize().getHeight();
