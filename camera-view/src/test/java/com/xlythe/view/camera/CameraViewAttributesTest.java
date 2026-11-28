@@ -173,12 +173,14 @@ public class CameraViewAttributesTest {
         CameraView view = from(builder -> builder
                 .addAttribute(R.attr.stabilizationEnabled, "true")
                 .addAttribute(R.attr.lowLightBoostEnabled, "true")
+                .addAttribute(R.attr.motionPhotoEnabled, "true")
                 .addAttribute(R.attr.exposureCompensation, "2"));
         CameraView torch = from(builder -> builder
                 .addAttribute(R.attr.torchEnabled, "true"));
 
         assertTrue(view.isStabilizationEnabled());
         assertTrue(view.isLowLightBoostEnabled());
+        assertTrue(view.isMotionPhotoEnabled());
         assertEquals(2, view.getExposureCompensation());
         assertTrue(torch.isTorchEnabled());
     }
@@ -196,6 +198,7 @@ public class CameraViewAttributesTest {
         assertFalse(view.isImageConfirmationEnabled());
         assertFalse(view.isVideoConfirmationEnabled());
         assertEquals(CameraView.DynamicRange.SDR, view.getDynamicRange());
+        assertFalse(view.isMotionPhotoEnabled());
         assertEquals(CameraView.Extension.NONE, view.getExtension());
         assertEquals(ICameraModule.DEFAULT_PICTURE_QUALITY, view.getPictureQuality());
         assertTrue(view.isShutterSoundEnabled());
