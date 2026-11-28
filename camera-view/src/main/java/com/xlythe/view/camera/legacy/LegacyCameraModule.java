@@ -649,7 +649,7 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     protected void startBurst(@NonNull Burst burst) {
         Camera camera = mCamera;
-        if (camera == null || isRecording() || mBurst != null) {
+        if (camera == null || isRecording() || mBurst != null || mTakingPicture) {
             Log.w(TAG, "Cannot take a burst in the camera's current state");
             burst.end();
             return;

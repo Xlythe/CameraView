@@ -12,6 +12,9 @@ import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 import android.os.Looper;
 
+import androidx.annotation.NonNull;
+
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
@@ -293,6 +296,34 @@ public class LegacyParityTest {
         module.takePicture(new File(directory, "third.jpg"));
         idle();
         assertEquals("once the first arrives the next is taken", 2,
+                ShadowSlowPictureCamera.getRequestCount());
+    }
+
+    /**
+     * A burst asked for while a picture is being taken finishes at once, untaken, since its first
+     * picture would take the other's callback as a second picture would.
+     */
+    @Test
+    @Config(shadows = {ShadowSlowPictureCamera.class})
+    public void aBurstAskedForWhileAPictureIsTakenDoesNotStart() throws Exception {
+        List<String> heard = new ArrayList<>();
+        File directory = RuntimeEnvironment.getApplication().getCacheDir();
+        module.open();
+        idle();
+        module.takePicture(new File(directory, "single.jpg"));
+
+        module.startBurst(new Burst(directory, "late", 3, new Burst.Callback() {
+            @Override public void onPictureTaken(@NonNull File file) {
+                heard.add("burst picture " + file.getName());
+            }
+            @Override public void onBurstFinished() {
+                heard.add("burst finished");
+            }
+        }));
+        idle();
+
+        assertEquals(Arrays.asList("burst finished"), heard);
+        assertEquals("the burst never reached the camera", 1,
                 ShadowSlowPictureCamera.getRequestCount());
     }
 
