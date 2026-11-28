@@ -637,8 +637,8 @@ Viewing any media
 MediaView shows whatever a file turns out to be, worked out from its contents: a picture to zoom
 into, a panorama to pan along, a photo sphere to look around, a video, a motion photo whose clip
 plays while it is held, a 360° video, a recording, or an animated picture. A tap plays and pauses;
-a thin line along the bottom shows how far it has played. HDR pictures and videos show in HDR
-where the screen can.
+a thin line along the bottom shows how far it has played. HDR pictures show in HDR
+where the screen can; an HDR video puts the window in HDR mode, but is drawn in standard range.
 ```java
 mMediaView.setUri(uri);                  // or setFile(file)
 mMediaView.setMediaListener(new MediaListener() {
