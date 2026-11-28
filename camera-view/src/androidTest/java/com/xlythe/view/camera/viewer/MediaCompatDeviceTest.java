@@ -248,7 +248,7 @@ public class MediaCompatDeviceTest {
         } else if (shown != FAILED) {
             hdr = onMain(view::isHoldingHdr);
             AtomicInteger drawn = shown == MediaView.VIDEO ? countFrames(view) : null;
-            plays = checkShown(view, shown, cells, file, wrong);
+            plays = checkShown(view, shown, cells, file, !"no".equals(decoder), wrong);
             if (drawn != null) {
                 frames = Integer.toString(drawn.get());
             }
@@ -338,9 +338,12 @@ public class MediaCompatDeviceTest {
         return null;
     }
 
-    /** Checks what showed: its orientation, place on the sphere, and that it plays. */
+    /**
+     * Checks what showed: its orientation, place on the sphere, and that it plays, or for a
+     * motion photo whose clip no decoder here takes, that the clip does not.
+     */
     private String checkShown(MediaView view, int shown, String[] cells, File file,
-            List<String> wrong) {
+            boolean decodable, List<String> wrong) {
         View content = make(view::getContentView);
         switch (shown) {
             case MediaView.PICTURE:
@@ -375,8 +378,9 @@ public class MediaCompatDeviceTest {
                     view.dispatchTouchEvent(up);
                     up.recycle();
                 });
-                if (!clip) {
-                    wrong.add("motion clip did not play");
+                if (clip != decodable) {
+                    wrong.add(decodable ? "motion clip did not play"
+                            : "motion clip played with no decoder for it");
                 }
                 return clip ? "clip" : "no clip";
             }

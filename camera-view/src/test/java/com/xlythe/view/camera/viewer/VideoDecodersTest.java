@@ -132,14 +132,17 @@ public class VideoDecodersTest {
                 MediaFormat.createVideoFormat("video/avc", 16, 16)));
     }
 
-    /** Android 4's software decoder lists H.264 Baseline only, so High is turned away. */
+    /**
+     * Android 4 and 5's software decoders list H.264 Baseline only, so High is turned away.
+     * Android 5's plays Main, so Main is taken on its word.
+     */
     @Test
-    public void aBaselineDecoderTakesBaselineAndNotHigh() {
+    public void aBaselineDecoderTakesBaselineAndMainAndNotHigh() {
         CodecProfileLevel[] baseline = {level(CodecProfileLevel.AVCProfileBaseline,
                 CodecProfileLevel.AVCLevel51)};
         assertFalse(VideoDecoders.supports("video/avc", CodecProfileLevel.AVCProfileHigh,
                 CodecProfileLevel.AVCLevel31, baseline));
-        assertFalse(VideoDecoders.supports("video/avc", CodecProfileLevel.AVCProfileMain,
+        assertTrue(VideoDecoders.supports("video/avc", CodecProfileLevel.AVCProfileMain,
                 CodecProfileLevel.AVCLevel31, baseline));
         assertTrue(VideoDecoders.supports("video/avc",
                 CodecProfileLevel.AVCProfileConstrainedBaseline, CodecProfileLevel.AVCLevel21,

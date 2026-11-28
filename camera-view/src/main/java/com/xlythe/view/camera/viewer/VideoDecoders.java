@@ -26,9 +26,8 @@ import java.util.Locale;
 /**
  * Whether this device has a decoder for a file's video, worked out from its tracks before it
  * plays, so a video no decoder here can draw fails rather than playing its sound over nothing.
- * A decoder counts when it takes the track's format; lists the track's profile, or a profile
- * that contains it, at the track's level or higher; and, from Android 5.0, takes frames of its
- * size.
+ * A decoder counts when it takes the track's format and lists the track's profile, or a profile
+ * that contains it, at the track's level or higher.
  *
  * <p>Android lists its decoders from 4.1. Before that, and for a file whose tracks cannot be
  * read, a video counts as decodable and the player has the last word.</p>
@@ -126,15 +125,11 @@ final class VideoDecoders {
                 }
                 video = true;
                 int[] profileLevel = profileLevel(mime, format);
-                int width = format.containsKey(MediaFormat.KEY_WIDTH)
-                        ? format.getInteger(MediaFormat.KEY_WIDTH) : 0;
-                int height = format.containsKey(MediaFormat.KEY_HEIGHT)
-                        ? format.getInteger(MediaFormat.KEY_HEIGHT) : 0;
-                if (hasDecoder(mime, profileLevel, width, height)) {
+                if (hasDecoder(mime, profileLevel)) {
                     return true;
                 }
-                Log.w(TAG, "No decoder here for " + describe(mime, profileLevel) + " at " + width
-                        + "x" + height + " in " + location);
+                Log.w(TAG, "No decoder here for " + describe(mime, profileLevel) + " in "
+                        + location);
             }
             return !video;
         } catch (IOException | RuntimeException e) {
@@ -356,14 +351,10 @@ final class VideoDecoders {
         return trimmed;
     }
 
-    /**
-     * Whether a decoder here takes a format: at a profile and level, when they are known, and
-     * from Android 5.0 at a size, when it is known.
-     */
+    /** Whether a decoder here takes a format, at a profile and level when they are known. */
     @RequiresApi(16)
     @WorkerThread
-    private static boolean hasDecoder(@NonNull String mime, @Nullable int[] profileLevel,
-            int width, int height) {
+    private static boolean hasDecoder(@NonNull String mime, @Nullable int[] profileLevel) {
         for (MediaCodecInfo info : decoders()) {
             for (String type : info.getSupportedTypes()) {
                 if (!type.equalsIgnoreCase(mime)) {
@@ -376,30 +367,13 @@ final class VideoDecoders {
                     Log.d(TAG, "Unable to read what " + info.getName() + " takes", e);
                     return true;
                 }
-                if (profileLevel != null && !supports(mime, profileLevel[0], profileLevel[1],
+                if (profileLevel == null || supports(mime, profileLevel[0], profileLevel[1],
                         capabilities.profileLevels)) {
-                    continue;
+                    return true;
                 }
-                if (Build.VERSION.SDK_INT >= 21 && !takesSize(capabilities, width, height)) {
-                    continue;
-                }
-                return true;
             }
         }
         return false;
-    }
-
-    /** Whether a decoder takes frames of a size, either way round; true when it is unknown. */
-    @RequiresApi(21)
-    @AnyThread
-    private static boolean takesSize(@NonNull MediaCodecInfo.CodecCapabilities capabilities,
-            int width, int height) {
-        MediaCodecInfo.VideoCapabilities video = capabilities.getVideoCapabilities();
-        if (video == null || width <= 0 || height <= 0) {
-            return true;
-        }
-        // Some decoders list their sizes for one orientation only.
-        return video.isSizeSupported(width, height) || video.isSizeSupported(height, width);
     }
 
     /** Every decoder this device lists. */
@@ -461,11 +435,13 @@ final class VideoDecoders {
             switch (track) {
                 case AVC_BASELINE:
                 case AVC_CONSTRAINED_BASELINE:
+                case AVC_MAIN:
+                    // Main is taken on a Baseline decoder's word too: Android 5's software
+                    // decoder lists Baseline alone, and plays Main.
                     return decoder == AVC_BASELINE || decoder == AVC_CONSTRAINED_BASELINE
                             || decoder == AVC_MAIN || decoder == AVC_HIGH
                             || decoder == AVC_CONSTRAINED_HIGH || decoder == AVC_HIGH10
                             || decoder == AVC_HIGH422 || decoder == AVC_HIGH444;
-                case AVC_MAIN:
                 case AVC_HIGH:
                 case AVC_CONSTRAINED_HIGH:
                     return decoder == AVC_HIGH || decoder == AVC_HIGH10
