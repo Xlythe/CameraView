@@ -14,16 +14,6 @@
         android:layout_height="match_parent"
         android:contentDescription="@string/viewer_media_description" />
 
-    <TextView
-        android:id="@+id/viewer_info"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_gravity="top"
-        android:background="#80000000"
-        android:padding="8dp"
-        android:textColor="#FFFFFF"
-        android:visibility="gone" />
-
     <ProgressBar
         android:id="@+id/viewer_progress"
         android:layout_width="wrap_content"
@@ -57,82 +47,12 @@
             android:textColor="#FFFFFF"
             app:cornerRadius="20dp" />
 
-        <!-- Scrolls rather than wraps where the screen is too narrow for every choice. -->
-        <HorizontalScrollView
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
+        <CheckBox
+            android:id="@+id/viewer_gyroscope"
+            style="@style/ViewerChoice"
             android:layout_marginStart="8dp"
-            android:layout_weight="1">
-
-            <LinearLayout
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <RadioGroup
-                    android:id="@+id/viewer_type"
-                    android:layout_width="wrap_content"
-                    android:layout_height="wrap_content"
-                    android:checkedButton="@id/viewer_type_detect"
-                    android:orientation="horizontal">
-
-                    <RadioButton
-                        android:id="@+id/viewer_type_detect"
-                        style="@style/ViewerChoice"
-                        android:text="@string/viewer_mode_detect" />
-
-                    <RadioButton
-                        android:id="@+id/viewer_type_picture"
-                        style="@style/ViewerChoice"
-                        android:text="@string/viewer_mode_picture" />
-
-                    <RadioButton
-                        android:id="@+id/viewer_type_panorama"
-                        style="@style/ViewerChoice"
-                        android:text="@string/viewer_mode_panorama" />
-
-                    <RadioButton
-                        android:id="@+id/viewer_type_photosphere"
-                        style="@style/ViewerChoice"
-                        android:text="@string/viewer_mode_photosphere" />
-
-                    <RadioButton
-                        android:id="@+id/viewer_type_video"
-                        style="@style/ViewerChoice"
-                        android:text="@string/viewer_mode_video" />
-
-                    <RadioButton
-                        android:id="@+id/viewer_type_motion"
-                        style="@style/ViewerChoice"
-                        android:text="@string/viewer_mode_motion" />
-
-                    <RadioButton
-                        android:id="@+id/viewer_type_spherical"
-                        style="@style/ViewerChoice"
-                        android:text="@string/viewer_mode_spherical" />
-
-                    <RadioButton
-                        android:id="@+id/viewer_type_audio"
-                        style="@style/ViewerChoice"
-                        android:text="@string/viewer_mode_audio" />
-
-                    <RadioButton
-                        android:id="@+id/viewer_type_animation"
-                        style="@style/ViewerChoice"
-                        android:text="@string/viewer_mode_animation" />
-
-                </RadioGroup>
-
-                <CheckBox
-                    android:id="@+id/viewer_gyroscope"
-                    style="@style/ViewerChoice"
-                    android:text="@string/viewer_gyroscope"
-                    android:visibility="gone" />
-
-            </LinearLayout>
-
-        </HorizontalScrollView>
+            android:text="@string/viewer_gyroscope"
+            android:visibility="gone" />
 
     </LinearLayout>
 
