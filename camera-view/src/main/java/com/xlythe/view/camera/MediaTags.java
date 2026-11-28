@@ -31,9 +31,11 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -1287,6 +1289,132 @@ public final class MediaTags {
     @Nullable
     public MotionPhoto getMotionPhoto() {
         return mContainer.motionPhoto();
+    }
+
+    /** The camera namespace's properties that describe a motion photo's clip. */
+    private static final String[] MOTION_PHOTO_PROPERTIES = {"MotionPhoto", "MotionPhotoVersion",
+            "MotionPhotoPresentationTimestampUs", "MicroVideo", "MicroVideoVersion",
+            "MicroVideoOffset", "MicroVideoPresentationTimestampUs"};
+
+    /**
+     * Says the picture carries a motion photo's clip of the given length at its very end, in
+     * Google's form: the camera namespace's flags, and an entry after the items the container
+     * directory already lists, which begin with the primary picture. Any earlier description of
+     * a clip is replaced. The clip itself is the caller's to append.
+     *
+     * @param presentationTimestampUs the time in the clip the still shows, or -1
+     * @return false, with nothing changed, if the file keeps no XMP or it would not fit
+     */
+    @WorkerThread
+    boolean describeMotionPhoto(long videoLength, long presentationTimestampUs) {
+        if (!editable() || mContainer.kind() != KIND_IMAGE) {
+            return false;
+        }
+        final String primaryMime = getFormat() == FORMAT_HEIF ? "image/heic" : "image/jpeg";
+        return editXmp(xmp -> {
+            List<Map<String, String>> items = withoutClip(xmp);
+            if (items.isEmpty() || !"Primary".equals(items.get(0).get(Xmp.NS_ITEM + "Semantic"))) {
+                items.add(0, directoryItem(primaryMime, "Primary", 0));
+            }
+            items.add(directoryItem("video/mp4", "MotionPhoto", videoLength));
+            for (String property : MOTION_PHOTO_PROPERTIES) {
+                xmp.remove(Xmp.NS_CAMERA, property);
+            }
+            xmp.set(Xmp.NS_CAMERA, "MotionPhoto", "1");
+            xmp.set(Xmp.NS_CAMERA, "MotionPhotoVersion", "1");
+            if (presentationTimestampUs >= 0) {
+                xmp.set(Xmp.NS_CAMERA, "MotionPhotoPresentationTimestampUs",
+                        Long.toString(presentationTimestampUs));
+            }
+            xmp.setDirectory(items);
+        });
+    }
+
+    /**
+     * Takes out what says the picture carries a motion photo's clip, for one whose clip has been
+     * cut off, leaving any other item the container directory lists, such as a gain map.
+     *
+     * @return false if the file says it has a clip and that could not be changed
+     */
+    @WorkerThread
+    boolean removeMotionPhotoDescription() {
+        boolean described = false;
+        for (String property : MOTION_PHOTO_PROPERTIES) {
+            described |= mContainer.xmp().get(Xmp.NS_CAMERA, property) != null;
+        }
+        List<Map<String, String>> items = mContainer.xmp().getStructs(Xmp.NS_CONTAINER,
+                "Directory");
+        if (!described && withoutClip(mContainer.xmp()).size() == items.size()) {
+            return true;
+        }
+        if (!editable()) {
+            return false;
+        }
+        return editXmp(xmp -> {
+            for (String property : MOTION_PHOTO_PROPERTIES) {
+                xmp.remove(Xmp.NS_CAMERA, property);
+            }
+            List<Map<String, String>> kept = withoutClip(xmp);
+            // A directory that lists nothing after the primary picture says nothing.
+            xmp.setDirectory(kept.size() > 1 ? kept : new ArrayList<>());
+        });
+    }
+
+    /** The container directory's items, leaving out a clip. */
+    @NonNull
+    private static List<Map<String, String>> withoutClip(@NonNull Xmp xmp) {
+        List<Map<String, String>> items = new ArrayList<>();
+        for (Map<String, String> item : xmp.getStructs(Xmp.NS_CONTAINER, "Directory")) {
+            String mime = item.get(Xmp.NS_ITEM + "Mime");
+            if ("MotionPhoto".equals(item.get(Xmp.NS_ITEM + "Semantic"))
+                    || (mime != null && mime.startsWith("video/"))) {
+                continue;
+            }
+            items.add(item);
+        }
+        return items;
+    }
+
+    @NonNull
+    private static Map<String, String> directoryItem(@NonNull String mime,
+            @NonNull String semantic, long length) {
+        Map<String, String> item = new LinkedHashMap<>();
+        item.put(Xmp.NS_ITEM + "Mime", mime);
+        item.put(Xmp.NS_ITEM + "Semantic", semantic);
+        item.put(Xmp.NS_ITEM + "Length", Long.toString(length));
+        item.put(Xmp.NS_ITEM + "Padding", "0");
+        return item;
+    }
+
+    /** Whether the file's Exif holds a thumbnail. */
+    @AnyThread
+    boolean hasExifThumbnail() {
+        Exif exif = mContainer.exif();
+        return exif != null && exif.hasThumbnail();
+    }
+
+    /**
+     * Has {@link #save()} write a thumbnail into the file's Exif if it has none.
+     *
+     * @return false if the format keeps no Exif or it cannot be written
+     */
+    @WorkerThread
+    boolean attachExifThumbnail() {
+        if (!editable()) {
+            return false;
+        }
+        try {
+            Exif exif = mContainer.writableExif();
+            if (exif == null) {
+                return false;
+            }
+            exif.attachThumbnail();
+            mContainer.markDirty();
+            return true;
+        } catch (IOException e) {
+            Log.w(TAG, "Unable to stage a thumbnail", e);
+            return false;
+        }
     }
 
     /**
