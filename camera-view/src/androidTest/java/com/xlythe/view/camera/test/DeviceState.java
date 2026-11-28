@@ -10,6 +10,7 @@ import android.os.PowerManager;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.annotation.NonNull;
+import androidx.core.content.ContextCompat;
 
 import org.junit.Assume;
 import org.junit.AssumptionViolatedException;
@@ -74,10 +75,16 @@ public final class DeviceState {
         Assume.assumeTrue("no camera on this device",
                 context.getPackageManager().hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY));
 
-        KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
+        KeyguardManager keyguard = ContextCompat.getSystemService(context, KeyguardManager.class);
         Assume.assumeFalse("this device is locked with a PIN, pattern or password, so no window"
                         + " can become visible and no camera can open - unlock it and run again",
-                keyguard != null && keyguard.isDeviceSecure() && keyguard.isKeyguardLocked());
+                keyguard != null && isSecure(keyguard) && keyguard.isKeyguardLocked());
+    }
+
+    /** Whether a PIN, pattern or password locks the device; before API 23, a locked SIM too. */
+    private static boolean isSecure(@NonNull KeyguardManager keyguard) {
+        return Build.VERSION.SDK_INT >= 23
+                ? keyguard.isDeviceSecure() : keyguard.isKeyguardSecure();
     }
 
     /**
@@ -220,8 +227,8 @@ public final class DeviceState {
     /** What to tell someone whose camera never opened, which is usually about the screen. */
     static String whyTheCameraMightNotOpen() {
         Context context = ApplicationProvider.getApplicationContext();
-        PowerManager power = context.getSystemService(PowerManager.class);
-        KeyguardManager keyguard = context.getSystemService(KeyguardManager.class);
+        PowerManager power = ContextCompat.getSystemService(context, PowerManager.class);
+        KeyguardManager keyguard = ContextCompat.getSystemService(context, KeyguardManager.class);
         return "(screen interactive: " + (power != null && power.isInteractive())
                 + ", keyguard locked: " + (keyguard != null && keyguard.isKeyguardLocked()) + ")";
     }

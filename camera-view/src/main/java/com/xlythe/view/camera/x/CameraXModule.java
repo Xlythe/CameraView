@@ -14,6 +14,7 @@ import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
 import android.hardware.camera2.CaptureResult;
 import android.hardware.camera2.TotalCaptureResult;
+import android.hardware.camera2.params.StreamConfigurationMap;
 import android.graphics.ImageFormat;
 import android.graphics.Matrix;
 import android.graphics.Rect;
@@ -21,6 +22,7 @@ import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.location.Location;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -37,6 +39,7 @@ import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.OptIn;
 import androidx.annotation.Nullable;
+import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.RestrictTo;
 import androidx.annotation.VisibleForTesting;
@@ -106,6 +109,7 @@ import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.CameraXFrameAnalyzer;
 import com.xlythe.view.camera.CameraXSegmentationAnalyzer;
 import com.xlythe.view.camera.Barcode;
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.ICameraModule;
@@ -120,6 +124,7 @@ import com.xlythe.view.camera.stream.VideoRecorder;
 import java.io.File;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
@@ -139,6 +144,13 @@ import java.util.concurrent.Executor;
 public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** Maximum time CameraX may take to report a still-image terminal callback. */
     private static final long IMAGE_CAPTURE_TIMEOUT_MILLIS = 15_000;
+    /**
+     * How many burst pictures are handed to CameraX at once. It takes them one after another, and
+     * with a few queued the next is always waiting when one is captured, while it is still saved.
+     * A drawn burst asks for one at a time, since each drawing is a full-size bitmap until it is
+     * written.
+     */
+    static final int BURST_PICTURES_IN_FLIGHT = 3;
     /**
      * How many RAW frames, and how many results, may wait to be paired. Captures are taken one at
      * a time here, so the second slot only covers one left behind by a capture CameraX abandoned.
@@ -366,6 +378,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private long mRecordedVideoDurationMillis;
     /** Pending image destination while a terminal callback is outstanding. */
     @Nullable private File mPendingImageFile;
+    /** The burst being taken, or null. Rebinding waits for it, as it does for a picture. */
+    @Nullable private Burst mBurst;
     /** Pending maximum-duration stop task for the active recording. */
     @Nullable private Runnable mDurationStopTask;
     /** Pending still-image timeout task. */
@@ -696,6 +710,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mPendingFrontFacing = null;
         mGeneration++;
         failPendingImage("Camera closed before image capture completed");
+        if (mBurst != null) mBurst.end();
         cancelRecordingTimeouts();
         cancelDurationStop();
         publishSnapshot();
@@ -1043,7 +1058,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     @Override public void setFlash(CameraView.Flash flash) {
         super.setFlash(flash);
-        runOnMainThread(() -> { if (mImageCapture != null) mImageCapture.setFlashMode(getFlashMode()); });
+        // A burst keeps the flash off, and puts this mode back once it finishes.
+        runOnMainThread(() -> {
+            if (mImageCapture != null && mBurst == null) mImageCapture.setFlashMode(getFlashMode());
+        });
     }
 
     @Override public void setDynamicRange(CameraView.DynamicRange dynamicRange) {
@@ -1397,8 +1415,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         if (listener == null) throw new NullPointerException("listener cannot be null");
         CameraXSegmentationAnalyzer analyzer;
         try {
-            analyzer = new CameraXSegmentationAnalyzer(
-                    listener, mMainExecutor, isUsingFrontFacingCamera());
+            analyzer = new CameraXSegmentationAnalyzer(listener, mMainExecutor);
         } catch (RuntimeException | LinkageError error) {
             // The model is delivered by Play services and its client is built here, so a device
             // without it fails at construction. Reported rather than thrown, for the same reason
@@ -1455,7 +1472,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
 
     private void takePictureOnMainThread(@NonNull File file) {
         ImageCapture imageCapture = mImageCapture;
-        if (!acceptsPicture(mOpenRequested, imageCapture != null, mPendingImageFile != null,
+        if (!acceptsPicture(mOpenRequested, imageCapture != null, isCapturing(),
                 isRecording(), mSnapshotWhileRecording)) {
             Log.w(TAG, "Cannot take a picture in the current CameraX state: " + mState);
             onImageFailed();
@@ -1482,14 +1499,10 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             takeDrawnPicture(imageCapture, effect, file, operationId);
             return;
         }
-        ImageCapture.Metadata metadata = new ImageCapture.Metadata();
         Location location = getLocation();
-        metadata.setLocation(location);
         ExifCaptureParameters exifParameters = exifCaptureParameters();
-        metadata.setReversedHorizontal(mFrontFacing);
-        ImageCapture.OutputFileOptions options = new ImageCapture.OutputFileOptions.Builder(file)
-                .setMetadata(metadata).build();
-        imageCapture.takePicture(options, mMainExecutor, new ImageCapture.OnImageSavedCallback() {
+        imageCapture.takePicture(outputOptions(file, location), mMainExecutor,
+                new ImageCapture.OnImageSavedCallback() {
             @Override public void onCaptureStarted() {
                 onShutter();
             }
@@ -1504,6 +1517,142 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 onImageFailed();
             }
         });
+    }
+
+    /**
+     * Where a picture is written, tagged with where it was taken and flipped as the preview is.
+     * Shared by a single picture and every picture of a burst, so the two are written alike.
+     */
+    @NonNull private ImageCapture.OutputFileOptions outputOptions(
+            @NonNull File file, @Nullable Location location) {
+        ImageCapture.Metadata metadata = new ImageCapture.Metadata();
+        metadata.setLocation(location);
+        metadata.setReversedHorizontal(mFrontFacing);
+        return new ImageCapture.OutputFileOptions.Builder(file).setMetadata(metadata).build();
+    }
+
+    /** Whether a picture or a burst is in flight, which a rebind would abort. */
+    private boolean isCapturing() {
+        return mPendingImageFile != null || mBurst != null;
+    }
+
+    @Override protected void startBurst(@NonNull Burst burst) {
+        runOnMainThread(() -> startBurstOnMainThread(burst));
+    }
+
+    /**
+     * Hands CameraX a few pictures at a time, and another as each is saved. Its own queue takes
+     * them back to back, each written and tagged as a single picture is. While frames are drawn,
+     * each picture is drawn and written as a single one is before the next is asked for. The
+     * flash is off for the burst, and comes back once the last is saved.
+     */
+    private void startBurstOnMainThread(@NonNull Burst burst) {
+        ImageCapture imageCapture = mImageCapture;
+        if (!mOpenRequested || mPaused || imageCapture == null || isRecording() || isCapturing()) {
+            Log.w(TAG, "Cannot take a burst in the current CameraX state: " + mState);
+            burst.end();
+            return;
+        }
+        mBurst = burst;
+        imageCapture.setFlashMode(ImageCapture.FLASH_MODE_OFF);
+        burst.whenFinished(() -> {
+            if (mBurst != burst) return;
+            mBurst = null;
+            imageCapture.setFlashMode(getFlashMode());
+            // Posted, because the burst finishes from inside a CameraX callback.
+            mMainHandler.post(this::rebindForSettledSize);
+        });
+        int inFlight = mFrameEffect == null ? BURST_PICTURES_IN_FLIGHT : 1;
+        for (int i = 0; i < inFlight; i++) {
+            requestBurstPicture(burst, imageCapture);
+        }
+    }
+
+    /**
+     * Asks for the burst's next picture, unless it has all it is going to take. Its Exif is
+     * finished on the burst's own thread, so the pictures reach the app in the order taken.
+     */
+    private void requestBurstPicture(@NonNull Burst burst, @NonNull ImageCapture imageCapture) {
+        File file = burst.nextFile();
+        if (file == null) return;
+        ExifCaptureParameters exifParameters =
+                exifCaptureParameters().setFlash(CameraView.Flash.OFF, hasFlash());
+        FrameEffect effect = mFrameEffect;
+        if (effect != null) {
+            requestDrawnBurstPicture(burst, imageCapture, effect, file, exifParameters);
+            return;
+        }
+        Location location = getLocation();
+        imageCapture.takePicture(outputOptions(file, location), mMainExecutor,
+                new ImageCapture.OnImageSavedCallback() {
+            @Override public void onCaptureStarted() {
+                onBurstShutter();
+            }
+            @Override public void onImageSaved(@NonNull ImageCapture.OutputFileResults results) {
+                requestBurstPicture(burst, imageCapture);
+                finishExif(file, location, exifParameters, burst.getExecutor(),
+                        () -> burst.onPictureTaken(file));
+            }
+            @Override public void onError(@NonNull ImageCaptureException error) {
+                Log.w(TAG, "Burst capture failed", error);
+                burst.onPictureFailed(file);
+            }
+        });
+    }
+
+    /**
+     * Asks for a burst picture drawn as {@link #takeDrawnPicture} draws a single one, and for the
+     * next once it is written. Waiting for the write rather than the capture keeps one full-size
+     * drawing in memory, not a queue of them, and the pictures in order.
+     */
+    @MainThread
+    private void requestDrawnBurstPicture(@NonNull Burst burst,
+            @NonNull ImageCapture imageCapture, @NonNull FrameEffect effect, @NonNull File file,
+            @NonNull ExifCaptureParameters exifParameters) {
+        boolean mirrored = mFrontFacing;
+        int quality = getPictureQuality();
+        imageCapture.takePicture(mMainExecutor, new ImageCapture.OnImageCapturedCallback() {
+            @Override public void onCaptureStarted() {
+                onBurstShutter();
+            }
+
+            @Override public void onCaptureSuccess(@NonNull ImageProxy image) {
+                DrawnStill still;
+                try {
+                    still = new DrawnStill(getContext(), image, mirrored, effect, file, quality,
+                            exifParameters, getLocation(),
+                            written -> mMainHandler.post(() -> onDrawnBurstPictureWritten(
+                                    burst, file, written,
+                                    () -> requestBurstPicture(burst, imageCapture))));
+                } catch (RuntimeException | OutOfMemoryError error) {
+                    Log.e(TAG, "Failed to copy the burst picture to draw", error);
+                    burst.onPictureFailed(file);
+                    return;
+                }
+                burst.getExecutor().execute(still);
+            }
+
+            @Override public void onError(@NonNull ImageCaptureException error) {
+                Log.w(TAG, "Burst capture failed", error);
+                burst.onPictureFailed(file);
+            }
+        });
+    }
+
+    /**
+     * Reports a drawn burst picture, and asks for the next only once it is on disk. A picture that
+     * could not be drawn or written ends the burst, as a failed capture does.
+     */
+    @MainThread
+    @VisibleForTesting
+    static void onDrawnBurstPictureWritten(@NonNull Burst burst, @NonNull File file,
+            boolean written, @NonNull Runnable requestNext) {
+        if (!written) {
+            burst.onPictureFailed(file);
+            return;
+        }
+        burst.onPictureTaken(file);
+        requestNext.run();
     }
 
     /**
@@ -1780,7 +1929,14 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     private void finishExif(@NonNull File file, @Nullable Location location,
             @NonNull ExifCaptureParameters exifParameters, @NonNull Runnable then) {
-        AsyncTask.THREAD_POOL_EXECUTOR.execute(() -> {
+        finishExif(file, location, exifParameters, AsyncTask.THREAD_POOL_EXECUTOR, then);
+    }
+
+    /** {@link #finishExif}, writing on {@code executor}. */
+    private void finishExif(@NonNull File file, @Nullable Location location,
+            @NonNull ExifCaptureParameters exifParameters, @NonNull Executor executor,
+            @NonNull Runnable then) {
+        executor.execute(() -> {
             writeExif(getContext(), file, location, exifParameters);
             mMainHandler.post(then);
         });
@@ -2237,18 +2393,27 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // Before the still, which is built as a JPEG whenever frames are drawn.
             boolean drawing = prepareFrameEffect(!streamPreviews.isEmpty());
             // A still output is wanted alongside a recording, not instead of it: that is the
-            // combination a camera app's video-snapshot button uses. Barcode analysis is the one
-            // thing that genuinely takes the slot, because it needs the frames itself.
-            ImageCapture imageCapture = mFrameAnalyzer == null
-                    ? createImageCapture(cameraInfo, drawing) : null;
-            ImageAnalysis imageAnalysis = mVideoCapture == null && mFrameAnalyzer != null
-                    ? createImageAnalysis() : null;
+            // combination a camera app's video-snapshot button uses. Analysis is bound beside the
+            // still, which every camera can hold with a preview, and gives way to a recording.
+            boolean analyzing = mVideoCapture == null && mFrameAnalyzer != null;
+            ImageCapture imageCapture = createImageCapture(cameraInfo, drawing, analyzing);
+            ImageAnalysis imageAnalysis = analyzing ? createImageAnalysis() : null;
             List<UseCase> requested = new ArrayList<>();
             requested.add(displayPreview);
             if (mVideoCapture != null) requested.add(mVideoCapture);
-            if (imageCapture != null) requested.add(imageCapture);
-            else if (imageAnalysis != null) requested.add(imageAnalysis);
+            requested.add(imageCapture);
+            if (imageAnalysis != null) requested.add(imageAnalysis);
             requested.addAll(streamPreviews.values());
+
+            // A preview, a still and analysis are guaranteed together, but not beside a stream
+            // as well. Asked for more than it can hold, the bind fails and takes the analysis
+            // with it, so the still is the part that gives way, as it does to a recording.
+            if (imageAnalysis != null && !streamPreviews.isEmpty()
+                    && !cameraInfo.isSessionConfigSupported(createSessionConfig(requested))) {
+                Log.d(TAG, "This camera cannot take a picture while it analyzes a stream");
+                requested.remove(imageCapture);
+                imageCapture = null;
+            }
 
             // Not every camera can hold a preview, a recording and a still at once. Asked for one
             // that cannot, the bind fails and the recording is lost with it, so the still is the
@@ -2275,6 +2440,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 }
             }
             unbindCurrentUseCases();
+            CameraXFrameAnalyzer analyzer = mFrameAnalyzer;
+            if (imageAnalysis != null && analyzer != null) {
+                // After unbinding, so no frame from the last lens arrives labelled as this one's.
+                analyzer.setMirrored(mFrontFacing);
+            }
             // After unbinding, so that an effect being let go is not closing outputs CameraX is
             // still drawing into, and before binding, because the group carries the effect.
             CameraEffect effect = reconcileFrameEffect(drawing);
@@ -2749,15 +2919,25 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         });
     }
 
-    /** @param drawing whether the bind puts frames through GL, which makes every still a JPEG */
+    /**
+     * @param drawing whether the bind puts frames through GL, which makes every still a JPEG
+     * @param analyzing whether analysis is bound beside the still. A camera promises a RAW or
+     *     Ultra HDR still beside a preview alone, so the still is then a JPEG taken as it is asked
+     *     for, as it is beside a Camera2 stream, at the size it would be apart from the analysis.
+     */
+    @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     @NonNull private ImageCapture createImageCapture(
-            @NonNull CameraInfo cameraInfo, boolean drawing) {
-        CameraView.PictureFormat format = boundPictureFormat(getPictureFormat(), drawing);
+            @NonNull CameraInfo cameraInfo, boolean drawing, boolean analyzing) {
+        boolean plain = drawing || analyzing;
+        CameraView.PictureFormat format = boundPictureFormat(getPictureFormat(), plain);
+        int captureMode = getCaptureMode(cameraInfo, format, analyzing);
+        boolean keepsFrames = captureMode == ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG;
         ImageCapture.Builder builder = new ImageCapture.Builder()
-                .setResolutionSelector(createImageResolutionSelector())
+                .setResolutionSelector(createImageResolutionSelector(analyzing && !keepsFrames
+                        ? sizesBesideAnalysis(cameraInfo, format) : Collections.emptyList()))
                 .setTargetRotation(getTargetRotation())
                 .setFlashMode(getFlashMode())
-                .setCaptureMode(getCaptureMode(cameraInfo, format))
+                .setCaptureMode(captureMode)
                 .setJpegQuality(getPictureQuality());
         // Checked against this camera as well as on request, since the lens may have changed.
         if (format == CameraView.PictureFormat.ULTRA_HDR && writesUltraHdr(cameraInfo)) {
@@ -2996,8 +3176,133 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .build();
     }
 
-    @NonNull private ResolutionSelector createImageResolutionSelector() {
-        return imageResolutionSelector(getQuality(), getAspectRatioStrategy());
+    /** @param heldTo the only sizes the still may take, or none to leave it to its quality */
+    @NonNull private ResolutionSelector createImageResolutionSelector(@NonNull List<Size> heldTo) {
+        return imageResolutionSelector(getQuality(), getAspectRatioStrategy(), heldTo);
+    }
+
+    /**
+     * The sizes a still beside analysis that keeps no frames is held to: those CameraX holds a
+     * still to when it takes it from kept frames, where that is how it would be taken apart from
+     * the analysis.
+     *
+     * <p>CameraX holds a zero-shutter-lag still to the sizes the camera reprocesses a kept frame
+     * at, whatever its selector prefers. On the API 37 emulator that is 1856x1392 alone, where
+     * HIGH's bound picks 1280x720. Held to the same sizes, a still that keeps no frames beside
+     * analysis (see {@link #getCaptureMode}) comes out the size it would have been without the
+     * analysis. A JPEG up to the camera's largest is guaranteed beside a preview and analysis.</p>
+     *
+     * @return empty where it is held to none
+     */
+    @MainThread
+    @OptIn(markerClass = ExperimentalZeroShutterLag.class)
+    @NonNull private List<Size> sizesBesideAnalysis(
+            @NonNull CameraInfo cameraInfo, @NonNull CameraView.PictureFormat format) {
+        // Frames are reprocessed from API 23, which is where CameraX starts keeping them.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M
+                || getCaptureMode(cameraInfo, format, false)
+                        != ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG) {
+            return Collections.emptyList();
+        }
+        CameraCharacteristics camera = cameraCharacteristics(cameraInfo);
+        if (camera == null) {
+            return Collections.emptyList();
+        }
+        List<CameraCharacteristics> physicalCameras = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            CameraManager manager =
+                    (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
+            for (String id : camera.getPhysicalCameraIds()) {
+                try {
+                    physicalCameras.add(manager.getCameraCharacteristics(id));
+                } catch (CameraAccessException | RuntimeException error) {
+                    Log.w(TAG, "Camera " + id + " cannot report its characteristics", error);
+                    physicalCameras.add(null);
+                }
+            }
+        }
+        return reprocessedSizes(camera, physicalCameras);
+    }
+
+    /**
+     * The sizes a camera reprocesses a kept frame at, worked out as CameraX works them out for
+     * zero shutter lag: the camera's own PRIVATE input sizes or, behind a logical camera, the
+     * ones every physical camera takes as PRIVATE input and reprocesses to a JPEG.
+     *
+     * @param physicalCameras the cameras behind a logical one, null where one cannot be read
+     * @return empty where there are none, which leaves a still to its selector
+     */
+    @AnyThread
+    @RequiresApi(Build.VERSION_CODES.M)
+    @NonNull static List<Size> reprocessedSizes(@NonNull CameraCharacteristics camera,
+            @NonNull List<CameraCharacteristics> physicalCameras) {
+        if (physicalCameras.isEmpty()) {
+            return privateInputSizes(
+                    camera.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP));
+        }
+        Set<Size> shared = null;
+        for (CameraCharacteristics physical : physicalCameras) {
+            List<Size> sizes = physical != null && reprocessesToJpeg(physical)
+                    ? privateInputSizes(physical.get(
+                            CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP))
+                    : Collections.emptyList();
+            if (shared == null) {
+                shared = new LinkedHashSet<>(sizes);
+            } else {
+                shared.retainAll(sizes);
+            }
+            if (shared.isEmpty()) {
+                return Collections.emptyList();
+            }
+        }
+        return new ArrayList<>(shared);
+    }
+
+    /** Whether a camera reprocesses a PRIVATE frame, and can write the result as a JPEG. */
+    @RequiresApi(Build.VERSION_CODES.M)
+    private static boolean reprocessesToJpeg(@NonNull CameraCharacteristics camera) {
+        int[] capabilities = camera.get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES);
+        StreamConfigurationMap map =
+                camera.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+        if (map == null || !contains(capabilities,
+                CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_PRIVATE_REPROCESSING)) {
+            return false;
+        }
+        try {
+            return contains(map.getValidOutputFormatsForInput(ImageFormat.PRIVATE),
+                    ImageFormat.JPEG);
+        } catch (IllegalArgumentException error) {
+            return false;
+        }
+    }
+
+    /** The PRIVATE input sizes a map lists, or none. */
+    @RequiresApi(Build.VERSION_CODES.M)
+    @NonNull private static List<Size> privateInputSizes(@Nullable StreamConfigurationMap map) {
+        Size[] sizes = map == null ? null : map.getInputSizes(ImageFormat.PRIVATE);
+        return sizes == null ? Collections.emptyList() : Arrays.asList(sizes);
+    }
+
+    private static boolean contains(@Nullable int[] values, int value) {
+        if (values == null) return false;
+        for (int candidate : values) {
+            if (candidate == value) return true;
+        }
+        return false;
+    }
+
+    /**
+     * The candidates a still held to some sizes may take, in the order its selector put them. All
+     * of them where it may take none of them, which is what CameraX does: it then takes the still
+     * without kept frames, at whatever size the selector prefers.
+     */
+    @AnyThread
+    @NonNull static List<Size> heldTo(@NonNull List<Size> candidates, @NonNull List<Size> sizes) {
+        List<Size> held = new ArrayList<>();
+        for (Size candidate : candidates) {
+            if (sizes.contains(candidate)) held.add(candidate);
+        }
+        return held.isEmpty() ? candidates : held;
     }
 
     /**
@@ -3010,20 +3315,34 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     @NonNull static ResolutionSelector imageResolutionSelector(
             @NonNull CameraView.Quality quality, @NonNull AspectRatioStrategy aspectRatioStrategy) {
+        return imageResolutionSelector(quality, aspectRatioStrategy, Collections.emptyList());
+    }
+
+    /**
+     * How a still is sized for a quality, held to some sizes where it is: see
+     * {@link #sizesBesideAnalysis}.
+     *
+     * @param heldTo the only sizes the still may take, or none to leave it to its quality
+     */
+    @NonNull static ResolutionSelector imageResolutionSelector(@NonNull CameraView.Quality quality,
+            @NonNull AspectRatioStrategy aspectRatioStrategy, @NonNull List<Size> heldTo) {
         ResolutionSelector.Builder builder =
                 new ResolutionSelector.Builder().setAspectRatioStrategy(aspectRatioStrategy);
         if (quality == CameraView.Quality.MAX) {
             return builder
                     .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
-                    .setResolutionFilter((sizes, rotationDegrees) -> largestFirst(sizes))
+                    .setResolutionFilter((sizes, rotationDegrees) ->
+                            heldTo(largestFirst(sizes), heldTo))
                     .setAllowedResolutionMode(
                             ResolutionSelector.PREFER_HIGHER_RESOLUTION_OVER_CAPTURE_RATE)
                     .build();
         }
-        return builder
-                .setResolutionStrategy(new ResolutionStrategy(imageTargetSize(quality),
-                        ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER))
-                .build();
+        builder.setResolutionStrategy(new ResolutionStrategy(imageTargetSize(quality),
+                ResolutionStrategy.FALLBACK_RULE_CLOSEST_LOWER_THEN_HIGHER));
+        if (!heldTo.isEmpty()) {
+            builder.setResolutionFilter((sizes, rotationDegrees) -> heldTo(sizes, heldTo));
+        }
+        return builder.build();
     }
 
     /** The sizes by area, largest first, which is the order CameraX then tries them in. */
@@ -3097,11 +3416,47 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * the frames kept for it are the still's own, and the picture is drawn after it is taken.
      * Taken otherwise, it would not be the picture the camera takes undrawn: on the API 37
      * emulator CameraX keeps frames at 1856x1392 and takes a picture without them at 1280x720.</p>
+     *
+     * <p>A still beside analysis is taken that way too where the camera promises the surfaces
+     * frames are kept and reprocessed through beside a preview and analysis, which is FULL and
+     * above. Below that it keeps no frames, and is held to the sizes kept frames would hold it to
+     * instead (see {@link #sizesBesideAnalysis}), so it is no smaller for it.</p>
+     *
+     * @param analyzing whether analysis is bound beside the still
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     private int getCaptureMode(@NonNull CameraInfo cameraInfo,
-            @NonNull CameraView.PictureFormat format) {
-        return captureMode(getQuality(), cameraInfo.isZslSupported(), format);
+            @NonNull CameraView.PictureFormat format, boolean analyzing) {
+        boolean keepsFrames = cameraInfo.isZslSupported()
+                && (!analyzing || keepsFramesBesideAnalysis(hardwareLevel(cameraInfo)));
+        return captureMode(getQuality(), keepsFrames, format);
+    }
+
+    /**
+     * Whether a camera at a hardware level promises a reprocessable session that holds a
+     * preview, analysis and a JPEG: the frames zero shutter lag keeps in, and the PRIVATE preview,
+     * YUV analysis and JPEG out. CameraDevice lists that combination for FULL and above only.
+     *
+     * @param hardwareLevel the camera's INFO_SUPPORTED_HARDWARE_LEVEL, or null if unknown
+     */
+    @AnyThread
+    static boolean keepsFramesBesideAnalysis(@Nullable Integer hardwareLevel) {
+        return hardwareLevel != null
+                && (hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL
+                        || hardwareLevel == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3);
+    }
+
+    /** The camera's hardware level, or null if it cannot say. */
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    @Nullable
+    private static Integer hardwareLevel(@NonNull CameraInfo cameraInfo) {
+        try {
+            return Camera2CameraInfo.from(cameraInfo).getCameraCharacteristic(
+                    CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+        } catch (RuntimeException | LinkageError error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its hardware level", error);
+            return null;
+        }
     }
 
     /**
@@ -3212,7 +3567,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             mLastHeight = height;
             if (!mOpenRequested || mPaused || mVideoRecording != null) return;
             // Unbinding an ImageCapture aborts the capture in flight, so the rebind waits for it.
-            if (mPendingImageFile != null) {
+            if (isCapturing()) {
                 mSizeRebindPending = true;
                 return;
             }
@@ -3224,7 +3579,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     private void rebindForSettledSize() {
         if (!mSizeRebindPending) return;
         mSizeRebindPending = false;
-        if (mOpenRequested && !mPaused && mVideoRecording == null && mPendingImageFile == null) {
+        if (mOpenRequested && !mPaused && mVideoRecording == null && !isCapturing()) {
             reconcileUseCases(true);
         }
     }
@@ -3242,6 +3597,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     /** Returns whether an atomic CameraX bind is active; used only by device validation. */
     boolean isCameraBoundForTesting() {
         return mActiveCamera != null && !mBoundUseCases.isEmpty();
+    }
+
+    /** The flash mode the bound still capture would use, or -1 for none; used only by tests. */
+    int imageCaptureFlashModeForTesting() {
+        return mImageCapture == null ? -1 : mImageCapture.getFlashMode();
     }
 
     private void runOnMainThread(@NonNull Runnable action) {
