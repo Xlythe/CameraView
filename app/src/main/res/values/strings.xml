@@ -6,6 +6,17 @@
     <string name="app_name_resizing">Resizing Demo</string>
     <string name="app_name_qr_code">QR Code Demo</string>
     <string name="app_name_wear">Wear Companion</string>
+    <string name="app_name_panorama">Panorama Demo</string>
+    <string name="panorama_mode_flat">Panorama</string>
+    <string name="panorama_mode_sphere">Photosphere</string>
+    <string name="panorama_hint_flat">Turn slowly on the spot, keeping the arrows on the line</string>
+    <string name="panorama_hint_sphere">Hold the circle on each dot until it fills, up and down too</string>
+    <string name="panorama_progress">%1$d%% covered</string>
+    <string name="panorama_failed">Nothing was captured</string>
+    <string name="panorama_unsupported">This device cannot report which way it is pointing</string>
+    <string name="panorama_result">%1$d × %2$d</string>
+    <string name="panorama_saved">Saved to the gallery</string>
+    <string name="panorama_image_description">The saved panorama</string>
     <string name="app_name_effect">Effect Demo</string>
     <string name="wear_status_idle">Open the companion app on your watch</string>
     <string name="wear_status_opening">Connecting to the watch…</string>
@@ -28,6 +39,9 @@
     <string name="btn_confirm">Confirm</string>
     <string name="btn_cancel">Cancel</string>
     <string name="btn_resize">Resize</string>
+    <string name="btn_start">Start</string>
+    <string name="btn_done">Done</string>
+    <string name="btn_back">Back</string>
     <!-- A zoom preset button, such as 0.6x or 2x -->
     <string name="zoom_preset">%1$sx</string>
     <!-- How far exposure compensation shifts the exposure, in stops, such as +0.7 EV -->

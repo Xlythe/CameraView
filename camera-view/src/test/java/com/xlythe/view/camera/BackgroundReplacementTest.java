@@ -6,9 +6,12 @@ import static org.junit.Assert.assertTrue;
 
 import android.Manifest;
 import android.content.Context;
+import android.hardware.Sensor;
+import android.hardware.SensorManager;
 
 import com.xlythe.view.camera.gl.BackgroundReplacer;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.pano.PanoramaSession;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowInjectableImageReader;
 import com.xlythe.view.camera.v2.FakeCamera2;
@@ -17,11 +20,13 @@ import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
 import org.junit.runner.RunWith;
+import org.mockito.Mockito;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.RuntimeEnvironment;
 import org.robolectric.Shadows;
 import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowLooper;
+import org.robolectric.shadows.ShadowSensor;
 import org.robolectric.util.ReflectionHelpers;
 
 /**
@@ -101,6 +106,35 @@ public class BackgroundReplacementTest {
 
         Boolean scanning = ReflectionHelpers.getField(cameraView, "mUsingModuleBarcodeScanner");
         assertFalse("nothing was started that would have to be stopped", scanning);
+    }
+
+    @Test
+    public void refusedWhileASweepRuns() {
+        ReflectionHelpers.setField(cameraView, "mPanoramaSession",
+                Mockito.mock(PanoramaSession.class));
+
+        assertFalse(cameraView.enterBackgroundReplacement(new BackgroundReplacer()));
+
+        assertFalse(cameraView.isReplacingBackground());
+        assertSame("the caller's renderer is left alone", renderer, cameraView.getFrameRenderer());
+        ReflectionHelpers.setField(cameraView, "mPanoramaSession", null);
+    }
+
+    @Test
+    public void aSweepIsRefusedWhileTheBackgroundIsReplaced() {
+        ReflectionHelpers.setField(cameraView, "mReplacingBackground", true);
+        SensorManager sensors = (SensorManager) RuntimeEnvironment.getApplication()
+                .getSystemService(Context.SENSOR_SERVICE);
+        Shadows.shadowOf(sensors).addSensor(
+                ShadowSensor.newInstance(Sensor.TYPE_GAME_ROTATION_VECTOR));
+
+        assertFalse(cameraView.startPanorama(CameraView.PanoramaMode.PANORAMA,
+                new CameraView.PanoramaListener() {
+                    @Override
+                    public void onPanoramaFailed() {}
+                }));
+
+        assertFalse(cameraView.isCapturingPanorama());
     }
 
     private static void idle() {
