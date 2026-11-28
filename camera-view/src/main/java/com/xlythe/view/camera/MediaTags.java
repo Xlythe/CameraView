@@ -56,8 +56,15 @@ import java.util.regex.Pattern;
  * }</pre>
  *
  * <p>The format is told from the file's first bytes, never its name. Pictures can be JPEG, PNG,
- * WebP, HEIF or AVIF, and DNG or TIFF to read; video can be MP4, QuickTime or 3GP; sound can be
- * M4A, MP3, WAV, FLAC, Ogg Vorbis or Opus. Any other file opens with no fields.</p>
+ * WebP, HEIF or AVIF, and DNG, TIFF or a camera's other raw formats to read; video can be MP4,
+ * QuickTime or 3GP, and Matroska or WebM to read; sound can be M4A, MP3, WAV, FLAC, Ogg Vorbis or
+ * Opus. A GIF says only whether it is animated. Any other file opens with no fields.</p>
+ *
+ * <p>A file opened from a content Uri is written where the app may write that Uri: a document it
+ * was granted write access to, or, from Android 10, a MediaStore item it inserted itself. Every
+ * setter returns false for one it may only read. A fragmented MP4 whose fragments locate their
+ * data from the start of the file, rather than from themselves, is read only, since growing its
+ * metadata would move them.</p>
  *
  * <h2>Where each field goes</h2>
  * <p>A field is written where the format itself keeps it, since that is where galleries look:
