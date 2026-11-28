@@ -219,13 +219,14 @@ public final class CameraXModuleTest {
     }
 
     /**
-     * A drawn still is never taken from kept frames. The effect shares one stream between every
-     * use case, CameraX allows each of them a single surface, and keeping frames takes more, so
-     * asking for both throws out of the bind and the camera never opens.
+     * A picture comes from kept frames where the camera keeps them, below MAX and for anything
+     * but RAW. A drawn still is no exception, since it is taken apart from the effect and drawn
+     * after: taken without kept frames, it came out smaller than the undrawn picture. A still
+     * beside analysis is, since a camera promises it beside a preview alone.
      */
     @OptIn(markerClass = ExperimentalZeroShutterLag.class)
     @Test
-    public void aDrawnStillIsNotTakenFromKeptFrames() {
+    public void aStillIsTakenFromKeptFramesWhereTheCameraKeepsThem() {
         assertEquals(ImageCapture.CAPTURE_MODE_ZERO_SHUTTER_LAG, CameraXModule.captureMode(
                 CameraView.Quality.HIGH, true, CameraView.PictureFormat.JPEG, false));
         assertEquals(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY, CameraXModule.captureMode(
