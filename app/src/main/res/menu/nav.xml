@@ -31,4 +31,8 @@
         android:id="@+id/viewer_fragment"
         android:icon="@drawable/ic_viewer"
         android:title="@string/app_name_viewer" />
+    <item
+        android:id="@+id/editor_fragment"
+        android:icon="@drawable/ic_editor"
+        android:title="@string/app_name_editor" />
 </menu>

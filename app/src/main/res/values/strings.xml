@@ -19,6 +19,7 @@
     <string name="panorama_image_description">The saved panorama</string>
     <string name="app_name_effect">Effect Demo</string>
     <string name="app_name_viewer">Media Demo</string>
+    <string name="app_name_editor">Editor Demo</string>
     <string name="wear_status_idle">Open the companion app on your watch</string>
     <string name="wear_status_opening">Connecting to the watch…</string>
     <string name="wear_status_streaming">Streaming to the watch</string>
@@ -82,6 +83,46 @@
     <string name="viewer_gyroscope">Gyro</string>
     <!-- The picture could not be shown -->
     <string name="viewer_failed">This device cannot show this file</string>
+    <!-- The editor before a picture is picked -->
+    <string name="editor_empty">Open a picture to edit</string>
+    <!-- What the editor shows, for accessibility services -->
+    <string name="editor_media_description">The picture being edited</string>
+    <!-- Turns the picture a further quarter; shows how far it is turned -->
+    <string name="editor_turn">Turn</string>
+    <string name="editor_turn_degrees">Turn %1$d°</string>
+    <!-- Mirrors the picture left to right -->
+    <string name="editor_flip_horizontal">Flip ↔</string>
+    <!-- Mirrors the picture top to bottom -->
+    <string name="editor_flip_vertical">Flip ↕</string>
+    <!-- Levels the picture by a few degrees -->
+    <string name="editor_straighten">Straighten</string>
+    <!-- Keeps the middle of the picture -->
+    <string name="editor_crop">Crop</string>
+    <!-- Makes the picture black and white -->
+    <string name="editor_filter">B&amp;W</string>
+    <!-- Draws a mark over the picture -->
+    <string name="editor_mark">Mark</string>
+    <!-- Makes the mark black and white too -->
+    <string name="editor_mark_filtered">B&amp;W mark</string>
+    <!-- Writes the edited picture -->
+    <string name="editor_save">Save</string>
+    <!-- Formats to write the edited picture in -->
+    <string name="editor_format_same">Same</string>
+    <string name="editor_format_jpeg">JPEG</string>
+    <string name="editor_format_png">PNG</string>
+    <string name="editor_format_webp">WebP</string>
+    <string name="editor_format_heif">HEIF</string>
+    <string name="editor_format_avif">AVIF</string>
+    <!-- What becomes of a motion photo's clip -->
+    <string name="editor_clip_auto">Clip: auto</string>
+    <string name="editor_clip_keep">Keep clip</string>
+    <string name="editor_clip_drop">Drop clip</string>
+    <!-- Writes a smaller picture -->
+    <string name="editor_small">2 MP</string>
+    <!-- What the edited picture is: its format, size and metadata -->
+    <string name="editor_info">%1$s · %2$d × %3$d · %4$s</string>
+    <!-- The picture could not be edited -->
+    <string name="editor_failed">This picture could not be edited</string>
     <!-- A zoom preset button, such as 0.6x or 2x -->
     <string name="zoom_preset">%1$sx</string>
     <!-- How far exposure compensation shifts the exposure, in stops, such as +0.7 EV -->
