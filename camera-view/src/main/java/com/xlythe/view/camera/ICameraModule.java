@@ -16,6 +16,7 @@ import android.util.Log;
 
 import androidx.annotation.AnyThread;
 import androidx.annotation.RawRes;
+import androidx.annotation.MainThread;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
 import androidx.annotation.NonNull;
@@ -240,6 +241,16 @@ public abstract class ICameraModule {
 
     protected Matrix getTransform(Matrix matrix) {
         return mView.getTransform(matrix);
+    }
+
+    /**
+     * Where to show a preview stream that carries HDR, which the TextureView behind
+     * {@link #getSurfaceTexture()} cannot show as HDR.
+     */
+    @MainThread
+    @NonNull
+    protected final HdrSurface getHdrSurface() {
+        return mView.getHdrSurface();
     }
 
     protected void setTransform(Matrix matrix) {

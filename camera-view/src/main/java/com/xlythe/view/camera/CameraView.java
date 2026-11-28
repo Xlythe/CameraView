@@ -516,6 +516,8 @@ public class CameraView extends FrameLayout {
     private OnCameraStateChangedListener mOnCameraStateChangedListener;
 
     private TextureView mCameraView;
+    /** Takes the preview off the TextureView while the camera streams HDR. */
+    private final HdrSurface mHdrSurface = new HdrSurface(this, this::asTextureView);
     private ImageView mImagePreview;
     private VideoView mVideoPreview;
 
@@ -961,8 +963,21 @@ public class CameraView extends FrameLayout {
         return displayRotation;
     }
 
+    /**
+     * The view the preview is drawn on.
+     *
+     * <p>Except while an HDR recording is being framed on a display that can show HDR: the
+     * TextureView cannot carry an HDR stream, so for that stretch the preview is drawn on a
+     * SurfaceView instead and this view is hidden.</p>
+     */
     public TextureView asTextureView() {
         return mCameraView;
+    }
+
+    /** Where a backend shows a preview stream that carries HDR. */
+    @NonNull
+    HdrSurface getHdrSurface() {
+        return mHdrSurface;
     }
 
     @UiThread
@@ -1338,6 +1353,7 @@ public class CameraView extends FrameLayout {
         finishZoomAnimation();
         mCameraModule.close();
         mCameraModule.releaseSounds();
+        mHdrSurface.reset();
 
         if (!mHasSavedState) {
             // Destroy the TextureView we used for the previous round of camera activity. This is
@@ -2674,6 +2690,8 @@ public class CameraView extends FrameLayout {
         // Nothing to reconfigure for a view that is no longer on screen, and the next layout pass
         // after it comes back will ask again.
         mHandler.removeCallbacks(mLayoutSettledRunnable);
+        // The window outlives the view, and should not stay in HDR on its behalf.
+        mHdrSurface.reset();
     }
 
     @Override
