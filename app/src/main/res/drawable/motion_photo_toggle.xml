@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The motion photo switch: bright while on, faded while off. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_motion_photo_on" android:state_checked="true" />
+    <item android:drawable="@drawable/ic_motion_photo_off" />
+</selector>

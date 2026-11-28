@@ -88,6 +88,7 @@ public class CameraViewTest {
         cameraView.setExposureCompensation(2);
         cameraView.setTorchEnabled(true);
         cameraView.setLowLightBoostEnabled(true);
+        cameraView.setMotionPhotoEnabled(true);
 
         assertEquals(CameraView.DynamicRange.HDR, cameraView.getDynamicRange());
         assertEquals(CameraView.Extension.NIGHT, cameraView.getExtension());
@@ -95,6 +96,7 @@ public class CameraViewTest {
         assertEquals(2, cameraView.getExposureCompensation());
         assertFalse("low-light boost turns the torch off", cameraView.isTorchEnabled());
         assertTrue(cameraView.isLowLightBoostEnabled());
+        assertTrue(cameraView.isMotionPhotoEnabled());
         assertFalse(cameraView.isDynamicRangeSupported(CameraView.DynamicRange.HDR));
         assertFalse(cameraView.isExtensionSupported(CameraView.Extension.NIGHT));
         assertTrue(cameraView.isExtensionSupported(CameraView.Extension.NONE));
@@ -102,6 +104,7 @@ public class CameraViewTest {
         assertFalse(cameraView.isExposureCompensationSupported());
         assertEquals(0f, cameraView.getExposureCompensationStep(), 0f);
         assertFalse(cameraView.isLowLightBoostSupported());
+        assertFalse("there is no encoder to feed", cameraView.isMotionPhotoSupported());
     }
     @Test
     public void lifecycleTracksWaitingAndClosedInternally() throws Exception {

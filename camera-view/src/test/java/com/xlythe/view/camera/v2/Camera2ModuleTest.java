@@ -7,6 +7,7 @@ import android.hardware.camera2.CameraDevice;
 import android.hardware.camera2.CameraManager;
 import android.os.Handler;
 import android.graphics.Rect;
+import android.util.Size;
 
 import com.xlythe.view.camera.CameraView;
 
@@ -21,6 +22,7 @@ import org.mockito.Mockito;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
@@ -206,5 +208,14 @@ public class Camera2ModuleTest {
     public void restoreIgnoresMissingModuleState() {
         module.onRestoreInstanceState(null);
         module.close();
+    }
+
+    /** The still cap on LIMITED hardware is the largest a recording could be. */
+    @Test
+    public void largestOfIsByArea() {
+        assertEquals(new Size(3840, 2160), Camera2Module.largestOf(new Size[] {
+                new Size(1920, 1080), new Size(3840, 2160), new Size(3000, 2000)}));
+        assertNull(Camera2Module.largestOf(new Size[0]));
+        assertNull(Camera2Module.largestOf(null));
     }
 }

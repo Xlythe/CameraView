@@ -232,6 +232,8 @@ public class CameraView extends FrameLayout {
     private static final String EXTRA_TORCH = "torch";
     /** Saved-state key for low-light boost state. */
     private static final String EXTRA_LOW_LIGHT_BOOST = "low_light_boost";
+    /** Saved-state key for whether pictures are motion photos. */
+    private static final String EXTRA_MOTION_PHOTO = "motion_photo";
     /** Saved-state key for whether the camera's sounds play. */
     private static final String EXTRA_SHUTTER_SOUND = "shutter_sound";
     /** Saved-state key for the app's own shutter sound. */
@@ -684,6 +686,7 @@ public class CameraView extends FrameLayout {
             setExposureCompensation(a.getInteger(R.styleable.CameraView_exposureCompensation, getExposureCompensation()));
             setTorchEnabled(a.getBoolean(R.styleable.CameraView_torchEnabled, isTorchEnabled()));
             setLowLightBoostEnabled(a.getBoolean(R.styleable.CameraView_lowLightBoostEnabled, isLowLightBoostEnabled()));
+            setMotionPhotoEnabled(a.getBoolean(R.styleable.CameraView_motionPhotoEnabled, isMotionPhotoEnabled()));
             mFocusReticleEnabled = a.getBoolean(R.styleable.CameraView_focusReticleEnabled, true);
             mFocusReticleColor = a.getColor(
                     R.styleable.CameraView_focusReticleColor, FocusReticle.DEFAULT_FOCUSING_COLOR);
@@ -752,6 +755,7 @@ public class CameraView extends FrameLayout {
         state.putInt(EXTRA_EXPOSURE_COMPENSATION, getExposureCompensation());
         state.putBoolean(EXTRA_TORCH, isTorchEnabled());
         state.putBoolean(EXTRA_LOW_LIGHT_BOOST, isLowLightBoostEnabled());
+        state.putBoolean(EXTRA_MOTION_PHOTO, isMotionPhotoEnabled());
         state.putBoolean(EXTRA_SHUTTER_SOUND, isShutterSoundEnabled());
         state.putInt(EXTRA_SHUTTER_SOUND_RES, getShutterSound());
         if (mImagePendingConfirmation != null) {
@@ -791,6 +795,7 @@ public class CameraView extends FrameLayout {
             setExposureCompensation(state.getInt(EXTRA_EXPOSURE_COMPENSATION));
             setTorchEnabled(state.getBoolean(EXTRA_TORCH));
             setLowLightBoostEnabled(state.getBoolean(EXTRA_LOW_LIGHT_BOOST));
+            setMotionPhotoEnabled(state.getBoolean(EXTRA_MOTION_PHOTO));
             setShutterSoundEnabled(state.getBoolean(EXTRA_SHUTTER_SOUND, true));
             setShutterSound(state.getInt(EXTRA_SHUTTER_SOUND_RES));
 
@@ -1352,6 +1357,9 @@ public class CameraView extends FrameLayout {
         mLocationTracker.stop();
         finishZoomAnimation();
         mCameraModule.close();
+        // After the camera, which was feeding it. A picture whose clip is still being cut keeps
+        // the frames already in.
+        mCameraModule.releaseMotionPhotoRecorder();
         mCameraModule.releaseSounds();
 
         if (!mHasSavedState) {
@@ -1399,9 +1407,11 @@ public class CameraView extends FrameLayout {
             }
             return;
         }
+        boolean motionPhoto = mCameraModule.beginMotionPhoto(file);
         // Freezing the preview to show the picture is right for a still, and wrong in the middle
-        // of a recording: the recording would freeze with it.
-        if (isImageConfirmationEnabled() && !isRecording()) {
+        // of a recording: the recording would freeze with it. A motion photo keeps the camera
+        // running for the second after the shutter its clip needs, and freezes when it is shown.
+        if (isImageConfirmationEnabled() && !isRecording() && !motionPhoto) {
             mCameraModule.pause();
         }
 
@@ -2668,6 +2678,47 @@ public class CameraView extends FrameLayout {
      */
     public boolean isStabilizationSupported() {
         return mCameraModule.isStabilizationSupported();
+    }
+
+    /**
+     * Makes each picture a motion photo: the picture, with the moments around it as a short silent
+     * clip, from about a second and a half before the shutter to a second after, in one JPEG that
+     * galleries play. {@link com.xlythe.view.camera.viewer.MediaView} plays the clip while the
+     * picture is held.
+     *
+     * <p>The picture is taken as it would be otherwise, at the same size and with the same Exif,
+     * and the clip is turned and mirrored the way the picture is. Because the clip starts before
+     * the shutter, the camera keeps a few seconds of video while this is on, which costs some
+     * battery, and a picture is reported about a second after its shutter, once its clip is in. A
+     * clip holds only what the camera saw since it opened.</p>
+     *
+     * <p>It takes a camera that can take motion photos ({@link #isMotionPhotoSupported()}). A
+     * request made before the camera opens is kept, and so is one across a lens switch. Pictures
+     * are taken without a clip while recording or streaming, in a {@link PictureFormat} other than
+     * JPEG, while frames are drawn by a {@link FrameRenderer}, a filter or a replaced background,
+     * and with an {@link Extension}.</p>
+     *
+     * <p>Changing it reconfigures the camera, which can interrupt the preview for a moment. During
+     * a recording the change waits until the recording ends.</p>
+     */
+    public void setMotionPhotoEnabled(boolean enabled) {
+        runOnMainThread(() -> mCameraModule.setMotionPhotoEnabled(enabled));
+    }
+
+    /**
+     * Returns whether motion photos are turned on. It reports the request, so it can be true on a
+     * camera that cannot take them. See {@link #setMotionPhotoEnabled}.
+     */
+    public boolean isMotionPhotoEnabled() {
+        return mCameraModule.isMotionPhotoEnabled();
+    }
+
+    /**
+     * Returns whether the active camera can take motion photos. Cameras on one device can differ,
+     * so read it once the camera has opened, and again after a lens switch.
+     */
+    public boolean isMotionPhotoSupported() {
+        return mCameraModule.isMotionPhotoSupported();
     }
 
     /**

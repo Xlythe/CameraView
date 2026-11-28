@@ -286,6 +286,24 @@ public final class GlMath {
         return inverse;
     }
 
+    /**
+     * A turn in degrees as one of the four a renderer takes, for a camera's orientation worked
+     * out as an int. Anything that is not a whole quarter turn is no turn.
+     */
+    @Rotation
+    public static int quarterTurn(int degrees) {
+        switch (((degrees % 360) + 360) % 360) {
+            case 90:
+                return 90;
+            case 180:
+                return 180;
+            case 270:
+                return 270;
+            default:
+                return 0;
+        }
+    }
+
     /** Whether a matrix leaves every coordinate where it was, to within rounding. */
     public static boolean isIdentity(@NonNull float[] matrix) {
         checkMatrix(matrix);

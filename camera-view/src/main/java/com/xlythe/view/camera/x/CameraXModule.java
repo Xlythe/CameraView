@@ -112,6 +112,7 @@ import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.gl.GlMath;
 import com.xlythe.view.camera.ICameraModule;
 import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.PermissionChecker;
@@ -119,6 +120,8 @@ import com.xlythe.view.camera.RawCapturePairer;
 import com.xlythe.view.camera.TransformMath;
 import com.xlythe.view.camera.ZoomMath;
 import com.xlythe.view.camera.v2.Camera2Module;
+import com.xlythe.view.camera.stream.MotionPhotoRecorder;
+import com.xlythe.view.camera.stream.RenderedMotionInput;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
@@ -128,6 +131,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -261,6 +265,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     @Nullable private SurfaceRequest.TransformationInfo mTransformationInfo;
     /** The GL effect every frame passes through, while a caller has asked for one. */
     @Nullable private FrameEffect mFrameEffect;
+    /**
+     * The lenses, front or back, that would not bind a motion photo's preview beside the others,
+     * so they are not asked again while this module lives.
+     */
+    private final Set<Boolean> mMotionPhotoRefusals = new HashSet<>();
 
     /**
      * Set once GL has failed here, after which this backend reports no effects and stops trying.
@@ -2404,6 +2413,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             requested.add(imageCapture);
             if (imageAnalysis != null) requested.add(imageAnalysis);
             requested.addAll(streamPreviews.values());
+            // A third stream only beside a still and nothing else: a custom stream already holds
+            // the slot, and a drawn frame or a recording has its own pipeline.
+            Preview motionPreview = imageCapture != null && mVideoCapture == null && !drawing
+                    && streamPreviews.isEmpty() ? createMotionPreview(generation) : null;
+            if (motionPreview != null) requested.add(motionPreview);
 
             // A preview, a still and analysis are guaranteed together, but not beside a stream
             // as well. Asked for more than it can hold, the bind fails and takes the analysis
@@ -2448,7 +2462,19 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             // After unbinding, so that an effect being let go is not closing outputs CameraX is
             // still drawing into, and before binding, because the group carries the effect.
             CameraEffect effect = reconcileFrameEffect(drawing);
-            Camera camera = bindAtomically(selector, requested, effect);
+            Camera camera;
+            try {
+                camera = bindAtomically(selector, requested, effect);
+            } catch (IllegalArgumentException | IllegalStateException refused) {
+                if (motionPreview == null) throw refused;
+                // Nothing promises a third stream beside a still, and pictures matter more than
+                // their clips.
+                Log.w(TAG, "The camera will not feed a motion photo beside its preview and still,"
+                        + " so pictures are taken without clips", refused);
+                mMotionPhotoRefusals.add(mFrontFacing);
+                requested.remove(motionPreview);
+                camera = bindAtomically(selector, requested, effect);
+            }
             if (generation != mGeneration || !mOpenRequested || mPaused) {
                 provider.unbind(requested.toArray(new UseCase[0]));
                 return false;
@@ -3112,6 +3138,73 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             previews.put(surfaceProvider, preview);
         }
         return previews;
+    }
+
+    /**
+     * A preview that feeds the motion photo encoder through a renderer of its own, or null when
+     * pictures carry no clip now.
+     *
+     * <p>The renderer draws the part of each frame the still shows, which a view port crops to
+     * the view's shape, and mirrors a front camera's frames as its still is mirrored. The frames
+     * are otherwise drawn as the camera wrote them and the clip tagged with how to turn them, as
+     * the still is.</p>
+     */
+    @MainThread
+    @Nullable private Preview createMotionPreview(long generation) {
+        MotionPhotoRecorder recorder = getMotionPhotoRecorder();
+        if (recorder == null) return null;
+        Preview preview = new Preview.Builder()
+                .setResolutionSelector(createStreamResolutionSelector(recorder.getMaxSize()))
+                .setTargetRotation(getTargetRotation())
+                .build();
+        preview.setSurfaceProvider(mMainExecutor, request -> {
+            if (generation != mGeneration || !mOpenRequested) {
+                request.willNotProvideSurface();
+                return;
+            }
+            RenderedMotionInput input;
+            try {
+                // The view port's crop comes with the transformation info, straight after.
+                input = RenderedMotionInput.start(recorder, request.getResolution(),
+                        GlMath.quarterTurn(getRelativeCameraOrientation()), mFrontFacing,
+                        true /* cropToFollow */);
+            } catch (IllegalStateException error) {
+                Log.w(TAG, "Unable to start the motion photo encoder", error);
+                input = null;
+            }
+            if (input == null) {
+                request.willNotProvideSurface();
+                return;
+            }
+            RenderedMotionInput started = input;
+            request.setTransformationInfoListener(mMainExecutor, info -> {
+                try {
+                    started.setCrop(info.getCropRect());
+                } catch (IllegalStateException error) {
+                    Log.w(TAG, "Unable to crop the motion photo clip", error);
+                }
+            });
+            request.provideSurface(started.getSurface(), mMainExecutor,
+                    result -> started.release());
+        });
+        return preview;
+    }
+
+    /**
+     * Whether this camera can take motion photos: an encoder to feed, GL to draw the clip with, and
+     * a lens that has not turned down the extra stream.
+     */
+    @Override public boolean isMotionPhotoSupported() {
+        return !mGlUnavailable && !mMotionPhotoRefusals.contains(mFrontFacing)
+                && MotionPhotoRecorder.isSupported();
+    }
+
+    @Override protected void onMotionPhotoChanged() {
+        runOnMainThread(() -> {
+            if (mOpenRequested && mVideoRecording == null && !mPaused && isHostActive()) {
+                reconcileUseCases(false);
+            }
+        });
     }
 
     private void unbindCurrentUseCases() {

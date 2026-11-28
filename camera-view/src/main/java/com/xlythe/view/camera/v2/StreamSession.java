@@ -79,6 +79,12 @@ class StreamSession extends PictureSession {
         return false;
     }
 
+    /** The stream's encoder holds the slot a motion photo's would take. */
+    @Override
+    protected boolean allowsMotionPhoto() {
+        return false;
+    }
+
     /**
      * A still is taken as the moment stands, as a recording's snapshot is: the stream's
      * repeating request runs without the flash strategy a pre-flash would be metered against.

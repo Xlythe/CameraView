@@ -1397,7 +1397,10 @@ public final class MediaTags {
         item.put(Xmp.NS_ITEM + "Mime", mime);
         item.put(Xmp.NS_ITEM + "Semantic", semantic);
         item.put(Xmp.NS_ITEM + "Length", Long.toString(length));
-        item.put(Xmp.NS_ITEM + "Padding", "0");
+        if ("Primary".equals(semantic)) {
+            // Only the primary picture may have padding after it, as the format defines it.
+            item.put(Xmp.NS_ITEM + "Padding", "0");
+        }
         return item;
     }
 

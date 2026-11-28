@@ -23,6 +23,7 @@ import android.hardware.camera2.params.OutputConfiguration;
 import android.hardware.camera2.params.SessionConfiguration;
 import android.hardware.camera2.params.StreamConfigurationMap;
 import android.media.ImageReader;
+import android.media.MediaRecorder;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
@@ -50,6 +51,7 @@ import com.xlythe.view.camera.ZoomMath;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderThread;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.stream.MotionPhotoRecorder;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
@@ -1032,7 +1034,11 @@ public class Camera2Module extends ICameraModule {
     }
 
     /**
-     * Builds a session with less in it, for a stream session the camera would not configure.
+     * Builds a session with less in it, for a session the camera would not configure.
+     *
+     * <p>A motion photo's encoder beside the preview and the still is more than some cameras
+     * take, though the tables promise it, and pictures matter more than their clips: such a
+     * camera takes pictures without clips from then on.</p>
      *
      * <p>A still beside a stream is more than Camera2 promises below FULL hardware, so a camera
      * that refuses one gets the stream alone, which is how a stream ran before it could have a
@@ -1042,6 +1048,15 @@ public class Camera2Module extends ICameraModule {
      * @return whether a session was built in this one's place
      */
     private boolean fallBackFrom(@NonNull Session session) {
+        if (session instanceof PictureSession && ((PictureSession) session).hasMotionSurface()) {
+            Log.w(TAG, "The camera will not feed a motion photo beside its preview and still,"
+                    + " so pictures are taken without clips");
+            refuseMotionPhotos();
+            mRegisteringSession = null;
+            closeSession(session);
+            setSession(newPictureSession());
+            return true;
+        }
         if (!(session instanceof StreamSession)) {
             return false;
         }
@@ -2357,6 +2372,101 @@ public class Camera2Module extends ICameraModule {
                 || mActiveSession instanceof VideoSession || mActiveSession instanceof StreamSession
                 || mRegisteringSession instanceof VideoSession
                 || mRegisteringSession instanceof StreamSession;
+    }
+
+    /**
+     * The cameras that turned down a session feeding a motion photo's encoder, by id, so that
+     * they are not asked again while this module lives.
+     */
+    private final Set<String> mMotionPhotoRefusals = new HashSet<>();
+
+    /** Remembers that the active camera will not feed a motion photo. */
+    private void refuseMotionPhotos() {
+        try {
+            mMotionPhotoRefusals.add(getActiveCamera());
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its id", error);
+        }
+    }
+
+    /**
+     * Whether this camera can take motion photos.
+     *
+     * <p>From LIMITED hardware upwards a camera promises a preview, an encoder and a still at once,
+     * which is the combination a motion photo needs; LEGACY hardware promises nothing of the sort.
+     * A front camera's clip is mirrored through GL, so it also needs GL to run here.</p>
+     */
+    @Override
+    public boolean isMotionPhotoSupported() {
+        if (!MotionPhotoRecorder.isSupported()) {
+            return false;
+        }
+        if (isUsingFrontFacingCamera() && !isGlAvailable()) {
+            return false;
+        }
+        try {
+            String cameraId = getActiveCamera();
+            if (mMotionPhotoRefusals.contains(cameraId)) {
+                return false;
+            }
+            Integer level = mCameraManager.getCameraCharacteristics(cameraId)
+                    .get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+            return level != null
+                    && level != CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_LEGACY;
+        } catch (CameraAccessException | RuntimeException error) {
+            if (DEBUG) Log.d(TAG, "Camera cannot report its hardware level", error);
+            return false;
+        }
+    }
+
+    @Override
+    protected void onMotionPhotoChanged() {
+        restartActiveSession();
+    }
+
+    /** The encoder for the session being built to feed, or null for none. */
+    @MainThread
+    @Nullable
+    MotionPhotoRecorder motionPhotoRecorder() {
+        return getMotionPhotoRecorder();
+    }
+
+    /**
+     * The largest still a session feeding a motion photo's encoder may ask for, or null for any.
+     *
+     * <p>FULL hardware promises a preview, a second preview-sized output and a still at the
+     * sensor's maximum together. LIMITED hardware promises the still only at the recording size,
+     * so there it is capped to the largest a recording could be.</p>
+     */
+    @Nullable
+    Size motionPhotoPictureCap() {
+        CameraCharacteristics characteristics = getCameraCharacteristics();
+        Integer level = characteristics == null
+                ? null : characteristics.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+        if (level == null || level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_FULL
+                || level == CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL_3) {
+            return null;
+        }
+        StreamConfigurationMap map =
+                characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
+        Size[] recording = map == null ? null : map.getOutputSizes(MediaRecorder.class);
+        return largestOf(recording);
+    }
+
+    /** The largest of a list of sizes by area, or null for none. */
+    @VisibleForTesting
+    @Nullable
+    static Size largestOf(@Nullable Size[] sizes) {
+        Size largest = null;
+        if (sizes != null) {
+            for (Size size : sizes) {
+                if (largest == null || (long) size.getWidth() * size.getHeight()
+                        > (long) largest.getWidth() * largest.getHeight()) {
+                    largest = size;
+                }
+            }
+        }
+        return largest;
     }
 
     /**

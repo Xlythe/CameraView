@@ -67,6 +67,10 @@ public class MainFragment extends CameraFragment {
     @Nullable
     private CheckBox mRaw;
 
+    /** Makes pictures motion photos, shown only where the camera can take them. */
+    @Nullable
+    private CheckBox mMotionPhoto;
+
     /** Opens the last picture filed in the viewer. */
     @Nullable
     private View mViewLast;
@@ -91,12 +95,19 @@ public class MainFragment extends CameraFragment {
         mExposureSlider = view.findViewById(R.id.exposure_slider);
         mExposureValue = view.findViewById(R.id.exposure_value);
         mRaw = view.findViewById(R.id.raw);
+        mMotionPhoto = view.findViewById(R.id.motion_photo);
         mViewLast = view.findViewById(R.id.view_last);
         mRaw.setOnCheckedChangeListener((button, checked) -> {
             CameraView cameraView = mCameraView;
             if (cameraView != null) {
                 cameraView.setPictureFormat(checked
                         ? CameraView.PictureFormat.RAW_JPEG : CameraView.PictureFormat.JPEG);
+            }
+        });
+        mMotionPhoto.setOnCheckedChangeListener((button, checked) -> {
+            CameraView cameraView = mCameraView;
+            if (cameraView != null) {
+                cameraView.setMotionPhotoEnabled(checked);
             }
         });
         // The DNG of a RAW capture is filed last, so it is the one the viewer opens.
@@ -188,6 +199,7 @@ public class MainFragment extends CameraFragment {
         mExposureSlider = null;
         mExposureValue = null;
         mRaw = null;
+        mMotionPhoto = null;
         mViewLast = null;
         super.onDestroyView();
     }
@@ -198,6 +210,7 @@ public class MainFragment extends CameraFragment {
         showZoomPresets();
         showExposureControl();
         showRaw();
+        showMotionPhoto();
     }
 
     @Override
@@ -208,6 +221,19 @@ public class MainFragment extends CameraFragment {
         showZoomPresets();
         showExposureControl();
         showRaw();
+        showMotionPhoto();
+    }
+
+    /** Offers motion photos where this lens can take them, and keeps the switch's state. */
+    @MainThread
+    private void showMotionPhoto() {
+        CameraView cameraView = mCameraView;
+        if (cameraView == null || mMotionPhoto == null) {
+            return;
+        }
+        mMotionPhoto.setChecked(cameraView.isMotionPhotoEnabled());
+        mMotionPhoto.setVisibility(
+                cameraView.isMotionPhotoSupported() ? View.VISIBLE : View.GONE);
     }
 
     /** Offers RAW where this lens can write it, and turns it off where it cannot. */

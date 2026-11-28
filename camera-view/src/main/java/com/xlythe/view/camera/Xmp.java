@@ -71,7 +71,9 @@ final class Xmp {
         PREFIXES.put(NS_TIFF, "tiff");
         PREFIXES.put(NS_PHOTOSHOP, "photoshop");
         PREFIXES.put(NS_GPANO, "GPano");
-        PREFIXES.put(NS_CAMERA, "Camera");
+        // The format calls it Camera, but every motion photo a phone writes says GCamera, and a
+        // reader that matches on text rather than on namespaces knows only that.
+        PREFIXES.put(NS_CAMERA, "GCamera");
         PREFIXES.put(NS_CONTAINER, "Container");
         PREFIXES.put(NS_ITEM, "Item");
         PREFIXES.put(NS_HDR_GAIN_MAP, "hdrgm");

@@ -71,8 +71,9 @@ pictureQuality [1 to 100], colorSpace [srgb, displayP3],
 pictureFormat [jpeg, ultraHdr, raw, rawJpeg], exposureCompensation [minExposureCompensation to
 maxExposureCompensation, in steps of exposureCompensationStep EV], torchEnabled [boolean],
 dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
-stabilizationEnabled [boolean], lowLightBoostEnabled [boolean], frameRenderer [FrameRenderer, see
-Filters and masks below] and cameraTextureProvider [CameraTextureProvider]. Not every camera can
+stabilizationEnabled [boolean], lowLightBoostEnabled [boolean], motionPhotoEnabled [boolean],
+frameRenderer [FrameRenderer, see Filters and masks below] and cameraTextureProvider
+[CameraTextureProvider]. Not every camera can
 do all of these, so CameraState below says which this one supports.
 
 Pass a state to be told what the camera can do and what it is doing. It holds null until a camera
@@ -97,7 +98,7 @@ CameraState reports hasFlash, hasFrontFacingCamera, isUsingFrontFacingCamera, is
 minZoomRatio, maxZoomRatio, zoomPresets, isExposureCompensationSupported,
 minExposureCompensation, maxExposureCompensation, exposureCompensationStep, supportedColorSpaces,
 supportedPictureFormats, supportedDynamicRanges, supportedExtensions, isStabilizationSupported,
-isLowLightBoostSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
+isLowLightBoostSupported, isMotionPhotoSupported, isSnapshotWhileRecordingSupported, isFaceDetectionSupported,
 horizontalFieldOfView, verticalFieldOfView, isRecording, isAnalyzingFrames, isFrameEffectSupported,
 isReplacingBackground and isCapturingPanorama.
 
@@ -284,8 +285,8 @@ flash [auto, on, off], lensFacing [back, front], maxVideoDuration [milliseconds]
 maxVideoSize [bytes], confirmImages [boolean], confirmVideos [boolean],
 pinchToZoomEnabled [boolean], matchPreviewAspectRatio [boolean], shutterSoundEnabled [boolean],
 shutterSound [raw resource], dynamicRange [sdr, hdr], extension [none, bokeh, hdr, night, faceRetouch, auto],
-stabilizationEnabled [boolean], exposureCompensation [integer], torchEnabled [boolean] and
-lowLightBoostEnabled [boolean].
+stabilizationEnabled [boolean], exposureCompensation [integer], torchEnabled [boolean],
+lowLightBoostEnabled [boolean] and motionPhotoEnabled [boolean].
 ```xml
 <com.xlythe.view.camera.CameraView
     xmlns:camera="http://schemas.android.com/apk/res-auto"
@@ -298,7 +299,7 @@ lowLightBoostEnabled [boolean].
     camera:maxVideoSize="10000000" />
 ```
 
-Each attribute has a matching setter. The last seven describe things not every camera can do, so
+Each attribute has a matching setter. The last eight describe things not every camera can do, so
 each also has a companion that reports whether the camera now open supports it, for example
 isDynamicRangeSupported(DynamicRange) or isLowLightBoostSupported(). Ask before relying on one; an
 unsupported request is logged and dropped rather than applied.
@@ -336,6 +337,18 @@ mCameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() 
   @Override public void onFailure() {}
 });
 ```
+Makes each picture a motion photo: the JPEG carries a short silent clip from about a second and a
+half before the shutter to a second after, which galleries and MediaView play
+```java
+if (mCameraView.isMotionPhotoSupported()) {
+  mCameraView.setMotionPhotoEnabled(true);
+}
+```
+The picture itself is unchanged, and the clip is turned and mirrored as the picture is. A picture
+is reported about a second after its shutter, once its clip is in, and the camera keeps a few
+seconds of video while motion photos are on. Pictures carry no clip while recording or streaming,
+in a picture format other than JPEG, while frames are drawn, or with an extension.
+
 Stops recording
 ```java
 mCameraView.stopRecording();

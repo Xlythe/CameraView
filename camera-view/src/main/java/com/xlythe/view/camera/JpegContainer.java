@@ -540,6 +540,12 @@ final class JpegContainer extends ExifImageContainer {
     /**
      * Rewrites the file with a packet in place of its own, or with none for null. Every other
      * segment and all that follows the picture is kept as it was.
+     *
+     * <p>The packet goes ahead of an MPF segment, wherever the Exif is, and a file whose packet
+     * comes after one is refused: MPF counts from itself, so only what is ahead of it may change
+     * size.</p>
+     *
+     * @throws IOException if the packet is too large for a segment, or comes after MPF
      */
     @WorkerThread
     static void writeXmp(@NonNull File file, @Nullable byte[] packet) throws IOException {
@@ -550,12 +556,21 @@ final class JpegContainer extends ExifImageContainer {
             List<Segment> segments = segments(source, 0);
             final List<Segment> kept = new ArrayList<>();
             int insertAt = 0;
+            int mpfAt = -1;
             for (Segment segment : segments) {
                 if (segment.is(APP1, XMP_IDENTIFIER)) {
+                    if (mpfAt >= 0) {
+                        // Rewriting it would move the gain map without moving what locates it.
+                        throw new IOException("The XMP follows the MPF segment");
+                    }
                     continue;
                 }
                 kept.add(segment);
-                if (segment.marker == APP0 || segment.is(APP1, EXIF_IDENTIFIER)) {
+                if (mpfAt < 0 && segment.is(APP2, MPF_IDENTIFIER)) {
+                    mpfAt = kept.size() - 1;
+                }
+                if (mpfAt < 0
+                        && (segment.marker == APP0 || segment.is(APP1, EXIF_IDENTIFIER))) {
                     insertAt = kept.size();
                 }
             }

@@ -158,6 +158,8 @@ data class CameraState(
     val supportedExtensions: Set<Extension> = emptySet(),
     val isStabilizationSupported: Boolean = false,
     val isLowLightBoostSupported: Boolean = false,
+    /** Whether [Camera]'s motionPhotoEnabled can make this camera's pictures motion photos. */
+    val isMotionPhotoSupported: Boolean = false,
     /** Whether [CameraController.takePicture] works while a recording is running. */
     val isSnapshotWhileRecordingSupported: Boolean = false,
     val isFaceDetectionSupported: Boolean = false,
@@ -708,6 +710,7 @@ private fun CameraView.readCameraState(): CameraState {
         },
         isStabilizationSupported = isStabilizationSupported,
         isLowLightBoostSupported = isLowLightBoostSupported,
+        isMotionPhotoSupported = isMotionPhotoSupported,
         isSnapshotWhileRecordingSupported = isSnapshotWhileRecordingSupported,
         isFaceDetectionSupported = isFaceDetectionSupported,
         horizontalFieldOfView = horizontalFieldOfView,
@@ -822,6 +825,11 @@ private fun Extension.toCameraView() = when (this) {
  *  made during a recording waits for the recording to end.
  * @param lowLightBoostEnabled Brightens the preview and recordings in a dark scene, on a camera
  *  with [CameraState.isLowLightBoostSupported], for which it may lower the frame rate.
+ * @param motionPhotoEnabled Makes each picture a motion photo, with the moments around the shutter
+ *  as a short clip in the JPEG, on a camera with [CameraState.isMotionPhotoSupported]. A picture
+ *  is then reported about a second after its shutter. Pictures carry no clip while recording,
+ *  in a [pictureFormat] other than [PictureFormat.JPEG], while a [frameRenderer] draws, or with an
+ *  [extension].
  * @param shutterSoundEnabled Plays the platform's click and recording tones. Where the law
  *  requires them, they play regardless.
  * @param shutterSound A raw resource played in place of the platform's click, or 0 for the click.
@@ -870,6 +878,7 @@ fun Camera(
     pictureQuality: Int = ICameraModule.DEFAULT_PICTURE_QUALITY,
     stabilizationEnabled: Boolean = false,
     lowLightBoostEnabled: Boolean = false,
+    motionPhotoEnabled: Boolean = false,
     shutterSoundEnabled: Boolean = true,
     @RawRes shutterSound: Int = 0,
     frameRenderer: FrameRenderer? = null,
@@ -913,6 +922,7 @@ fun Camera(
         pictureQuality = pictureQuality,
         stabilizationEnabled = stabilizationEnabled,
         lowLightBoostEnabled = lowLightBoostEnabled,
+        motionPhotoEnabled = motionPhotoEnabled,
         shutterSoundEnabled = shutterSoundEnabled,
         shutterSound = shutterSound,
         controller = controller,
@@ -1007,6 +1017,7 @@ fun Camera(
         pictureQuality = pictureQuality,
         stabilizationEnabled = stabilizationEnabled,
         lowLightBoostEnabled = lowLightBoostEnabled,
+        motionPhotoEnabled = false,
         shutterSoundEnabled = shutterSoundEnabled,
         shutterSound = shutterSound,
         controller = controller,
@@ -1124,6 +1135,7 @@ private fun CameraImpl(
     pictureQuality: Int,
     stabilizationEnabled: Boolean,
     lowLightBoostEnabled: Boolean,
+    motionPhotoEnabled: Boolean,
     shutterSoundEnabled: Boolean,
     @RawRes shutterSound: Int,
     controller: MutableState<CameraController?>,
@@ -1357,6 +1369,7 @@ private fun CameraImpl(
         view.pictureQuality = pictureQuality
         view.isStabilizationEnabled = stabilizationEnabled
         view.isLowLightBoostEnabled = lowLightBoostEnabled
+        view.isMotionPhotoEnabled = motionPhotoEnabled
         view.isShutterSoundEnabled = shutterSoundEnabled
         view.shutterSound = shutterSound
         frameEffects.update(view, frameRenderer, cameraTextureProvider)

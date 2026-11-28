@@ -26,10 +26,13 @@ import androidx.annotation.UiThread;
 
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.stream.MotionPhotoRecorder;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
+import java.io.IOException;
 import java.text.SimpleDateFormat;
+import java.util.Collections;
 import java.util.Date;
 import java.util.HashSet;
 import java.util.Locale;
@@ -88,6 +91,21 @@ public abstract class ICameraModule {
     /** Whether pictures and videos should match the preview aspect ratio. */
     private boolean mMatchPreviewAspectRatio = true;
 
+    /** Whether pictures are asked to carry a clip. See {@link #setMotionPhotoEnabled}. */
+    private boolean mMotionPhotoEnabled;
+
+    /**
+     * The encoder a backend feeds for motion photos, or null while none is. Only ever a
+     * {@link MotionPhotoRecorder}, which needs API 21; held as an Object so that nothing on older
+     * releases loads the class. Touched on the main thread only.
+     */
+    @Nullable
+    private Object mMotionPhotoRecorder;
+
+    /** Holds each picture back until its clip is written into it. */
+    @Nullable
+    private MotionPhotos mMotionPhotos;
+
     public ICameraModule(CameraView view) {
         mView = view;
     }
@@ -127,6 +145,136 @@ public abstract class ICameraModule {
 
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
 
+    }
+
+    /**
+     * Asks for pictures to carry the moments around the shutter as a clip, written into the JPEG
+     * as a motion photo. A backend that can feed an encoder says so in
+     * {@link #isMotionPhotoSupported}, and is told of a change in {@link #onMotionPhotoChanged}.
+     */
+    @MainThread
+    public void setMotionPhotoEnabled(boolean enabled) {
+        if (mMotionPhotoEnabled == enabled) {
+            return;
+        }
+        mMotionPhotoEnabled = enabled;
+        if (!enabled) {
+            releaseMotionPhotoRecorder();
+        }
+        onMotionPhotoChanged();
+    }
+
+    /** Whether motion photos were asked for, whether or not this camera can take them. */
+    public boolean isMotionPhotoEnabled() {
+        return mMotionPhotoEnabled;
+    }
+
+    /** Whether this camera can feed an encoder beside its preview and its still. */
+    public boolean isMotionPhotoSupported() {
+        return false;
+    }
+
+    /**
+     * Called when motion photos are turned on or off, for a backend to rebuild its outputs around
+     * {@link #getMotionPhotoRecorder}. A recording keeps the outputs it started with.
+     */
+    @MainThread
+    protected void onMotionPhotoChanged() {}
+
+    /**
+     * The encoder to feed with every preview frame, or null when pictures are not to carry a clip
+     * now. A backend asks each time it builds its outputs.
+     *
+     * <p>A motion photo is a JPEG, a picture first and a clip second, so the clip gives way: in
+     * another picture format, while frames are drawn, and with a vendor extension, there is none,
+     * and the encoder stops until there is one again.</p>
+     */
+    @RequiresApi(21)
+    @MainThread
+    @Nullable
+    protected final MotionPhotoRecorder getMotionPhotoRecorder() {
+        if (!mMotionPhotoEnabled || !isMotionPhotoSupported() || !takesMotionPhotos()) {
+            releaseMotionPhotoRecorder();
+            return null;
+        }
+        if (mMotionPhotoRecorder == null) {
+            mMotionPhotoRecorder = new MotionPhotoRecorder();
+        }
+        return (MotionPhotoRecorder) mMotionPhotoRecorder;
+    }
+
+    /** Whether the settings other than the switch itself leave room for a clip. */
+    private boolean takesMotionPhotos() {
+        return getPictureFormat() == CameraView.PictureFormat.JPEG && !isDrawingFrames()
+                && getExtension() == CameraView.Extension.NONE;
+    }
+
+    /**
+     * Stops the motion photo encoder, as the camera closes. A picture whose clip is still being
+     * cut gets the frames already in.
+     */
+    @MainThread
+    void releaseMotionPhotoRecorder() {
+        Object recorder = mMotionPhotoRecorder;
+        mMotionPhotoRecorder = null;
+        if (recorder != null && Build.VERSION.SDK_INT >= 21) {
+            ((MotionPhotoRecorder) recorder).release();
+        }
+    }
+
+    /**
+     * Starts the clip of a picture about to be taken into a file, if frames are being fed.
+     *
+     * @return whether the picture will be a motion photo, which holds it back about a second
+     */
+    @MainThread
+    boolean beginMotionPhoto(@NonNull File file) {
+        if (!mMotionPhotoEnabled || Build.VERSION.SDK_INT < 21 || isRecording()
+                || !takesMotionPhotos()) {
+            return false;
+        }
+        Object recorder = mMotionPhotoRecorder;
+        if (recorder == null) {
+            Log.w(TAG, "Nothing is feeding the motion photo encoder, so this picture has no clip");
+            return false;
+        }
+        boolean begun = motionPhotos().begin(file, clipSource((MotionPhotoRecorder) recorder));
+        if (!begun) {
+            Log.w(TAG, "No frames reached the motion photo encoder in the last second, so this"
+                    + " picture has no clip");
+        }
+        return begun;
+    }
+
+    @NonNull
+    private MotionPhotos motionPhotos() {
+        if (mMotionPhotos == null) {
+            mMotionPhotos = new MotionPhotos(getContext().getCacheDir());
+        }
+        return mMotionPhotos;
+    }
+
+    /** The recorder, as the clips {@link MotionPhotos} asks for. */
+    @RequiresApi(21)
+    @NonNull
+    private static MotionPhotos.ClipSource clipSource(@NonNull MotionPhotoRecorder recorder) {
+        return listener -> {
+            MotionPhotoRecorder.Capture capture = recorder.capture(
+                    clip -> listener.onClip(clip == null ? null : new MotionPhotos.ClipFile() {
+                        @Override
+                        public long getPresentationTimestampUs() {
+                            return clip.getPresentationTimestampUs();
+                        }
+
+                        @Override
+                        public void writeTo(@NonNull File mp4) throws IOException {
+                            clip.writeTo(mp4, MotionPhotoWriter.METADATA_TRACK_MIME,
+                                    MotionPhotoWriter.metadataTrackSample(
+                                            clip.getPresentationTimestampUs()));
+                        }
+                    }));
+            return capture == null ? null : capture::cancel;
+        };
     }
 
     protected boolean startBarcodeScanner(
@@ -278,7 +426,7 @@ public abstract class ICameraModule {
      * Informs the CameraView to pause and show the taken photo
      */
     public void showImageConfirmation(File file) {
-        mView.showImageConfirmation(file);
+        showImageConfirmation(file, Collections.singletonList(file));
     }
 
     /**
@@ -289,10 +437,19 @@ public abstract class ICameraModule {
      */
     @RestrictTo(RestrictTo.Scope.LIBRARY)
     public void showImageConfirmation(@NonNull File file, @NonNull List<File> files) {
+        MotionPhotos motionPhotos = mMotionPhotos;
+        if (motionPhotos != null
+                && motionPhotos.finish(file, () -> mView.showImageConfirmation(file, files))) {
+            return;
+        }
         mView.showImageConfirmation(file, files);
     }
 
     public void onImageFailed() {
+        MotionPhotos motionPhotos = mMotionPhotos;
+        if (motionPhotos != null) {
+            motionPhotos.fail();
+        }
         mView.onImageFailed();
     }
 

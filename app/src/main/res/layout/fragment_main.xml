@@ -124,6 +124,16 @@
                 app:backgroundTint="#388E3C"
                 app:cornerRadius="20dp" />
 
+            <!-- Motion photos, shown by MainFragment where the camera can take them -->
+            <CheckBox
+                android:id="@+id/motion_photo"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginEnd="8dp"
+                android:button="@drawable/motion_photo_toggle"
+                android:contentDescription="@string/motion_photo"
+                android:visibility="gone" />
+
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/view_last"
                 android:layout_width="wrap_content"

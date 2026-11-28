@@ -71,6 +71,7 @@ public class CameraViewStateTest {
         cameraView.setMatchPreviewAspectRatio(false);
         cameraView.setDynamicRange(CameraView.DynamicRange.HDR);
         cameraView.setStabilizationEnabled(true);
+        cameraView.setMotionPhotoEnabled(true);
         cameraView.setExposureCompensation(3);
         cameraView.setTorchEnabled(true);
         cameraView.setShutterSoundEnabled(false);
@@ -88,6 +89,7 @@ public class CameraViewStateTest {
         assertFalse(restored.isMatchPreviewAspectRatioEnabled());
         assertEquals(CameraView.DynamicRange.HDR, restored.getDynamicRange());
         assertTrue(restored.isStabilizationEnabled());
+        assertTrue(restored.isMotionPhotoEnabled());
         assertEquals(3, restored.getExposureCompensation());
         assertTrue(restored.isTorchEnabled());
         assertFalse(restored.isShutterSoundEnabled());
