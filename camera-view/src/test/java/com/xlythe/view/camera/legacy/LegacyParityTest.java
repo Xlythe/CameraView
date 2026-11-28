@@ -3,6 +3,7 @@ package com.xlythe.view.camera.legacy;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 
@@ -12,10 +13,15 @@ import android.graphics.SurfaceTexture;
 import android.hardware.Camera;
 import android.os.Looper;
 
+import androidx.annotation.NonNull;
+
+import com.xlythe.view.camera.Burst;
 import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
+import com.xlythe.view.camera.shadow.ShadowFrameRateRefusingCamera;
 import com.xlythe.view.camera.shadow.ShadowRefusingCamera;
+import com.xlythe.view.camera.shadow.ShadowSlowPictureCamera;
 
 import org.junit.After;
 import org.junit.Before;
@@ -31,6 +37,9 @@ import org.robolectric.shadows.ShadowPausedAsyncTask;
 import org.robolectric.util.ReflectionHelpers;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -70,6 +79,7 @@ public class LegacyParityTest {
 
     @Before
     public void setUp() {
+        ShadowSlowPictureCamera.reset();
         Context context = RuntimeEnvironment.getApplication();
         Shadows.shadowOf((android.app.Application) context).grantPermissions(
                 Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO);
@@ -106,6 +116,76 @@ public class LegacyParityTest {
         assertEquals(Camera.Parameters.FLASH_MODE_AUTO, flashMode());
         module.setFlash(CameraView.Flash.OFF);
         assertEquals(Camera.Parameters.FLASH_MODE_OFF, flashMode());
+    }
+
+    /**
+     * The preview runs no slower than 15 fps where the camera allows it, rather than at the 5 fps
+     * the camera service's widest range lets a dim scene fall to. These are the API 37 emulator's
+     * ranges, where the default made a flash picture take three times as long as on Camera2.
+     */
+    @Test
+    public void thePreviewKeepsItsFrameRateUp() {
+        givenTheCameraOffersFrameRates("(15000,15000),(5000,30000),(15000,30000),(30000,30000)",
+                "5000,30000");
+        module.open();
+        idle();
+
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        int[] range = new int[2];
+        camera.getParameters().getPreviewFpsRange(range);
+        assertEquals(15000, range[Camera.Parameters.PREVIEW_FPS_MIN_INDEX]);
+        assertEquals(30000, range[Camera.Parameters.PREVIEW_FPS_MAX_INDEX]);
+    }
+
+    /** A camera that will not take the range it lists keeps its own, and still opens. */
+    @Test
+    @Config(shadows = {ShadowFrameRateRefusingCamera.class})
+    public void aCameraThatRefusesTheFrameRateStillOpens() {
+        givenTheCameraOffersFrameRates("(5000,30000),(15000,30000)", "5000,30000");
+        module.open();
+        idle();
+
+        assertTrue(module.isCameraReady());
+        Camera camera = ReflectionHelpers.getField(module, "mCamera");
+        assertEquals("5000,30000", camera.getParameters().get("preview-fps-range"));
+    }
+
+    @Test
+    public void theFastestTopRateUpTo30FpsIsChosen() {
+        assertRange(15000, 30000, new int[] {7500, 24000}, new int[] {15000, 30000},
+                new int[] {30000, 60000});
+        assertRange(30000, 30000, new int[] {7500, 30000}, new int[] {30000, 30000});
+        assertRange(24000, 24000, new int[] {24000, 24000}, new int[] {15000, 15000});
+    }
+
+    @Test
+    public void theLowestFloorOf15FpsIsChosen() {
+        assertRange(15000, 30000, new int[] {30000, 30000}, new int[] {15000, 30000},
+                new int[] {20000, 30000});
+    }
+
+    @Test
+    public void aCameraWhoseFloorsAreAllLowGetsItsHighest() {
+        assertRange(10000, 30000, new int[] {5000, 30000}, new int[] {10000, 30000},
+                new int[] {7500, 30000});
+    }
+
+    @Test
+    public void aCameraWhoseRangesAreAllFasterGetsItsSlowest() {
+        assertRange(30000, 60000, new int[] {60000, 120000}, new int[] {30000, 60000});
+    }
+
+    @Test
+    public void aCameraThatListsNoRangesIsLeftAlone() {
+        assertNull(LegacyCameraModule.previewFpsRange(null));
+        assertNull(LegacyCameraModule.previewFpsRange(new ArrayList<>()));
+    }
+
+    private static void assertRange(int min, int max, int[]... supported) {
+        int[] range = LegacyCameraModule.previewFpsRange(Arrays.asList(supported));
+        assertNotNull(range);
+        assertEquals(min + "-" + max, range[Camera.Parameters.PREVIEW_FPS_MIN_INDEX] + "-"
+                + range[Camera.Parameters.PREVIEW_FPS_MAX_INDEX]);
     }
 
     /** The torch lights the flash continuously, and turning it off gives the strategy back. */
@@ -252,6 +332,116 @@ public class LegacyParityTest {
         assertTrue(failed.get());
     }
 
+    /**
+     * A picture asked for while another is being taken is reported failed on the main thread,
+     * and the first still arrives as itself. The second call used to replace the first one's
+     * callback, so the first picture was filed as the second, or never answered.
+     */
+    @Test
+    @Config(shadows = {ShadowSlowPictureCamera.class})
+    public void aPictureAskedForWhileAnotherIsTakenFails() throws Exception {
+        List<String> heard = new ArrayList<>();
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onImageConfirmation() {}
+            @Override public void onImageCaptured(File file) {
+                heard.add("captured " + file.getName() + onMainThread());
+            }
+            @Override public void onFailure() {
+                heard.add("failed" + onMainThread());
+            }
+        });
+        ShadowPausedAsyncTask.overrideExecutor(Runnable::run);
+        File directory = RuntimeEnvironment.getApplication().getCacheDir();
+        module.open();
+        idle();
+
+        module.takePicture(new File(directory, "first.jpg"));
+        module.takePicture(new File(directory, "second.jpg"));
+        idle();
+        assertEquals(Arrays.asList("failed on main"), heard);
+        assertEquals("the second never reached the camera", 1,
+                ShadowSlowPictureCamera.getRequestCount());
+
+        ShadowSlowPictureCamera.deliverPicture(
+                new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9});
+        idle();
+        assertEquals(Arrays.asList("failed on main", "captured first.jpg on main"), heard);
+
+        module.takePicture(new File(directory, "third.jpg"));
+        idle();
+        assertEquals("once the first arrives the next is taken", 2,
+                ShadowSlowPictureCamera.getRequestCount());
+    }
+
+    /**
+     * A burst asked for while a picture is being taken finishes at once, untaken, since its first
+     * picture would take the other's callback as a second picture would.
+     */
+    @Test
+    @Config(shadows = {ShadowSlowPictureCamera.class})
+    public void aBurstAskedForWhileAPictureIsTakenDoesNotStart() throws Exception {
+        List<String> heard = new ArrayList<>();
+        File directory = RuntimeEnvironment.getApplication().getCacheDir();
+        module.open();
+        idle();
+        module.takePicture(new File(directory, "single.jpg"));
+
+        module.startBurst(new Burst(directory, "late", 3, new Burst.Callback() {
+            @Override public void onPictureTaken(@NonNull File file) {
+                heard.add("burst picture " + file.getName());
+            }
+            @Override public void onBurstFinished() {
+                heard.add("burst finished");
+            }
+        }));
+        idle();
+
+        assertEquals(Arrays.asList("burst finished"), heard);
+        assertEquals("the burst never reached the camera", 1,
+                ShadowSlowPictureCamera.getRequestCount());
+    }
+
+    /** A picture being taken when the camera closes does not hold up the next camera's. */
+    @Test
+    @Config(shadows = {ShadowSlowPictureCamera.class})
+    public void closingTheCameraEndsThePictureBeingTaken() throws Exception {
+        AtomicReference<Boolean> failed = new AtomicReference<>(false);
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onImageConfirmation() {}
+            @Override public void onImageCaptured(File file) {}
+            @Override public void onFailure() { failed.set(true); }
+        });
+        File directory = RuntimeEnvironment.getApplication().getCacheDir();
+        module.open();
+        idle();
+        module.takePicture(new File(directory, "abandoned.jpg"));
+        module.close();
+        module.open();
+        idle();
+
+        module.takePicture(new File(directory, "next.jpg"));
+        idle();
+
+        assertFalse(failed.get());
+        assertEquals(2, ShadowSlowPictureCamera.getRequestCount());
+    }
+
+    /**
+     * Makes the camera list the given preview frame rate ranges and start at one of them, as
+     * its parameters say on the next open.
+     */
+    private static void givenTheCameraOffersFrameRates(String ranges, String current) {
+        Camera camera = Camera.open(0);
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            parameters.set("preview-fps-range-values", ranges);
+            parameters.set("preview-fps-range", current);
+            camera.setParameters(parameters);
+        } finally {
+            camera.release();
+        }
+    }
+
     /** Makes the camera list the given flash modes, as its parameters say on the next open. */
     private static void givenTheCameraOffers(String... modes) {
         Camera camera = Camera.open(0);
@@ -287,6 +477,10 @@ public class LegacyParityTest {
         Camera camera = ReflectionHelpers.getField(module, "mCamera");
         Camera.Size size = camera.getParameters().getPictureSize();
         return size.width + "x" + size.height;
+    }
+
+    private static String onMainThread() {
+        return Looper.myLooper() == Looper.getMainLooper() ? " on main" : " off main";
     }
 
     private static void idle() {

@@ -20,6 +20,7 @@ import android.view.ViewGroup;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
+import androidx.core.content.ContextCompat;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.rule.GrantPermissionRule;
@@ -485,6 +486,6 @@ public final class PictureSizeDeviceTest {
 
     private static CameraManager cameraManager() {
         Context context = ApplicationProvider.getApplicationContext();
-        return context.getSystemService(CameraManager.class);
+        return ContextCompat.getSystemService(context, CameraManager.class);
     }
 }

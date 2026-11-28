@@ -42,6 +42,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 
+import androidx.annotation.AnyThread;
 import androidx.annotation.MainThread;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -68,6 +69,17 @@ public class LegacyCameraModule extends ICameraModule {
      */
     private static final double MIN_MATCHED_PIXEL_FRACTION = 0.5;
 
+    /**
+     * The slowest the preview may run, in frames per second times 1000 as the old API counts
+     * them: frames no longer than 1/15 s, which a dim scene may still use to gather light.
+     */
+    @VisibleForTesting
+    static final int MIN_PREVIEW_FPS = 15_000;
+
+    /** The fastest preview chosen: 30 fps, as phones preview, not a high-speed range. */
+    @VisibleForTesting
+    static final int MAX_PREVIEW_FPS = 30_000;
+
     /** Orders sizes by how many pixels they hold. */
     private static final Comparator<Point> BY_AREA = (a, b) -> Long.signum(area(a) - area(b));
 
@@ -79,6 +91,13 @@ public class LegacyCameraModule extends ICameraModule {
 
     /** The preview size chosen for the open camera, or null when no camera is open. */
     @Nullable private Camera.Size mPreviewSize;
+
+    /**
+     * Whether the open camera is taking a picture, from the call until its JPEG arrives. The
+     * camera keeps one picture callback, which every call replaces, even one it then refuses: a
+     * second picture asked for meanwhile takes the first one's JPEG, or leaves neither answered.
+     */
+    private boolean mTakingPicture;
 
     /**
      * The zoom, as a ratio. While a camera is open it is the entry of its zoom table the camera is
@@ -184,6 +203,7 @@ public class LegacyCameraModule extends ICameraModule {
             if (exposureCompensation != null) {
                 super.setExposureCompensation(exposureCompensation);
             }
+            applyPreviewFpsRange(mCamera);
             applyShutterSound();
             transformPreview(getWidth(), getHeight(), getPreviewWidth(), getPreviewHeight(), cameraOrientation);
 
@@ -370,6 +390,76 @@ public class LegacyCameraModule extends ICameraModule {
     }
 
     /**
+     * Keeps the preview as quick as on the other backends. Left alone, the camera service gives
+     * the old API the widest range a camera lists, which can let a dim scene run at 5 fps; the
+     * metering before a flash picture counts frames, so it then takes three times as long.
+     *
+     * <p>Set apart from the other parameters, so a camera that will not take the range it lists
+     * keeps its own and still opens.</p>
+     */
+    @MainThread
+    private static void applyPreviewFpsRange(@NonNull Camera camera) {
+        try {
+            Camera.Parameters parameters = camera.getParameters();
+            int[] range = previewFpsRange(parameters.getSupportedPreviewFpsRange());
+            if (range == null) {
+                return;
+            }
+            parameters.setPreviewFpsRange(range[Camera.Parameters.PREVIEW_FPS_MIN_INDEX],
+                    range[Camera.Parameters.PREVIEW_FPS_MAX_INDEX]);
+            camera.setParameters(parameters);
+        } catch (RuntimeException e) {
+            Log.w(TAG, "Camera would not take a preview frame rate range", e);
+        }
+    }
+
+    /**
+     * The preview frame rate range to use: the fastest top rate up to {@link #MAX_PREVIEW_FPS},
+     * and with it the lowest floor of at least {@link #MIN_PREVIEW_FPS}, so a dim scene gets the
+     * longest exposures that still keep the preview smooth. A camera whose every range is faster
+     * gets its slowest, and one whose every floor is lower gets its highest floor.
+     *
+     * @return the range, or null for a camera that lists none
+     */
+    @AnyThread
+    @VisibleForTesting
+    @Nullable
+    static int[] previewFpsRange(@Nullable List<int[]> supported) {
+        if (supported == null) {
+            return null;
+        }
+        int[] best = null;
+        for (int[] range : supported) {
+            if (range != null && range.length > Camera.Parameters.PREVIEW_FPS_MAX_INDEX
+                    && (best == null || isBetterPreviewFpsRange(range, best))) {
+                best = range;
+            }
+        }
+        return best;
+    }
+
+    /** Whether one preview frame rate range suits {@link #previewFpsRange} better than another. */
+    @AnyThread
+    private static boolean isBetterPreviewFpsRange(@NonNull int[] range, @NonNull int[] than) {
+        int max = range[Camera.Parameters.PREVIEW_FPS_MAX_INDEX];
+        int thanMax = than[Camera.Parameters.PREVIEW_FPS_MAX_INDEX];
+        if (max != thanMax) {
+            boolean capped = max <= MAX_PREVIEW_FPS;
+            if (capped != (thanMax <= MAX_PREVIEW_FPS)) {
+                return capped;
+            }
+            return capped ? max > thanMax : max < thanMax;
+        }
+        int min = range[Camera.Parameters.PREVIEW_FPS_MIN_INDEX];
+        int thanMin = than[Camera.Parameters.PREVIEW_FPS_MIN_INDEX];
+        boolean floored = min >= MIN_PREVIEW_FPS;
+        if (floored != (thanMin >= MIN_PREVIEW_FPS)) {
+            return floored;
+        }
+        return floored ? min < thanMin : min > thanMin;
+    }
+
+    /**
      * The flash mode for a strategy and the torch: the torch when it is on and the camera has
      * one, the strategy where the camera offers it, and off otherwise.
      *
@@ -477,6 +567,8 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera.release();
             mCamera = null;
             mPreviewSize = null;
+            // A released camera delivers no picture still being taken.
+            mTakingPicture = false;
         }
     }
 
@@ -603,13 +695,24 @@ public class LegacyCameraModule extends ICameraModule {
             onImageFailed();
             return;
         }
+        if (mTakingPicture) {
+            Log.w(TAG, "Ignoring a picture asked for while another is being taken");
+            onImageFailed();
+            return;
+        }
+        LegacyPictureListener listener = new LegacyPictureListener(
+                file, getRelativeCameraOrientation(false /* isPreview */),
+                isUsingFrontFacingCamera(), exifCaptureParameters(), this);
+        mTakingPicture = true;
         try {
-            mCamera.takePicture(this::onShutter, null, new LegacyPictureListener(
-                    file, getRelativeCameraOrientation(false /* isPreview */),
-                    isUsingFrontFacingCamera(), exifCaptureParameters(), this));
+            mCamera.takePicture(this::onShutter, null, (data, camera) -> {
+                mTakingPicture = false;
+                listener.onPictureTaken(data, camera);
+            });
         } catch (RuntimeException e) {
-            // Thrown rather than reported, for a picture asked for while another is being taken
-            // or while the preview is stopped.
+            // Thrown rather than reported, as for a picture asked for while the preview is
+            // stopped.
+            mTakingPicture = false;
             Log.w(TAG, "The camera refused to take a picture", e);
             onImageFailed();
         }
@@ -637,7 +740,7 @@ public class LegacyCameraModule extends ICameraModule {
     @Override
     protected void startBurst(@NonNull Burst burst) {
         Camera camera = mCamera;
-        if (camera == null || isRecording() || mBurst != null) {
+        if (camera == null || isRecording() || mBurst != null || mTakingPicture) {
             Log.w(TAG, "Cannot take a burst in the camera's current state");
             burst.end();
             return;
