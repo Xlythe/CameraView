@@ -632,6 +632,41 @@ Photosphere(uri = uri, gyroscope = true)
 A DNG is shown on Android 7.0 and newer. The first time, it is decoded once and kept in the app's
 cache as a JPEG, so showing it again is as quick as any other picture.
 
+Viewing any media
+-----------------
+MediaView shows whatever a file turns out to be, worked out from its contents: a picture to zoom
+into, a panorama to pan along, a photo sphere to look around, a video, a motion photo whose clip
+plays while it is held, a 360° video, a recording, or an animated picture. A tap plays and pauses;
+a thin line along the bottom shows how far it has played. HDR pictures and videos show in HDR
+where the screen can.
+```java
+mMediaView.setUri(uri);                  // or setFile(file)
+mMediaView.setMediaListener(new MediaListener() {
+  @Override public void onMediaLoaded(int type) { ... }  // MediaView.PHOTOSPHERE, VIDEO, ...
+  @Override public void onMediaFailed() { ... }
+});
+mMediaView.setMediaType(MediaView.PANORAMA);  // to show it as something else
+```
+```kotlin
+Media(uri = uri, onLoaded = { type -> ... })
+```
+The line and the tap and hold can each be turned off, and the line restyled, with the MediaView
+attributes or setters; it draws no text.
+
+What shows depends on what the device decodes:
+
+| | Shows on |
+|---|---|
+| JPEG, PNG, WebP, GIF, BMP | every version |
+| Animated GIF and PNG | every version |
+| Animated WebP, HEIF and HEIC | Android 9 and newer |
+| AVIF, and animated AVIF | Android 12 and newer |
+| DNG | Android 7.0 and newer; before that, the preview it carries, if any |
+| Other camera raws (CR2, CR3, NEF, ARW, RAF, ORF, RW2) | every version, as the largest JPEG the camera embedded, which for some cameras is smaller than the photo |
+| Ultra HDR and other gain maps, in HDR | Android 14 and newer; before that, as an ordinary picture |
+| Videos and sound | the codecs the device has; 10-bit, Dolby Vision and AV1 vary the most |
+| TIFF, JPEG XL, AVI | not shown |
+
 VideoEditor
 -----------------
 VideoEditor changes a video that has already been recorded - trimming it, cropping, scaling and
