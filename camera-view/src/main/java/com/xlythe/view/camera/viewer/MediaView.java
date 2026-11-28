@@ -1411,62 +1411,65 @@ public class MediaView extends FrameLayout {
      * hill inside, and a line across it from corner to corner.
      */
     private static final class ErrorDrawable extends Drawable {
-        /** Draws the icon. */
+        /** The hill's outline, as line segments in a 24-unit box. */
+        private static final float[] HILL = {6, 16, 10, 11, 10, 11, 13, 14.5f, 13, 14.5f, 15,
+                12.5f, 15, 12.5f, 18, 16};
+
+        /** Fills the frame. */
         private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-        /** The frame, the hill and the line, in a 24-unit box. */
-        private final Path mPath = new Path();
+        /** Draws the hill and the line across. */
+        private final Paint mLines = new Paint(Paint.ANTI_ALIAS_FLAG);
 
-        /** The icon, scaled to the bounds. */
-        private final Path mScaled = new Path();
+        /** The hill, scaled to the bounds. */
+        private final float[] mHill = new float[HILL.length];
 
         ErrorDrawable(@ColorInt int color) {
             mPaint.setColor(color);
-            mPath.setFillType(Path.FillType.EVEN_ODD);
-            // The frame: an outline two units thick.
-            mPath.addRect(3, 5, 21, 19, Path.Direction.CW);
-            mPath.addRect(5, 7, 19, 17, Path.Direction.CW);
-            // A hill, inside the frame.
-            mPath.moveTo(6, 16);
-            mPath.lineTo(10, 11);
-            mPath.lineTo(13, 14.5f);
-            mPath.lineTo(15, 12.5f);
-            mPath.lineTo(18, 16);
-            mPath.close();
+            mLines.setColor(color);
+            mLines.setStyle(Paint.Style.STROKE);
+            mLines.setStrokeCap(Paint.Cap.ROUND);
         }
 
         @Override
         public void draw(@NonNull Canvas canvas) {
+            // Rectangles and lines rather than a path, which Android 4.0's emulator leaves
+            // undrawn.
             Rect bounds = getBounds();
-            float size = Math.min(bounds.width(), bounds.height()) * PLACEHOLDER_FRACTION;
-            Matrix matrix = new Matrix();
-            matrix.setScale(size / 24, size / 24);
-            matrix.postTranslate(bounds.exactCenterX() - size / 2,
-                    bounds.exactCenterY() - size / 2);
-            mPath.transform(matrix, mScaled);
-            canvas.drawPath(mScaled, mPaint);
+            float unit = Math.min(bounds.width(), bounds.height()) * PLACEHOLDER_FRACTION / 24;
+            float left = bounds.exactCenterX() - 12 * unit;
+            float top = bounds.exactCenterY() - 12 * unit;
+            // The frame, two units thick: its top, bottom, left and right sides.
+            canvas.drawRect(left + 3 * unit, top + 5 * unit, left + 21 * unit, top + 7 * unit,
+                    mPaint);
+            canvas.drawRect(left + 3 * unit, top + 17 * unit, left + 21 * unit, top + 19 * unit,
+                    mPaint);
+            canvas.drawRect(left + 3 * unit, top + 7 * unit, left + 5 * unit, top + 17 * unit,
+                    mPaint);
+            canvas.drawRect(left + 19 * unit, top + 7 * unit, left + 21 * unit, top + 17 * unit,
+                    mPaint);
+            for (int i = 0; i < HILL.length; i += 2) {
+                mHill[i] = left + HILL[i] * unit;
+                mHill[i + 1] = top + HILL[i + 1] * unit;
+            }
+            mLines.setStrokeWidth(1.5f * unit);
+            canvas.drawLines(mHill, mLines);
             // The line across, from the top left corner to the bottom right.
-            float stroke = mPaint.getStrokeWidth();
-            Paint.Style style = mPaint.getStyle();
-            mPaint.setStyle(Paint.Style.STROKE);
-            mPaint.setStrokeWidth(size / 12);
-            mPaint.setStrokeCap(Paint.Cap.ROUND);
-            float left = bounds.exactCenterX() - size / 2;
-            float top = bounds.exactCenterY() - size / 2;
-            canvas.drawLine(left + size * 3 / 24, top + size * 3 / 24, left + size * 21 / 24,
-                    top + size * 21 / 24, mPaint);
-            mPaint.setStrokeWidth(stroke);
-            mPaint.setStyle(style);
+            mLines.setStrokeWidth(2 * unit);
+            canvas.drawLine(left + 3 * unit, top + 3 * unit, left + 21 * unit, top + 21 * unit,
+                    mLines);
         }
 
         @Override
         public void setAlpha(int alpha) {
             mPaint.setAlpha(alpha);
+            mLines.setAlpha(alpha);
         }
 
         @Override
         public void setColorFilter(@Nullable ColorFilter filter) {
             mPaint.setColorFilter(filter);
+            mLines.setColorFilter(filter);
         }
 
         @Override

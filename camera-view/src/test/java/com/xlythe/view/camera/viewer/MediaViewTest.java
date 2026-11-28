@@ -328,8 +328,8 @@ public class MediaViewTest {
         show(new File("/nowhere/to/be/found.jpg"));
         Bitmap bitmap = Bitmap.createBitmap(400, 300, Bitmap.Config.ARGB_8888);
         mView.draw(new Canvas(bitmap));
-        // The icon is a quarter of the shorter side, 75 px, around the middle: its frame's left
-        // edge, and the line across it, are drawn; the corners of the view are not.
+        // The icon is a quarter of the shorter side, 75 px, around the middle; the corners of the
+        // view are left alone.
         int drawn = 0;
         for (int x = 160; x < 240; x++) {
             for (int y = 110; y < 190; y++) {
@@ -339,7 +339,13 @@ public class MediaViewTest {
             }
         }
         assertTrue("the icon should be drawn, " + drawn + " pixels were", drawn > 300);
+        // The line across, through the middle.
         assertTrue(Color.alpha(bitmap.getPixel(200, 150)) > 0);
+        // The frame's top, left and right sides, away from the line; and inside it, nothing.
+        assertTrue(Color.alpha(bitmap.getPixel(215, 131)) > 0);
+        assertTrue(Color.alpha(bitmap.getPixel(175, 160)) > 0);
+        assertTrue(Color.alpha(bitmap.getPixel(225, 140)) > 0);
+        assertEquals(0, bitmap.getPixel(210, 140));
         assertEquals(0, bitmap.getPixel(5, 5));
         assertEquals(0, bitmap.getPixel(395, 295));
         assertEquals(0, bitmap.getPixel(100, 150));
