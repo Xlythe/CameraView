@@ -111,7 +111,8 @@ public class DrawingView extends View {
     /** Turns events into strokes. */
     private final StylusInput mInput = new StylusInput(new InputListener());
     /** Undo and redo, over whole drawings. */
-    private History<Drawing> mHistory = new History<>(new Drawing(0, 0), History.DEFAULT_CAPACITY);
+    private final History<Drawing> mHistory =
+            new History<>(new Drawing(0, 0), History.DEFAULT_CAPACITY);
     /** The brush strokes draw with. */
     @NonNull private Brush mBrush = Brush.PEN;
     /** What a stroke does. */
@@ -235,6 +236,13 @@ public class DrawingView extends View {
             mHistory.redo();
             changed();
         }
+    }
+
+    /** The steps, for an {@link EditHistory} to keep in order with other views' steps. */
+    @MainThread
+    @NonNull
+    History<Drawing> history() {
+        return mHistory;
     }
 
     @MainThread

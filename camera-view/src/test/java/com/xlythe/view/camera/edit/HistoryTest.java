@@ -7,6 +7,10 @@ import static org.junit.Assert.assertTrue;
 
 import org.junit.Test;
 
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+
 /** Undo and redo over snapshots, as Muse's ink history keeps them. */
 public class HistoryTest {
     @Test
@@ -86,5 +90,32 @@ public class HistoryTest {
         assertEquals("z", history.current());
         assertThrows(IllegalArgumentException.class, () -> new History<>("a", 0));
         assertTrue(new History<>("a", 1).current().equals("a"));
+    }
+
+    @Test
+    public void eachChangeIsHeardButNotOnesThatChangeNothing() {
+        History<String> history = new History<>("a", 2);
+        List<Integer> events = new ArrayList<>();
+        history.setListener(events::add);
+        history.commit("b");
+        history.amend("b2");
+        history.commit("b2");
+        history.undo();
+        history.redo();
+        history.commit("c");
+        history.rollback();
+        history.undo();
+        history.undo();
+        history.reset("z");
+        history.rollback();
+        assertEquals(Arrays.asList(History.EVENT_COMMIT, History.EVENT_AMEND,
+                History.EVENT_UNDO, History.EVENT_REDO, History.EVENT_COMMIT,
+                History.EVENT_ROLLBACK, History.EVENT_UNDO, History.EVENT_RESET), events);
+        history.commit("1");
+        history.commit("2");
+        events.clear();
+        history.commit("3");
+        assertEquals("the oldest of two falls off",
+                Arrays.asList(History.EVENT_DROP_OLDEST, History.EVENT_COMMIT), events);
     }
 }

@@ -27,6 +27,25 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
+        <!-- Stickers and text over the ink. A touch that misses them draws. -->
+        <com.xlythe.view.camera.edit.OverlayView
+            android:id="@+id/editor_overlays"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- Shown while a sticker is chosen; dragging it here removes it. -->
+        <ImageView
+            android:id="@+id/editor_delete_zone"
+            android:layout_width="56dp"
+            android:layout_height="56dp"
+            android:layout_gravity="bottom|center_horizontal"
+            android:layout_marginBottom="16dp"
+            android:background="@drawable/editor_delete_zone"
+            android:contentDescription="@string/editor_delete_zone"
+            android:padding="16dp"
+            android:src="@drawable/ic_delete"
+            android:visibility="gone" />
+
         <!-- The saved picture. -->
         <com.xlythe.view.camera.viewer.MediaView
             android:id="@+id/editor_media"
@@ -75,6 +94,47 @@
         android:background="#202020"
         android:orientation="vertical"
         android:padding="8dp">
+
+        <!-- Stickers to tap or drag onto the picture, and text. -->
+        <HorizontalScrollView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content">
+
+            <LinearLayout
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <ImageView
+                    android:id="@+id/editor_sticker_heart"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/editor_sticker_heart"
+                    android:padding="4dp"
+                    android:scaleType="fitCenter" />
+
+                <ImageView
+                    android:id="@+id/editor_sticker_star"
+                    android:layout_width="48dp"
+                    android:layout_height="48dp"
+                    android:layout_marginStart="8dp"
+                    android:background="?attr/selectableItemBackgroundBorderless"
+                    android:contentDescription="@string/editor_sticker_star"
+                    android:padding="4dp"
+                    android:scaleType="fitCenter" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/editor_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="8dp"
+                    android:text="@string/editor_text"
+                    android:textColor="#FFFFFF"
+                    app:cornerRadius="20dp" />
+            </LinearLayout>
+        </HorizontalScrollView>
 
         <!-- What to change. Scrolls rather than wraps on a narrow screen. -->
         <HorizontalScrollView
@@ -129,6 +189,7 @@
                     android:id="@+id/editor_undo"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
+                    android:enabled="false"
                     android:text="@string/editor_undo"
                     android:textColor="#FFFFFF"
                     app:cornerRadius="20dp" />
@@ -138,6 +199,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="8dp"
+                    android:enabled="false"
                     android:text="@string/editor_redo"
                     android:textColor="#FFFFFF"
                     app:cornerRadius="20dp" />

@@ -2,9 +2,11 @@ package com.xlythe.sample.camera;
 
 import static com.xlythe.sample.camera.MainActivity.TAG;
 
+import android.content.ContentResolver;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Color;
 import android.graphics.RectF;
 import android.net.Uri;
 import android.os.Bundle;
@@ -16,6 +18,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.ImageView;
 import android.widget.ProgressBar;
 import android.widget.RadioGroup;
@@ -28,6 +31,7 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 import androidx.annotation.WorkerThread;
+import androidx.appcompat.app.AlertDialog;
 import androidx.core.os.BundleCompat;
 import androidx.fragment.app.Fragment;
 
@@ -35,6 +39,9 @@ import com.xlythe.view.camera.MediaTags;
 import com.xlythe.view.camera.edit.BrushPanelView;
 import com.xlythe.view.camera.edit.Drawing;
 import com.xlythe.view.camera.edit.DrawingView;
+import com.xlythe.view.camera.edit.EditHistory;
+import com.xlythe.view.camera.edit.Overlay;
+import com.xlythe.view.camera.edit.OverlayView;
 import com.xlythe.view.camera.edit.PictureEditor;
 import com.xlythe.view.camera.edit.PictureEdits;
 import com.xlythe.view.camera.gl.ColorMatrix;
@@ -44,6 +51,8 @@ import com.xlythe.view.camera.viewer.MediaView;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -112,6 +121,10 @@ public class EditorFragment extends Fragment {
     @Nullable private MediaView mMedia;
     @Nullable private ImageView mPreview;
     @Nullable private DrawingView mDrawing;
+    @Nullable private OverlayView mOverlays;
+    @Nullable private View mDeleteZone;
+    @Nullable private Button mUndo;
+    @Nullable private Button mRedo;
     @Nullable private BrushPanelView mBrushes;
     @Nullable private CheckBox mErase;
     @Nullable private CheckBox mShowResult;
@@ -150,6 +163,10 @@ public class EditorFragment extends Fragment {
         mMedia = view.findViewById(R.id.editor_media);
         mPreview = view.findViewById(R.id.editor_preview);
         mDrawing = view.findViewById(R.id.editor_drawing);
+        mOverlays = view.findViewById(R.id.editor_overlays);
+        mDeleteZone = view.findViewById(R.id.editor_delete_zone);
+        mUndo = view.findViewById(R.id.editor_undo);
+        mRedo = view.findViewById(R.id.editor_redo);
         mBrushes = view.findViewById(R.id.editor_brushes);
         mErase = view.findViewById(R.id.editor_erase);
         mShowResult = view.findViewById(R.id.editor_show_result);
@@ -189,8 +206,19 @@ public class EditorFragment extends Fragment {
         mBrushes.setDrawingView(mDrawing);
         mErase.setOnCheckedChangeListener((box, checked) -> mDrawing.setTool(
                 checked ? DrawingView.TOOL_ERASE : DrawingView.TOOL_DRAW));
-        view.findViewById(R.id.editor_undo).setOnClickListener(v -> mDrawing.undo());
-        view.findViewById(R.id.editor_redo).setOnClickListener(v -> mDrawing.redo());
+        // One undo across the drawing and the stickers, in the order things were done.
+        EditHistory history = new EditHistory();
+        history.attach(mDrawing);
+        history.attach(mOverlays);
+        history.setOnHistoryChangedListener(() -> {
+            if (mUndo != null && mRedo != null) {
+                mUndo.setEnabled(history.canUndo());
+                mRedo.setEnabled(history.canRedo());
+            }
+        });
+        mUndo.setOnClickListener(v -> history.undo());
+        mRedo.setOnClickListener(v -> history.redo());
+        setUpOverlays(view);
         mShowResult.setOnCheckedChangeListener((box, checked) -> showResult(checked));
 
         // HEIF and AVIF need encoders not every device has.
@@ -244,6 +272,10 @@ public class EditorFragment extends Fragment {
         mMedia = null;
         mPreview = null;
         mDrawing = null;
+        mOverlays = null;
+        mDeleteZone = null;
+        mUndo = null;
+        mRedo = null;
         mBrushes = null;
         mErase = null;
         mShowResult = null;
@@ -303,6 +335,11 @@ public class EditorFragment extends Fragment {
                         // The drawing is kept in the picture's own pixels.
                         mDrawing.setDrawingSize(size[0], size[1]);
                     }
+                    if (mOverlays != null) {
+                        // So are the stickers.
+                        mOverlays.setCanvasSize(size[0], size[1]);
+                        mOverlays.setOverlays(Collections.<Overlay>emptyList());
+                    }
                 }
             });
         });
@@ -322,18 +359,16 @@ public class EditorFragment extends Fragment {
         File output = new File(directory == null ? requireContext().getFilesDir() : directory,
                 "edited-" + System.currentTimeMillis() + extensionOf(format));
         Drawing drawing = mDrawing == null ? null : mDrawing.getDrawing();
-        Uri source = mUri;
         PictureEdits edits = edits();
+        if (mOverlays != null && (!mOverlays.getOverlays().isEmpty()
+                || (drawing != null && !drawing.isEmpty()))) {
+            // The ink and the stickers over it, as one picture to lay over the one edited.
+            int[] size = overlaySize(mUprightWidth, mUprightHeight);
+            edits = new PictureEdits.Builder(edits)
+                    .setOverlay(mOverlays.toBitmap(size[0], size[1], 0, drawing)).build();
+        }
         setBusy(true, null);
-        mExecutor.execute(() -> {
-            PictureEdits withInk = drawing == null || drawing.isEmpty() ? edits
-                    : new PictureEdits.Builder(edits).setOverlay(overlay(drawing)).build();
-            mHandler.post(() -> {
-                if (source.equals(mUri) && isAdded()) {
-                    startEditor(source, output, format, withInk);
-                }
-            });
-        });
+        startEditor(mUri, output, format, edits);
     }
 
     /** Writes the edited picture. */
@@ -382,14 +417,102 @@ public class EditorFragment extends Fragment {
                 .build();
     }
 
-    /** The drawing as a picture to lay over the one edited, no larger than it needs to be. */
-    @WorkerThread
+    /** The size to draw what goes over the picture at: its own, no larger than it needs. */
     @NonNull
-    private static Bitmap overlay(@NonNull Drawing drawing) {
-        float scale = Math.min(1f, MAX_OVERLAY_SIDE / Math.max(drawing.getWidth(),
-                drawing.getHeight()));
-        return drawing.toBitmap(Math.max(1, Math.round(drawing.getWidth() * scale)),
-                Math.max(1, Math.round(drawing.getHeight() * scale)));
+    private static int[] overlaySize(int width, int height) {
+        float scale = Math.min(1f, MAX_OVERLAY_SIDE / (float) Math.max(1, Math.max(width,
+                height)));
+        return new int[] {Math.max(1, Math.round(width * scale)),
+                Math.max(1, Math.round(height * scale))};
+    }
+
+    /** Wires the sticker row, text and the delete zone to the overlay view. */
+    @MainThread
+    private void setUpOverlays(@NonNull View root) {
+        OverlayView overlays = mOverlays;
+        if (overlays == null) {
+            return;
+        }
+        setUpSticker(root.findViewById(R.id.editor_sticker_heart), rawUri(R.raw.sticker_heart),
+                "image/png");
+        setUpSticker(root.findViewById(R.id.editor_sticker_star), rawUri(R.raw.sticker_star),
+                "image/gif");
+        overlays.setDropTargetEnabled(true);
+        overlays.setDeleteZone(mDeleteZone);
+        overlays.setOnOverlayChangedListener(new OverlayView.OnOverlayChangedListener() {
+            @Override
+            public void onOverlaysChanged(@NonNull List<Overlay> items) {}
+
+            @Override
+            public void onSelectionChanged(@Nullable Overlay overlay) {
+                if (mDeleteZone != null) {
+                    mDeleteZone.setVisibility(overlay != null ? View.VISIBLE : View.GONE);
+                }
+            }
+        });
+        root.findViewById(R.id.editor_text).setOnClickListener(v -> editText());
+    }
+
+    /** A sticker in the row: a tap adds it, and a long press drags it onto the picture. */
+    @MainThread
+    private void setUpSticker(@NonNull ImageView view, @NonNull Uri uri,
+            @NonNull String mimeType) {
+        view.setImageURI(uri);
+        view.setOnClickListener(v -> {
+            if (mOverlays != null) {
+                mOverlays.addImage(uri, mimeType, null);
+            }
+        });
+        view.setOnLongClickListener(v -> OverlayView.startDrag(v, uri, mimeType));
+    }
+
+    /** Asks for text to add, or to put in place of the chosen text. */
+    @MainThread
+    private void editText() {
+        OverlayView overlays = mOverlays;
+        if (overlays == null) {
+            return;
+        }
+        Overlay chosen = null;
+        for (Overlay overlay : overlays.getOverlays()) {
+            if (overlay.getId().equals(overlays.getSelectedId())
+                    && overlay.getKind() == Overlay.KIND_TEXT) {
+                chosen = overlay;
+            }
+        }
+        Overlay editing = chosen;
+        EditText input = new EditText(requireContext());
+        input.setHint(R.string.editor_text_hint);
+        input.setSingleLine(true);
+        if (editing != null && editing.getText() != null) {
+            input.setText(editing.getText());
+        }
+        new AlertDialog.Builder(requireContext())
+                .setView(input)
+                .setPositiveButton(android.R.string.ok, (dialog, which) -> {
+                    String text = input.getText().toString().trim();
+                    if (text.isEmpty() || mOverlays == null) {
+                        return;
+                    }
+                    if (editing != null) {
+                        mOverlays.updateOverlay(new Overlay.Builder(editing).setText(text)
+                                .build());
+                    } else {
+                        mOverlays.addText(text, Color.WHITE);
+                    }
+                })
+                .setNegativeButton(android.R.string.cancel, null)
+                .show();
+    }
+
+    /** A resource of this app's as a URI the overlay view can read. */
+    @NonNull
+    private Uri rawUri(int id) {
+        return new Uri.Builder().scheme(ContentResolver.SCHEME_ANDROID_RESOURCE)
+                .authority(requireContext().getPackageName())
+                .appendPath(getResources().getResourceTypeName(id))
+                .appendPath(getResources().getResourceEntryName(id))
+                .build();
     }
 
     /** The picture, upright, small enough to show while it is edited, or null. */
@@ -486,6 +609,9 @@ public class EditorFragment extends Fragment {
         }
         if (mDrawing != null) {
             mDrawing.setVisibility(result ? View.GONE : View.VISIBLE);
+        }
+        if (mOverlays != null) {
+            mOverlays.setVisibility(result ? View.GONE : View.VISIBLE);
         }
         if (mPreview != null) {
             mPreview.setVisibility(result ? View.GONE : View.VISIBLE);

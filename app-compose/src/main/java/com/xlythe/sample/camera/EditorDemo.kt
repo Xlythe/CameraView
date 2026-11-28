@@ -1,5 +1,6 @@
 package com.xlythe.sample.camera
 
+import android.content.ContentResolver
 import android.graphics.RectF
 import android.net.Uri
 import android.util.Log
@@ -9,6 +10,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -17,10 +19,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TextField
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -32,17 +38,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.xlythe.compose.camera.BrushPanel
 import com.xlythe.compose.camera.DrawingSurface
 import com.xlythe.compose.camera.Media
+import com.xlythe.compose.camera.Overlays
 import com.xlythe.compose.camera.editPicture
 import com.xlythe.view.camera.MediaTags
 import com.xlythe.view.camera.edit.Brush
 import com.xlythe.view.camera.edit.Drawing
 import com.xlythe.view.camera.edit.DrawingView
+import com.xlythe.view.camera.edit.EditHistory
+import com.xlythe.view.camera.edit.Overlay
+import com.xlythe.view.camera.edit.OverlayView
 import com.xlythe.view.camera.edit.PictureEditor
 import com.xlythe.view.camera.edit.PictureEdits
 import com.xlythe.view.camera.gl.ColorMatrix
@@ -62,10 +73,17 @@ private val FORMATS = listOf(
     "AVIF" to PictureEditor.FORMAT_AVIF,
 )
 
+/** The sample's own stickers, our art: a heart, and a spinning star that animates. */
+private val STICKERS = listOf(
+    R.raw.sticker_heart to "image/png",
+    R.raw.sticker_star to "image/gif",
+)
+
 /**
- * Edits a picture with the library's pieces: [DrawingSurface] to draw on it, [BrushPanel] to
- * pick the brush, and [editPicture] to turn, flip, crop and filter it with the drawing on it and
- * write it in any format the device can, keeping its metadata, then shows the result.
+ * Edits a picture with the library's pieces: [DrawingSurface] to draw on it, [Overlays] for
+ * stickers and text over the drawing, [BrushPanel] to pick the brush, one [EditHistory] to undo
+ * across them, and [editPicture] to turn, flip, crop and filter it with the drawing and stickers
+ * on it and write it in any format the device can, keeping its metadata, then shows the result.
  */
 @Composable
 fun EditorDemoScreen(initialUri: Uri?) {
@@ -82,6 +100,30 @@ fun EditorDemoScreen(initialUri: Uri?) {
     var drawing by remember(uri) { mutableStateOf<Drawing?>(null) }
     var brush by remember { mutableStateOf(Brush.PEN) }
     var drawingView by remember { mutableStateOf<DrawingView?>(null) }
+    var overlayView by remember { mutableStateOf<OverlayView?>(null) }
+    var chosen by remember { mutableStateOf<Overlay?>(null) }
+    var askingText by remember { mutableStateOf(false) }
+    var canUndo by remember { mutableStateOf(false) }
+    var canRedo by remember { mutableStateOf(false) }
+    // One undo across the drawing and the stickers, in the order things were done.
+    val history = remember {
+        EditHistory().apply {
+            setOnHistoryChangedListener {
+                canUndo = canUndo()
+                canRedo = canRedo()
+            }
+        }
+    }
+    val stickers = remember {
+        STICKERS.map { (id, mimeType) ->
+            val uri = Uri.Builder().scheme(ContentResolver.SCHEME_ANDROID_RESOURCE)
+                .authority(context.packageName)
+                .appendPath(context.resources.getResourceTypeName(id))
+                .appendPath(context.resources.getResourceEntryName(id))
+                .build()
+            Triple(uri, mimeType, BitmapFactory.decodeResource(context.resources, id))
+        }
+    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { picked ->
         if (picked != null) {
             uri = picked
@@ -97,6 +139,7 @@ fun EditorDemoScreen(initialUri: Uri?) {
             val bitmap = withContext(Dispatchers.IO) { BitmapFactory.decodeFile(file.path) }
             preview = bitmap
             drawing = Drawing(bitmap.width.toFloat(), bitmap.height.toFloat())
+            overlayView?.setOverlays(emptyList())
         } catch (e: IOException) {
             status = "This device cannot show this file"
         }
@@ -110,15 +153,9 @@ fun EditorDemoScreen(initialUri: Uri?) {
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
             val shown = preview
-            if (edited != null || shown == null) {
-                Media(
-                    modifier = Modifier.fillMaxSize(),
-                    file = edited,
-                    uri = if (edited == null) null else uri,
-                    onLoaded = { status = "" },
-                    onFailed = { status = "This device cannot show this file" },
-                )
-            } else {
+            // The editing views stay while the result shows over them, so the steps to undo
+            // stay with the views that took them.
+            if (shown != null) {
                 Image(
                     bitmap = shown.asImageBitmap(),
                     contentDescription = "The picture being edited",
@@ -130,7 +167,31 @@ fun EditorDemoScreen(initialUri: Uri?) {
                     drawing = drawing,
                     brush = brush,
                     onDrawingChanged = { drawing = it },
-                    onView = { drawingView = it },
+                    onView = {
+                        drawingView = it
+                        history.attach(it)
+                    },
+                )
+                // Stickers and text over the ink; a touch that misses them draws.
+                Overlays(
+                    modifier = Modifier.fillMaxSize(),
+                    canvasWidth = shown.width.toFloat(),
+                    canvasHeight = shown.height.toFloat(),
+                    dropTarget = true,
+                    onSelectionChanged = { chosen = it },
+                    onView = {
+                        overlayView = it
+                        history.attach(it)
+                    },
+                )
+            }
+            if (edited != null || shown == null) {
+                Media(
+                    modifier = Modifier.fillMaxSize().background(Color.Black),
+                    file = edited,
+                    uri = if (edited == null) null else uri,
+                    onLoaded = { status = "" },
+                    onFailed = { status = "This device cannot show this file" },
                 )
             }
             if (summary.isNotEmpty()) {
@@ -154,9 +215,50 @@ fun EditorDemoScreen(initialUri: Uri?) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            stickers.forEach { (stickerUri, mimeType, thumbnail) ->
+                Image(
+                    bitmap = thumbnail.asImageBitmap(),
+                    contentDescription = "A sticker to add",
+                    modifier = Modifier.size(48.dp)
+                        .clickable { overlayView?.addImage(stickerUri, mimeType, null) },
+                )
+            }
+            Button(onClick = { askingText = true }) { Text("Text") }
+        }
+        if (askingText) {
+            val editing = chosen?.takeIf { it.kind == Overlay.KIND_TEXT }
+            var text by remember { mutableStateOf(editing?.text?.toString() ?: "") }
+            AlertDialog(
+                onDismissRequest = { askingText = false },
+                text = {
+                    TextField(value = text, onValueChange = { text = it }, singleLine = true,
+                        placeholder = { Text("Words to add") })
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        askingText = false
+                        val words = text.trim()
+                        if (words.isNotEmpty()) {
+                            if (editing != null) {
+                                overlayView?.updateOverlay(
+                                    Overlay.Builder(editing).setText(words).build())
+                            } else {
+                                overlayView?.addText(words, Color.White.toArgb())
+                            }
+                        }
+                    }) { Text("OK") }
+                },
+                dismissButton = { TextButton(onClick = { askingText = false }) { Text("Cancel") } },
+            )
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Button(onClick = { picker.launch(arrayOf("image/*")) }) { Text("Open") }
-            Button(onClick = { drawingView?.undo() }) { Text("Undo") }
-            Button(onClick = { drawingView?.redo() }) { Text("Redo") }
+            Button(enabled = canUndo, onClick = { history.undo() }) { Text("Undo") }
+            Button(enabled = canRedo, onClick = { history.redo() }) { Text("Redo") }
             if (edited != null) {
                 Button(onClick = { edited = null; summary = "" }) { Text("Back") }
             }
@@ -210,15 +312,21 @@ fun EditorDemoScreen(initialUri: Uri?) {
                     scope.launch {
                         try {
                             val ink = drawing
-                            val withInk = if (ink == null || ink.isEmpty) edits else {
-                                val overlay = withContext(Dispatchers.IO) {
-                                    val scale = minOf(1f, 2048f / maxOf(ink.width, ink.height))
-                                    ink.toBitmap((ink.width * scale).toInt().coerceAtLeast(1),
-                                        (ink.height * scale).toInt().coerceAtLeast(1))
-                                }
-                                PictureEdits.Builder(edits).setOverlay(overlay).build()
+                            val items = overlayView
+                            val picture = preview
+                            val hasOverlay = (ink != null && !ink.isEmpty) ||
+                                items?.overlays?.isNotEmpty() == true
+                            val withOverlay = if (picture == null || items == null || !hasOverlay) {
+                                edits
+                            } else {
+                                val scale = minOf(1f, 2048f / maxOf(picture.width, picture.height))
+                                val width = (picture.width * scale).toInt().coerceAtLeast(1)
+                                val height = (picture.height * scale).toInt().coerceAtLeast(1)
+                                // The ink and the stickers over it, as one picture.
+                                PictureEdits.Builder(edits)
+                                    .setOverlay(items.toBitmap(width, height, 0, ink)).build()
                             }
-                            val file = editPicture(context, source, output, withInk, format, quality = 90)
+                            val file = editPicture(context, source, output, withOverlay, format, quality = 90)
                             edited?.delete()
                             edited = file
                             summary = withContext(Dispatchers.IO) {

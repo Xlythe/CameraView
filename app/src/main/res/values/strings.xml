@@ -102,10 +102,20 @@
     <string name="editor_filter">B&amp;W</string>
     <!-- Strokes on the picture erase -->
     <string name="editor_erase">Erase</string>
-    <!-- Takes back the last stroke -->
+    <!-- Takes back the last stroke or sticker change -->
     <string name="editor_undo">Undo</string>
-    <!-- Puts back the last stroke taken back -->
+    <!-- Puts back the last stroke or sticker change taken back -->
     <string name="editor_redo">Redo</string>
+    <!-- Adds a line of text over the picture, or changes the chosen one -->
+    <string name="editor_text">Text</string>
+    <!-- Hint in the box where the text to add is typed -->
+    <string name="editor_text_hint">Words to add</string>
+    <!-- A sticker of a heart, to tap or drag onto the picture -->
+    <string name="editor_sticker_heart">Heart sticker</string>
+    <!-- An animated sticker of a spinning star, to tap or drag onto the picture -->
+    <string name="editor_sticker_star">Spinning star sticker</string>
+    <!-- Where a sticker is dragged to remove it -->
+    <string name="editor_delete_zone">Drag here to remove</string>
     <!-- Makes the drawing black and white too -->
     <string name="editor_mark_filtered">B&amp;W ink</string>
     <!-- Shows the saved picture instead of the one being edited -->

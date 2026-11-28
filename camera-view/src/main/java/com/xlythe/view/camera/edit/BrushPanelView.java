@@ -320,6 +320,15 @@ public class BrushPanelView extends LinearLayout {
             float width = Math.min(area.height() * 0.4f, dp(Math.max(1.5f, brush.getWidth()
                     * 0.6f)));
             Brush shown = brush.withWidth(Math.max(0.5f, width));
+            if (!shown.isErasing()) {
+                // A chip behind the stroke that contrasts with its ink, so dark ink shows on a
+                // dark panel and light ink on a light one, whatever the app's background.
+                mPaint.setStyle(Paint.Style.FILL);
+                mPaint.setColor(isDark(shown.getColor()) ? 0x40FFFFFF : 0x40000000);
+                RectF chip = new RectF(area);
+                chip.inset(-dp(4), -dp(4));
+                canvas.drawRoundRect(chip, dp(4), dp(4), mPaint);
+            }
             int saved = InkRenderer.saveLayer(canvas, cell, null);
             if (shown.isErasing()) {
                 // An eraser is shown as the path it clears through a tint.
@@ -329,6 +338,12 @@ public class BrushPanelView extends LinearLayout {
             }
             InkRenderer.drawStroke(canvas, sampleStroke(area, shown), mInk);
             canvas.restoreToCount(saved);
+        }
+
+        /** Whether a colour reads as dark, by its perceived brightness. */
+        private boolean isDark(int color) {
+            return 0.299f * Color.red(color) + 0.587f * Color.green(color)
+                    + 0.114f * Color.blue(color) < 128f;
         }
 
         @Override
