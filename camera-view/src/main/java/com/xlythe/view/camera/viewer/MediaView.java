@@ -595,6 +595,8 @@ public class MediaView extends FrameLayout {
         if (mContent != null) {
             if (mContent instanceof PhotosphereView) {
                 ((PhotosphereView) mContent).clearVideo();
+            } else if (mContent instanceof AnimationView) {
+                ((AnimationView) mContent).release();
             }
             removeView(mContent);
             mContent = null;
