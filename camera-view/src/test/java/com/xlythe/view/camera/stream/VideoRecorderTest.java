@@ -3,6 +3,7 @@ package com.xlythe.view.camera.stream;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 
 import android.media.MediaCodec;
@@ -22,9 +23,15 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.MediaCodecInfoBuilder;
 import org.robolectric.shadows.ShadowMediaCodec;
 import org.robolectric.shadows.ShadowMediaCodecList;
+import org.robolectric.shadows.ShadowSystemClock;
 
 import java.io.ByteArrayOutputStream;
+import java.io.PipedInputStream;
+import java.lang.reflect.Field;
+import java.nio.ByteBuffer;
+import java.time.Duration;
 import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
@@ -263,6 +270,189 @@ public class VideoRecorderTest {
                 Arrays.asList("started", "stopped", "released"),
                 ShadowSlowStartingMediaCodec.getEvents());
         assertFalse(recorder.isRecording());
+    }
+
+    /**
+     * What a stream can give up below the floor depends on the release: frames only from API
+     * 29, where an encoder can be told to drop them, and pixels from 21, where a size can be
+     * asked for. Frames always come first.
+     */
+    @Test
+    public void theLadderFollowsTheRelease() {
+        List<BitRateController.Level> current = VideoRecorder.levelsFor(37);
+        assertEquals(3, current.size());
+        assertEquals(0.5f, current.get(0).getFrameRateScale(), 0);
+        assertEquals(1f, current.get(0).getAreaScale(), 0);
+        assertEquals(0.5f, current.get(1).getAreaScale(), 0);
+        assertEquals(0.25f, current.get(2).getAreaScale(), 0);
+        assertEquals(0.5f, current.get(2).getFrameRateScale(), 0);
+
+        List<BitRateController.Level> api28 = VideoRecorder.levelsFor(28);
+        assertEquals("no frame step without an encoder that drops frames", 2, api28.size());
+        assertEquals(1f, api28.get(0).getFrameRateScale(), 0);
+        assertEquals(0.5f, api28.get(0).getAreaScale(), 0);
+
+        assertTrue(VideoRecorder.levelsFor(20).isEmpty());
+    }
+
+    /** Only a lossy stream, on a release that can change a running encoder, adapts. */
+    @Test
+    public void onlyALossyStreamAdapts() throws Exception {
+        LossyPipedOutputStream lossy = new LossyPipedOutputStream(new PipedInputStream());
+
+        BitRateController controller = VideoRecorder.createController(1_000_000, 37, lossy);
+        assertNotNull(controller);
+        assertEquals(1_000_000, controller.getCeiling());
+        assertEquals(BitRateController.VIDEO_FLOOR_BIT_RATE, controller.getFloor());
+        assertEquals(4, controller.getLevelCount());
+
+        assertNull(VideoRecorder.createController(1_000_000, 37, new ByteArrayOutputStream()));
+        assertNull(VideoRecorder.createController(1_000_000, 18, lossy));
+    }
+
+    /**
+     * A lower frame rate is a share of what the camera was measured drawing at; with nothing
+     * measured yet, of what was asked for, and never below a floor.
+     */
+    @Test
+    public void aSessionsFrameRateIsAShareOfTheFullRate() {
+        VideoRecorder recorder = new VideoRecorder(new NoCanvas(), new ByteArrayOutputStream());
+        recorder.setFrameRate(20);
+
+        assertEquals(20, recorder.sessionFrameRate(1));
+        assertEquals(10, recorder.sessionFrameRate(0.5f));
+        recorder.setFrameRate(6);
+        assertEquals(VideoRecorder.MIN_FRAME_RATE, recorder.sessionFrameRate(0.5f));
+    }
+
+    /** A smaller size is a share of the first session's area, within the caller's own cap. */
+    @Test
+    public void aSessionsSizeIsAShareOfTheFirst() throws Exception {
+        RecordingCanvas canvas = new RecordingCanvas();
+        VideoRecorder recorder = new VideoRecorder(canvas, new ByteArrayOutputStream());
+        assertNull("no cap and nothing to scale from", recorder.sessionMaxSize(0.5f));
+
+        recorder.start();
+        assertTrue(canvas.attached.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS);
+        while (recorder.sessionMaxSize(0.25f) == null && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10);
+        }
+        recorder.stop();
+
+        assertEquals("the camera gave 1280x720", new Size(640, 360), recorder.sessionMaxSize(0.25f));
+        assertEquals(new Size(904, 508), recorder.sessionMaxSize(0.5f));
+        assertNull("full size follows the caller's cap, which is none",
+                recorder.sessionMaxSize(1));
+        recorder.setMaxSize(new Size(320, 480));
+        assertEquals("never past the caller's cap", new Size(320, 360),
+                recorder.sessionMaxSize(0.25f));
+    }
+
+    /** A lossy recorder starts with a controller, and the meter reports to it. */
+    @Test
+    public void aLossyRecorderListensToItsMeter() throws Exception {
+        PipedInputStream pipe = new PipedInputStream(1024 * 1024);
+        LossyPipedOutputStream lossy = new LossyPipedOutputStream(pipe);
+        RecordingCanvas canvas = new RecordingCanvas();
+        VideoRecorder recorder = new VideoRecorder(canvas, lossy);
+        DeliveryMeter meter = new DeliveryMeter();
+        recorder.setDeliveryMeter(meter);
+        assertNull("nothing adapts before the stream starts", recorder.getController());
+
+        recorder.start();
+        try {
+            assertTrue(canvas.attached.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            BitRateController controller = recorder.getController();
+            assertNotNull(controller);
+            int before = controller.getBitRate();
+            meter.onAcknowledged(0);
+            assertEquals(before, controller.getBitRate());
+        } finally {
+            recorder.stop();
+        }
+    }
+
+    /**
+     * A reader that stops reading makes the running encoder lower its bit rate, down to the
+     * floor, and then the recorder restarts the encoder for the next level down: a second
+     * session, asking the camera for a surface again.
+     *
+     * <p>The stand-in encoder passes through whatever is queued into it, so the test plays the
+     * camera by queueing frames itself, and moves the system clock the recorder keeps time on.</p>
+     */
+    @Test
+    public void aStalledReaderCutsTheBitRateAndThenMovesDownALevel() throws Exception {
+        PipedInputStream pipe = new PipedInputStream(1024 * 1024);
+        LossyPipedOutputStream lossy = new LossyPipedOutputStream(pipe);
+        RecordingCanvas canvas = new RecordingCanvas();
+        VideoRecorder recorder = new VideoRecorder(canvas, lossy);
+        recorder.setBitRate(1_000_000);
+        recorder.setFrameRate(30);
+        recorder.start();
+        try {
+            assertTrue(canvas.attached.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            BitRateController controller = recorder.getController();
+            assertNotNull(controller);
+            int lowestAtFullQuality = Integer.MAX_VALUE;
+            long deadline = System.currentTimeMillis() + TimeUnit.SECONDS.toMillis(30);
+            for (int frame = 0; controller.getLevelIndex() == 0
+                    && System.currentTimeMillis() < deadline; frame++) {
+                queueFrame(recorder, 20_000, frame % 30 == 0);
+                ShadowSystemClock.advanceBy(Duration.ofMillis(33));
+                // The controller's own lock, so the level and the rate are read together.
+                synchronized (controller) {
+                    if (controller.getLevelIndex() == 0) {
+                        lowestAtFullQuality =
+                                Math.min(lowestAtFullQuality, controller.getBitRate());
+                    }
+                }
+            }
+
+            assertEquals("the bit rate stops at the floor", BitRateController.VIDEO_FLOOR_BIT_RATE,
+                    lowestAtFullQuality);
+            assertEquals("and then the stream gives something up", 1,
+                    controller.getLevelIndex());
+            long restartDeadline = System.currentTimeMillis()
+                    + TimeUnit.SECONDS.toMillis(TIMEOUT_SECONDS);
+            while (canvas.attachments < 2 && System.currentTimeMillis() < restartDeadline) {
+                // The old encoder drains its last frame before the recorder notices the level.
+                queueFrame(recorder, 1_000, false);
+                Thread.sleep(10);
+            }
+            assertEquals("a new session asks the camera again", 2, canvas.attachments);
+            assertTrue("the backlog allowance follows the bit rate down",
+                    lossy.getMaxBufferedBytes() < VideoRecorder.backlogBytesFor(1_000_000, 250));
+        } finally {
+            recorder.stop();
+        }
+    }
+
+    /** Queues one frame into whichever encoder the recorder is running, if it has one ready. */
+    private static void queueFrame(VideoRecorder recorder, int size, boolean keyFrame)
+            throws Exception {
+        Field field = VideoRecorder.class.getDeclaredField("mEncoder");
+        field.setAccessible(true);
+        MediaCodec encoder = (MediaCodec) ((AtomicReference<?>) field.get(recorder)).get();
+        if (encoder == null) {
+            Thread.sleep(5);
+            return;
+        }
+        try {
+            int index = encoder.dequeueInputBuffer(10_000);
+            if (index < 0) {
+                return;
+            }
+            ByteBuffer input = encoder.getInputBuffer(index);
+            input.clear();
+            input.put(new byte[Math.min(size, input.remaining())]);
+            encoder.queueInputBuffer(index, 0, input.position(), 0,
+                    keyFrame ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0);
+            // Gives the recorder's thread the frame before the clock moves again.
+            Thread.sleep(2);
+        } catch (IllegalStateException e) {
+            // Released between sessions; the next frame goes to the new encoder.
+        }
     }
 
     /** Waits until a thread is either waiting for a lock or finished, whichever comes first. */

@@ -8,6 +8,7 @@ import android.media.MediaFormat;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
+import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
 import android.view.Surface;
@@ -17,6 +18,8 @@ import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
+import androidx.annotation.RestrictTo;
+import androidx.annotation.WorkerThread;
 
 import com.xlythe.view.camera.CameraView;
 
@@ -25,6 +28,8 @@ import static com.xlythe.view.camera.ICameraModule.DEBUG;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -63,6 +68,15 @@ public class VideoRecorder {
   /** Maximum time allowed for the camera/encoder surface handshake. */
   private static final long SURFACE_TIMEOUT_SECONDS = 10;
 
+  /** The first release that can change a running encoder's bit rate. */
+  static final int RUNTIME_BIT_RATE_SDK = 19;
+  /** The first release whose encoders can be told to drop frames from their input surface. */
+  static final int MAX_FPS_SDK = 29;
+  /** The least a congested stream lowers its frame rate to. */
+  static final int MIN_FRAME_RATE = 5;
+  /** How long the first session counts frames for, to learn the camera's own rate. */
+  private static final long FRAME_RATE_MEASURE_MILLIS = 2000;
+
   /** The stream to write to. */
   private final OutputStream mOutputStream;
 
@@ -95,6 +109,31 @@ public class VideoRecorder {
   private final AtomicLong mDroppedFrames = new AtomicLong();
   /** Surface provider currently attached to the camera backend. */
   private final AtomicReference<SurfaceProvider> mSurfaceProvider = new AtomicReference<>();
+
+  /**
+   * Lowers the bit rate, then frames, then pixels, when the reader falls behind. Null for a
+   * stream that cannot adapt: a lossless one, or one on a release that cannot change a running
+   * encoder.
+   */
+  @Nullable private volatile BitRateController mController;
+  /** Measures the reader, and the far end when it acknowledges, for the controller. */
+  @Nullable private volatile DeliveryMeter mDeliveryMeter;
+  /** The bit rate the running encoder was last given. Recorder thread only. */
+  private int mAppliedBitRate;
+  /** The controller level the running session was configured for. Recorder thread only. */
+  private int mSessionLevel;
+  /** The dropped-frame count the controller was last told about. Recorder thread only. */
+  private long mLastDroppedFrames;
+  /** The first session's frame size, which later sessions scale from. Recorder thread only. */
+  private int mBaseWidth;
+  /** Likewise. */
+  private int mBaseHeight;
+  /** When the first session's frame count began, or -1. Recorder thread only. */
+  private long mMeasureStartMillis = -1;
+  /** Frames counted since then. Recorder thread only. */
+  private long mMeasuredFrames;
+  /** The rate the camera was measured drawing at, or 0 before it has been. */
+  private volatile float mMeasuredFrameRate;
 
   /**
    * A simple video recorder.
@@ -167,6 +206,21 @@ public class VideoRecorder {
     return mMaxSize;
   }
 
+  /**
+   * Measures whoever reads this stream, so the bit rate can follow the link. Set before
+   * {@link #start()}.
+   */
+  @RestrictTo(RestrictTo.Scope.LIBRARY)
+  public void setDeliveryMeter(@Nullable DeliveryMeter deliveryMeter) {
+    mDeliveryMeter = deliveryMeter;
+  }
+
+  /** The controller adapting this stream, or null when it does not adapt. */
+  @Nullable
+  BitRateController getController() {
+    return mController;
+  }
+
   /** @return True if actively recording. False otherwise. */
   public boolean isRecording() {
     return mIsAlive.get();
@@ -182,6 +236,11 @@ public class VideoRecorder {
 
     mIsAlive.set(true);
     applyBacklogBudget();
+    mController = createController(getBitRate(), Build.VERSION.SDK_INT, mOutputStream);
+    DeliveryMeter meter = mDeliveryMeter;
+    if (meter != null && mController != null) {
+      meter.setListener(mController);
+    }
     Thread thread =
             new Thread() {
               @RequiresPermission(Manifest.permission.CAMERA)
@@ -200,125 +259,348 @@ public class VideoRecorder {
                   return;
                 }
 
-                Handoff<CameraMetadata> requestedSizeFuture = new Handoff<>();
-                Handoff<Surface> providedSurface = new Handoff<>();
-                SurfaceProvider surfaceProvider = new SurfaceProvider() {
-                  @Override
-                  public Surface getSurface(int width, int height, int orientation, boolean flipped) {
-                    requestedSizeFuture.set(new CameraMetadata(width, height, orientation, flipped));
-                    try {
-                      return providedSurface.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                    } catch (InterruptedException | TimeoutException e) {
-                      throw new RuntimeException(e);
-                    }
-                  }
-
-                  @Nullable
-                  @Override
-                  public Size getMaxSize() {
-                    return VideoRecorder.this.getMaxSize();
-                  }
-                };
-                synchronized (VideoRecorder.this) {
-                  if (!isRecording()) {
-                    stopInternal();
-                    return;
-                  }
-                  mSurfaceProvider.set(surfaceProvider);
-                  mCanvas.attachSurface(surfaceProvider);
-                }
-
-                Surface surface = null;
                 try {
-                  CameraMetadata metadata = requestedSizeFuture.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-                  MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, metadata.getWidth(), metadata.getHeight());
-
-                  // Failing to specify some of these can cause the MediaCodec configure() call to
-                  // throw an unhelpful exception.
-                  format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
-                  format.setInteger(MediaFormat.KEY_BIT_RATE, getBitRate());
-                  format.setInteger(MediaFormat.KEY_FRAME_RATE, getFrameRate());
-                  format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, getIFrameInterval());
-                  if (Build.VERSION.SDK_INT >= 31) {
-                    format.setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, /*true=*/1);
-                  }
-
-                  // Pass this info to the remote device.
-                  write(metadata.getWidth(),
-                          metadata.getHeight(),
-                          metadata.getOrientation(),
-                          metadata.isFlipped(),
-                          getBitRate(),
-                          getFrameRate(),
-                          getIFrameInterval());
-
-                  MediaCodec encoder;
-                  // Held until start() returns, because stop() takes the same lock before it
-                  // closes the encoder. Before API 29, MediaCodec aborts the whole process when a
-                  // release() overtakes a start() that is still completing on another thread.
-                  synchronized (VideoRecorder.this) {
-                    if (!isRecording()) {
-                      return;
-                    }
-                    encoder = MediaCodec.createByCodecName(codecInfo.getName());
-                    mEncoder.set(encoder);
-                    encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-                    surface = encoder.createInputSurface();
-                    providedSurface.set(surface);
-                    encoder.start();
-                  }
-                  Log.d(TAG, "Started recording video with dimensions " + metadata);
-
-                  MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+                  boolean first = true;
                   while (isRecording()) {
-                    int statusOrIndex = encoder.dequeueOutputBuffer(info, NO_TIMEOUT);
-                    int status = getStatus(statusOrIndex);
-                    int index = getIndex(statusOrIndex);
-
-                    switch (status) {
-                      case INFO_SUCCESS:
-                        ByteBuffer encodedData = encoder.getOutputBuffers()[index];
-                        if (encodedData == null) {
-                          throw new IOException("ByteBuffer for " + index + " was null");
-                        }
-
-                        // It's usually necessary to adjust the ByteBuffer values to match BufferInfo.
-                        encodedData.position(info.offset);
-                        encodedData.limit(info.offset + info.size);
-                        byte[] data = new byte[info.size];
-                        encodedData.get(data);
-                        encodedData.position(info.offset);
-                        write(data, info.presentationTimeUs, info.flags);
-                        encoder.releaseOutputBuffer(index, false);
-                        requestSyncFrameIfNeeded(encoder);
-                        break;
-                      case INFO_TRY_AGAIN_LATER:
-                        Log.d(TAG, "Video not ready yet. Trying again later.");
-                        Thread.sleep(100);
-                        continue;
-                      case INFO_OUTPUT_FORMAT_CHANGED:
-                        Log.d(TAG, "Video encoder output format changed: " + encoder.getOutputFormat());
-                        break;
-                      case INFO_OUTPUT_BUFFERS_CHANGED:
-                        Log.d(TAG, "Video encoder output buffers changed");
-                        break;
+                    if (!runSession(codecInfo, first)) {
+                      break;
                     }
+                    first = false;
                   }
-
-                  encoder.signalEndOfInputStream();
-                } catch (IOException | IllegalArgumentException | IllegalStateException | InterruptedException | TimeoutException e) {
-                  Log.e(TAG, "Exception with recording video stream", e);
                 } finally {
-                  detachSurfaceProvider();
-                  stopInternal();
-                  if (surface != null) {
-                    surface.release();
+                  DeliveryMeter meter = mDeliveryMeter;
+                  if (meter != null) {
+                    meter.setListener(null);
                   }
+                  stopInternal();
                 }
               }
             };
     mThread.set(thread);
     thread.start();
+  }
+
+  /**
+   * Attaches an encoder to the camera and drains it, until the recording stops or the controller
+   * moves to another level.
+   *
+   * <p>A level is a frame rate and a size, and neither can be changed on a running encoder fed
+   * from a surface, so a new level is a new session: the encoder is released, the camera is
+   * asked for a surface again, at the new size, and a new encoder starts at the new frame rate.
+   * The stream itself carries on. The new encoder opens with its own configuration and a key
+   * frame, which is all a decoder needs to follow a change of size, so nothing else is sent: a
+   * second header would reach a player from before this as a frame of video.</p>
+   *
+   * @param first whether this is the stream's first session, which writes its header
+   * @return whether to run another session
+   */
+  @RequiresPermission(Manifest.permission.CAMERA)
+  @WorkerThread
+  private boolean runSession(MediaCodecInfo codecInfo, boolean first) {
+    BitRateController controller = mController;
+    int level = controller == null ? 0 : controller.getLevelIndex();
+    BitRateController.Level step = controller == null
+            ? new BitRateController.Level(1, 1) : controller.getLevel();
+    mSessionLevel = level;
+    int frameRate = sessionFrameRate(step.getFrameRateScale());
+    Size sessionMaxSize = Build.VERSION.SDK_INT >= 21 ? sessionMaxSize(step.getAreaScale()) : null;
+
+    Handoff<CameraMetadata> requestedSizeFuture = new Handoff<>();
+    Handoff<Surface> providedSurface = new Handoff<>();
+    SurfaceProvider surfaceProvider = new SurfaceProvider() {
+      @Override
+      public Surface getSurface(int width, int height, int orientation, boolean flipped) {
+        requestedSizeFuture.set(new CameraMetadata(width, height, orientation, flipped));
+        try {
+          return providedSurface.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException | TimeoutException e) {
+          throw new RuntimeException(e);
+        }
+      }
+
+      @Nullable
+      @Override
+      public Size getMaxSize() {
+        return sessionMaxSize != null ? sessionMaxSize : VideoRecorder.this.getMaxSize();
+      }
+    };
+    synchronized (VideoRecorder.this) {
+      if (!isRecording()) {
+        return false;
+      }
+      mSurfaceProvider.set(surfaceProvider);
+      mCanvas.attachSurface(surfaceProvider);
+    }
+
+    Surface surface = null;
+    boolean restart = false;
+    try {
+      CameraMetadata metadata = requestedSizeFuture.get(SURFACE_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+      int bitRate = controller == null ? getBitRate() : controller.getBitRate();
+      MediaFormat format = MediaFormat.createVideoFormat(MIME_TYPE, metadata.getWidth(), metadata.getHeight());
+
+      // Failing to specify some of these can cause the MediaCodec configure() call to
+      // throw an unhelpful exception.
+      format.setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface);
+      format.setInteger(MediaFormat.KEY_BIT_RATE, bitRate);
+      format.setInteger(MediaFormat.KEY_FRAME_RATE, frameRate);
+      format.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, getIFrameInterval());
+      if (Build.VERSION.SDK_INT >= MAX_FPS_SDK && step.getFrameRateScale() < 1) {
+        // The frame rate above only informs rate control: an encoder fed from a surface takes
+        // every frame the camera draws into it unless it is told to drop down to a rate.
+        format.setFloat(MediaFormat.KEY_MAX_FPS_TO_ENCODER, frameRate);
+      }
+      if (Build.VERSION.SDK_INT >= 31) {
+        format.setInteger(MediaFormat.KEY_ALLOW_FRAME_DROP, /*true=*/1);
+      }
+
+      if (first) {
+        mBaseWidth = metadata.getWidth();
+        mBaseHeight = metadata.getHeight();
+        // Pass this info to the remote device.
+        write(metadata.getWidth(),
+                metadata.getHeight(),
+                metadata.getOrientation(),
+                metadata.isFlipped(),
+                getBitRate(),
+                getFrameRate(),
+                getIFrameInterval());
+      }
+
+      MediaCodec encoder;
+      // Held until start() returns, because stop() takes the same lock before it
+      // closes the encoder. Before API 29, MediaCodec aborts the whole process when a
+      // release() overtakes a start() that is still completing on another thread.
+      synchronized (VideoRecorder.this) {
+        if (!isRecording()) {
+          return false;
+        }
+        encoder = MediaCodec.createByCodecName(codecInfo.getName());
+        mEncoder.set(encoder);
+        encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
+        surface = encoder.createInputSurface();
+        providedSurface.set(surface);
+        encoder.start();
+      }
+      mAppliedBitRate = bitRate;
+      if (controller != null) {
+        applyBacklogBudget(bitRate);
+      }
+      Log.d(TAG, "Started recording video with dimensions " + metadata
+              + " at " + bitRate + "bps and " + frameRate + "fps, level " + level);
+
+      MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
+      while (isRecording() && !restart) {
+        int statusOrIndex = encoder.dequeueOutputBuffer(info, NO_TIMEOUT);
+        int status = getStatus(statusOrIndex);
+        int index = getIndex(statusOrIndex);
+
+        switch (status) {
+          case INFO_SUCCESS:
+            ByteBuffer encodedData = encoder.getOutputBuffers()[index];
+            if (encodedData == null) {
+              throw new IOException("ByteBuffer for " + index + " was null");
+            }
+
+            // It's usually necessary to adjust the ByteBuffer values to match BufferInfo.
+            encodedData.position(info.offset);
+            encodedData.limit(info.offset + info.size);
+            byte[] data = new byte[info.size];
+            encodedData.get(data);
+            encodedData.position(info.offset);
+            observeQueue();
+            write(data, info.presentationTimeUs, info.flags);
+            encoder.releaseOutputBuffer(index, false);
+            requestSyncFrameIfNeeded(encoder);
+            if (first) {
+              measureFrameRate(info.flags);
+            }
+            restart = adapt(encoder);
+            break;
+          case INFO_TRY_AGAIN_LATER:
+            Log.d(TAG, "Video not ready yet. Trying again later.");
+            Thread.sleep(100);
+            continue;
+          case INFO_OUTPUT_FORMAT_CHANGED:
+            Log.d(TAG, "Video encoder output format changed: " + encoder.getOutputFormat());
+            break;
+          case INFO_OUTPUT_BUFFERS_CHANGED:
+            Log.d(TAG, "Video encoder output buffers changed");
+            break;
+        }
+      }
+
+      if (!restart) {
+        encoder.signalEndOfInputStream();
+      }
+      return restart && isRecording();
+    } catch (IOException | IllegalArgumentException | IllegalStateException | InterruptedException | TimeoutException e) {
+      Log.e(TAG, "Exception with recording video stream", e);
+      return false;
+    } finally {
+      detachSurfaceProvider();
+      if (restart) {
+        closeEncoder();
+      }
+      if (surface != null) {
+        surface.release();
+      }
+    }
+  }
+
+  /**
+   * The controller for a stream, or null when it has nothing to act on.
+   *
+   * <p>Only a lossy stream has a backlog to watch: a lossless one blocks the encoder instead. And
+   * the bit rate can only be changed on a running encoder from API 19.</p>
+   */
+  @Nullable
+  static BitRateController createController(int bitRate, int sdk, OutputStream outputStream) {
+    if (sdk < RUNTIME_BIT_RATE_SDK || !(outputStream instanceof LossyPipedOutputStream)) {
+      return null;
+    }
+    return BitRateController.withLevels(bitRate, BitRateController.VIDEO_FLOOR_BIT_RATE,
+            levelsFor(sdk));
+  }
+
+  /**
+   * What the stream gives up below the bit rate floor, in order: half its frames, then half its
+   * area, then half again.
+   *
+   * <p>Frames go first because a viewer forgives a lower frame rate sooner than a softer picture,
+   * and because it is the cheaper restart: the camera is asked for the same size again. An
+   * encoder can only be told to drop frames from API 29, and below that the frame rate step is
+   * left out rather than taken with no effect. A size needs API 21 to be asked for at all.</p>
+   */
+  @NonNull
+  static List<BitRateController.Level> levelsFor(int sdk) {
+    List<BitRateController.Level> levels = new ArrayList<>();
+    float frameRateScale = 1;
+    if (sdk >= MAX_FPS_SDK) {
+      frameRateScale = 0.5f;
+      levels.add(new BitRateController.Level(frameRateScale, 1));
+    }
+    if (sdk >= 21) {
+      levels.add(new BitRateController.Level(frameRateScale, 0.5f));
+      levels.add(new BitRateController.Level(frameRateScale, 0.25f));
+    }
+    return levels;
+  }
+
+  /** Tells the controller what the reader has left unread, before the next frame joins it. */
+  @WorkerThread
+  private void observeQueue() {
+    BitRateController controller = mController;
+    if (controller == null || !(mOutputStream instanceof LossyPipedOutputStream)) {
+      return;
+    }
+    LossyPipedOutputStream lossy = (LossyPipedOutputStream) mOutputStream;
+    try {
+      controller.onQueue(SystemClock.elapsedRealtime(), lossy.bufferedBytes(),
+              lossy.getMaxBufferedBytes());
+    } catch (IOException e) {
+      // The reader has gone, which ends the stream on the next write.
+    }
+  }
+
+  /**
+   * Feeds the controller what the last frame showed about the reader, and acts on its answer.
+   *
+   * @return whether the controller moved to another level, which needs a new session
+   */
+  @WorkerThread
+  private boolean adapt(MediaCodec encoder) {
+    BitRateController controller = mController;
+    if (controller == null) {
+      return false;
+    }
+    long now = SystemClock.elapsedRealtime();
+    long dropped = mDroppedFrames.get();
+    if (dropped != mLastDroppedFrames) {
+      mLastDroppedFrames = dropped;
+      controller.onDropped();
+    }
+    if (!controller.update(now)) {
+      return false;
+    }
+    int bitRate = controller.getBitRate();
+    if (bitRate != mAppliedBitRate) {
+      applyBitRate(encoder, bitRate);
+    }
+    return controller.getLevelIndex() != mSessionLevel;
+  }
+
+  /** Changes the running encoder's bit rate, and the backlog that is a quarter second of it. */
+  @WorkerThread
+  private void applyBitRate(MediaCodec encoder, int bitRate) {
+    if (Build.VERSION.SDK_INT < RUNTIME_BIT_RATE_SDK) {
+      return;
+    }
+    Bundle parameters = new Bundle();
+    parameters.putInt(MediaCodec.PARAMETER_KEY_VIDEO_BITRATE, bitRate);
+    try {
+      encoder.setParameters(parameters);
+      mAppliedBitRate = bitRate;
+      applyBacklogBudget(bitRate);
+      if (DEBUG) {
+        Log.d(TAG, "Video bit rate now " + bitRate + "bps");
+      }
+    } catch (IllegalStateException error) {
+      Log.w(TAG, "Unable to change the video bit rate", error);
+    }
+  }
+
+  /** Counts the first session's frames, to learn the rate the camera actually draws at. */
+  @WorkerThread
+  private void measureFrameRate(int flags) {
+    if ((flags & MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0) {
+      return;
+    }
+    long now = SystemClock.elapsedRealtime();
+    if (mMeasureStartMillis < 0) {
+      mMeasureStartMillis = now;
+      return;
+    }
+    mMeasuredFrames++;
+    long elapsed = now - mMeasureStartMillis;
+    if (elapsed >= FRAME_RATE_MEASURE_MILLIS) {
+      mMeasuredFrameRate = mMeasuredFrames * 1000f / elapsed;
+    }
+  }
+
+  /**
+   * The frame rate for a session at a share of the full rate.
+   *
+   * <p>The full rate is what the camera was measured drawing at, rather than what was asked for:
+   * an encoder fed from a surface takes whatever it is given, so the rate asked for is often not
+   * the rate being sent, and halving that would be no reduction at all.</p>
+   */
+  int sessionFrameRate(float scale) {
+    if (scale >= 1) {
+      return getFrameRate();
+    }
+    float full = mMeasuredFrameRate > 0 ? mMeasuredFrameRate : getFrameRate();
+    return Math.max(MIN_FRAME_RATE, Math.round(full * scale));
+  }
+
+  /**
+   * The size cap for a session at a share of the first session's area, within the caller's own.
+   */
+  @Nullable
+  @RequiresApi(21)
+  Size sessionMaxSize(float areaScale) {
+    Size cap = getMaxSize();
+    if (areaScale >= 1 || mBaseWidth <= 0 || mBaseHeight <= 0) {
+      return cap;
+    }
+    double side = Math.sqrt(areaScale);
+    int width = Math.max(2, (int) (mBaseWidth * side) & ~1);
+    int height = Math.max(2, (int) (mBaseHeight * side) & ~1);
+    if (cap != null) {
+      width = Math.min(width, cap.getWidth());
+      height = Math.min(height, cap.getHeight());
+    }
+    return new Size(width, height);
   }
 
   private void detachSurfaceProvider() {
@@ -453,13 +735,18 @@ public class VideoRecorder {
 
   /** Applies the latency budget to a lossy sink, which cannot know the bit rate itself. */
   private void applyBacklogBudget() {
+    applyBacklogBudget(getBitRate());
+  }
+
+  /** Applies the latency budget at a bit rate, which changes as the stream adapts. */
+  private void applyBacklogBudget(int bitRate) {
     if (!(mOutputStream instanceof LossyPipedOutputStream)) {
       return;
     }
-    int bytes = backlogBytesFor(getBitRate(), TARGET_BACKLOG_MILLIS);
+    int bytes = backlogBytesFor(bitRate, TARGET_BACKLOG_MILLIS);
     ((LossyPipedOutputStream) mOutputStream).setMaxBufferedBytes(bytes);
     if (DEBUG) {
-      Log.d(TAG, "Dropping frames past " + bytes + " bytes of backlog at " + getBitRate() + "bps");
+      Log.d(TAG, "Dropping frames past " + bytes + " bytes of backlog at " + bitRate + "bps");
     }
   }
 

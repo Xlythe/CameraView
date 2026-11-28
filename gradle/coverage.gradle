@@ -60,10 +60,16 @@ def coreCoverageIncludes = [
         'com/xlythe/view/camera/x/CameraXMath.class',
         'com/xlythe/view/camera/gl/GlMath.class',
         'com/xlythe/view/camera/stream/AudioBuffer.class',
+        'com/xlythe/view/camera/stream/AudioCodec.class',
         'com/xlythe/view/camera/stream/AudioCatchUp.class',
         'com/xlythe/view/camera/stream/AudioStreamHeader.class',
         'com/xlythe/view/camera/stream/AudioStreamHeader$*.class',
+        'com/xlythe/view/camera/stream/BitRateController.class',
+        'com/xlythe/view/camera/stream/BitRateController$*.class',
+        'com/xlythe/view/camera/stream/DeliveryMeter.class',
+        'com/xlythe/view/camera/stream/DeliveryMeter$*.class',
         'com/xlythe/view/camera/stream/LossyPipedOutputStream.class',
+        'com/xlythe/view/camera/stream/PlaybackCapabilities.class',
         'com/xlythe/view/camera/stream/VideoFrame*.class'
 ]
 
