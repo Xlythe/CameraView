@@ -426,6 +426,20 @@ public class MediaViewTest {
         assertTrue(mView.getContentView() instanceof LargeImageView);
     }
 
+    /** An animation taken off the screen pauses, and plays on when it is put back. */
+    @Test
+    public void anAnimationPlaysOnWhenItsViewIsPutBack() throws IOException {
+        show(file(ApngDecoderTest.everyOperation(), ".png"));
+        ShadowLooper.idleMainLooper();
+        assertTrue(mView.isPlaying());
+        ViewGroup parent = (ViewGroup) mView.getParent();
+        parent.removeView(mView);
+        assertFalse(mView.isPlaying());
+        parent.addView(mView);
+        assertTrue(mView.isPlaying());
+        assertTrue(mView.getContentView() instanceof AnimationView);
+    }
+
     /** A picture asked to animate that does not, shows still. */
     @Test
     public void aStillShownAsAnAnimationStaysStill() throws IOException {

@@ -98,6 +98,9 @@ final class AnimationView extends View {
     /** How far it had played when it was paused, in milliseconds. */
     private long mPausedAt;
 
+    /** Whether it was playing when it was taken off the screen, to play again when put back. */
+    private boolean mResumeOnAttach;
+
     /** How often a GIF played through {@link Movie}, which says nothing of its frames, redraws. */
     private static final long MOVIE_FRAME_MILLIS = 16;
 
@@ -394,9 +397,19 @@ final class AnimationView extends View {
     }
 
     @Override
+    protected void onAttachedToWindow() {
+        super.onAttachedToWindow();
+        if (mResumeOnAttach) {
+            mResumeOnAttach = false;
+            play();
+        }
+    }
+
+    @Override
     protected void onDetachedFromWindow() {
+        // Kept, paused, so a view shown again plays on from where it was; release() frees it.
+        mResumeOnAttach = pause();
         super.onDetachedFromWindow();
-        release();
     }
 
     @Override
