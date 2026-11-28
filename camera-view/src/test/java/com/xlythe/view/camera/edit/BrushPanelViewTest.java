@@ -142,6 +142,27 @@ public class BrushPanelViewTest {
         assertTrue("it draws its controls", inked > 1000);
     }
 
+    @Test
+    public void darkInkShowsOnADarkPanel() {
+        View brushes = row(0);
+        assertTrue("the default ink is dark", Color.red(panel.getBrush().getColor()) < 64);
+        Bitmap bitmap = Bitmap.createBitmap(brushes.getWidth(), brushes.getHeight(),
+                Bitmap.Config.ARGB_8888);
+        bitmap.eraseColor(Color.BLACK);
+        brushes.draw(new Canvas(bitmap));
+        // A tile that is not chosen, so no highlight lights it: its chip does.
+        int cell = brushes.getWidth() / panel.getBrushes().size();
+        int lit = 0;
+        for (int x = cell; x < 2 * cell; x++) {
+            for (int y = 0; y < brushes.getHeight(); y++) {
+                if (Color.red(bitmap.getPixel(x, y)) > 40) {
+                    lit++;
+                }
+            }
+        }
+        assertTrue("lit " + lit, lit > cell * brushes.getHeight() / 4);
+    }
+
     private View row(int index) {
         return panel.getChildAt(index);
     }
