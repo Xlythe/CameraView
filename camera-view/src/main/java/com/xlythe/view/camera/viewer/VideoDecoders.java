@@ -167,6 +167,7 @@ final class VideoDecoders {
     @AnyThread
     @Nullable
     @VisibleForTesting
+    @RequiresApi(16)
     static int[] profileLevel(@NonNull String mime, @NonNull MediaFormat format) {
         if (!AVC.equalsIgnoreCase(mime) && !HEVC.equalsIgnoreCase(mime)
                 && !VP9.equalsIgnoreCase(mime) && !AV1.equalsIgnoreCase(mime)) {
@@ -412,6 +413,7 @@ final class VideoDecoders {
      */
     @AnyThread
     @VisibleForTesting
+    @RequiresApi(16)
     static boolean supports(@NonNull String mime, int profile, int level,
             @Nullable CodecProfileLevel[] listed) {
         if (listed == null || listed.length == 0) {
