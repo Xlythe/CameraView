@@ -1,5 +1,7 @@
 package com.xlythe.view.camera.stream;
 
+import androidx.annotation.RestrictTo;
+
 import java.io.IOException;
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
@@ -127,6 +129,27 @@ public class LossyPipedOutputStream extends PipedOutputStream {
       resyncRequested = false;
     }
     // The frame API owns its own decision, so leave the byte-level path's state alone.
+    canDropNextPacket = false;
+    return true;
+  }
+
+  /**
+   * Writes one whole frame that nothing else is decoded against, or drops it when the reader is
+   * behind.
+   *
+   * <p>For compressed audio, whose frames each decode on their own. {@link #writeFrame} would
+   * treat a dropped one as a broken chain and drop every frame after it until a key frame that
+   * audio never sends.</p>
+   *
+   * @return true when the frame was written, false when it was dropped
+   */
+  @RestrictTo(RestrictTo.Scope.LIBRARY)
+  public synchronized boolean writeIndependentFrame(byte[] frame) throws IOException {
+    if (requireSink().available() > maxBufferedBytes) {
+      return false;
+    }
+    super.write(frame, 0, frame.length);
+    super.flush();
     canDropNextPacket = false;
     return true;
   }

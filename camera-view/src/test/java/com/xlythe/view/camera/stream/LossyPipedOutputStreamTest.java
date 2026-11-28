@@ -264,6 +264,28 @@ public class LossyPipedOutputStreamTest {
         }
     }
 
+    /**
+     * A frame nothing depends on is dropped alone: once the reader catches up the next one goes
+     * through, where a dropped delta would have taken every frame until a key frame with it.
+     */
+    @Test
+    public void anIndependentFrameIsDroppedAlone() throws IOException {
+        PipedInputStream sink = new PipedInputStream(PIPE_BYTES);
+        try (LossyPipedOutputStream stream = new LossyPipedOutputStream(sink, MAX_BUFFERED)) {
+            assertTrue(stream.writeIndependentFrame(frameOf(MAX_BUFFERED + 1, (byte) 1)));
+            assertFalse("the reader is behind", stream.writeIndependentFrame(frameOf(8, (byte) 2)));
+
+            byte[] backlog = new byte[MAX_BUFFERED + 1];
+            assertEquals(backlog.length, sink.read(backlog));
+            assertTrue("caught up, so the next frame goes through",
+                    stream.writeIndependentFrame(frameOf(8, (byte) 3)));
+            assertFalse("and nothing asks for a key frame", stream.consumeResyncRequest());
+            byte[] next = new byte[8];
+            assertEquals(8, sink.read(next));
+            assertArrayEquals(frameOf(8, (byte) 3), next);
+        }
+    }
+
     @Test
     public void onlyDeltaFramesAreDroppable() {
         assertTrue(VideoRecorder.isDroppable(0));
