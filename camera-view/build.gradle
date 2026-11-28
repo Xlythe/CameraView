@@ -204,6 +204,7 @@ def rangedModules = [
         'androidx.annotation:annotation',
         'androidx.exifinterface:exifinterface',
         'com.google.mlkit:barcode-scanning',
+        'com.google.ar:core',
         'com.google.guava:guava',
         'androidx.camera:camera-core',
         'androidx.camera:camera-camera2',
@@ -275,6 +276,12 @@ dependencies {
         api 'androidx.media3:media3-transformer:[1.11.1,)'
         api 'androidx.media3:media3-effect:[1.11.1,)'
     }
+    // ARCore brings an install activity, Play Store queries and native libraries with it, which
+    // an app that never enters AR should not carry, so every build only compiles against it and
+    // leaves adding it to the app. CameraView#isArSupported is false when it is missing.
+    compileOnly 'com.google.ar:core:[1.57.0,)'
+    testImplementation 'com.google.ar:core:[1.57.0,)'
+    androidTestImplementation 'com.google.ar:core:[1.57.0,)'
     // The test dependencies stay exact. They reach no consumer, and a suite that silently
     // changed runner underneath a failure is a worse trade than one that needs bumping.
     testImplementation 'org.robolectric:robolectric:4.18.1'

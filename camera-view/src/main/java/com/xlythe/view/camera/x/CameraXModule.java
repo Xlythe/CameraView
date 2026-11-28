@@ -9,6 +9,7 @@ import android.content.ContextWrapper;
 import android.content.Intent;
 import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCaptureSession;
+import android.hardware.camera2.CameraAccessException;
 import android.hardware.camera2.CameraCharacteristics;
 import android.hardware.camera2.CameraManager;
 import android.hardware.camera2.CaptureRequest;
@@ -109,6 +110,7 @@ import com.xlythe.view.camera.Barcode;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderer;
 import com.xlythe.view.camera.ICameraModule;
+import com.xlythe.view.camera.LensCalibration;
 import com.xlythe.view.camera.PendingPicture;
 import com.xlythe.view.camera.PermissionChecker;
 import com.xlythe.view.camera.RawCapturePairer;
@@ -259,6 +261,12 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * on the main thread again on every rotation.</p>
      */
     private boolean mGlUnavailable;
+
+    /**
+     * The bound camera's calibration and zoom, for a renderer to project with. CameraX owns the
+     * requests, so the zoom is read back from its zoom state rather than from a request.
+     */
+    private final LensCalibration.Geometry mLensGeometry = new LensCalibration.Geometry();
 
     /** Whether the bound configuration can take a still while it records. */
     private boolean mSnapshotWhileRecording;
@@ -961,6 +969,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             try {
                 result.get();
                 mConfirmedZoomRatio = requested;
+                mLensGeometry.setZoomRatio(requested);
             } catch (ExecutionException e) {
                 if (e.getCause() instanceof CameraControl.OperationCanceledException) {
                     return;
@@ -2385,7 +2394,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         CameraTextureProvider textureProvider = getCameraTextureProvider();
         if (renderer == null && textureProvider == null) return;
         mFrameEffect = FrameEffect.create(FrameEffect.TARGETS, mMainExecutor, renderer,
-                textureProvider, this::onFrameEffectFailed);
+                textureProvider, mLensGeometry, this::onFrameEffectFailed);
         if (mFrameEffect == null) {
             // The renderer logged why. The camera goes on being bound without an effect, which is
             // a camera that works and an effect that does not, rather than no camera at all.
@@ -2456,9 +2465,49 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      */
     @MainThread
     private void updateFrameEffectOrientation() {
+        updateLensGeometry();
         FrameEffect effect = mFrameEffect;
         if (effect != null) {
             effect.setShownOrientation(getRelativeCameraOrientation(), mFrontFacing);
+        }
+    }
+
+    /** Reads the bound camera's calibration and zoom into what the renderer projects with. */
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    @MainThread
+    private void updateLensGeometry() {
+        Camera camera = mActiveCamera;
+        if (camera == null) {
+            mLensGeometry.setCalibration(null);
+            return;
+        }
+        mLensGeometry.setCalibration(calibrationOf(camera));
+        ZoomState zoom = camera.getCameraInfo().getZoomState().getValue();
+        mLensGeometry.setZoomRatio(zoom == null ? 1f : zoom.getZoomRatio());
+    }
+
+    /**
+     * The calibration of a bound camera, or null where it cannot be read.
+     *
+     * <p>From the camera2 characteristics underneath, through the platform rather than through
+     * Camera2CameraInfo, which hands out single keys but not the whole set - and the calibration
+     * reads a dozen of them, several of which depend on each other.</p>
+     */
+    @OptIn(markerClass = ExperimentalCamera2Interop.class)
+    @Nullable
+    private LensCalibration calibrationOf(@NonNull Camera camera) {
+        try {
+            String cameraId = Camera2CameraInfo.from(camera.getCameraInfo()).getCameraId();
+            CameraManager manager =
+                    (CameraManager) getContext().getSystemService(Context.CAMERA_SERVICE);
+            if (manager == null) {
+                return null;
+            }
+            return LensCalibration.from(manager.getCameraCharacteristics(cameraId));
+        } catch (CameraAccessException | IllegalArgumentException | IllegalStateException
+                | LinkageError error) {
+            Log.w(TAG, "Could not read the camera's calibration", error);
+            return null;
         }
     }
 
@@ -2557,14 +2606,21 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                     CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
             float[] focalLengths = info.getCameraCharacteristic(
                     CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
-            if (sensor == null || focalLengths == null || focalLengths.length == 0) {
-                return 0f;
+            // The calibrated focal length where the camera publishes one, as the camera2
+            // backend prefers it.
+            LensCalibration calibration = calibrationOf(camera);
+            float full = calibration == null ? 0f : calibration.fieldOfViewDegrees(horizontal);
+            if (full <= 0f) {
+                if (sensor == null || focalLengths == null || focalLengths.length == 0) {
+                    return 0f;
+                }
+                // The first focal length, for the reason the camera2 backend records: a zoom
+                // ratio of one is the lens the camera uses by default, which is the one this
+                // array leads with, and the shortest is the ultra-wide the ratio reaches by going
+                // below one.
+                full = TransformMath.fieldOfViewDegrees(
+                        horizontal ? sensor.getWidth() : sensor.getHeight(), focalLengths[0]);
             }
-            // The first focal length, for the reason the camera2 backend records: a zoom ratio
-            // of one is the lens the camera uses by default, which is the one this array leads
-            // with, and the shortest is the ultra-wide the ratio reaches by going below one.
-            float full = TransformMath.fieldOfViewDegrees(
-                    horizontal ? sensor.getWidth() : sensor.getHeight(), focalLengths[0]);
 
             ZoomState zoom = camera.getCameraInfo().getZoomState().getValue();
             if (zoom == null) {

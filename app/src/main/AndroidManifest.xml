@@ -26,6 +26,11 @@
         android:largeHeap="true"
         android:theme="@style/AppTheme">
 
+        <!-- AR is one demo among many, so the app installs where AR cannot run. -->
+        <meta-data
+            android:name="com.google.ar.core"
+            android:value="optional" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

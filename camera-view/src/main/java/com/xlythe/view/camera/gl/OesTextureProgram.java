@@ -117,6 +117,14 @@ public final class OesTextureProgram {
      * and repeating it is meaningless.</p>
      */
     public int createExternalTexture() {
+        return newExternalTexture();
+    }
+
+    /**
+     * {@link #createExternalTexture()} for a caller with no program of its own, which is a
+     * camera texture handed to something else to fill. Needs a current context like any GL call.
+     */
+    public static int newExternalTexture() {
         int[] names = new int[1];
         GLES20.glGenTextures(1, names, 0);
         if (names[0] == 0) {

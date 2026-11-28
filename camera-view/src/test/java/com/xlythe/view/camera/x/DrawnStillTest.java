@@ -90,7 +90,7 @@ public class DrawnStillTest {
         ShadowRecordingGles20.reset();
         ShadowInjectableImageReader.reset();
         ShadowFrameSurfaceTexture.setFrameTransform(CAMERA_FLIP);
-        effect = FrameEffect.create(FrameEffect.TARGETS, Runnable::run, renderer, null,
+        effect = FrameEffect.create(FrameEffect.TARGETS, Runnable::run, renderer, null, null,
                 error -> {});
         assertNotNull(effect);
         output = new File(RuntimeEnvironment.getApplication().getCacheDir(), "drawn-still.jpg");

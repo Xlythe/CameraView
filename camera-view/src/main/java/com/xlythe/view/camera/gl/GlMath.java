@@ -27,6 +27,12 @@ public final class GlMath {
     /** The side of the square matrix those sixteen floats hold. */
     private static final int MATRIX_SIDE = 4;
 
+    /**
+     * Floats in a camera's intrinsics as {@link #projection} takes them: the focal lengths, the
+     * principal point and the skew, each divided by the width or height of the buffer.
+     */
+    public static final int INTRINSICS_SIZE = 5;
+
     /** How far a frame is turned clockwise to be shown, in whole quarter turns. */
     @Retention(RetentionPolicy.SOURCE)
     @IntDef({0, 90, 180, 270})
@@ -180,6 +186,64 @@ public final class GlMath {
     }
 
     /**
+     * The turn and mirror a camera asks a SurfaceTexture for, as the camera service composes it
+     * from the sensor orientation and the lens: the matrix a SurfaceTexture folds in after its
+     * flip and its crop, taking an upright texture coordinate to the buffer's.
+     *
+     * <p>For frames that reach a texture without that request in them, so that they can be
+     * drawn exactly as frames that came straight from the camera are.</p>
+     *
+     * @param sensorOrientation how far the sensor is turned from the device's natural
+     *     orientation, as the camera reports it
+     * @param front whether the lens faces the same way as the screen, which the camera mirrors
+     */
+    @NonNull
+    public static float[] cameraRequest(@Rotation int sensorOrientation, boolean front) {
+        // A quarter turn as the camera service composes one: (s, t) is read from (1 - t, s).
+        float[] rotate90 = unitSquareSymmetry(new float[] {0f, -1f, 1f, 0f});
+        float[] flipS = unitSquareSymmetry(new float[] {-1f, 0f, 0f, 1f});
+        float[] flipT = unitSquareSymmetry(new float[] {1f, 0f, 0f, -1f});
+        // The flags the camera service sets, which a front lens takes with a horizontal flip
+        // folded in and its quarter turns the other way round.
+        boolean flipH;
+        boolean flipV;
+        boolean quarter;
+        switch ((sensorOrientation % 360 + 360) % 360) {
+            case 90:
+                flipH = false;
+                flipV = front;
+                quarter = true;
+                break;
+            case 180:
+                flipH = !front;
+                flipV = true;
+                quarter = false;
+                break;
+            case 270:
+                flipH = true;
+                flipV = !front;
+                quarter = true;
+                break;
+            default:
+                flipH = front;
+                flipV = false;
+                quarter = false;
+                break;
+        }
+        float[] request = identity();
+        if (flipH) {
+            request = multiply(request, flipS);
+        }
+        if (flipV) {
+            request = multiply(request, flipT);
+        }
+        if (quarter) {
+            request = multiply(request, rotate90);
+        }
+        return request;
+    }
+
+    /**
      * Where each of an output's texture coordinates reads the camera's buffer, as the camera
      * wrote it: the output's own matrix with the SurfaceTexture's flip, crop and camera request
      * taken back off.
@@ -272,6 +336,79 @@ public final class GlMath {
         inverse[3 * MATRIX_SIDE] = -(inverse[0] * x + inverse[MATRIX_SIDE] * y);
         inverse[3 * MATRIX_SIDE + 1] = -(inverse[1] * x + inverse[MATRIX_SIDE + 1] * y);
         return inverse;
+    }
+
+    /**
+     * The projection that lines geometry in the camera's space up with a frame drawn through
+     * {@code outputToBuffer}.
+     *
+     * <p>The camera's space is GL eye space, held the way the camera wrote its buffer: x towards
+     * the buffer's right, y towards its top, looking down -z. That is the space ARCore reports
+     * the camera's pose in and the one a lens's calibration describes, and it does not turn with
+     * the display - the turn, the mirror and the crop of each output are all in
+     * {@code outputToBuffer}, so one view matrix serves every output.</p>
+     *
+     * <p>The result maps onto the frame's own clip space, which is the viewport the frame is
+     * drawn into rather than the whole output: under a fill the frame overhangs the output, and a
+     * point at the edge of the camera's view belongs at the edge of the frame.</p>
+     *
+     * @param intrinsics {fx/w, fy/h, cx/w, cy/h, skew/w} of the buffer, with the principal point
+     *     measured from the buffer's top left as the camera wrote it
+     * @param outputToBuffer from {@link #outputToBuffer}
+     * @param near the distance to the near clipping plane, in the units of the camera's space
+     * @param far the distance to the far clipping plane
+     * @throws IllegalArgumentException if the planes are not in front of the camera and in order
+     */
+    @NonNull
+    public static float[] projection(@NonNull float[] intrinsics, @NonNull float[] outputToBuffer,
+            float near, float far) {
+        checkIntrinsics(intrinsics);
+        if (!(near > 0f) || !(far > near)) {
+            throw new IllegalArgumentException(
+                    "The clipping planes must satisfy 0 < near < far, not " + near + ", " + far);
+        }
+        float[] bufferToOutput = invertAffine(outputToBuffer);
+        float a = bufferToOutput[0];
+        float b = bufferToOutput[MATRIX_SIDE];
+        float e = bufferToOutput[3 * MATRIX_SIDE];
+        float c = bufferToOutput[1];
+        float d = bufferToOutput[MATRIX_SIDE + 1];
+        float f = bufferToOutput[3 * MATRIX_SIDE + 1];
+        // A point (x, y, z) lands on the buffer at s = px + qx * x / -z + k * y / -z and
+        // t = py + qy * y / -z, counted up from the bottom as GL counts texture coordinates, and
+        // the frame's clip space is twice its texture coordinates less one, times -z.
+        float qx = intrinsics[0];
+        float qy = intrinsics[1];
+        float px = intrinsics[2];
+        float py = 1f - intrinsics[3];
+        float k = -intrinsics[4];
+        float[] matrix = new float[MATRIX_SIZE];
+        matrix[0] = 2f * a * qx;
+        matrix[1] = 2f * c * qx;
+        matrix[MATRIX_SIDE] = 2f * (a * k + b * qy);
+        matrix[MATRIX_SIDE + 1] = 2f * (c * k + d * qy);
+        matrix[2 * MATRIX_SIDE] = 1f - 2f * (a * px + b * py + e);
+        matrix[2 * MATRIX_SIDE + 1] = 1f - 2f * (c * px + d * py + f);
+        matrix[2 * MATRIX_SIDE + 2] = -(far + near) / (far - near);
+        matrix[2 * MATRIX_SIDE + 3] = -1f;
+        matrix[3 * MATRIX_SIDE + 2] = -2f * far * near / (far - near);
+        return matrix;
+    }
+
+    /**
+     * The direction, in the camera's space, of the ray through a point of the buffer. The
+     * inverse of {@link #projection} for one point, which is what a hit test casts.
+     *
+     * @param s across the buffer from its left, from 0 to 1
+     * @param t up the buffer from its bottom, from 0 to 1, as GL counts texture coordinates
+     * @return {x, y, -1}, a direction rather than a unit vector
+     */
+    @NonNull
+    public static float[] bufferRay(@NonNull float[] intrinsics, float s, float t) {
+        checkIntrinsics(intrinsics);
+        float y = (t - (1f - intrinsics[3])) / intrinsics[1];
+        float x = (s - intrinsics[2] + intrinsics[4] * y) / intrinsics[0];
+        return new float[] {x, y, -1f};
     }
 
     /** Whether a matrix leaves every coordinate where it was, to within rounding. */
@@ -393,6 +530,16 @@ public final class GlMath {
     @NonNull
     private static float[] transpose(@NonNull float[] linear) {
         return new float[] {linear[0], linear[2], linear[1], linear[3]};
+    }
+
+    private static void checkIntrinsics(@NonNull float[] intrinsics) {
+        if (intrinsics.length != INTRINSICS_SIZE) {
+            throw new IllegalArgumentException(
+                    "Intrinsics are " + INTRINSICS_SIZE + " floats, not " + intrinsics.length);
+        }
+        if (!(intrinsics[0] > 0f) || !(intrinsics[1] > 0f)) {
+            throw new IllegalArgumentException("A camera's focal lengths are positive");
+        }
     }
 
     private static void checkMatrix(@NonNull float[] matrix) {

@@ -76,10 +76,12 @@ final class FrameEffect extends CameraEffect {
             @NonNull Executor executor,
             @Nullable FrameRenderer renderer,
             @Nullable CameraTextureProvider textureProvider,
+            @Nullable FrameRenderThread.GeometrySource geometrySource,
             @NonNull Consumer<Throwable> errorListener) {
         FrameRenderThread renderThread = new FrameRenderThread("CameraViewFrameRenderer");
         renderThread.setCameraTextureProvider(textureProvider);
         renderThread.setFrameRenderer(renderer);
+        renderThread.setGeometrySource(geometrySource);
         if (!renderThread.start()) {
             return null;
         }

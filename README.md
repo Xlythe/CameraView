@@ -175,6 +175,13 @@ frameRenderer, until exitBackgroundReplacement. Returns false if this camera can
 cameraController.enterBackgroundReplacement(BackgroundReplacer().apply { setBackgroundImage(bitmap) })
 cameraController.exitBackgroundReplacement()
 ```
+Runs the camera with AR following the phone through the room, until exitAr; see AR below.
+CameraState reports isArSupported, isInAr, arTracking and isArDepthSupported.
+```kotlin
+cameraController.enterAr { tracking -> ... }
+val anchor = cameraController.addArAnchor(offset.x, offset.y)
+cameraController.exitAr()
+```
 
 CameraFragment
 -----------------
@@ -486,6 +493,65 @@ A picture taken while something is drawing is drawn as the preview shows it and 
 JPEG. isPictureFormatSupported reports every other format unsupported until nothing is drawing:
 Ultra HDR chosen beforehand falls back to JPEG, and a picture taken in RAW or RAW_JPEG chosen
 beforehand fails.
+
+Every frame a renderer draws also says how to draw something where the camera sees it. Outside
+AR, getProjectionMatrix comes from the lens's own calibration and getViewMatrix brings the phone's
+sensor coordinates into the camera's space, so a direction from SensorManager lands where the
+camera sees it. Combine them with a model matrix as projection * view * model.
+
+AR
+-----------------
+enterAr runs the camera with AR following the phone through the room, until exitAr. Add ARCore to
+your app, and declare it in your manifest:
+```groovy
+implementation 'com.google.ar:core:1.57.0'
+```
+```xml
+<meta-data android:name="com.google.ar.core" android:value="optional" />
+```
+isArSupported says whether AR can run here. While it runs, the view matrix of every frame brings
+the room into the camera's space, in metres with y up, and addArAnchor finds a place in the room
+under a point of the view: a floor, a wall or a table AR has seen.
+```java
+mCameraView.setFrameRenderer(renderer);
+if (mCameraView.isArSupported()) {
+    mCameraView.enterAr(tracking -> {
+        // INITIALIZING, INSUFFICIENT_LIGHT and the rest are worth telling someone about
+    });
+}
+ArAnchor anchor = mCameraView.addArAnchor(event.getX(), event.getY()); // null if nothing is there
+mCameraView.exitAr();
+```
+The renderer draws at an anchor with the frame's matrices and the anchor's own, read again every
+frame:
+```java
+public boolean onDrawFrame(GlFrame frame) {
+    frame.drawCameraFrame();
+    if (frame.getProjectionMatrix(projection, 0.05f, 100f) && frame.getViewMatrix(view)
+            && anchor.getModelMatrix(model)) {
+        // draw with projection * view * model
+    }
+    return true;
+}
+```
+Where isArDepthSupported, getDepthTextureName is how far away the scene is across the frame, so a
+real object can hide what is drawn behind it. Sample it where the camera frame is sampled, the
+texture matrix applied to the frame's coordinates, and compare it with how far away what you draw
+is. Each texel is millimetres split over two bytes, and 0 where the distance is unknown:
+```glsl
+float meters = dot(texture2D(depth, uv).ra, vec2(255.0, 65280.0)) / 1000.0;
+```
+The phone has to move a little before the first measurement.
+
+AR uses the back camera, and reopens it as it starts and ends. While it runs the camera does not
+record, stream, analyze or scan frames, replace the background, zoom, light its flash or torch,
+compensate exposure, focus on a tapped point, report faces, steady the picture, brighten it in low
+light or switch lenses; it takes JPEG pictures in sRGB only, drawn as the preview shows them at the
+preview's resolution, and a texture provider is set aside. Each of these reports itself unsupported
+until AR ends.
+
+See ArFragment and PillarRenderer in the sample app for a pillar of light that stays where it is
+placed and passes behind what is in front of it.
 
 Frames
 -----------------

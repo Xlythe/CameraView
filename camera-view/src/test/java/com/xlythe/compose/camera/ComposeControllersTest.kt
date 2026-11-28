@@ -12,6 +12,8 @@ import com.xlythe.view.camera.VideoStream
 import com.xlythe.view.camera.VideoView
 import com.xlythe.view.camera.gl.BackgroundReplacer
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -130,5 +132,9 @@ class ComposeControllersTest {
 
         controllerState.value = controller
         assertNotNull(controllerState.value)
+        // A controller written before AR existed still compiles, and declines it.
+        assertFalse(controller.enterAr())
+        controller.exitAr()
+        assertNull(controller.addArAnchor(0f, 0f))
     }
 }

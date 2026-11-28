@@ -254,6 +254,32 @@ class CameraComposableTest {
         compose.waitForIdle()
     }
 
+    /**
+     * Where AR cannot run, the controller says so and the state says AR is off, and leaving or
+     * placing anything is harmless.
+     */
+    @Test
+    fun arIsDeclinedWhereItCannotRun() {
+        val controller = mutableStateOf<CameraController?>(null)
+        val state = mutableStateOf<CameraState?>(null)
+        compose.setContent { Camera(controller = controller, state = state) }
+        compose.waitForIdle()
+        val camera = requireNotNull(controller.value)
+
+        val tracking = mutableListOf<CameraView.ArTracking>()
+        assertFalse(camera.enterAr { tracking.add(it) })
+        camera.exitAr()
+        assertNull(camera.addArAnchor(10f, 10f))
+        compose.waitForIdle()
+
+        val published = requireNotNull(state.value)
+        assertFalse(published.isArSupported)
+        assertFalse(published.isInAr)
+        assertNull(published.arTracking)
+        assertFalse(published.isArDepthSupported)
+        assertTrue(tracking.isEmpty())
+    }
+
     @Test
     fun togglingSwitchesTheLens() {
         val controller = mutableStateOf<CameraController?>(null)

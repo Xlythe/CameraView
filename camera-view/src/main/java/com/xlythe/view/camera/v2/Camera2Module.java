@@ -49,6 +49,7 @@ import com.xlythe.view.camera.ZoomMath;
 import com.xlythe.view.camera.gl.CameraTextureProvider;
 import com.xlythe.view.camera.gl.FrameRenderThread;
 import com.xlythe.view.camera.gl.FrameRenderer;
+import com.xlythe.view.camera.LensCalibration;
 import com.xlythe.view.camera.stream.VideoRecorder;
 
 import java.io.File;
@@ -361,6 +362,12 @@ public class Camera2Module extends ICameraModule {
     private boolean mGlUnavailable;
 
     /**
+     * The open camera's calibration and zoom, for a renderer to project with. Kept up to date
+     * whether or not anything is drawing, so an effect that starts later finds it ready.
+     */
+    private final LensCalibration.Geometry mLensGeometry = new LensCalibration.Geometry();
+
+    /**
      * Whether the recording being made, or the last one made, is mirrored in the file.
      *
      * <p>Decided by each recording rather than once for the camera, because a front recording
@@ -406,10 +413,10 @@ public class Camera2Module extends ICameraModule {
      */
     private void applyFrameEffect() {
         if (!isFrameEffectSupported()) {
-            // A subclass that draws the frames itself, which the AR backend does.
+            // GL has already failed here, and the camera carries on without it.
             return;
         }
-        boolean wanted = getFrameRenderer() != null || getCameraTextureProvider() != null;
+        boolean wanted = wantsEffect();
         boolean running = mEffect != null;
         if (wanted == running) {
             if (mEffect != null) {
@@ -419,8 +426,7 @@ public class Camera2Module extends ICameraModule {
         }
         if (wanted) {
             FrameRenderThread effect = new FrameRenderThread("CameraViewCamera2Renderer");
-            effect.setCameraTextureProvider(getCameraTextureProvider());
-            effect.setFrameRenderer(getFrameRenderer());
+            configureEffect(effect);
             if (!effect.start()) {
                 // A device whose driver will not give us a context is a device the camera still
                 // has to work on, so the effect is refused and not offered again.
@@ -436,6 +442,48 @@ public class Camera2Module extends ICameraModule {
             }
         }
         restartActiveSession();
+    }
+
+    /** Whether the frames have to go through GL, which they do while anything draws them. */
+    @MainThread
+    boolean wantsEffect() {
+        return getFrameRenderer() != null || getCameraTextureProvider() != null;
+    }
+
+    /** Readies a pipeline that has not started yet, which is when its texture is decided. */
+    @MainThread
+    void configureEffect(@NonNull FrameRenderThread effect) {
+        effect.setCameraTextureProvider(getCameraTextureProvider());
+        effect.setFrameRenderer(getFrameRenderer());
+        effect.setGeometrySource(mLensGeometry);
+    }
+
+    /** The session a camera runs while it is neither recording nor streaming. */
+    @MainThread
+    @NonNull
+    Session createIdleSession() {
+        return new PictureSession(this);
+    }
+
+    /**
+     * What the camera device reports to, given the callback this module would use. A camera
+     * shared with another client wraps it in that client's.
+     */
+    @NonNull
+    CameraDevice.StateCallback wrapDeviceCallback(@NonNull CameraDevice.StateCallback callback) {
+        return callback;
+    }
+
+    /** The open camera, or null while none is. */
+    @Nullable
+    CameraDevice getCameraDevice() {
+        return mCameraDevice;
+    }
+
+    /** The session the camera is running, or null while none is configured. */
+    @Nullable
+    Session getActiveSession() {
+        return mActiveSession;
     }
 
     /** The pipeline, for the sessions that have to point the camera at it. */
@@ -683,7 +731,7 @@ public class Camera2Module extends ICameraModule {
 
                 mBusyRetry.cancel();
                 mCameraDevice = cameraDevice;
-                setSession(new PictureSession(Camera2Module.this));
+                setSession(createIdleSession());
             }
 
             @Override
@@ -721,7 +769,8 @@ public class Camera2Module extends ICameraModule {
         try {
             mActiveCamera = getActiveCamera();
             if (DEBUG) Log.d(TAG, "Opening camera " + mActiveCamera);
-            mCameraManager.openCamera(mActiveCamera, createStateCallback(generation), mHandler);
+            mCameraManager.openCamera(
+                    mActiveCamera, wrapDeviceCallback(createStateCallback(generation)), mHandler);
         } catch (CameraAccessException e) {
             // A camera in use is reported both here and to onError. Retrying moves the generation
             // on, so the onError that follows is ignored as stale.
@@ -893,6 +942,7 @@ public class Camera2Module extends ICameraModule {
             if (map == null) {
                 throw new IllegalStateException("Camera has no stream configuration map");
             }
+            mLensGeometry.setCalibration(LensCalibration.from(characteristics));
             session.initialize(map);
 
             // Now, with all of our surfaces, we'll ask for a new session
@@ -956,7 +1006,7 @@ public class Camera2Module extends ICameraModule {
      * on uses, and it has nothing to gain from being rewritten for a feature that is not in
      * play.</p>
      */
-    private void createCaptureSession(@NonNull List<Surface> surfaces,
+    void createCaptureSession(@NonNull List<Surface> surfaces,
             @NonNull CameraCaptureSession.StateCallback callback) throws CameraAccessException {
         CameraDevice device = mCameraDevice;
         if (device == null) {
@@ -1487,6 +1537,9 @@ public class Camera2Module extends ICameraModule {
     private void applyZoom(@NonNull Session session) throws CameraAccessException {
         CameraCharacteristics characteristics =
                 mCameraManager.getCameraCharacteristics(getActiveCamera());
+        // The ratio means the same whether the camera zooms by ratio or by a centred crop, so
+        // that is what a renderer projects with either way.
+        mLensGeometry.setZoomRatio(mZoomRatio);
         if (zoomRatioRange(characteristics) != null) {
             session.setZoomRatio(mZoomRatio);
             session.setCropRegion(null);
@@ -1630,7 +1683,7 @@ public class Camera2Module extends ICameraModule {
         // recording or streaming, which a rebuild would end. The session after it is built with
         // the new quality.
         if (mActiveSession != null && !isRecordingOrStreaming()) {
-            setSession(new PictureSession(this));
+            setSession(createIdleSession());
         }
     }
 
@@ -1897,15 +1950,22 @@ public class Camera2Module extends ICameraModule {
             SizeF sensor = characteristics.get(CameraCharacteristics.SENSOR_INFO_PHYSICAL_SIZE);
             float[] focalLengths =
                     characteristics.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS);
-            if (sensor == null || focalLengths == null || focalLengths.length == 0) {
-                return 0f;
+            // The calibrated focal length where the camera publishes one, since that is what the
+            // lens actually does rather than what it was designed to.
+            LensCalibration calibration = LensCalibration.from(characteristics);
+            float full = calibration == null ? 0f : calibration.fieldOfViewDegrees(horizontal);
+            if (full <= 0f) {
+                if (sensor == null || focalLengths == null || focalLengths.length == 0) {
+                    return 0f;
+                }
+                // The first focal length, not the shortest: a zoom ratio of one means the lens
+                // the camera uses by default, and that is the one this array leads with. On a
+                // logical camera the shortest belongs to the ultra-wide, which the ratio reaches
+                // by going below one - so taking it here and applying the ratio would count it
+                // twice.
+                full = TransformMath.fieldOfViewDegrees(
+                        horizontal ? sensor.getWidth() : sensor.getHeight(), focalLengths[0]);
             }
-            // The first focal length, not the shortest: a zoom ratio of one means the lens the
-            // camera uses by default, and that is the one this array leads with. On a logical
-            // camera the shortest belongs to the ultra-wide, which the ratio reaches by going
-            // below one - so taking it here and then applying the ratio would count it twice.
-            float full = TransformMath.fieldOfViewDegrees(
-                    horizontal ? sensor.getWidth() : sensor.getHeight(), focalLengths[0]);
             // The ratio means the same thing whether the camera zooms by ratio or by crop, so the
             // one every request carries is the one the picture was taken at.
             return TransformMath.zoomedFieldOfViewDegrees(full, mZoomRatio);
@@ -2171,7 +2231,7 @@ public class Camera2Module extends ICameraModule {
                 capturePendingPicture();
                 return;
             }
-            setSession(new PictureSession(this));
+            setSession(createIdleSession());
         });
     }
 
@@ -2444,7 +2504,7 @@ public class Camera2Module extends ICameraModule {
     @Override
     public void stopRecording() {
         mIsRecording = false;
-        setSession(new PictureSession(this));
+        setSession(createIdleSession());
     }
 
     @Override
@@ -2471,7 +2531,7 @@ public class Camera2Module extends ICameraModule {
 
     @Override
     protected void detachSurface(VideoRecorder.SurfaceProvider surfaceProvider) {
-        setSession(new PictureSession(this));
+        setSession(createIdleSession());
     }
 
     void transformPreview(int previewWidth, int previewHeight) throws CameraAccessException {

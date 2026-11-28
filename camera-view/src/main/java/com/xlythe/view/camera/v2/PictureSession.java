@@ -837,7 +837,7 @@ class PictureSession extends PreviewSession {
     }
 
     /** Writes a drawn picture off the main thread, through {@link DrawnPictures#write}. */
-    private static class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
+    static class DrawnImageSaver extends AsyncTask<Void, Void, Boolean> {
         /** The application, whose name and version the picture records as its software. */
         private final Context mContext;
 

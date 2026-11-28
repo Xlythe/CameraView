@@ -29,6 +29,7 @@ import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import com.xlythe.view.camera.ArAnchor
 import com.xlythe.view.camera.Barcode
 import com.xlythe.view.camera.CameraView
 import com.xlythe.view.camera.Face
@@ -167,7 +168,21 @@ data class CameraState(
      */
     val isFrameEffectSupported: Boolean = false,
     /** Whether [CameraController.enterBackgroundReplacement] is in force. */
-    val isReplacingBackground: Boolean = false
+    val isReplacingBackground: Boolean = false,
+    /**
+     * Whether [CameraController.enterAr] can run here. The first answer after the app starts can
+     * be false while the phone is still being checked, and a later snapshot has the settled one.
+     */
+    val isArSupported: Boolean = false,
+    /** Whether AR is running the camera. */
+    val isInAr: Boolean = false,
+    /** How AR is tracking, or null outside AR. */
+    val arTracking: CameraView.ArTracking? = null,
+    /**
+     * Whether AR measures how far away the scene is here, which is what lets a real object hide
+     * something drawn behind it. False outside AR.
+     */
+    val isArDepthSupported: Boolean = false
 )
 
 interface CameraController {
@@ -266,6 +281,37 @@ interface CameraController {
 
     /** Stops replacing the background, and draws through [Camera]'s frameRenderer again. */
     fun exitBackgroundReplacement()
+
+    /**
+     * Runs the camera with AR following the phone through the room, until [exitAr], and reopens
+     * it on the back camera. Each frame [Camera]'s frameRenderer draws then carries the view
+     * matrix that brings the room into the camera's space and, where
+     * [CameraState.isArDepthSupported], how far away the scene is. What AR leaves unavailable is
+     * listed on [CameraView.enterAr]; [CameraState] reports each of those unsupported while AR
+     * runs.
+     *
+     * @param onTrackingChanged told on the main thread whenever tracking changes, as
+     *     [CameraState.arTracking] then reports it
+     * Defaults to false, so a controller written before AR existed still compiles.
+     *
+     * @return whether AR is starting. False, changing nothing, where [CameraState.isArSupported]
+     *     is false, while recording, analyzing frames, scanning barcodes or replacing the
+     *     background.
+     */
+    @RequiresPermission(Manifest.permission.CAMERA)
+    fun enterAr(onTrackingChanged: (CameraView.ArTracking) -> Unit = {}): Boolean = false
+
+    /** Ends AR and reopens the camera [Camera] was given. */
+    fun exitAr() {}
+
+    /**
+     * Places an anchor on the first surface AR finds under a point of the preview, in its pixels
+     * from the top left. Waits up to half a second for the next frame.
+     *
+     * @return the anchor, or null outside AR, while it is not tracking, and where nothing is
+     *     under the point
+     */
+    fun addArAnchor(x: Float, y: Float): ArAnchor? = null
 }
 
 private class CameraControllerImpl(
@@ -327,7 +373,12 @@ private class CameraControllerImpl(
 
     @RequiresPermission(allOf = [Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO])
     override fun stream(): VideoStream? {
-        return getView()?.stream()
+        val view = getView() ?: return null
+        if (view.isInAr) {
+            Log.w(TAG, "Video cannot be streamed while AR is running")
+            return null
+        }
+        return view.stream()
     }
 
     override fun toggleCamera() {
@@ -458,6 +509,40 @@ private class CameraControllerImpl(
         frameEffects.restore(view)
         onCameraStateChanged()
     }
+
+    @RequiresPermission(Manifest.permission.CAMERA)
+    override fun enterAr(onTrackingChanged: (CameraView.ArTracking) -> Unit): Boolean {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for enterAr")
+            return false
+        }
+        val started = view.enterAr { tracking ->
+            onTrackingChanged(tracking)
+            onCameraStateChanged()
+        }
+        onCameraStateChanged()
+        return started
+    }
+
+    override fun exitAr() {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for exitAr")
+            return
+        }
+        view.exitAr()
+        onCameraStateChanged()
+    }
+
+    override fun addArAnchor(x: Float, y: Float): ArAnchor? {
+        val view = getView()
+        if (view == null) {
+            Log.e(TAG, "View not available for addArAnchor")
+            return null
+        }
+        return view.addArAnchor(x, y)
+    }
 }
 
 /**
@@ -504,7 +589,11 @@ private fun CameraView.readCameraState(): CameraState {
         isRecording = isRecording,
         isAnalyzingFrames = isAnalyzingFrames,
         isFrameEffectSupported = isFrameEffectSupported,
-        isReplacingBackground = isReplacingBackground
+        isReplacingBackground = isReplacingBackground,
+        isArSupported = isArSupported,
+        isInAr = isInAr,
+        arTracking = arTracking,
+        isArDepthSupported = isArDepthSupported
     )
 }
 
