@@ -13,6 +13,7 @@ import android.graphics.Color;
 import android.media.MediaMetadataRetriever;
 import android.os.Debug;
 import android.opengl.GLES20;
+import android.os.Build;
 import android.os.SystemClock;
 import android.util.Log;
 import android.util.Size;
@@ -22,6 +23,7 @@ import androidx.annotation.Nullable;
 import androidx.test.core.app.ActivityScenario;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
+import androidx.test.platform.app.InstrumentationRegistry;
 import androidx.exifinterface.media.ExifInterface;
 import androidx.test.rule.GrantPermissionRule;
 
@@ -101,6 +103,10 @@ public final class FrameEffectDeviceTest {
     /** How far apart two aspect ratios may be and still count as one crop, after rounding. */
     private static final float ASPECT_TOLERANCE = 0.01f;
     private static final String FILTER_TAG = "FrameEffect";
+    /** Where burst rates are logged, for {@code adb logcat -s BurstRate}. */
+    private static final String BURST_TAG = "BurstRate";
+    /** How many pictures the drawn burst takes: enough to see each one drawn, and a rate. */
+    private static final int DRAWN_BURST_COUNT = 5;
     /** How long the preview is given to show what the renderer drew, once the camera is open. */
     private static final long PREVIEW_WAIT_MILLIS = 10_000;
     /** How often the screen is looked at while waiting for it. */
@@ -649,6 +655,152 @@ public final class FrameEffectDeviceTest {
         } finally {
             unfiltered.recycle();
             grey.recycle();
+        }
+    }
+
+    /**
+     * Every picture of a burst is drawn as a single picture is: a filter that clamps every channel
+     * to white leaves each file white. The rate is logged under the BurstRate tag beside the
+     * undrawn one from BackendMatrixDeviceTest.
+     */
+    @Test
+    public void aColourFilterReachesEveryPictureOfABurst() throws Exception {
+        File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                "drawn-burst-" + backend);
+        File[] stale = directory.listFiles();
+        if (stale != null) {
+            for (File file : stale) {
+                assertTrue(file.delete());
+            }
+        }
+        CountDownLatch finished = new CountDownLatch(1);
+        AtomicInteger count = new AtomicInteger(-1);
+        long[] times = new long[3];
+        withOpenCamera(new ColorFilter(ColorMatrix.brightness(1f)), camera -> {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync(() -> {
+                camera.setShutterSoundEnabled(false);
+                times[0] = SystemClock.elapsedRealtime();
+                camera.startBurst(directory, DRAWN_BURST_COUNT, new CameraView.OnBurstListener() {
+                    @Override public void onBurstImageCaptured(@NonNull File file) {
+                        if (times[1] == 0) {
+                            times[1] = SystemClock.elapsedRealtime();
+                        }
+                        times[2] = SystemClock.elapsedRealtime();
+                    }
+
+                    @Override public void onBurstFinished(int pictures) {
+                        count.set(pictures);
+                        finished.countDown();
+                    }
+                });
+            });
+            assertTrue("the drawn burst never finished",
+                    finished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+        });
+
+        assertEquals("the drawn burst lost pictures", DRAWN_BURST_COUNT, count.get());
+        File[] pictures = directory.listFiles();
+        assertNotNull(pictures);
+        assertEquals(DRAWN_BURST_COUNT, pictures.length);
+        for (File picture : pictures) {
+            Bitmap decoded = BitmapFactory.decodeFile(picture.getAbsolutePath());
+            assertNotNull(picture.getName() + " is not an image", decoded);
+            try {
+                for (int[] point : samplePoints(decoded)) {
+                    int pixel = decoded.getPixel(point[0], point[1]);
+                    assertTrue(picture.getName() + " was not drawn through the filter, and left "
+                                    + String.format("#%06X", pixel & 0xFFFFFF),
+                            Color.red(pixel) >= WHITE_FLOOR && Color.green(pixel) >= WHITE_FLOOR
+                                    && Color.blue(pixel) >= WHITE_FLOOR);
+                }
+            } finally {
+                decoded.recycle();
+            }
+        }
+        Log.i(BURST_TAG, String.format(Locale.US,
+                "%s %s drawn: %d pictures, first after %d ms, then %.1f per second",
+                Build.MODEL, backend, DRAWN_BURST_COUNT, times[1] - times[0],
+                (DRAWN_BURST_COUNT - 1) / ((times[2] - times[1]) / 1000.0)));
+    }
+
+    /**
+     * A drawn burst picture is the drawn picture a single press takes, from either lens: the same
+     * size, the same way up and mirrored the same way. {@link Quarters} marks each quarter of the
+     * camera's buffer, so a picture turned or mirrored differently shows them elsewhere.
+     */
+    @Test
+    public void aDrawnBurstPictureIsTheSingleDrawnPicture() throws Exception {
+        for (CameraView.LensFacing lensFacing : CameraView.LensFacing.values()) {
+            File directory = new File(ApplicationProvider.getApplicationContext().getCacheDir(),
+                    "drawn-burst-quarters-" + backend + "-" + lensFacing);
+            File[] stale = directory.listFiles();
+            if (stale != null) {
+                for (File file : stale) {
+                    assertTrue(file.delete());
+                }
+            }
+            CountDownLatch burstFinished = new CountDownLatch(1);
+            AtomicInteger count = new AtomicInteger(-1);
+            CountDownLatch singleFinished = new CountDownLatch(1);
+            AtomicReference<File> single = new AtomicReference<>();
+
+            boolean opened = withOpenCamera(new Quarters(), lensFacing, camera -> {
+                camera.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+                    @Override public void onImageConfirmation() {}
+
+                    @Override public void onImageCaptured(File saved) {
+                        single.set(saved);
+                        singleFinished.countDown();
+                    }
+
+                    @Override public void onFailure() {
+                        singleFinished.countDown();
+                    }
+                });
+                Thread.sleep(1_000);
+                InstrumentationRegistry.getInstrumentation().runOnMainSync(() ->
+                        camera.startBurst(directory, DRAWN_BURST_COUNT,
+                                new CameraView.OnBurstListener() {
+                                    @Override public void onBurstFinished(int pictures) {
+                                        count.set(pictures);
+                                        burstFinished.countDown();
+                                    }
+                                }));
+                assertTrue("the drawn burst never finished",
+                        burstFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                camera.takePicture(temporaryFile(".jpg"));
+                assertTrue("the single picture never reported",
+                        singleFinished.await(TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            });
+            if (!opened) {
+                continue;
+            }
+
+            assertEquals("the " + lensFacing + " drawn burst lost pictures",
+                    DRAWN_BURST_COUNT, count.get());
+            assertNotNull("the " + lensFacing + " single picture failed", single.get());
+            File[] pictures = directory.listFiles();
+            assertNotNull(pictures);
+            assertEquals(DRAWN_BURST_COUNT, pictures.length);
+            Bitmap expected = ShownFrames.ofPicture(single.get());
+            try {
+                for (File picture : pictures) {
+                    Bitmap shown = ShownFrames.ofPicture(picture);
+                    try {
+                        String what = lensFacing + " burst picture " + picture.getName();
+                        assertEquals("the " + what + " is the single picture's size",
+                                new Size(expected.getWidth(), expected.getHeight()),
+                                new Size(shown.getWidth(), shown.getHeight()));
+                        assertSameQuarters(what, expected, shown);
+                    } finally {
+                        shown.recycle();
+                    }
+                }
+            } finally {
+                expected.recycle();
+            }
+            Log.i(FILTER_TAG, backend + " " + lensFacing + " drawn burst pictures are "
+                    + "the single drawn picture");
         }
     }
 

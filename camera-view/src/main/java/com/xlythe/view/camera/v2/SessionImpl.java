@@ -420,6 +420,10 @@ abstract class SessionImpl implements Camera2Module.Session {
         mCamera2Module.onShutter();
     }
 
+    void onBurstShutter() {
+        mCamera2Module.onBurstShutter();
+    }
+
     void onVideoFailed() {
         mCamera2Module.onVideoFailed();
     }

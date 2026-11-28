@@ -15,6 +15,7 @@ import android.os.Parcelable;
 import android.util.Log;
 
 import androidx.annotation.AnyThread;
+import androidx.annotation.MainThread;
 import androidx.annotation.RawRes;
 import androidx.annotation.RequiresApi;
 import androidx.annotation.RequiresPermission;
@@ -75,6 +76,10 @@ public abstract class ICameraModule {
     private volatile boolean mShutterSoundEnabled = true;
     /** The click and recording tones, for a backend the platform plays none for. */
     private final CameraSounds mSounds = new CameraSounds();
+    /** The sound of the burst being taken, or null while none is or it is silent. */
+    @Nullable private BurstSound mBurstSound;
+    /** How many pictures a second the last burst took, or 0 before one has taken two. */
+    private float mMeasuredBurstRate;
     /** Listener receiving still-image terminal callbacks. */
     private CameraView.OnImageCapturedListener mOnImageCapturedListener;
     /** Listener receiving video terminal callbacks. */
@@ -300,6 +305,60 @@ public abstract class ICameraModule {
     }
 
     /**
+     * Called as each picture of a burst is exposed. No picture clicks: the burst's own sound
+     * starts with the first, and the image listener is not told, since the burst reports its own.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    public void onBurstShutter() {
+        BurstSound sound = mBurstSound;
+        if (sound != null) {
+            sound.onPictureExposed();
+        }
+    }
+
+    /**
+     * Takes a burst, with its sound where the shutter sound is on or required: a click looped at
+     * the burst's rate while it runs, and a tone once it ends. The rate is the last burst's, or
+     * what the camera reports, or 10 a second.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    public final void takeBurst(@NonNull Burst burst) {
+        boolean required = CameraSounds.isRequired();
+        if (mShutterSoundEnabled || required) {
+            float rate = mMeasuredBurstRate > 0 ? mMeasuredBurstRate : getReportedBurstRate();
+            BurstSound sound = new BurstSound(burst, required, this::platformClicksBurstPictures,
+                    BurstSound.framePeriodMillis(rate), measured -> mMeasuredBurstRate = measured);
+            mBurstSound = sound;
+            burst.whenFinished(() -> {
+                if (mBurstSound == sound) {
+                    mBurstSound = null;
+                }
+            });
+        }
+        startBurst(burst);
+    }
+
+    /**
+     * How many pictures a second the camera says a burst can take, or 0 when it does not say.
+     * Asked as a burst starts.
+     */
+    @MainThread
+    protected float getReportedBurstRate() {
+        return 0f;
+    }
+
+    /**
+     * Whether the platform clicks for every picture of the running burst itself, as the old
+     * camera API does where the click cannot be silenced. Asked as its first picture is exposed.
+     */
+    @MainThread
+    protected boolean platformClicksBurstPictures() {
+        return false;
+    }
+
+    /**
      * Called just before the recorder starts. The tone plays first so that as little of it as
      * possible ends up in the recording.
      */
@@ -359,6 +418,18 @@ public abstract class ICameraModule {
     void releaseSounds() {
         mSounds.release();
     }
+
+    /**
+     * Takes the pictures of a burst as fast as the camera allows, asking the burst where each
+     * goes and reporting each to it, until it hands out no more files. A backend that cannot take
+     * one right now ends it.
+     *
+     * <p>Every picture is saved and tagged like one from {@link #takePicture}, but without the
+     * flash. Each calls {@link #onBurstShutter} as it is exposed, rather than
+     * {@link #onShutter}.</p>
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    protected abstract void startBurst(@NonNull Burst burst);
 
     /**
      * Records a video. Set a OnVideoCapturedListener to be notified of when
@@ -904,6 +975,14 @@ public abstract class ICameraModule {
      * layout arriving at its answer all produce a run of layout passes at different sizes.</p>
      */
     public void onLayoutSettled() {}
+
+    /**
+     * Called on the main thread each time the view shows a new preview frame. The old camera API's
+     * burst waits for one before asking for its next picture.
+     */
+    @RestrictTo(RestrictTo.Scope.LIBRARY)
+    @MainThread
+    public void onPreviewFrameShown() {}
 
     public void setOnImageCapturedListener(CameraView.OnImageCapturedListener l) {
         mOnImageCapturedListener = l;

@@ -19,13 +19,13 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * The frame thread does not give a frame back while ML Kit is still reading it.
  *
- * <p>The frame is closed as soon as the scanner returns from it, so these hold the scanner's wait
- * to that: it returns when the scan completes, and not before, whether it is interrupted or the
- * scan is slow.</p>
+ * <p>The frame is closed as soon as its analyzer returns from it, so these hold the analyzers'
+ * wait to that: it returns when the task completes, and not before, whether it is interrupted or
+ * the task is slow.</p>
  */
 @RunWith(RobolectricTestRunner.class)
 @Config(sdk = {29, 37})
-public class BarcodeScanWaitTest {
+public class MlKitTasksTest {
     /** Long enough that a frame thread still waiting is plainly waiting, not slow to return. */
     private static final long STILL_WAITING_MILLIS = 300;
 
@@ -118,7 +118,7 @@ public class BarcodeScanWaitTest {
         @Override
         public void run() {
             try {
-                result.set(BarcodeScanner.awaitScan(mScan.getTask(), mSlowMillis));
+                result.set(MlKitTasks.awaitFrameRead(mScan.getTask(), mSlowMillis, "A scan"));
             } catch (ExecutionException e) {
                 error.set(e);
             } finally {
