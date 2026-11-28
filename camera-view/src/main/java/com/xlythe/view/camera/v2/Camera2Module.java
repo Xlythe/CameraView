@@ -1043,11 +1043,21 @@ public class Camera2Module extends ICameraModule {
         List<OutputConfiguration> outputs = new ArrayList<>(surfaces.size());
         for (Surface surface : surfaces) {
             OutputConfiguration output = new OutputConfiguration(surface);
-            output.setDynamicRangeProfile(session.getDynamicRangeProfile(surface));
+            setProfile(output, session.getDynamicRangeProfile(surface));
             outputs.add(output);
         }
         device.createCaptureSession(new SessionConfiguration(
                 SessionConfiguration.SESSION_REGULAR, outputs, mHandler::post, callback));
+    }
+
+    /**
+     * Names the profile an output streams in. The library streams in only two, so each is named
+     * as the platform's own constant.
+     */
+    @RequiresApi(33)
+    private static void setProfile(@NonNull OutputConfiguration output, long profile) {
+        output.setDynamicRangeProfile(profile == DynamicRangeProfiles.HLG10
+                ? DynamicRangeProfiles.HLG10 : DynamicRangeProfiles.STANDARD);
     }
 
     /**
@@ -1201,7 +1211,7 @@ public class Camera2Module extends ICameraModule {
                     still.getWidth(), still.getHeight(), stillFormat, 1);
             OutputConfiguration preview =
                     new OutputConfiguration(previewSize, SurfaceTexture.class);
-            preview.setDynamicRangeProfile(profile);
+            setProfile(preview, profile);
             List<OutputConfiguration> outputs = Arrays.asList(
                     preview, new OutputConfiguration(probeReader.getSurface()));
             SessionConfiguration configuration = new SessionConfiguration(
