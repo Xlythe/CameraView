@@ -21,6 +21,7 @@ import android.graphics.RectF;
 import android.graphics.SurfaceTexture;
 import android.location.Location;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -102,6 +103,7 @@ import com.xlythe.view.camera.Exif;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.ExifNoRoomException;
 import com.xlythe.view.camera.Face;
+import com.xlythe.view.camera.HdrSurface;
 import com.xlythe.view.camera.CameraXBarcodeAnalyzer;
 import com.xlythe.view.camera.CameraXFrameAnalyzer;
 import com.xlythe.view.camera.CameraXSegmentationAnalyzer;
@@ -259,6 +261,13 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
      * on the main thread again on every rotation.</p>
      */
     private boolean mGlUnavailable;
+    /** The HDR surface the display stream is shown on, or null while it is on the TextureView. */
+    @Nullable private HdrSurface.Lease mHdrLease;
+    /**
+     * The bind whose HDR stream arrived without the camera's own transform, which a SurfaceView
+     * cannot make up for, so that its display stream goes to the TextureView instead.
+     */
+    private long mHdrRefusedGeneration = -1;
 
     /** Whether the bound configuration can take a still while it records. */
     private boolean mSnapshotWhileRecording;
@@ -2232,8 +2241,11 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             if (!provider.hasCamera(selector)) throw new IllegalStateException("No camera matches the requested lens facing");
             CameraInfo cameraInfo = provider.getCameraInfo(selector);
             mSensorOrientation = cameraInfo.getSensorRotationDegrees();
-            Preview displayPreview = createDisplayPreview(generation, cameraInfo);
-            Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews = createStreamPreviews(generation);
+            DynamicRange hdrPreviewRange = hdrPreviewRange(cameraInfo);
+            Preview displayPreview =
+                    createDisplayPreview(generation, cameraInfo, true, hdrPreviewRange);
+            Map<VideoRecorder.SurfaceProvider, Preview> streamPreviews =
+                    createStreamPreviews(generation, hdrPreviewRange != null);
             // Before the still, which is built as a JPEG whenever frames are drawn.
             boolean drawing = prepareFrameEffect(!streamPreviews.isEmpty());
             // A still output is wanted alongside a recording, not instead of it: that is the
@@ -2250,6 +2262,20 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             else if (imageAnalysis != null) requested.add(imageAnalysis);
             requested.addAll(streamPreviews.values());
 
+            // An HDR viewfinder is worth less than any of the outputs, so where the camera cannot
+            // stream one beside them it is the part that gives way: the preview is left
+            // unspecified, which matches whatever the outputs settle on.
+            if (hdrPreviewRange != null
+                    && !cameraInfo.isSessionConfigSupported(createSessionConfig(requested))) {
+                Log.d(TAG, "This camera cannot stream an HDR preview beside its other outputs");
+                hdrPreviewRange = null;
+                requested.removeAll(streamPreviews.values());
+                displayPreview = createDisplayPreview(generation, cameraInfo, true, null);
+                requested.set(0, displayPreview);
+                streamPreviews = createStreamPreviews(generation, false);
+                requested.addAll(streamPreviews.values());
+            }
+
             // Not every camera can hold a preview, a recording and a still at once. Asked for one
             // that cannot, the bind fails and the recording is lost with it, so the still is the
             // part that gives way.
@@ -2263,7 +2289,8 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             if (!streamPreviews.isEmpty()
                     && !provider.getCameraInfo(selector).isSessionConfigSupported(createSessionConfig(requested))) {
                 if (isStabilizationEnabled()) {
-                    displayPreview = createDisplayPreview(generation, cameraInfo, false);
+                    displayPreview =
+                            createDisplayPreview(generation, cameraInfo, false, hdrPreviewRange);
                     requested.set(0, displayPreview);
                     Log.w(TAG, "Preview stabilization is unavailable while a custom stream is attached");
                 }
@@ -2501,15 +2528,67 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
                 .setScaleType(ViewPort.FILL_CENTER).build();
     }
 
-    @NonNull private Preview createDisplayPreview(long generation, @NonNull CameraInfo cameraInfo) {
-        return createDisplayPreview(generation, cameraInfo, true);
+    /**
+     * The range to stream the display preview in when HDR video is wanted, or null to leave it
+     * unspecified, which matches whatever else is bound.
+     *
+     * <p>Only where it will be shown as HDR. Asking for a 10-bit preview limits what else the
+     * camera can stream beside it, and on a display that cannot show HDR it buys nothing.</p>
+     */
+    @MainThread
+    @Nullable private DynamicRange hdrPreviewRange(@NonNull CameraInfo cameraInfo) {
+        // Frames drawn through GL are 8-bit by the time they reach the view.
+        if (!isHdrPreviewEnabled() || !getHdrSurface().isAvailable()
+                || getFrameRenderer() != null || getCameraTextureProvider() != null) {
+            return null;
+        }
+        if (getDynamicRange() == CameraView.DynamicRange.HDR) {
+            DynamicRange range = selectedDynamicRange(cameraInfo);
+            if (range.getEncoding() != DynamicRange.ENCODING_SDR) return range;
+        }
+        // An Ultra HDR picture is HDR too, so it is framed in HDR where the camera can.
+        if (getPictureFormat() == CameraView.PictureFormat.ULTRA_HDR
+                && writesUltraHdr(cameraInfo) && cameraInfo.querySupportedDynamicRanges(
+                        Collections.singleton(DynamicRange.HLG_10_BIT))
+                        .contains(DynamicRange.HLG_10_BIT)) {
+            return DynamicRange.HLG_10_BIT;
+        }
+        return null;
     }
 
-    @NonNull private Preview createDisplayPreview(
-            long generation, @NonNull CameraInfo cameraInfo, boolean allowStabilization) {
+    @Override public void setHdrPreviewEnabled(boolean enabled) {
+        boolean before = isHdrPreviewEnabled();
+        super.setHdrPreviewEnabled(enabled);
+        if (enabled != before) {
+            rebindConfiguration();
+        }
+    }
+
+    @Override public boolean isHdrPreviewSupported() {
+        Camera camera = mActiveCamera;
+        if (Build.VERSION.SDK_INT < 33 || camera == null || isDrawingFrames()
+                || !getHdrSurface().isAvailable()) {
+            return false;
+        }
+        for (DynamicRange range : camera.getCameraInfo().querySupportedDynamicRanges(
+                Collections.singleton(DynamicRange.HDR_UNSPECIFIED_10_BIT))) {
+            if (range.getEncoding() != DynamicRange.ENCODING_SDR) return true;
+        }
+        return false;
+    }
+
+    /**
+     * @param hdrRange the range to stream in, the same one a recording would use, or null to
+     *     leave it unspecified
+     */
+    @NonNull private Preview createDisplayPreview(long generation, @NonNull CameraInfo cameraInfo,
+            boolean allowStabilization, @Nullable DynamicRange hdrRange) {
         Preview.Builder builder = new Preview.Builder()
                 .setResolutionSelector(createResolutionSelector())
                 .setTargetRotation(getTargetRotation());
+        if (hdrRange != null) {
+            builder.setDynamicRange(hdrRange);
+        }
         if (allowStabilization && isStabilizationEnabled()
                 && Preview.getPreviewCapabilities(cameraInfo).isStabilizationSupported()) {
             builder.setPreviewStabilizationEnabled(true);
@@ -2728,11 +2807,18 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
     }
 
     private void provideDisplaySurface(long generation, @NonNull SurfaceRequest request) {
+        if (generation == mGeneration && mOpenRequested && request.getDynamicRange().is10BitHdr()
+                && generation != mHdrRefusedGeneration && getHdrSurface().isAvailable()) {
+            new HdrDisplaySurface(generation, request).provide();
+            return;
+        }
         SurfaceTexture texture = getSurfaceTexture();
         if (texture == null || generation != mGeneration || !mOpenRequested) {
             request.willNotProvideSurface();
             return;
         }
+        mHdrLease = null;
+        getHdrSurface().showSdr();
         Size resolution = request.getResolution();
         texture.setDefaultBufferSize(resolution.getWidth(), resolution.getHeight());
         request.setTransformationInfoListener(mMainExecutor, information -> {
@@ -2747,6 +2833,77 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
             surface.release();
             if (DEBUG) Log.d(TAG, "Display surface released with result " + result.getResultCode());
         });
+    }
+
+    /**
+     * Puts one HDR display stream on the HDR preview surface, from asking for the surface to
+     * giving it up once the camera is done with it.
+     */
+    private final class HdrDisplaySurface implements HdrSurface.Listener {
+        /** The bind the stream belongs to. */
+        private final long mStreamGeneration;
+        /** CameraX's request for the stream's surface. */
+        private final SurfaceRequest mRequest;
+        /** The claim on the HDR surface, held until the camera has finished with it. */
+        @Nullable private HdrSurface.Lease mLease;
+        /** Whether the surface has been handed to CameraX, which then says when it is done. */
+        private boolean mProvided;
+
+        HdrDisplaySurface(long generation, @NonNull SurfaceRequest request) {
+            mStreamGeneration = generation;
+            mRequest = request;
+        }
+
+        @MainThread
+        void provide() {
+            Size resolution = mRequest.getResolution();
+            HdrSurface.Lease lease = getHdrSurface().acquire(resolution.getWidth(), resolution.getHeight(), this);
+            mLease = lease;
+            mHdrLease = lease;
+            mRequest.addRequestCancellationListener(mMainExecutor, lease::release);
+            mRequest.setTransformationInfoListener(mMainExecutor, information -> {
+                if (mStreamGeneration != mGeneration || mHdrLease != lease) return;
+                if (!information.hasCameraTransform()) {
+                    // CameraX copied the stream through its own pipeline, so nothing turns it
+                    // upright on the way to the display, and a SurfaceView cannot be turned.
+                    Log.w(TAG, "Showing the HDR preview as SDR, because it arrived unrotated");
+                    mHdrRefusedGeneration = mStreamGeneration;
+                    mHdrLease = null;
+                    if (!mProvided) lease.release();
+                    mRequest.invalidate();
+                    return;
+                }
+                mPreviewResolution = resolution;
+                mTransformationInfo = information;
+                applyPreviewTransform();
+            });
+        }
+
+        @MainThread
+        @Override
+        public void onSurfaceReady(@NonNull Surface surface) {
+            HdrSurface.Lease lease = mLease;
+            if (lease == null) return;
+            if (mStreamGeneration != mGeneration || !mOpenRequested || mHdrLease != lease) {
+                lease.release();
+                mRequest.willNotProvideSurface();
+                return;
+            }
+            mProvided = true;
+            mRequest.provideSurface(surface, mMainExecutor, result -> {
+                mRequest.clearTransformationInfoListener();
+                lease.release();
+                if (DEBUG) Log.d(TAG, "HDR display surface released with result "
+                        + result.getResultCode());
+            });
+        }
+
+        @MainThread
+        @Override
+        public void onSurfaceLost() {
+            // Asks CameraX for a new request, which is given the surface once it exists again.
+            mRequest.invalidate();
+        }
     }
 
     /** @param drawing whether the bind puts frames through GL, which makes every still a JPEG */
@@ -2902,16 +3059,24 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         return analysis;
     }
 
-    @NonNull private Map<VideoRecorder.SurfaceProvider, Preview> createStreamPreviews(long generation) {
+    /**
+     * @param sdr whether to ask for SDR outright. Left unspecified, a stream matches the 10-bit
+     *     range of an HDR display preview, and the encoder behind a stream is 8-bit.
+     */
+    @NonNull private Map<VideoRecorder.SurfaceProvider, Preview> createStreamPreviews(
+            long generation, boolean sdr) {
         Map<VideoRecorder.SurfaceProvider, Preview> previews = new LinkedHashMap<>();
         for (VideoRecorder.SurfaceProvider surfaceProvider : mSurfaceProviders) {
             Size maxSize = surfaceProvider.getMaxSize();
-            Preview preview = new Preview.Builder()
+            Preview.Builder builder = new Preview.Builder()
                     .setResolutionSelector(maxSize == null
                             ? createResolutionSelector()
                             : createStreamResolutionSelector(maxSize))
-                    .setTargetRotation(getTargetRotation())
-                    .build();
+                    .setTargetRotation(getTargetRotation());
+            if (sdr) {
+                builder.setDynamicRange(DynamicRange.SDR);
+            }
+            Preview preview = builder.build();
             preview.setSurfaceProvider(mMainExecutor, request -> {
                 if (generation != mGeneration || !mOpenRequested) {
                     request.willNotProvideSurface();
@@ -2956,6 +3121,7 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         mImageAnalysis = null;
         mPreviewResolution = null;
         mTransformationInfo = null;
+        mHdrLease = null;
         publishSnapshot();
     }
 
@@ -3233,6 +3399,13 @@ public class CameraXModule extends ICameraModule implements LifecycleOwner {
         Size resolution = mPreviewResolution;
         SurfaceRequest.TransformationInfo information = mTransformationInfo;
         if (resolution == null || information == null) return;
+        HdrSurface.Lease hdrLease = mHdrLease;
+        if (hdrLease != null) {
+            hdrLease.setTransform(CameraXMath.createSurfaceViewTransform(
+                    resolution, information.getCropRect(), information.getRotationDegrees(),
+                    information.isMirroring(), getSensorOrientation(), getWidth(), getHeight()));
+            return;
+        }
         setTransform(CameraXMath.createTextureTransform(
                 resolution, information.getCropRect(), information.getRotationDegrees(),
                 information.isMirroring(), information.hasCameraTransform(),
