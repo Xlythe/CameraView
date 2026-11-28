@@ -16,6 +16,7 @@ import com.xlythe.view.camera.CameraView;
 import com.xlythe.view.camera.ExifCaptureParameters;
 import com.xlythe.view.camera.shadow.ShadowAvailableTextureView;
 import com.xlythe.view.camera.shadow.ShadowRefusingCamera;
+import com.xlythe.view.camera.shadow.ShadowSlowPictureCamera;
 
 import org.junit.After;
 import org.junit.Before;
@@ -31,6 +32,9 @@ import org.robolectric.shadows.ShadowPausedAsyncTask;
 import org.robolectric.util.ReflectionHelpers;
 
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -70,6 +74,7 @@ public class LegacyParityTest {
 
     @Before
     public void setUp() {
+        ShadowSlowPictureCamera.reset();
         Context context = RuntimeEnvironment.getApplication();
         Shadows.shadowOf((android.app.Application) context).grantPermissions(
                 Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO);
@@ -250,6 +255,72 @@ public class LegacyParityTest {
         assertTrue(failed.get());
     }
 
+    /**
+     * A picture asked for while another is being taken is reported failed on the main thread,
+     * and the first still arrives as itself. The second call used to replace the first one's
+     * callback, so the first picture was filed as the second, or never answered.
+     */
+    @Test
+    @Config(shadows = {ShadowSlowPictureCamera.class})
+    public void aPictureAskedForWhileAnotherIsTakenFails() throws Exception {
+        List<String> heard = new ArrayList<>();
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onImageConfirmation() {}
+            @Override public void onImageCaptured(File file) {
+                heard.add("captured " + file.getName() + onMainThread());
+            }
+            @Override public void onFailure() {
+                heard.add("failed" + onMainThread());
+            }
+        });
+        ShadowPausedAsyncTask.overrideExecutor(Runnable::run);
+        File directory = RuntimeEnvironment.getApplication().getCacheDir();
+        module.open();
+        idle();
+
+        module.takePicture(new File(directory, "first.jpg"));
+        module.takePicture(new File(directory, "second.jpg"));
+        idle();
+        assertEquals(Arrays.asList("failed on main"), heard);
+        assertEquals("the second never reached the camera", 1,
+                ShadowSlowPictureCamera.getRequestCount());
+
+        ShadowSlowPictureCamera.deliverPicture(
+                new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xD9});
+        idle();
+        assertEquals(Arrays.asList("failed on main", "captured first.jpg on main"), heard);
+
+        module.takePicture(new File(directory, "third.jpg"));
+        idle();
+        assertEquals("once the first arrives the next is taken", 2,
+                ShadowSlowPictureCamera.getRequestCount());
+    }
+
+    /** A picture being taken when the camera closes does not hold up the next camera's. */
+    @Test
+    @Config(shadows = {ShadowSlowPictureCamera.class})
+    public void closingTheCameraEndsThePictureBeingTaken() throws Exception {
+        AtomicReference<Boolean> failed = new AtomicReference<>(false);
+        cameraView.setOnImageCapturedListener(new CameraView.OnImageCapturedListener() {
+            @Override public void onImageConfirmation() {}
+            @Override public void onImageCaptured(File file) {}
+            @Override public void onFailure() { failed.set(true); }
+        });
+        File directory = RuntimeEnvironment.getApplication().getCacheDir();
+        module.open();
+        idle();
+        module.takePicture(new File(directory, "abandoned.jpg"));
+        module.close();
+        module.open();
+        idle();
+
+        module.takePicture(new File(directory, "next.jpg"));
+        idle();
+
+        assertFalse(failed.get());
+        assertEquals(2, ShadowSlowPictureCamera.getRequestCount());
+    }
+
     /** Makes the camera list the given flash modes, as its parameters say on the next open. */
     private static void givenTheCameraOffers(String... modes) {
         Camera camera = Camera.open(0);
@@ -285,6 +356,10 @@ public class LegacyParityTest {
         Camera camera = ReflectionHelpers.getField(module, "mCamera");
         Camera.Size size = camera.getParameters().getPictureSize();
         return size.width + "x" + size.height;
+    }
+
+    private static String onMainThread() {
+        return Looper.myLooper() == Looper.getMainLooper() ? " on main" : " off main";
     }
 
     private static void idle() {

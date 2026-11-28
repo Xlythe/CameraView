@@ -81,6 +81,13 @@ public class LegacyCameraModule extends ICameraModule {
     @Nullable private Camera.Size mPreviewSize;
 
     /**
+     * Whether the open camera is taking a picture, from the call until its JPEG arrives. The
+     * camera keeps one picture callback, which every call replaces, even one it then refuses: a
+     * second picture asked for meanwhile takes the first one's JPEG, or leaves neither answered.
+     */
+    private boolean mTakingPicture;
+
+    /**
      * The zoom, as a ratio. While a camera is open it is the entry of its zoom table the camera is
      * set to; while none is, it is what was asked for, which the next open applies.
      */
@@ -469,6 +476,8 @@ public class LegacyCameraModule extends ICameraModule {
             mCamera.release();
             mCamera = null;
             mPreviewSize = null;
+            // A released camera delivers no picture still being taken.
+            mTakingPicture = false;
         }
     }
 
@@ -595,13 +604,24 @@ public class LegacyCameraModule extends ICameraModule {
             onImageFailed();
             return;
         }
+        if (mTakingPicture) {
+            Log.w(TAG, "Ignoring a picture asked for while another is being taken");
+            onImageFailed();
+            return;
+        }
+        LegacyPictureListener listener = new LegacyPictureListener(
+                file, getRelativeCameraOrientation(false /* isPreview */),
+                isUsingFrontFacingCamera(), exifCaptureParameters(), this);
+        mTakingPicture = true;
         try {
-            mCamera.takePicture(this::onShutter, null, new LegacyPictureListener(
-                    file, getRelativeCameraOrientation(false /* isPreview */),
-                    isUsingFrontFacingCamera(), exifCaptureParameters(), this));
+            mCamera.takePicture(this::onShutter, null, (data, camera) -> {
+                mTakingPicture = false;
+                listener.onPictureTaken(data, camera);
+            });
         } catch (RuntimeException e) {
-            // Thrown rather than reported, for a picture asked for while another is being taken
-            // or while the preview is stopped.
+            // Thrown rather than reported, as for a picture asked for while the preview is
+            // stopped.
+            mTakingPicture = false;
             Log.w(TAG, "The camera refused to take a picture", e);
             onImageFailed();
         }
