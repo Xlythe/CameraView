@@ -7,6 +7,8 @@ import android.app.Instrumentation;
 import android.content.Context;
 import android.graphics.BitmapFactory;
 import android.graphics.SurfaceTexture;
+import android.media.MediaCodecInfo;
+import android.media.MediaCodecList;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.ParcelFileDescriptor;
@@ -56,8 +58,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * what it is, shows or fails cleanly rather than crashing or hanging, stands the right way up,
  * sits on the sphere where its metadata says, plays its motion clip, and holds HDR where it
  * should. What decodes and plays on this release is written out as one line per file, for the
- * compatibility matrix, with how many frames a video drew: one that plays its sound over nothing
- * drew none.
+ * compatibility matrix, with how many frames a video drew, one that plays its sound over nothing
+ * drawing none, and whether a decoder here takes its video.
  *
  * <p>The corpus is pushed to /data/local/tmp/media-corpus, with an expected.tsv beside it; without
  * it the test skips. Before Android 6.0, whose shell commands never say they have finished, it is
@@ -120,7 +122,8 @@ public class MediaCompatDeviceTest {
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(
                 new ByteArrayInputStream(expected), StandardCharsets.UTF_8));
                 PrintWriter out = new PrintWriter(new FileOutputStream(results), true)) {
-            out.println("path\texpected\tdetected\tshown\tmillis\tplays\thdr\tframes\tproblems");
+            out.println("path\texpected\tdetected\tshown\tmillis\tplays\thdr\tframes\tdecoder"
+                    + "\tproblems");
             String line;
             while ((line = reader.readLine()) != null) {
                 String[] cells = line.split("\t");
@@ -137,6 +140,44 @@ public class MediaCompatDeviceTest {
         }
         assertTrue(problems.size() + " problems:\n" + TextUtils.join("\n", problems),
                 problems.isEmpty());
+    }
+
+    /**
+     * Writes out every decoder this device lists, with the profiles, levels and sizes it says it
+     * takes: what the check before a video plays goes by. It asserts nothing.
+     */
+    @Test
+    public void listTheDecoders() throws IOException {
+        File list = new File(mContext.getExternalFilesDir(null),
+                "media-decoders-api" + Build.VERSION.SDK_INT + ".txt");
+        try (PrintWriter out = new PrintWriter(new FileOutputStream(list), true)) {
+            for (MediaCodecInfo info : new MediaCodecList(MediaCodecList.ALL_CODECS)
+                    .getCodecInfos()) {
+                if (info.isEncoder()) {
+                    continue;
+                }
+                for (String type : info.getSupportedTypes()) {
+                    if (!type.startsWith("video/")) {
+                        continue;
+                    }
+                    MediaCodecInfo.CodecCapabilities capabilities =
+                            info.getCapabilitiesForType(type);
+                    StringBuilder line = new StringBuilder(info.getName()).append('\t')
+                            .append(type).append('\t');
+                    for (MediaCodecInfo.CodecProfileLevel entry : capabilities.profileLevels) {
+                        line.append(String.format(Locale.US, "0x%x/0x%x ", entry.profile,
+                                entry.level));
+                    }
+                    MediaCodecInfo.VideoCapabilities video = capabilities.getVideoCapabilities();
+                    if (video != null) {
+                        line.append('\t').append(video.getSupportedWidths()).append('x')
+                                .append(video.getSupportedHeights());
+                    }
+                    out.println(line);
+                    Log.i(TAG, "DECODER\t" + line);
+                }
+            }
+        }
     }
 
     /**
@@ -167,8 +208,16 @@ public class MediaCompatDeviceTest {
         }
         List<String> wrong = new ArrayList<>();
         int detected;
+        // Whether a decoder here takes its video, or its motion photo's clip.
+        String decoder = "-";
         try {
-            detected = MediaDetector.detect(mContext, ImageLocation.of(file)).type;
+            MediaDetector.Detection detection = MediaDetector.detect(mContext,
+                    ImageLocation.of(file));
+            detected = detection.type;
+            if (detected == MediaView.VIDEO || detected == MediaView.SPHERICAL_VIDEO
+                    || detected == MediaView.MOTION_PHOTO) {
+                decoder = detection.decodable ? "yes" : "no";
+            }
         } catch (IOException e) {
             detected = FAILED;
         }
@@ -214,7 +263,7 @@ public class MediaCompatDeviceTest {
         }
         return TextUtils.join("\t", new Object[] {path, nameOf(want), nameOf(detected),
                 shown == HUNG ? "HUNG" : shown == FAILED ? "FAILED" : "SHOWN", millis, plays,
-                hdr ? "HDR" : "-", frames, TextUtils.join("; ", wrong)});
+                hdr ? "HDR" : "-", frames, decoder, TextUtils.join("; ", wrong)});
     }
 
     /**

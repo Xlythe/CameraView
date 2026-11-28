@@ -81,6 +81,10 @@ import java.util.concurrent.TimeUnit;
  *   <li>an animated GIF, WebP or PNG, which plays as soon as it shows and a tap pauses.</li>
  * </ul>
  *
+ * <p>A file it cannot show, it reports to {@link MediaListener#onMediaFailed()} and shows an
+ * error placeholder in place of. That includes a video this device has no decoder for, which
+ * would otherwise play its sound over nothing, and one whose decoder gives up while it plays.</p>
+ *
  * <p>HDR pictures and videos put the window in HDR colour mode while they show, where the device
  * has one, and it goes back once nothing in the window shows HDR. A picture's gain map is drawn
  * in HDR; a video is drawn tone-mapped to standard range.</p>
@@ -88,7 +92,8 @@ import java.util.concurrent.TimeUnit;
  * <h2>What each release shows</h2>
  * <ul>
  *   <li>JPEG, PNG, WebP, GIF and BMP pictures, animated GIFs and animated PNGs, on every
- *       release.</li>
+ *       release; before Android 9 an animated GIF plays through the library's own decoder, a
+ *       frame at a time.</li>
  *   <li>HEIF and HEIC pictures, and animated WebP and HEIF sequences, from Android 9. Before it,
  *       an animated WebP shows as a still only where the platform decodes its first frame, which
  *       Android 5 does not.</li>
@@ -99,18 +104,24 @@ import java.util.concurrent.TimeUnit;
  *       fails.</li>
  *   <li>Gain maps in HDR from Android 14. Before it, an Ultra HDR picture shows as an ordinary
  *       one.</li>
- *   <li>Videos and sound in whichever codecs the device decodes. QuickTime movies that open
- *       without a file type, as older ones and some Live Photos do, play from a copy the
- *       platform recognises, kept in the app's cache.</li>
+ *   <li>Videos and sound in whichever codecs the device decodes. From Android 4.1 a video's
+ *       format, profile and level are checked against the device's decoders before it plays,
+ *       and one none of them takes fails. Android 4.0 lists no decoders, so there a video fails
+ *       when its decoder gives up on it. The software decoders of Android 5 and older take
+ *       H.264's Baseline profile and not its Main or High, which most cameras record in; phones
+ *       of those years often decode High in hardware. QuickTime movies that open without a file
+ *       type, as older ones and some Live Photos do, play from a copy the platform recognises,
+ *       kept in the app's cache.</li>
  *   <li>TIFF, JPEG XL and AVI files fail on every release so far.</li>
  * </ul>
  *
  * <h2>Look</h2>
- * <p>The only thing it draws itself is a thin line along its bottom edge that shows how far a
- * video or recording has played, in the theme's {@code colorControlActivated}, and an icon for
- * sound with no cover, in {@code colorControlNormal}. Both can be restyled or turned off
- * through the {@code MediaView} attributes or the setters, as can tapping, holding and HDR. It
- * draws no text; give it a content description of your own.</p>
+ * <p>The only things it draws itself are a thin line along its bottom edge that shows how far a
+ * video or recording has played, in the theme's {@code colorControlActivated}; an icon for
+ * sound with no cover; and an icon of a struck-out picture for a file it cannot show. Both
+ * icons are in {@code colorControlNormal}. Each can be restyled, replaced or turned off through
+ * the {@code MediaView} attributes or the setters, as can tapping, holding and HDR. It draws no
+ * text; give it a content description of your own.</p>
  */
 public class MediaView extends FrameLayout {
     /** What a file is shown as. */
@@ -141,7 +152,7 @@ public class MediaView extends FrameLayout {
     /** The progress line's thickness when no style sets it, in dp. */
     private static final float DEFAULT_PROGRESS_DP = 2;
 
-    /** How large the sound icon is drawn, as a fraction of the view's shorter side. */
+    /** How large the library's icons are drawn, as a fraction of the view's shorter side. */
     private static final float PLACEHOLDER_FRACTION = 0.25f;
 
     /** Posts the worker's results back to the main thread. */
@@ -185,6 +196,13 @@ public class MediaView extends FrameLayout {
     /** What stands for sound with no cover, or null for nothing. */
     @Nullable
     private Drawable mAudioPlaceholder;
+
+    /** What shows in place of a file that cannot be shown, or null for nothing. */
+    @Nullable
+    private Drawable mErrorPlaceholder;
+
+    /** Whether the file failed, so the error placeholder shows. */
+    private boolean mFailed;
 
     /** Hears whether each file showed. */
     @Nullable
@@ -270,8 +288,9 @@ public class MediaView extends FrameLayout {
                 DEFAULT_PROGRESS_DP, getResources().getDisplayMetrics()));
         mProgressPaint.setColor(themeColor(context, android.R.attr.colorControlActivated,
                 themeColor(context, android.R.attr.colorAccent, 0xFFFFFFFF)));
-        mAudioPlaceholder = new NoteDrawable(themeColor(context,
-                android.R.attr.colorControlNormal, 0xB3FFFFFF));
+        int iconColor = themeColor(context, android.R.attr.colorControlNormal, 0xB3FFFFFF);
+        mAudioPlaceholder = new NoteDrawable(iconColor);
+        mErrorPlaceholder = new ErrorDrawable(iconColor);
         if (attrs != null) {
             TypedArray a = context.obtainStyledAttributes(attrs, R.styleable.MediaView,
                     defStyleAttr, 0);
@@ -287,15 +306,35 @@ public class MediaView extends FrameLayout {
                         R.styleable.MediaView_mediaProgressHeight, mProgressHeight);
                 mProgressPaint.setColor(a.getColor(R.styleable.MediaView_mediaProgressColor,
                         mProgressPaint.getColor()));
-                if (a.hasValue(R.styleable.MediaView_audioPlaceholder)) {
-                    int placeholder = a.getResourceId(R.styleable.MediaView_audioPlaceholder, 0);
-                    mAudioPlaceholder = placeholder == 0 ? null
-                            : ContextCompat.getDrawable(context, placeholder);
-                }
+                mAudioPlaceholder = placeholder(context, a, attrs,
+                        R.styleable.MediaView_audioPlaceholder, R.attr.audioPlaceholder,
+                        mAudioPlaceholder);
+                mErrorPlaceholder = placeholder(context, a, attrs,
+                        R.styleable.MediaView_errorPlaceholder, R.attr.errorPlaceholder,
+                        mErrorPlaceholder);
             } finally {
                 a.recycle();
             }
         }
+    }
+
+    /**
+     * A placeholder set by an attribute: its drawable, null where it is {@code @null}, or the
+     * library's own where it is not set. A layout's {@code @null} reads back from the typed
+     * array as if it were not set at all, so the layout's own attributes are looked at too.
+     */
+    @Nullable
+    private static Drawable placeholder(@NonNull Context context, @NonNull TypedArray array,
+            @NonNull AttributeSet attrs, int index, int attribute, @Nullable Drawable library) {
+        boolean set = array.hasValue(index);
+        for (int i = 0; !set && i < attrs.getAttributeCount(); i++) {
+            set = attrs.getAttributeNameResource(i) == attribute;
+        }
+        if (!set) {
+            return library;
+        }
+        int id = array.getResourceId(index, 0);
+        return id == 0 ? null : ContextCompat.getDrawable(context, id);
     }
 
     /** A colour from the theme, or the fallback if the theme has none. */
@@ -369,6 +408,7 @@ public class MediaView extends FrameLayout {
         mDetection = null;
         mType = UNKNOWN;
         mReported = false;
+        mFailed = false;
         if (location == null) {
             return;
         }
@@ -411,6 +451,12 @@ public class MediaView extends FrameLayout {
         clearContent();
         mType = type;
         mReported = false;
+        mFailed = false;
+        if ((type == VIDEO || type == SPHERICAL_VIDEO) && !detection.decodable) {
+            // It would play its sound over nothing.
+            reportFailed();
+            return;
+        }
         switch (type) {
             case PICTURE:
             case MOTION_PHOTO:
@@ -621,12 +667,19 @@ public class MediaView extends FrameLayout {
         }
     }
 
+    /**
+     * Shows the error placeholder in place of the file and reports it once, whether or not it
+     * showed first: a video can show, then fail to play.
+     */
     @MainThread
     private void reportFailed() {
-        if (mReported) {
+        if (mFailed) {
             return;
         }
         mReported = true;
+        mFailed = true;
+        clearContent();
+        invalidate();
         if (mListener != null) {
             mListener.onMediaFailed();
         }
@@ -732,6 +785,9 @@ public class MediaView extends FrameLayout {
                     releasePlayer();
                     if (report) {
                         reportFailed();
+                    } else {
+                        // A motion photo's clip: its still shows again.
+                        stopClip();
                     }
                 }
                 return true;
@@ -856,7 +912,8 @@ public class MediaView extends FrameLayout {
         MediaDetector.Detection detection = mDetection;
         ImageLocation location = mLocation;
         if (detection == null || detection.motionPhoto == null || location == null
-                || mHolding) {
+                || mHolding || !detection.decodable) {
+            // A clip no decoder here takes would hold a blank over the still.
             return;
         }
         mHolding = true;
@@ -1073,6 +1130,9 @@ public class MediaView extends FrameLayout {
     @Override
     protected void dispatchDraw(@NonNull Canvas canvas) {
         super.dispatchDraw(canvas);
+        if (mFailed && mErrorPlaceholder != null) {
+            drawCentered(canvas, mErrorPlaceholder);
+        }
         if (!mProgressVisible || mDuration <= 0 || mProgressHeight <= 0) {
             return;
         }
@@ -1082,6 +1142,28 @@ public class MediaView extends FrameLayout {
         }
         canvas.drawRect(0, getHeight() - mProgressHeight, getWidth() * fraction, getHeight(),
                 mProgressPaint);
+    }
+
+    /**
+     * Draws a drawable in the middle of the view: at its own size, shrunk to fit if it is
+     * larger, or over the whole view if it has no size of its own, as the library's icons do.
+     */
+    @MainThread
+    private void drawCentered(@NonNull Canvas canvas, @NonNull Drawable drawable) {
+        int width = drawable.getIntrinsicWidth();
+        int height = drawable.getIntrinsicHeight();
+        if (width <= 0 || height <= 0) {
+            drawable.setBounds(0, 0, getWidth(), getHeight());
+        } else {
+            float scale = Math.min(1, Math.min((float) getWidth() / width,
+                    (float) getHeight() / height));
+            int shownWidth = Math.round(width * scale);
+            int shownHeight = Math.round(height * scale);
+            int left = (getWidth() - shownWidth) / 2;
+            int top = (getHeight() - shownHeight) / 2;
+            drawable.setBounds(left, top, left + shownWidth, top + shownHeight);
+        }
+        drawable.draw(canvas);
     }
 
     /** How far what plays has got, as a fraction, for tests. */
@@ -1181,6 +1263,24 @@ public class MediaView extends FrameLayout {
     }
 
     /**
+     * Sets what shows in place of a file that cannot be shown, instead of the library's icon,
+     * or nothing for null. It is drawn in the middle of the view, at its own size or smaller to
+     * fit; one with no size of its own is given the whole view.
+     */
+    @MainThread
+    public void setErrorPlaceholder(@Nullable Drawable placeholder) {
+        mErrorPlaceholder = placeholder;
+        invalidate();
+    }
+
+    /** What shows in place of a file that cannot be shown, or null for nothing. */
+    @MainThread
+    @Nullable
+    public Drawable getErrorPlaceholder() {
+        return mErrorPlaceholder;
+    }
+
+    /**
      * Whether HDR pictures and videos put the window in HDR colour mode while they show. On by
      * default.
      */
@@ -1249,6 +1349,12 @@ public class MediaView extends FrameLayout {
         super.onDetachedFromWindow();
     }
 
+    /** Whether the file could not be shown, so the error placeholder shows, for tests. */
+    @VisibleForTesting
+    boolean hasFailed() {
+        return mFailed;
+    }
+
     /** A note, the library's icon for sound with no cover picture. */
     private static final class NoteDrawable extends Drawable {
         /** Draws the note. */
@@ -1282,6 +1388,75 @@ public class MediaView extends FrameLayout {
                     bounds.exactCenterY() - size / 2);
             mPath.transform(matrix, mScaled);
             canvas.drawPath(mScaled, mPaint);
+        }
+
+        @Override
+        public void setAlpha(int alpha) {
+            mPaint.setAlpha(alpha);
+        }
+
+        @Override
+        public void setColorFilter(@Nullable ColorFilter filter) {
+            mPaint.setColorFilter(filter);
+        }
+
+        @Override
+        public int getOpacity() {
+            return PixelFormat.TRANSLUCENT;
+        }
+    }
+
+    /**
+     * A picture struck out, the library's icon for a file that cannot be shown: a frame with a
+     * hill inside, and a line across it from corner to corner.
+     */
+    private static final class ErrorDrawable extends Drawable {
+        /** Draws the icon. */
+        private final Paint mPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        /** The frame, the hill and the line, in a 24-unit box. */
+        private final Path mPath = new Path();
+
+        /** The icon, scaled to the bounds. */
+        private final Path mScaled = new Path();
+
+        ErrorDrawable(@ColorInt int color) {
+            mPaint.setColor(color);
+            mPath.setFillType(Path.FillType.EVEN_ODD);
+            // The frame: an outline two units thick.
+            mPath.addRect(3, 5, 21, 19, Path.Direction.CW);
+            mPath.addRect(5, 7, 19, 17, Path.Direction.CW);
+            // A hill, inside the frame.
+            mPath.moveTo(6, 16);
+            mPath.lineTo(10, 11);
+            mPath.lineTo(13, 14.5f);
+            mPath.lineTo(15, 12.5f);
+            mPath.lineTo(18, 16);
+            mPath.close();
+        }
+
+        @Override
+        public void draw(@NonNull Canvas canvas) {
+            Rect bounds = getBounds();
+            float size = Math.min(bounds.width(), bounds.height()) * PLACEHOLDER_FRACTION;
+            Matrix matrix = new Matrix();
+            matrix.setScale(size / 24, size / 24);
+            matrix.postTranslate(bounds.exactCenterX() - size / 2,
+                    bounds.exactCenterY() - size / 2);
+            mPath.transform(matrix, mScaled);
+            canvas.drawPath(mScaled, mPaint);
+            // The line across, from the top left corner to the bottom right.
+            float stroke = mPaint.getStrokeWidth();
+            Paint.Style style = mPaint.getStyle();
+            mPaint.setStyle(Paint.Style.STROKE);
+            mPaint.setStrokeWidth(size / 12);
+            mPaint.setStrokeCap(Paint.Cap.ROUND);
+            float left = bounds.exactCenterX() - size / 2;
+            float top = bounds.exactCenterY() - size / 2;
+            canvas.drawLine(left + size * 3 / 24, top + size * 3 / 24, left + size * 21 / 24,
+                    top + size * 21 / 24, mPaint);
+            mPaint.setStrokeWidth(stroke);
+            mPaint.setStyle(style);
         }
 
         @Override
